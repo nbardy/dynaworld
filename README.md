@@ -1,33 +1,106 @@
 # dynaworld
 
-Dynaworld is an Open Source World Model.
+**Hollywood's Open Source World Model.**
 
-There are many ideas of what world models are and many different uses for them. Common examples are "text to static world" systems such as World Labs, or "actions inside a world" systems such as Genie.
+Dynamic video => compressed splats.
 
-World models also take a stance on what comes into the model and what comes out of it: text or image in, text or image out. In our case, the contract is simple:
+DynaWorld is less about making new worlds and more about modality shifts.
+It lets you go from `Video <=> splats` both directions, so you can use splats
+when they're best and video when its best.
 
-`Video in -> splats out`
+The first use case is camera change. You shot the footage. Now you want a
+different angle. DynaWorld turns that video into a compact dynamic splat scene,
+lets you move the camera inside it, then renders video again.
 
-This is uniquely suited to novel view synthesis on existing videos. The goal is to let videographers edit their existing footage in real time with fast local splat rendering.
+The second use case is special effects. Traditional physics pipelines or
+algorithmic special effects can run on the splat representations. As powerful
+as video diffusion models can be for special effects, sometimes mathematical
+representations are better when we want the control of traditional generative
+algorithms.
 
-There is another type of world model that is still largely ignored: dynamic video to splats.
+This is made to be used in conjunction with video diffusion for upscaling,
+editing, and final-pixel cleanup. They are complementary, not opposites.
+Video diffusion is the generative portion. DynaWorld is focused on the
+exploratory portion.
 
-How can we ingest a dynamic video and output a scene of Gaussian splats that lets us explore and move around a dynamic video from novel camera angles? We want to change the camera inside a dynamic world, not just a static world. And we want to condition on real-world video, not generate novel worlds from scratch.
+You can shoot a clip, or generate one with video diffusion. Then DynaWorld
+creates an exploratory version of that clip.
 
-This lets us jump into our favorite existing worlds through videos of what is actually happening there.
+## Video `<=>` Video
 
-Phase I of Dynaworld focuses on dynamic `video in -> splats out`. Phase II extends that foundation toward actions inside the world model, but the first job is to make dynamic novel-view video editing work.
+A world model needs to be `Video <=> Video` so it can train self structured on
+video, unsupervised or self supervised.
+
+`Video <=> Video` is the only training data for world models that scales.
+Everything else requires expensive labeling, and labels don't scale.
+
+The training contract is simple:
+
+1. encode video
+2. decode splats
+3. render video
+4. compare to the video you started from
+
+Splats sit in the middle as the compact intermediate. No fake 3D labels. No
+synthetic ground truth. Render splats and compare directly against
+ground-truth video.
+
+The useful signal is in the preimage.
+
+## Cheap Adapters
+
+Modalities don't require pretraining. The implicit latents in video models are
+the key. Decoding them to splats is cheap adapter training.
+
+A lightweight splat head on a frozen video backbone. Not a new foundation
+model.
+
+## Generative Capacity
+
+There is not a generative phase planned for generating the initial world. Leave
+that phase to world models that generate the starting world.
+
+DynaWorld still needs generative capacity. Novel camera angles mean the model
+has to know whats back there, even if the input has not seen it. Looking behind
+an object is hallucinating some content. Extending the background is
+hallucinating some content. But it is not fully generating in time.
+
+For now, keep the model focused. It only generates novel angles.
+
+The stronger training task is probably to force the model to render images it
+didn't encode. Encode part of a clip, decode splats as a function of `t`, then
+train on the GT of images it didn't encode. That forces data that is not in the
+encode path to come from the world model, the 3D inductive bias in the splat
+renderer, and the time-conditioned decoder.
 
 ## Core Beliefs
 
-- World models are video models. A strong video backbone already carries geometry, motion, and lighting structure.
-- The contract we care about is `video in -> splats out`, not text-conditioned world generation.
-- Foundations are sacred. We want lightweight splat heads on top of frozen or mostly frozen video models, not a new foundation model from scratch.
-- The useful signal is in the preimage. A single forward pass through a video model can expose enough spatiotemporal structure to decode dynamic splats.
-- Supervision should stay in pixel space. We render splats and compare directly against ground-truth video instead of relying on blurry latent-space losses.
-- Memory should be spent on dynamic scene state, not luxury parameters. Compact splat parameterizations matter if we want long videos to fit and train.
+See `research_notes/README.md` for the long-form rationale.
 
-The longer-form research notes and prompt scaffolding live under `research_notes/`.
+1. World models are video models. A strong video backbone already carries geometry, motion, and lighting structure.
+2. DynaWorld is less about making new worlds and more about modality shifts.
+3. `Video <=> Video` is the training contract. It is the only training data for world models that scales. Splats sit in the middle.
+4. The useful signal is in the preimage.
+5. Static and dynamic are the same problem.
+6. Foundations are sacred. Modalities don't require pretraining. A lightweight splat head on a frozen video backbone is cheap adapter training.
+7. Supervision should stay in pixel space. Render splats and compare to video.
+8. Memory should be spent on dynamic scene state, not luxury parameters.
+
+## Phases
+
+**Phase I - `Video <=> splats`.** Dynamic reconstruction and fast camera
+editing. Where we are today.
+
+**Phase II - Interaction.** Actions inside the world model. Agents and physics
+handles that let you control the dynamic scene, not just re-view it.
+
+No planned Phase III for text-to-world generation. Generate new dynamic worlds
+somewhere else, then use DynaWorld to make them exploratory.
+
+## Status
+
+Local Mac overfit baselines today. Real dataset and scaling next. The
+longer-form research notes live under `research_notes/`.
 
 ## Setup
 
