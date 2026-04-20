@@ -33,7 +33,9 @@ def axis_angle_to_matrix(axis_angle):
     angles = torch.linalg.norm(axis_angle, dim=-1, keepdim=True)
     axes = axis_angle / angles.clamp_min(1e-8)
     skew = skew_symmetric(axes)
-    eye = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).unsqueeze(0).expand(axis_angle.shape[0], -1, -1)
+    eye = (
+        torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).unsqueeze(0).expand(axis_angle.shape[0], -1, -1)
+    )
     sin_term = torch.sin(angles).unsqueeze(-1)
     cos_term = (1.0 - torch.cos(angles)).unsqueeze(-1)
     small_angle = angles.squeeze(-1) < 1e-6
@@ -45,8 +47,10 @@ def axis_angle_to_matrix(axis_angle):
 
 
 def compose_camera_with_se3_delta(base_camera, rotation_delta, translation_delta):
-    delta_transform = torch.eye(4, device=rotation_delta.device, dtype=rotation_delta.dtype).unsqueeze(0).repeat(
-        rotation_delta.shape[0], 1, 1
+    delta_transform = (
+        torch.eye(4, device=rotation_delta.device, dtype=rotation_delta.dtype)
+        .unsqueeze(0)
+        .repeat(rotation_delta.shape[0], 1, 1)
     )
     delta_transform[:, :3, :3] = axis_angle_to_matrix(rotation_delta)
     delta_transform[:, :3, 3] = translation_delta
@@ -208,7 +212,10 @@ class VideoEncoder(nn.Module):
         self.bottleneck_dim = bottleneck_dim
         self.patch_embed = VideoPatchEmbedding(dim=dim, tubelet_size=tubelet_size)
         self.stage1_blocks = nn.ModuleList(
-            [TransformerBlock(dim=dim, num_heads=num_heads, mlp_ratio=mlp_ratio) for _ in range(encoder_self_attn_layers)]
+            [
+                TransformerBlock(dim=dim, num_heads=num_heads, mlp_ratio=mlp_ratio)
+                for _ in range(encoder_self_attn_layers)
+            ]
         )
         self.downsample = VideoTokenDownsample(in_dim=dim, out_dim=bottleneck_dim)
         self.bottleneck_blocks = nn.ModuleList(
@@ -384,7 +391,10 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         )
         self.query_tokens = LearnedQueryTokenBank(total_tokens=self.total_tokens, dim=feat_dim)
         self.query_decoder_blocks = nn.ModuleList(
-            [QueryCrossAttentionBlock(dim=feat_dim, num_heads=num_heads, mlp_ratio=mlp_ratio) for _ in range(cross_attn_layers)]
+            [
+                QueryCrossAttentionBlock(dim=feat_dim, num_heads=num_heads, mlp_ratio=mlp_ratio)
+                for _ in range(cross_attn_layers)
+            ]
         )
         self.gaussian_heads = TimeConditionedGaussianHeads(
             feat_dim=feat_dim,
@@ -425,7 +435,9 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
 
         xyz, scales, quats, opacities, rgbs = self.gaussian_heads(gs_tokens)
         base_camera, base_state = self.global_camera_head(global_camera_token.squeeze(0), image_size=self.image_size)
-        rotation_delta, translation_delta, path_residuals = self.path_camera_head(path_token, base_radius=base_state["radius"])
+        rotation_delta, translation_delta, path_residuals = self.path_camera_head(
+            path_token, base_radius=base_state["radius"]
+        )
         camera = compose_camera_with_se3_delta(base_camera, rotation_delta, translation_delta)[0]
         camera_state = {
             "fov_degrees": base_state["fov_degrees"],
@@ -435,7 +447,15 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
             "translation_delta": translation_delta,
             "path_residuals": path_residuals,
         }
-        return xyz.squeeze(0), scales.squeeze(0), quats.squeeze(0), opacities.squeeze(0), rgbs.squeeze(0), camera, camera_state
+        return (
+            xyz.squeeze(0),
+            scales.squeeze(0),
+            quats.squeeze(0),
+            opacities.squeeze(0),
+            rgbs.squeeze(0),
+            camera,
+            camera_state,
+        )
 
     def forward(self, video, decode_times):
         if video.ndim != 5:
@@ -448,7 +468,9 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
             raise ValueError("decode_times must have one value per frame in the clip.")
 
         refined_queries = self.encode_queries(video)
-        decoded = [self._decode_single_time(refined_queries, decode_times[0, index]) for index in range(decode_times.shape[1])]
+        decoded = [
+            self._decode_single_time(refined_queries, decode_times[0, index]) for index in range(decode_times.shape[1])
+        ]
 
         xyz = torch.stack([item[0] for item in decoded], dim=0)
         scales = torch.stack([item[1] for item in decoded], dim=0)

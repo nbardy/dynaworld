@@ -108,7 +108,9 @@ class TokenGSBackbone(nn.Module):
         feature_map = self.encoder(image)
         feature_h, feature_w = feature_map.shape[-2:]
         if plucker_grid.shape[-2:] != (feature_h, feature_w):
-            plucker_grid = F.interpolate(plucker_grid, size=(feature_h, feature_w), mode="bilinear", align_corners=False)
+            plucker_grid = F.interpolate(
+                plucker_grid, size=(feature_h, feature_w), mode="bilinear", align_corners=False
+            )
         grounded_feature_map = feature_map + self.ray_proj(plucker_grid)
         return flatten_hw_features(grounded_feature_map)
 

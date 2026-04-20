@@ -68,7 +68,9 @@ def build_arg_parser(default_renderer="auto"):
         default=4,
         help="How many frames to encode at once when rendering validation videos.",
     )
-    parser.add_argument("--tokens", type=int, default=128, help="Number of splat tokens. The model adds two camera tokens.")
+    parser.add_argument(
+        "--tokens", type=int, default=128, help="Number of splat tokens. The model adds two camera tokens."
+    )
     parser.add_argument(
         "--gaussians-per-token",
         type=int,
@@ -116,7 +118,9 @@ def build_arg_parser(default_renderer="auto"):
     )
     parser.add_argument("--log-every", type=int, default=10, help="Log scalar loss to W&B every N steps")
     parser.add_argument("--image-log-every", type=int, default=50, help="Log preview image to W&B every N steps")
-    parser.add_argument("--video-log-every", type=int, default=50, help="Log GT and rendered videos to W&B every N steps")
+    parser.add_argument(
+        "--video-log-every", type=int, default=50, help="Log GT and rendered videos to W&B every N steps"
+    )
     parser.add_argument("--amp", action="store_true", help="Use autocast for the model forward pass")
     parser.add_argument("--wandb-project", type=str, default="dynamic-tokengs-overfit", help="W&B project name")
     parser.add_argument("--wandb-run-name", type=str, default="dynamic-implicit-camera-run", help="W&B run name")
@@ -279,7 +283,12 @@ def load_sequence_data(
         expected_frames = metadata.get("frame_sampling", {}).get("total_frames") if metadata is not None else None
         video_sequence = load_video_sequence(resolved_video_path, target_size=target_size, max_frames=max_frames)
         actual_frames = video_sequence["all_frame_count"]
-        if frame_source == "summary_video" and expected_frames is not None and max_frames == 0 and int(expected_frames) != int(actual_frames):
+        if (
+            frame_source == "summary_video"
+            and expected_frames is not None
+            and max_frames == 0
+            and int(expected_frames) != int(actual_frames)
+        ):
             raise ValueError(
                 f"summary_video requested but video frame count {actual_frames} does not match "
                 f"summary.json frame_sampling.total_frames {expected_frames}. "
@@ -357,9 +366,7 @@ def render_full_sequence(model, sequence_data, args, renderer_mode, dense_grid, 
         batch_frames = sequence_data["frames"][start:end]
         batch_times = sequence_data["frame_times"][start:end]
 
-        autocast_context = (
-            torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
-        )
+        autocast_context = torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
         with fast_attn_context(device), autocast_context:
             xyz, scales, quats, opacities, rgbs, cameras, camera_state = model(
                 batch_frames,
@@ -417,7 +424,9 @@ def run_training(args):
 
     wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
 
-    model = DynamicTokenGSImplicitCamera(num_tokens=args.tokens, gaussians_per_token=args.gaussians_per_token).to(device)
+    model = DynamicTokenGSImplicitCamera(num_tokens=args.tokens, gaussians_per_token=args.gaussians_per_token).to(
+        device
+    )
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, fused=device.type in {"cuda", "mps"})
 
@@ -446,9 +455,7 @@ def run_training(args):
         batch_frames = sequence_data["frames"][batch_indices]
         batch_times = sequence_data["frame_times"][batch_indices]
 
-        autocast_context = (
-            torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
-        )
+        autocast_context = torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
         with fast_attn_context(device), autocast_context:
             xyz, scales, quats, opacities, rgbs, cameras, camera_state = model(batch_frames, frame_times=batch_times)
 
@@ -471,10 +478,17 @@ def run_training(args):
             recon_losses.append(F.l1_loss(render, target) + 0.2 * F.mse_loss(render, target))
 
         recon_loss = torch.stack(recon_losses).mean()
-        camera_motion_loss = torch.cat(
-            [camera_state["rotation_delta"], camera_state["translation_delta"] / camera_state["radius"].clamp_min(1e-6)],
-            dim=-1,
-        ).pow(2).mean()
+        camera_motion_loss = (
+            torch.cat(
+                [
+                    camera_state["rotation_delta"],
+                    camera_state["translation_delta"] / camera_state["radius"].clamp_min(1e-6),
+                ],
+                dim=-1,
+            )
+            .pow(2)
+            .mean()
+        )
         camera_global_loss = camera_state["global_residuals"].pow(2).mean()
         if batch_indices.numel() > 1:
             motion_features = torch.cat([camera_state["rotation_delta"], camera_state["translation_delta"]], dim=-1)

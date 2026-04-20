@@ -8,16 +8,14 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
 import wandb
-from PIL import Image
-from tqdm import tqdm
-
-from fast_attn import configure_fast_attn, fast_attn_context
 from camera import CameraSpec
+from fast_attn import configure_fast_attn, fast_attn_context
 from gs_models import DynamicTokenGS
+from PIL import Image
 from renderers.common import build_pixel_grid
 from renderers.dense import render_pytorch_3dgs
 from renderers.tiled import render_pytorch_3dgs_tiled
-
+from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SEQUENCE_DIR = ROOT / "test_data" / "dust3r_outputs" / "test_video_small_all_frames"
@@ -94,7 +92,9 @@ def build_arg_parser(default_renderer="auto"):
     parser.add_argument("--lr", type=float, default=0.005, help="Optimizer learning rate")
     parser.add_argument("--log-every", type=int, default=10, help="Log scalar loss to W&B every N steps")
     parser.add_argument("--image-log-every", type=int, default=50, help="Log preview image to W&B every N steps")
-    parser.add_argument("--video-log-every", type=int, default=50, help="Log GT and rendered videos to W&B every N steps")
+    parser.add_argument(
+        "--video-log-every", type=int, default=50, help="Log GT and rendered videos to W&B every N steps"
+    )
     parser.add_argument("--amp", action="store_true", help="Use autocast for the model forward pass")
     parser.add_argument("--wandb-project", type=str, default="dynamic-tokengs-overfit", help="W&B project name")
     parser.add_argument("--wandb-run-name", type=str, default="dynamic-sequence-run", help="W&B run name")
@@ -306,9 +306,7 @@ def render_full_sequence(model, sequence_data, args, renderer_mode, dense_grid, 
         batch_times = sequence_data["frame_times"][start:end]
         batch_cameras = sequence_data["cameras"][start:end]
 
-        autocast_context = (
-            torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
-        )
+        autocast_context = torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
         with fast_attn_context(device):
             with autocast_context:
                 outputs = model(batch_frames, camera=batch_cameras, frame_times=batch_times)
@@ -389,9 +387,7 @@ def run_training(args):
         batch_times = sequence_data["frame_times"][batch_indices]
         batch_cameras = [sequence_data["cameras"][index] for index in batch_indices.tolist()]
 
-        autocast_context = (
-            torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
-        )
+        autocast_context = torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
         with fast_attn_context(device):
             with autocast_context:
                 outputs = model(batch_frames, camera=batch_cameras, frame_times=batch_times)

@@ -5,14 +5,13 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
 import wandb
-from tqdm import tqdm
-
 from fast_attn import configure_fast_attn, fast_attn_context
-from renderers.tiled import render_pytorch_3dgs_tiled
-from renderers.dense import render_pytorch_3dgs
-from renderers.common import build_pixel_grid
 from gs_models import TokenGS
 from image_utils import fetch_image
+from renderers.common import build_pixel_grid
+from renderers.dense import render_pytorch_3dgs
+from renderers.tiled import render_pytorch_3dgs_tiled
+from tqdm import tqdm
 
 
 def main():
@@ -52,7 +51,9 @@ def main():
     parser.add_argument("--amp", action="store_true", help="Use autocast for the model forward pass")
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    )
     print(f"Using device: {device}")
 
     wandb.init(project="tokengs-overfit", name="single-image-run", config=vars(args))
@@ -96,9 +97,7 @@ def main():
         optimizer.zero_grad(set_to_none=True)
 
         # 1. Forward Pass (Image -> Tokens -> 3D Parameters)
-        autocast_context = (
-            torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
-        )
+        autocast_context = torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
         with fast_attn_context(device):
             with autocast_context:
                 xyz, scales, quats, opacities, rgbs = model(gt_tensor)

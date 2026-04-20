@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import os
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
-import os
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +11,6 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
 import wandb
-from tqdm import tqdm
-
 from dynamicTokenGS import (
     DEFAULT_SEQUENCE_DIR,
     configure_fast_attn,
@@ -25,8 +23,8 @@ from gs_models import DynamicVideoTokenGSImplicitCamera
 from renderers.common import build_pixel_grid
 from renderers.dense import render_pytorch_3dgs
 from renderers.tiled import render_pytorch_3dgs_tiled
+from tqdm import tqdm
 from train_camera_implicit_dynamic import load_sequence_data, resolve_frames_dir
-
 
 DEFAULT_CONFIG = {
     "data": {
@@ -357,9 +355,7 @@ def render_full_sequence(
         clip_indices = torch.arange(clip_start, clip_end, device=device)
         clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
 
-        autocast_context = (
-            torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
-        )
+        autocast_context = torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
         with fast_attn_context(device), autocast_context:
             xyz, scales, quats, opacities, rgbs, cameras, camera_state = model(clip_frames, decode_times=clip_times)
         camera_states.append(camera_state)
@@ -513,13 +509,17 @@ class Trainer:
         clip_times: torch.Tensor,
         camera_state: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        camera_motion_loss = torch.cat(
-            [
-                camera_state["rotation_delta"],
-                camera_state["translation_delta"] / camera_state["radius"].clamp_min(1e-6),
-            ],
-            dim=-1,
-        ).pow(2).mean()
+        camera_motion_loss = (
+            torch.cat(
+                [
+                    camera_state["rotation_delta"],
+                    camera_state["translation_delta"] / camera_state["radius"].clamp_min(1e-6),
+                ],
+                dim=-1,
+            )
+            .pow(2)
+            .mean()
+        )
 
         if clip_times.shape[1] > 1:
             motion_features = torch.cat([camera_state["rotation_delta"], camera_state["translation_delta"]], dim=-1)

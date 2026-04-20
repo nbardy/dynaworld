@@ -35,7 +35,9 @@ def axis_angle_to_matrix(axis_angle):
     angles = torch.linalg.norm(axis_angle, dim=-1, keepdim=True)
     axes = axis_angle / angles.clamp_min(1e-8)
     skew = skew_symmetric(axes)
-    eye = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).unsqueeze(0).expand(axis_angle.shape[0], -1, -1)
+    eye = (
+        torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).unsqueeze(0).expand(axis_angle.shape[0], -1, -1)
+    )
     sin_term = torch.sin(angles).unsqueeze(-1)
     cos_term = (1.0 - torch.cos(angles)).unsqueeze(-1)
     small_angle = angles.squeeze(-1) < 1e-6
@@ -47,8 +49,10 @@ def axis_angle_to_matrix(axis_angle):
 
 
 def compose_camera_with_se3_delta(base_camera, rotation_delta, translation_delta):
-    delta_transform = torch.eye(4, device=rotation_delta.device, dtype=rotation_delta.dtype).unsqueeze(0).repeat(
-        rotation_delta.shape[0], 1, 1
+    delta_transform = (
+        torch.eye(4, device=rotation_delta.device, dtype=rotation_delta.dtype)
+        .unsqueeze(0)
+        .repeat(rotation_delta.shape[0], 1, 1)
     )
     delta_transform[:, :3, :3] = axis_angle_to_matrix(rotation_delta)
     delta_transform[:, :3, 3] = translation_delta
@@ -188,7 +192,9 @@ class DynamicTokenGSImplicitCamera(nn.Module):
         tokens = []
         for start in range(0, img.shape[0], batch_size):
             end = min(start + batch_size, img.shape[0])
-            refined_tokens = self._refine_tokens(img[start:end], None if frame_times is None else frame_times[start:end])
+            refined_tokens = self._refine_tokens(
+                img[start:end], None if frame_times is None else frame_times[start:end]
+            )
             tokens.append(refined_tokens[:, 0, :])
         return torch.cat(tokens, dim=0).mean(dim=0)
 
@@ -205,7 +211,9 @@ class DynamicTokenGSImplicitCamera(nn.Module):
         xyz, scales, quats, opacities, rgbs = self.gaussian_heads(splat_tokens)
 
         base_camera, camera_state = self.global_camera_head(global_camera_token, image_size=img.shape[-1])
-        rotation_delta, translation_delta, path_residuals = self.path_camera_head(path_tokens, base_radius=camera_state["radius"])
+        rotation_delta, translation_delta, path_residuals = self.path_camera_head(
+            path_tokens, base_radius=camera_state["radius"]
+        )
         cameras = compose_camera_with_se3_delta(base_camera, rotation_delta, translation_delta)
         camera_state["rotation_delta"] = rotation_delta
         camera_state["translation_delta"] = translation_delta

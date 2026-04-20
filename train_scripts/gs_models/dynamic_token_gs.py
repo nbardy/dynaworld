@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-
 from camera import build_plucker_ray_grid, build_plucker_ray_grid_batch, make_default_camera
 
 from .blocks import TokenGSBackbone
@@ -22,9 +21,9 @@ class DynamicTokenGS(TokenGSBackbone):
     def _build_plucker_batch(self, camera, batch_size, image_size, device):
         if camera is None:
             default_camera = make_default_camera(image_size=image_size, device=device)
-            return build_plucker_ray_grid(default_camera, image_size=image_size, device=device, channels_first=True).expand(
-                batch_size, -1, -1, -1
-            )
+            return build_plucker_ray_grid(
+                default_camera, image_size=image_size, device=device, channels_first=True
+            ).expand(batch_size, -1, -1, -1)
         if isinstance(camera, (list, tuple)):
             if len(camera) != batch_size:
                 raise ValueError(f"Expected {batch_size} cameras, got {len(camera)}")
