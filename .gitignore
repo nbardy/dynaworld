@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+.venv/
+.dust3r_probe_frames/
+tea_debug.log
+wandb/
+
+test_data/dust3r_outputs/
+
+third_party/dust3r/croco/
