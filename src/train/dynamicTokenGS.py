@@ -7,13 +7,13 @@ import torch.nn.functional as F
 import wandb
 from fast_attn import configure_fast_attn, fast_attn_context
 from gs_models import DynamicTokenGS
+from renderers.common import build_pixel_grid
 from rendering import pick_renderer_mode as resolve_renderer_mode
 from rendering import render_gaussian_frame
-from renderers.common import build_pixel_grid
 from runtime_types import GaussianFrame
 from sequence_data import load_camera_sequence, select_window_indices
-from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 from tqdm import tqdm
+from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SEQUENCE_DIR = ROOT / "test_data" / "dust3r_outputs" / "test_video_small_all_frames"

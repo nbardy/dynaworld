@@ -17,12 +17,12 @@ from dynamicTokenGS import (
     pick_device,
 )
 from gs_models import DynamicVideoTokenGSImplicitCamera
-from rendering import build_or_reuse_grid, camera_for_viewport, pick_renderer_mode as resolve_renderer_mode
-from rendering import render_gaussian_frame, resize_images
+from rendering import build_or_reuse_grid, camera_for_viewport, render_gaussian_frame, resize_images
+from rendering import pick_renderer_mode as resolve_renderer_mode
 from runtime_types import GaussianFrame
 from sequence_data import load_uncalibrated_sequence, resolve_frames_dir, select_window_indices
-from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 from tqdm import tqdm
+from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 
 
 @dataclass
@@ -289,9 +289,7 @@ class Trainer:
             )
         self.temporal_microbatch_size = int(self.train_cfg["temporal_microbatch_size"])
         if self.temporal_microbatch_size < 1:
-            raise ValueError(
-                f"temporal_microbatch_size must be >= 1, got {self.temporal_microbatch_size}."
-            )
+            raise ValueError(f"temporal_microbatch_size must be >= 1, got {self.temporal_microbatch_size}.")
         self.render_size = int(self.render_cfg["render_size"])
         if self.render_size < 1:
             raise ValueError(f"render_size must be >= 1, got {self.render_size}.")
@@ -616,8 +614,7 @@ class Trainer:
         )
         print(f"Reconstruction backward strategy: {self.recon_backward_strategy}")
         print(
-            "Temporal reconstruction chunk size: "
-            f"{self.temporal_recon_chunk_size(self.model_cfg['train_frame_count'])}"
+            f"Temporal reconstruction chunk size: {self.temporal_recon_chunk_size(self.model_cfg['train_frame_count'])}"
         )
         print(f"Attention backend: {self.attn_backend}")
 

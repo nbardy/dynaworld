@@ -14,12 +14,12 @@ from dynamicTokenGS import (
     select_window_indices,
 )
 from gs_models import DynamicTokenGSImplicitCamera
-from rendering import render_gaussian_frame
 from renderers.common import build_pixel_grid
+from rendering import render_gaussian_frame
 from runtime_types import GaussianFrame
 from sequence_data import load_uncalibrated_sequence, resolve_frames_dir
-from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 from tqdm import tqdm
+from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 
 
 def build_arg_parser(default_renderer="auto"):
