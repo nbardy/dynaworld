@@ -4,6 +4,3 @@
 [submodule "third_party/taichi-splatting"]
 	path = third_party/taichi-splatting
 	url = git@github.com:nbardy/taichi-gsplat-differentiable-render-mac.git
-[submodule "third_party/fast-mac-gsplat"]
-	path = third_party/fast-mac-gsplat
-	url = git@github.com:nbardy/fast-mac-gsplat.git
