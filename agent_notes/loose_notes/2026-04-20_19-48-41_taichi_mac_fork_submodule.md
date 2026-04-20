@@ -41,3 +41,10 @@ Important result:
   fast Mac renderer. The current Taichi-native sort paths do not beat the
   reference path; the next speed attempt should be a raw fused Metal kernel or a
   Taichi backend change that exposes the needed threadgroup-memory pattern.
+
+Follow-up README polish:
+
+- Updated the fork README opening to lead with `Taichi Mac Splatting` and
+  `Fast splatting on the Mac integrated with Taichi.`
+- Pushed fork commit `244b002 Clarify Mac fork README`.
+- Parent submodule pointer should advance from `37a83dd` to `244b002`.
