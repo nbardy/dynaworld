@@ -17,6 +17,7 @@ LOG_EVERY="${LOG_EVERY:-25}"
 IMAGE_LOG_EVERY="${IMAGE_LOG_EVERY:-100}"
 VIDEO_LOG_EVERY="${VIDEO_LOG_EVERY:-200}"
 SIZE="${SIZE:-384}"
+RENDER_SIZE="${RENDER_SIZE:-$SIZE}"
 TRAIN_FRAME_COUNT="${TRAIN_FRAME_COUNT:-16}"
 TOKENS="${TOKENS:-8}"
 GAUSSIANS_PER_TOKEN="${GAUSSIANS_PER_TOKEN:-64}"
@@ -77,6 +78,11 @@ if (( TRAIN_FRAME_COUNT % TUBELET_SIZE_T != 0 )); then
   exit 1
 fi
 
+if (( RENDER_SIZE < 1 )); then
+  echo "RENDER_SIZE=$RENDER_SIZE must be >= 1" >&2
+  exit 1
+fi
+
 if [[ "$FRAME_COUNT" -lt "$TRAIN_FRAME_COUNT" ]]; then
   echo "Need at least TRAIN_FRAME_COUNT=$TRAIN_FRAME_COUNT frames in $VIDEO_PATH, got $FRAME_COUNT" >&2
   exit 1
@@ -117,7 +123,8 @@ echo "Scalar log every: $LOG_EVERY"
 echo "Image log every: $IMAGE_LOG_EVERY"
 echo "Video log every: $VIDEO_LOG_EVERY"
 echo "Always log last step: $ALWAYS_LOG_LAST_STEP"
-echo "Input/render size: $SIZE"
+echo "Input size: $SIZE"
+echo "Render size: $RENDER_SIZE"
 if [[ "$FRAME_COUNT" -gt "$TRAIN_FRAME_COUNT" ]]; then
   echo "Sampling: random contiguous chunks of $TRAIN_FRAME_COUNT frames per step"
 else
@@ -129,6 +136,7 @@ export VIDEO_PATH
 export FRAME_SOURCE="explicit_video"
 export STEPS
 export SIZE
+export RENDER_SIZE
 export TRAIN_FRAME_COUNT
 export TOKENS
 export GAUSSIANS_PER_TOKEN

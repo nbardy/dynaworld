@@ -1,20 +1,18 @@
 import argparse
-import json
 from contextlib import nullcontext
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.nn.functional as F
-import torchvision.transforms as T
 import wandb
-from camera import CameraSpec
 from fast_attn import configure_fast_attn, fast_attn_context
 from gs_models import DynamicTokenGS
-from PIL import Image
+from rendering import pick_renderer_mode as resolve_renderer_mode
+from rendering import render_gaussian_frame
 from renderers.common import build_pixel_grid
-from renderers.dense import render_pytorch_3dgs
-from renderers.tiled import render_pytorch_3dgs_tiled
+from runtime_types import GaussianFrame
+from sequence_data import load_camera_sequence, select_window_indices
+from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -115,44 +113,6 @@ def resolve_camera_json_path(sequence_dir: Path, camera_json: Path | None) -> Pa
     return sequence_dir / "per_frame_cameras.json"
 
 
-def infer_video_fps(records):
-    timestamps = [record.get("timestamp_seconds") for record in records]
-    diffs = []
-    for left, right in zip(timestamps[:-1], timestamps[1:]):
-        if left is None or right is None:
-            continue
-        delta = float(right) - float(left)
-        if delta > 0:
-            diffs.append(delta)
-    if not diffs:
-        return 1.0
-    return float(1.0 / np.median(np.asarray(diffs, dtype=np.float32)))
-
-
-def summarize_sequence_intrinsics(intrinsics: np.ndarray) -> dict[str, float]:
-    return {
-        "fx_median": float(np.median(intrinsics[:, 0, 0])),
-        "fy_median": float(np.median(intrinsics[:, 1, 1])),
-        "cx_median": float(np.median(intrinsics[:, 0, 2])),
-        "cy_median": float(np.median(intrinsics[:, 1, 2])),
-    }
-
-
-def resolve_sequence_intrinsics(
-    intrinsics: np.ndarray,
-    focal_mode: str,
-) -> np.ndarray:
-    resolved = intrinsics.copy()
-    if focal_mode == "median":
-        summary = summarize_sequence_intrinsics(intrinsics)
-        resolved[:, 0, 0] = summary["fx_median"]
-        resolved[:, 1, 1] = summary["fy_median"]
-        return resolved
-    if focal_mode == "per_frame":
-        return resolved
-    raise ValueError(f"Unsupported camera focal mode: {focal_mode}")
-
-
 def load_sequence_data(
     camera_json_path: Path,
     target_size: int,
@@ -161,71 +121,14 @@ def load_sequence_data(
     focal_mode: str,
     device,
 ):
-    records = json.loads(camera_json_path.read_text())
-    if max_frames > 0:
-        records = records[:max_frames]
-    if len(records) < 2:
-        raise ValueError(f"Need at least 2 frame-camera records in {camera_json_path}")
-
-    transform = T.Compose([T.Resize((target_size, target_size)), T.ToTensor()])
-    scale = float(target_size) / float(camera_image_size)
-    base_pose = torch.tensor(records[0]["camera_to_world"], dtype=torch.float32)
-    base_pose_inv = torch.linalg.inv(base_pose)
-    raw_intrinsics = np.stack([np.asarray(record["intrinsics"], dtype=np.float32) for record in records], axis=0)
-    intrinsics_per_frame = resolve_sequence_intrinsics(raw_intrinsics, focal_mode=focal_mode)
-    intrinsics_summary = summarize_sequence_intrinsics(intrinsics_per_frame)
-
-    frames = []
-    cameras = []
-    timestamps = []
-
-    for record, intrinsics in zip(records, intrinsics_per_frame):
-        frame_path = Path(record["frame_path"])
-        if not frame_path.exists():
-            raise FileNotFoundError(f"Missing frame referenced by camera JSON: {frame_path}")
-        frames.append(transform(Image.open(frame_path).convert("RGB")))
-
-        pose = torch.tensor(record["camera_to_world"], dtype=torch.float32)
-        pose = base_pose_inv @ pose
-        cameras.append(
-            CameraSpec(
-                fx=float(intrinsics[0, 0] * scale),
-                fy=float(intrinsics[1, 1] * scale),
-                cx=float(intrinsics[0, 2] * scale),
-                cy=float(intrinsics[1, 2] * scale),
-                camera_to_world=pose.to(device=device),
-            )
-        )
-
-        timestamp = record.get("timestamp_seconds")
-        timestamps.append(float(timestamp) if timestamp is not None else None)
-
-    times_np = np.asarray(
-        [timestamp if timestamp is not None else index for index, timestamp in enumerate(timestamps)],
-        dtype=np.float32,
+    return load_camera_sequence(
+        camera_json_path=camera_json_path,
+        target_size=target_size,
+        camera_image_size=camera_image_size,
+        max_frames=max_frames,
+        focal_mode=focal_mode,
+        device=device,
     )
-    if len(times_np) > 1 and float(times_np.max()) > float(times_np.min()):
-        times_np = (times_np - times_np.min()) / (times_np.max() - times_np.min())
-    else:
-        times_np = np.zeros_like(times_np)
-
-    return {
-        "frames": torch.stack(frames, dim=0).to(device),
-        "cameras": cameras,
-        "frame_times": torch.from_numpy(times_np).to(device=device).unsqueeze(-1),
-        "records": records,
-        "video_fps": infer_video_fps(records),
-        "intrinsics_summary": {
-            "focal_mode": focal_mode,
-            "raw_fx_median": float(np.median(raw_intrinsics[:, 0, 0])),
-            "raw_fy_median": float(np.median(raw_intrinsics[:, 1, 1])),
-            "resolved_fx_median": intrinsics_summary["fx_median"],
-            "resolved_fy_median": intrinsics_summary["fy_median"],
-            "resolved_cx_median": intrinsics_summary["cx_median"],
-            "resolved_cy_median": intrinsics_summary["cy_median"],
-            "training_scale": scale,
-        },
-    }
 
 
 def normalize_model_outputs(outputs):
@@ -237,60 +140,28 @@ def normalize_model_outputs(outputs):
 
 def pick_renderer_mode(args):
     effective_gaussians = args.tokens * args.gaussians_per_token
-    if args.renderer == "auto":
-        renderer_mode = "dense" if effective_gaussians * args.size * args.size <= args.auto_dense_limit else "tiled"
-    else:
-        renderer_mode = args.renderer
+    renderer_mode = resolve_renderer_mode(
+        renderer=args.renderer,
+        gaussian_count=effective_gaussians,
+        height=args.size,
+        width=args.size,
+        auto_dense_limit=args.auto_dense_limit,
+    )
     return renderer_mode, effective_gaussians
 
 
 def render_one_frame(renderer_mode, args, dense_grid, camera, xyz, scales, quats, opacities, rgbs):
-    if renderer_mode == "dense":
-        return render_pytorch_3dgs(
-            xyz.float(),
-            scales.float(),
-            quats.float(),
-            opacities.float(),
-            rgbs.float(),
-            args.size,
-            args.size,
-            camera.fx,
-            camera.fy,
-            camera.cx,
-            camera.cy,
-            grid=dense_grid,
-            camera_to_world=camera.camera_to_world.float(),
-        )
-    return render_pytorch_3dgs_tiled(
-        xyz.float(),
-        scales.float(),
-        quats.float(),
-        opacities.float(),
-        rgbs.float(),
-        args.size,
-        args.size,
-        camera.fx,
-        camera.fy,
-        camera.cx,
-        camera.cy,
+    return render_gaussian_frame(
+        GaussianFrame(xyz=xyz, scales=scales, quats=quats, opacities=opacities, rgbs=rgbs),
+        camera=camera,
+        height=args.size,
+        width=args.size,
+        mode=renderer_mode,
+        dense_grid=dense_grid,
         tile_size=args.tile_size,
         bound_scale=args.bound_scale,
         alpha_threshold=args.alpha_threshold,
-        camera_to_world=camera.camera_to_world.float(),
     )
-
-
-def select_window_indices(num_frames, frames_per_step, device):
-    window = min(frames_per_step, num_frames)
-    if window >= num_frames:
-        return torch.arange(num_frames, device=device)
-    start = torch.randint(0, num_frames - window + 1, (1,), device=device).item()
-    return torch.arange(start, start + window, device=device)
-
-
-def make_wandb_video(frames, fps):
-    video = (frames.detach().cpu().clamp(0, 1) * 255.0).to(torch.uint8).numpy()
-    return wandb.Video(video, fps=max(1, int(round(fps))), format="mp4")
 
 
 @torch.no_grad()
@@ -427,9 +298,9 @@ def run_training(args):
                 "SequenceFrames": num_frames,
             }
             if should_log_images:
-                preview = torch.cat([batch_frames[0], renders[0].detach()], dim=2)
-                payload["Render_GT_vs_Pred"] = wandb.Image(
-                    T.ToPILImage()(preview.cpu().clamp(0, 1)),
+                payload["Render_GT_vs_Pred"] = make_preview_image(
+                    batch_frames[0],
+                    renders[0],
                     caption=f"Step {step}",
                 )
             if should_log_videos:
@@ -444,9 +315,13 @@ def run_training(args):
                     device,
                 )
                 gt_sequence = sequence_data["frames"].detach().cpu()
-                side_by_side = torch.cat([gt_sequence, rendered_sequence], dim=3)
-                payload["Render_Video"] = make_wandb_video(rendered_sequence, sequence_data["video_fps"])
-                payload["Render_GT_Video"] = make_wandb_video(side_by_side, sequence_data["video_fps"])
+                payload.update(
+                    build_validation_video_payload(
+                        rendered_sequence,
+                        gt_sequence,
+                        sequence_data["video_fps"],
+                    )
+                )
                 if not gt_video_logged:
                     payload["GT_Video"] = make_wandb_video(gt_sequence, sequence_data["video_fps"])
                     gt_video_logged = True

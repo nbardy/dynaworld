@@ -1,5 +1,16 @@
 # Dynaworld Interface Cleanup And Unification
 
+## Status
+
+Implemented first cleanup pass on 2026-04-20:
+
+- added shared runtime payload contracts in `src/train/runtime_types.py`
+- added shared sequence loaders/window sampling in `src/train/sequence_data.py`
+- added shared renderer dispatch in `src/train/rendering.py`
+- added shared W&B logging helpers in `src/train/train_logging.py`
+- extracted implicit-camera heads and SE(3) math into `src/train/gs_models/implicit_camera.py`
+- migrated the known-camera, image-implicit, and video-implicit trainers onto the shared helper vocabulary without introducing a shared base trainer
+
 ## Goal
 
 Reduce script drift in `dynaworld/` without overbuilding a framework.

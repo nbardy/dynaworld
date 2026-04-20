@@ -9,22 +9,22 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
-import torchvision.transforms as T
 import wandb
+from camera import CameraSpec
 from dynamicTokenGS import (
     DEFAULT_SEQUENCE_DIR,
     configure_fast_attn,
     fast_attn_context,
-    make_wandb_video,
     pick_device,
-    select_window_indices,
 )
 from gs_models import DynamicVideoTokenGSImplicitCamera
+from rendering import pick_renderer_mode as resolve_renderer_mode
+from rendering import render_gaussian_frame, resize_images
 from renderers.common import build_pixel_grid
-from renderers.dense import render_pytorch_3dgs
-from renderers.tiled import render_pytorch_3dgs_tiled
+from runtime_types import GaussianFrame
+from sequence_data import load_uncalibrated_sequence, resolve_frames_dir, select_window_indices
+from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 from tqdm import tqdm
-from train_camera_implicit_dynamic import load_sequence_data, resolve_frames_dir
 
 DEFAULT_CONFIG = {
     "data": {
@@ -60,6 +60,7 @@ DEFAULT_CONFIG = {
     },
     "render": {
         "renderer": "dense",
+        "render_size": 0,
         "auto_dense_limit": 400_000,
         "tile_size": 8,
         "bound_scale": 3.0,
@@ -121,6 +122,8 @@ def resolve_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["data"]["frames_dir"] = None if frames_dir is None else Path(frames_dir)
     video_path = cfg["data"]["video_path"]
     cfg["data"]["video_path"] = None if video_path is None else Path(video_path)
+    if int(cfg["render"]["render_size"]) <= 0:
+        cfg["render"]["render_size"] = int(cfg["model"]["size"])
     return cfg
 
 
@@ -187,6 +190,9 @@ def config_from_env(env: dict[str, str] | None = None) -> dict[str, Any]:
         "train": {
             "steps": "STEPS",
             "temporal_microbatch_size": "TEMPORAL_MICROBATCH_SIZE",
+        },
+        "render": {
+            "render_size": "RENDER_SIZE",
         },
         "logging": {
             "log_every": "LOG_EVERY",
@@ -261,14 +267,13 @@ def pick_renderer_mode_from_config(config: dict[str, Any]) -> tuple[str, int]:
     model_cfg = config["model"]
     render_cfg = config["render"]
     effective_gaussians = model_cfg["tokens"] * model_cfg["gaussians_per_token"]
-    if render_cfg["renderer"] == "auto":
-        renderer_mode = (
-            "dense"
-            if effective_gaussians * model_cfg["size"] * model_cfg["size"] <= render_cfg["auto_dense_limit"]
-            else "tiled"
-        )
-    else:
-        renderer_mode = render_cfg["renderer"]
+    renderer_mode = resolve_renderer_mode(
+        renderer=render_cfg["renderer"],
+        gaussian_count=effective_gaussians,
+        height=render_cfg["render_size"],
+        width=render_cfg["render_size"],
+        auto_dense_limit=render_cfg["auto_dense_limit"],
+    )
     return renderer_mode, effective_gaussians
 
 
@@ -290,7 +295,8 @@ def prepare_clip(sequence_data: dict[str, Any], clip_indices: torch.Tensor) -> t
 def render_clip_frame(
     renderer_mode: str,
     render_cfg: dict[str, Any],
-    image_size: int,
+    input_size: int,
+    render_size: int,
     dense_grid: torch.Tensor,
     camera: Any,
     xyz: torch.Tensor,
@@ -299,38 +305,24 @@ def render_clip_frame(
     opacities: torch.Tensor,
     rgbs: torch.Tensor,
 ) -> torch.Tensor:
-    if renderer_mode == "dense":
-        return render_pytorch_3dgs(
-            xyz.float(),
-            scales.float(),
-            quats.float(),
-            opacities.float(),
-            rgbs.float(),
-            image_size,
-            image_size,
-            camera.fx,
-            camera.fy,
-            camera.cx,
-            camera.cy,
-            grid=dense_grid,
-            camera_to_world=camera.camera_to_world.float(),
-        )
-    return render_pytorch_3dgs_tiled(
-        xyz.float(),
-        scales.float(),
-        quats.float(),
-        opacities.float(),
-        rgbs.float(),
-        image_size,
-        image_size,
-        camera.fx,
-        camera.fy,
-        camera.cx,
-        camera.cy,
+    camera_scale = float(render_size) / float(input_size)
+    scaled_camera = CameraSpec(
+        fx=camera.fx * camera_scale,
+        fy=camera.fy * camera_scale,
+        cx=camera.cx * camera_scale,
+        cy=camera.cy * camera_scale,
+        camera_to_world=camera.camera_to_world,
+    )
+    return render_gaussian_frame(
+        GaussianFrame(xyz=xyz, scales=scales, quats=quats, opacities=opacities, rgbs=rgbs),
+        camera=scaled_camera,
+        height=render_size,
+        width=render_size,
+        mode=renderer_mode,
+        dense_grid=dense_grid,
         tile_size=render_cfg["tile_size"],
         bound_scale=render_cfg["bound_scale"],
         alpha_threshold=render_cfg["alpha_threshold"],
-        camera_to_world=camera.camera_to_world.float(),
     )
 
 
@@ -348,6 +340,7 @@ def render_full_sequence(
     was_training = model.training
     model.eval()
     model_cfg = config["model"]
+    render_cfg = config["render"]
     clip_length = model_cfg["train_frame_count"]
     num_frames = sequence_data["frames"].shape[0]
     rendered_frames = [None] * num_frames
@@ -369,8 +362,9 @@ def render_full_sequence(
                 continue
             rendered_frames[frame_index] = render_clip_frame(
                 renderer_mode,
-                config["render"],
+                render_cfg,
                 model_cfg["size"],
+                render_cfg["render_size"],
                 dense_grid,
                 cameras[local_index],
                 xyz[local_index],
@@ -441,6 +435,9 @@ class Trainer:
             raise ValueError(
                 f"temporal_microbatch_size must be >= 1, got {self.temporal_microbatch_size}."
             )
+        self.render_size = int(self.render_cfg["render_size"])
+        if self.render_size < 1:
+            raise ValueError(f"render_size must be >= 1, got {self.render_size}.")
 
         self.device = pick_device()
         print(f"Using device: {self.device}")
@@ -472,7 +469,7 @@ class Trainer:
             fused=self.device.type in {"cuda", "mps"},
         )
 
-        self.dense_grid = build_pixel_grid(self.model_cfg["size"], self.model_cfg["size"], self.device)
+        self.dense_grid = build_pixel_grid(self.render_size, self.render_size, self.device)
         self.amp_available = bool(
             self.train_cfg["amp"] and torch.amp.autocast_mode.is_autocast_available(self.device.type)
         )
@@ -490,7 +487,7 @@ class Trainer:
         if self.data_cfg["frame_source"] == "explicit_video" and self.data_cfg["video_path"] is None:
             raise ValueError("config['data']['video_path'] is required when frame_source='explicit_video'.")
         frames_dir = resolve_frames_dir(self.data_cfg["sequence_dir"], self.data_cfg["frames_dir"])
-        return load_sequence_data(
+        return load_uncalibrated_sequence(
             sequence_dir=self.data_cfg["sequence_dir"],
             frames_dir=frames_dir,
             video_path=self.data_cfg["video_path"],
@@ -578,6 +575,7 @@ class Trainer:
         preview_render = None
         frame_count = len(cameras)
         chunk_size = self.temporal_recon_chunk_size(frame_count)
+        target_frames = resize_images(clip_frames[0], self.render_size)
 
         for chunk_start in range(0, frame_count, chunk_size):
             chunk_end = min(chunk_start + chunk_size, frame_count)
@@ -589,6 +587,7 @@ class Trainer:
                     self.renderer_mode,
                     self.render_cfg,
                     self.model_cfg["size"],
+                    self.render_size,
                     self.dense_grid,
                     camera,
                     xyz[local_index],
@@ -599,7 +598,7 @@ class Trainer:
                 )
                 if keep_preview and preview_render is None:
                     preview_render = render.detach()
-                target = clip_frames[0, local_index]
+                target = target_frames[local_index]
                 chunk_losses.append(F.l1_loss(render, target) + 0.2 * F.mse_loss(render, target))
 
             chunk_recon_loss = torch.stack(chunk_losses).sum() / frame_count
@@ -689,6 +688,8 @@ class Trainer:
             "Loss/CameraGlobal": result.camera_global_loss.item(),
             "TrainFrameCount": int(self.model_cfg["train_frame_count"]),
             "SequenceFrames": self.num_frames,
+            "InputSize": int(self.model_cfg["size"]),
+            "RenderSize": int(self.render_size),
             "Camera/FOVDegrees": metrics["fov_degrees"],
             "Camera/Radius": metrics["radius"],
             "Camera/RotationDeltaMeanDegrees": metrics["rotation_delta_mean_degrees"],
@@ -698,8 +699,8 @@ class Trainer:
     def render_preview_image(self, result: StepResult, step: int) -> wandb.Image:
         if result.preview_render is None:
             raise ValueError("Preview render was requested for logging but was not retained during the training step.")
-        preview = torch.cat([result.clip_frames[0, 0], result.preview_render], dim=2)
-        return wandb.Image(T.ToPILImage()(preview.cpu().clamp(0, 1)), caption=f"Step {step}")
+        target = resize_images(result.clip_frames[0, 0], self.render_size)
+        return make_preview_image(target, result.preview_render, caption=f"Step {step}")
 
     def validation_video_payload(self) -> dict[str, Any]:
         rendered_sequence, eval_camera_state = render_full_sequence(
@@ -712,11 +713,13 @@ class Trainer:
             self.amp_dtype,
             self.device,
         )
-        gt_sequence = self.sequence_data["frames"].detach().cpu()
-        side_by_side = torch.cat([gt_sequence, rendered_sequence], dim=3)
+        gt_sequence = resize_images(self.sequence_data["frames"], self.render_size).detach().cpu()
         payload = {
-            "Render_Video": make_wandb_video(rendered_sequence, self.sequence_data["video_fps"]),
-            "Render_GT_Video": make_wandb_video(side_by_side, self.sequence_data["video_fps"]),
+            **build_validation_video_payload(
+                rendered_sequence,
+                gt_sequence,
+                self.sequence_data["video_fps"],
+            ),
             "Camera/EvalFOVDegrees": eval_camera_state["fov_degrees"].item(),
             "Camera/EvalRadius": eval_camera_state["radius"].item(),
             "Camera/EvalRotationDeltaMeanDegrees": (
@@ -749,6 +752,7 @@ class Trainer:
         print(
             "Starting DynamicVideoTokenGSImplicitCamera Training: "
             f"{self.num_frames} frames, train_frame_count={self.model_cfg['train_frame_count']}, "
+            f"input_size={self.model_cfg['size']}, render_size={self.render_size}, "
             f"1 global camera token + 1 path token + {self.model_cfg['tokens']} 3DGS tokens x "
             f"{self.model_cfg['gaussians_per_token']} gaussians/token = "
             f"{self.effective_gaussians} explicit Gaussians with {self.renderer_mode} renderer..."

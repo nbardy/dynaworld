@@ -1,29 +1,24 @@
 import argparse
-import json
 from contextlib import nullcontext
 from pathlib import Path
 
-import cv2
-import numpy as np
 import torch
 import torch.nn.functional as F
-import torchvision.transforms as T
 import wandb
 from dynamicTokenGS import (
     DEFAULT_SEQUENCE_DIR,
     configure_fast_attn,
     fast_attn_context,
-    infer_video_fps,
-    make_wandb_video,
     pick_device,
     pick_renderer_mode,
     select_window_indices,
 )
 from gs_models import DynamicTokenGSImplicitCamera
-from PIL import Image
+from rendering import render_gaussian_frame
 from renderers.common import build_pixel_grid
-from renderers.dense import render_pytorch_3dgs
-from renderers.tiled import render_pytorch_3dgs_tiled
+from runtime_types import GaussianFrame
+from sequence_data import load_uncalibrated_sequence, resolve_frames_dir
+from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 from tqdm import tqdm
 
 
@@ -131,137 +126,6 @@ def parse_args(default_renderer="auto"):
     return build_arg_parser(default_renderer=default_renderer).parse_args()
 
 
-def resolve_frames_dir(sequence_dir: Path, frames_dir: Path | None) -> Path:
-    if frames_dir is not None:
-        return frames_dir
-    return sequence_dir / "frames"
-
-
-def resolve_video_path(video_path: Path | None, metadata) -> Path | None:
-    if video_path is not None:
-        return video_path
-    if metadata is None:
-        return None
-    value = metadata.get("video")
-    if not value:
-        return None
-    return Path(value)
-
-
-def load_sequence_metadata(sequence_dir: Path):
-    summary_path = sequence_dir / "summary.json"
-    if not summary_path.exists():
-        return None
-    return json.loads(summary_path.read_text())
-
-
-def build_frame_times(frame_paths, metadata):
-    timestamps = None
-    if metadata is not None:
-        sampled_frames = metadata.get("frame_sampling", {}).get("sampled_frames", [])
-        timestamp_by_path = {}
-        for item in sampled_frames:
-            path = item.get("path")
-            if path is None:
-                continue
-            timestamp_by_path[str(Path(path).resolve())] = item.get("timestamp_seconds")
-        timestamps = [timestamp_by_path.get(str(path.resolve())) for path in frame_paths]
-
-    if timestamps is None or all(timestamp is None for timestamp in timestamps):
-        values = np.arange(len(frame_paths), dtype=np.float32)
-        return torch.from_numpy(values).unsqueeze(-1), 1.0
-
-    times_np = np.asarray(
-        [timestamp if timestamp is not None else index for index, timestamp in enumerate(timestamps)],
-        dtype=np.float32,
-    )
-    video_fps = infer_video_fps([{"timestamp_seconds": value} for value in timestamps])
-    return torch.from_numpy(times_np).unsqueeze(-1), video_fps
-
-
-def build_uniform_frame_times(num_frames: int, fps: float):
-    if num_frames < 1:
-        raise ValueError("Need at least one frame to build timestamps.")
-    safe_fps = float(fps) if fps and fps > 0 else 1.0
-    values = np.arange(num_frames, dtype=np.float32) / safe_fps
-    return torch.from_numpy(values).unsqueeze(-1), safe_fps
-
-
-def normalize_frame_times(frame_times: torch.Tensor):
-    frame_times_np = frame_times.numpy()
-    if len(frame_times_np) > 1 and float(frame_times_np.max()) > float(frame_times_np.min()):
-        frame_times_np = (frame_times_np - frame_times_np.min()) / (frame_times_np.max() - frame_times_np.min())
-    else:
-        frame_times_np = np.zeros_like(frame_times_np)
-    return torch.from_numpy(frame_times_np)
-
-
-def resolve_frame_paths(sequence_dir: Path, frames_dir: Path, metadata, frame_source: str):
-    if frame_source == "summary_sampled" and metadata is not None:
-        sampled_frames = metadata.get("frame_sampling", {}).get("sampled_frames", [])
-        sampled_paths = [Path(item["path"]) for item in sampled_frames if item.get("path")]
-        existing_paths = [path for path in sampled_paths if path.exists()]
-        if len(existing_paths) >= 2:
-            return existing_paths, "summary_sampled"
-    return sorted(frames_dir.glob("*.png")), "all_frames"
-
-
-def load_video_sequence(video_path: Path, target_size: int, max_frames: int):
-    capture = cv2.VideoCapture(str(video_path))
-    if not capture.isOpened():
-        raise FileNotFoundError(f"Could not open video: {video_path}")
-    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    transform = T.Compose([T.Resize((target_size, target_size)), T.ToTensor()])
-    frames = []
-
-    while True:
-        ok, frame_bgr = capture.read()
-        if not ok:
-            break
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        frames.append(transform(Image.fromarray(frame_rgb)))
-        if max_frames > 0 and len(frames) >= max_frames:
-            break
-
-    capture.release()
-    if len(frames) < 2:
-        raise ValueError(f"Need at least 2 frames in video {video_path}")
-
-    frame_times, video_fps = build_uniform_frame_times(len(frames), fps)
-    return {
-        "frames": torch.stack(frames, dim=0),
-        "frame_times": normalize_frame_times(frame_times),
-        "video_fps": video_fps,
-        "frame_source": "summary_video",
-        "source_path": video_path,
-        "selected_frame_count": len(frames),
-        "all_frame_count": total_frames if total_frames > 0 else len(frames),
-    }
-
-
-def load_frame_sequence(frames_dir: Path, metadata, target_size: int, max_frames: int, frame_source: str):
-    all_frame_paths = sorted(frames_dir.glob("*.png"))
-    frame_paths, resolved_frame_source = resolve_frame_paths(None, frames_dir, metadata, frame_source=frame_source)
-    if max_frames > 0:
-        frame_paths = frame_paths[:max_frames]
-    if len(frame_paths) < 2:
-        raise ValueError(f"Need at least 2 frames in {frames_dir}")
-    transform = T.Compose([T.Resize((target_size, target_size)), T.ToTensor()])
-    frames = [transform(Image.open(frame_path).convert("RGB")) for frame_path in frame_paths]
-    frame_times, video_fps = build_frame_times(frame_paths, metadata)
-    return {
-        "frames": torch.stack(frames, dim=0),
-        "frame_times": normalize_frame_times(frame_times),
-        "frame_paths": frame_paths,
-        "video_fps": video_fps,
-        "frame_source": resolved_frame_source,
-        "source_path": frames_dir,
-        "selected_frame_count": len(frame_paths),
-        "all_frame_count": len(all_frame_paths),
-    }
-
-
 def load_sequence_data(
     sequence_dir: Path,
     frames_dir: Path,
@@ -271,79 +135,28 @@ def load_sequence_data(
     frame_source: str,
     device,
 ):
-    metadata = load_sequence_metadata(sequence_dir)
-    if frame_source in {"summary_video", "explicit_video"}:
-        resolved_video_path = resolve_video_path(video_path, metadata if frame_source == "summary_video" else None)
-        if resolved_video_path is None or not resolved_video_path.exists():
-            mode_name = "summary_video" if frame_source == "summary_video" else "explicit_video"
-            raise FileNotFoundError(
-                f"{mode_name} requested but no usable video path was found. "
-                "Pass --video-path explicitly or use --frame-source summary_sampled."
-            )
-        expected_frames = metadata.get("frame_sampling", {}).get("total_frames") if metadata is not None else None
-        video_sequence = load_video_sequence(resolved_video_path, target_size=target_size, max_frames=max_frames)
-        actual_frames = video_sequence["all_frame_count"]
-        if (
-            frame_source == "summary_video"
-            and expected_frames is not None
-            and max_frames == 0
-            and int(expected_frames) != int(actual_frames)
-        ):
-            raise ValueError(
-                f"summary_video requested but video frame count {actual_frames} does not match "
-                f"summary.json frame_sampling.total_frames {expected_frames}. "
-                "Use --frame-source summary_sampled when the source video was not pre-downsampled."
-            )
-        video_sequence["frame_source"] = frame_source
-        video_sequence["frames"] = video_sequence["frames"].to(device)
-        video_sequence["frame_times"] = video_sequence["frame_times"].to(device=device, dtype=torch.float32)
-        return video_sequence
-
-    frame_sequence = load_frame_sequence(
+    return load_uncalibrated_sequence(
+        sequence_dir=sequence_dir,
         frames_dir=frames_dir,
-        metadata=metadata,
+        video_path=video_path,
         target_size=target_size,
         max_frames=max_frames,
         frame_source=frame_source,
+        device=device,
     )
-    frame_sequence["frames"] = frame_sequence["frames"].to(device)
-    frame_sequence["frame_times"] = frame_sequence["frame_times"].to(device=device, dtype=torch.float32)
-    return frame_sequence
 
 
 def render_implicit_frame(renderer_mode, args, dense_grid, camera, xyz, scales, quats, opacities, rgbs):
-    if renderer_mode == "dense":
-        return render_pytorch_3dgs(
-            xyz.float(),
-            scales.float(),
-            quats.float(),
-            opacities.float(),
-            rgbs.float(),
-            args.size,
-            args.size,
-            camera.fx,
-            camera.fy,
-            camera.cx,
-            camera.cy,
-            grid=dense_grid,
-            camera_to_world=camera.camera_to_world.float(),
-        )
-    return render_pytorch_3dgs_tiled(
-        xyz.float(),
-        scales.float(),
-        quats.float(),
-        opacities.float(),
-        rgbs.float(),
-        args.size,
-        args.size,
-        camera.fx,
-        camera.fy,
-        camera.cx,
-        camera.cy,
+    return render_gaussian_frame(
+        GaussianFrame(xyz=xyz, scales=scales, quats=quats, opacities=opacities, rgbs=rgbs),
+        camera=camera,
+        height=args.size,
+        width=args.size,
+        mode=renderer_mode,
+        dense_grid=dense_grid,
         tile_size=args.tile_size,
         bound_scale=args.bound_scale,
         alpha_threshold=args.alpha_threshold,
-        camera_to_world=camera.camera_to_world.float(),
     )
 
 
@@ -530,9 +343,9 @@ def run_training(args):
                 "Camera/TranslationDeltaMean": mean_trans,
             }
             if should_log_images:
-                preview = torch.cat([batch_frames[0], renders[0].detach()], dim=2)
-                payload["Render_GT_vs_Pred"] = wandb.Image(
-                    T.ToPILImage()(preview.cpu().clamp(0, 1)),
+                payload["Render_GT_vs_Pred"] = make_preview_image(
+                    batch_frames[0],
+                    renders[0],
                     caption=f"Step {step}",
                 )
             if should_log_videos:
@@ -547,9 +360,13 @@ def run_training(args):
                     device,
                 )
                 gt_sequence = sequence_data["frames"].detach().cpu()
-                side_by_side = torch.cat([gt_sequence, rendered_sequence], dim=3)
-                payload["Render_Video"] = make_wandb_video(rendered_sequence, sequence_data["video_fps"])
-                payload["Render_GT_Video"] = make_wandb_video(side_by_side, sequence_data["video_fps"])
+                payload.update(
+                    build_validation_video_payload(
+                        rendered_sequence,
+                        gt_sequence,
+                        sequence_data["video_fps"],
+                    )
+                )
                 payload["Camera/EvalFOVDegrees"] = eval_camera_state["fov_degrees"].item()
                 payload["Camera/EvalRadius"] = eval_camera_state["radius"].item()
                 payload["Camera/EvalRotationDeltaMeanDegrees"] = (
