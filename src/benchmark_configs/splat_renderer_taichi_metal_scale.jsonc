@@ -1,0 +1,67 @@
+{
+  // Taichi/Metal-only scaling sweep.
+  //
+  // This is forward-only by default because the current Metal path is a simple
+  // differentiable reference kernel. Use the main benchmark config with CLI
+  // overrides when you specifically want backward probes at selected points.
+  "resolutions": [
+    [128, 128],
+    [256, 256],
+    [512, 512],
+    [1024, 1024]
+  ],
+  "splat_counts": [65536, 131072, 262144],
+
+  "sets_per_case": 1,
+  "warmup_iters": 1,
+  "timed_iters": 3,
+  "backward": false,
+  "compare_outputs": false,
+
+  "device": "auto",
+  "dtype": "float32",
+  "renderers": ["taichi"],
+
+  "save_images": {
+    "enabled": true,
+    "directory": "benchmark_outputs/taichi_scale_images",
+    "set_index": 0,
+    "largest_resolution_only": true,
+    "largest_splat_count_only": true
+  },
+
+  "taichi": {
+    "variant": "metal_reference",
+    "sort_backend": "auto",
+    "backward_variant": "pixel_reference",
+    "metal_block_dim": 0,
+    "use_depth16": false,
+    "tile_size": 16,
+    "alpha_threshold": 0.00392156862745098,
+    "clamp_max_alpha": 0.99,
+    "saturate_threshold": 0.9999,
+    "metal_compatible": true,
+    "precision": {
+      "compute_dtype": "input"
+    }
+  },
+
+  "overlap_stats": {
+    // Scaling sweep diagnostics: this is the sort-key pressure table that
+    // explains whether higher resolution/count cases are actually key-bound.
+    "enabled": true,
+    "variants": ["taichi_obb", "exact_conic"],
+    "print_per_case": true,
+    "large_splat_tile_threshold": 64,
+    "batch_size": 8192,
+    "max_candidate_pairs_per_batch": 1000000
+  },
+
+  "random_splats": {
+    "depth_range": [1.5, 4.0],
+    "opacity_range": [0.08, 0.85],
+    "scale_pixel_range": [1.0, 5.0],
+    "xy_margin_fraction": 0.08,
+    "focal_length_factor": 1.15
+  }
+}

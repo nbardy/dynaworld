@@ -1,0 +1,67 @@
+{
+  // Accuracy check for the Taichi rasterizer against a direct Torch reference.
+  //
+  // This intentionally uses small packed 2D splats rather than the full 3D
+  // projection path. That isolates raster/blend correctness and gradient
+  // correctness for Taichi's forward/backward kernels.
+  "resolutions": [
+    [16, 16],
+    [32, 32]
+  ],
+  "splat_counts": [4, 8, 16],
+  "sets_per_case": 3,
+
+  "device": "auto",
+  "dtype": "float32",
+  "baseline_device": "cpu",
+  "baseline_dtype": "float64",
+  "renderers": ["taichi", "raw_metal"],
+
+  "taichi": {
+    "variant": "metal_reference",
+    "sort_backend": "auto",
+    "backward_variant": "pixel_reference",
+    "metal_block_dim": 0,
+    "use_depth16": false,
+    "tile_size": 16,
+    "alpha_threshold": 0.00392156862745098,
+    "clamp_max_alpha": 0.99,
+    "saturate_threshold": 0.9999,
+    "metal_compatible": true
+  },
+
+  "raw_metal": {
+    "tile_size": 16,
+    "chunk_size": 32,
+    "alpha_threshold": 0.00392156862745098,
+    "transmittance_threshold": 0.0001
+  },
+
+  "random_splats_2d": {
+    "xy_margin_fraction": 0.12,
+    "sigma_pixel_range": [1.25, 4.5],
+    "opacity_range": [0.04, 0.35],
+    "feature_range": [0.05, 0.95],
+    "background": [0.08, 0.13, 0.21]
+  },
+
+  "tolerances": {
+    "image_max_abs": 0.0005,
+    "image_mean_abs": 0.00005,
+    "loss_abs": 0.00005,
+    "packed_grad_max_abs": 0.002,
+    "packed_grad_mean_abs": 0.0001,
+    "feature_grad_max_abs": 0.002,
+    "feature_grad_mean_abs": 0.0001
+  },
+
+  "save_images": {
+    // Save Torch reference, Taichi output, and an amplified absolute-diff PNG
+    // for the largest resolution/count and set 0.
+    "enabled": true,
+    "directory": "benchmark_outputs/splat_accuracy_images",
+    "set_index": 0,
+    "largest_resolution_only": true,
+    "largest_splat_count_only": true
+  }
+}
