@@ -18,6 +18,17 @@ This lets us jump into our favorite existing worlds through videos of what is ac
 
 Phase I of Dynaworld focuses on dynamic `video in -> splats out`. Phase II extends that foundation toward actions inside the world model, but the first job is to make dynamic novel-view video editing work.
 
+## Core Beliefs
+
+- World models are video models. A strong video backbone already carries geometry, motion, and lighting structure.
+- The contract we care about is `video in -> splats out`, not text-conditioned world generation.
+- Foundations are sacred. We want lightweight splat heads on top of frozen or mostly frozen video models, not a new foundation model from scratch.
+- The useful signal is in the preimage. A single forward pass through a video model can expose enough spatiotemporal structure to decode dynamic splats.
+- Supervision should stay in pixel space. We render splats and compare directly against ground-truth video instead of relying on blurry latent-space losses.
+- Memory should be spent on dynamic scene state, not luxury parameters. Compact splat parameterizations matter if we want long videos to fit and train.
+
+The longer-form research notes and prompt scaffolding live under `research_notes/`.
+
 ## Setup
 
 ```bash
