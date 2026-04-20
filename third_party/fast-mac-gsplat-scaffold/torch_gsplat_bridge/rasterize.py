@@ -17,7 +17,7 @@ class RasterConfig:
     height: int
     width: int
     tile_size: int = 16
-    max_tile_pairs: int = 4096
+    chunk_size: int = 32
     alpha_threshold: float = 1.0 / 255.0
     transmittance_threshold: float = 1e-4
     background: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -35,80 +35,30 @@ class _RasterizeProjectedGaussians(torch.autograd.Function):
         meta_i32: Tensor,
         meta_f32: Tensor,
     ) -> Tensor:
-        if not hasattr(torch.ops, "gsplat_metal_fast"):
-            raise RuntimeError("gsplat_metal_fast custom ops not found. Build the extension first.")
-
-        # Sort outside the custom op so the Metal kernels only ever see a monotone depth order.
-        # We detach the permutation source because this renderer treats ordering as piecewise constant.
-        perm = torch.argsort(depths.detach(), dim=0, stable=True)
-        means2d_s = means2d.index_select(0, perm).contiguous()
-        conics_s = conics.index_select(0, perm).contiguous()
-        colors_s = colors.index_select(0, perm).contiguous()
-        opacities_s = opacities.index_select(0, perm).contiguous()
-
-        out, tile_counts, tile_offsets, binned_ids = torch.ops.gsplat_metal_fast.forward(
-            means2d_s, conics_s, colors_s, opacities_s, meta_i32, meta_f32
-        )
-        ctx.save_for_backward(
-            perm,
-            means2d_s,
-            conics_s,
-            colors_s,
-            opacities_s,
-            depths,
-            meta_i32,
-            meta_f32,
-            tile_counts,
-            tile_offsets,
-            binned_ids,
-        )
+        if not hasattr(torch.ops, "gsplat_metal"):
+            raise RuntimeError("gsplat_metal custom ops not found. Build the extension first.")
+        out, aux = torch.ops.gsplat_metal.forward(means2d, conics, colors, opacities, depths, meta_i32, meta_f32)
+        ctx.save_for_backward(means2d, conics, colors, opacities, depths, meta_i32, meta_f32, aux)
         return out
 
     @staticmethod
     def backward(ctx, grad_out: Tensor):
-        (
-            perm,
-            means2d_s,
-            conics_s,
-            colors_s,
-            opacities_s,
+        means2d, conics, colors, opacities, depths, meta_i32, meta_f32, aux = ctx.saved_tensors
+        g_means2d, g_conics, g_colors, g_opacities, g_depths = torch.ops.gsplat_metal.backward(
+            grad_out.contiguous(),
+            means2d,
+            conics,
+            colors,
+            opacities,
             depths,
             meta_i32,
             meta_f32,
-            tile_counts,
-            tile_offsets,
-            binned_ids,
-        ) = ctx.saved_tensors
-
-        g_means2d_s, g_conics_s, g_colors_s, g_opacities_s = torch.ops.gsplat_metal_fast.backward(
-            grad_out.contiguous(),
-            means2d_s,
-            conics_s,
-            colors_s,
-            opacities_s,
-            meta_i32,
-            meta_f32,
-            tile_counts,
-            tile_offsets,
-            binned_ids,
+            aux,
         )
-
-        def unsort(grad: Tensor) -> Tensor:
-            out = torch.empty_like(grad)
-            out[perm] = grad
-            return out
-
-        g_means2d = unsort(g_means2d_s)
-        g_conics = unsort(g_conics_s)
-        g_colors = unsort(g_colors_s)
-        g_opacities = unsort(g_opacities_s)
-        g_depths = torch.zeros_like(depths)
         return g_means2d, g_conics, g_colors, g_opacities, g_depths, None, None
 
 
 def _make_meta(config: RasterConfig, device: torch.device):
-    if config.tile_size != 16:
-        raise ValueError("The fast Metal path is currently specialized for 16x16 tiles.")
     tiles_y = (config.height + config.tile_size - 1) // config.tile_size
     tiles_x = (config.width + config.tile_size - 1) // config.tile_size
     meta_i32 = torch.tensor(
@@ -120,7 +70,7 @@ def _make_meta(config: RasterConfig, device: torch.device):
             config.tile_size,
             0,  # patched per-call with G
             tiles_y * tiles_x,
-            config.max_tile_pairs,
+            config.chunk_size,
         ],
         device=device,
         dtype=torch.int32,
@@ -133,7 +83,6 @@ def _make_meta(config: RasterConfig, device: torch.device):
             config.background[1],
             config.background[2],
             1e-8,
-            0.99,
         ],
         device=device,
         dtype=torch.float32,
@@ -159,11 +108,13 @@ def rasterize_projected_gaussians(
         raise ValueError("opacities must have shape [G]")
     if depths.ndim != 1:
         raise ValueError("depths must have shape [G]")
+
     G = means2d.shape[0]
     device = means2d.device
     meta_i32, meta_f32 = _make_meta(config, device)
     meta_i32 = meta_i32.clone()
     meta_i32[5] = G
+
     return _RasterizeProjectedGaussians.apply(
         means2d.contiguous(),
         conics.contiguous(),

@@ -11,7 +11,7 @@ import torch
 
 BENCHMARK_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BENCHMARK_DIR.parents[1]
-RAW_METAL_DIR = PROJECT_ROOT / "shader_experiments" / "raw_metal_fast_rasterizer"
+RAW_METAL_DIR = PROJECT_ROOT / "third_party" / "raw-metal-mlx-gsplat"
 
 
 class RawMetalUnavailable(RuntimeError):

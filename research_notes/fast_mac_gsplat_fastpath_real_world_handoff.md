@@ -4,7 +4,7 @@ Date: 2026-04-20
 
 ## Summary
 
-The second Torch/Metal handoff in `submodules/fast-mac-gsplat-fastpath/` is a real fastpath, not a scaffold. After small packaging/schema fixes and one important Metal layout correctness fix, it builds locally, registers a Torch custom op, renders on MPS, and produces backward gradients.
+The second Torch/Metal handoff now lives as the `fast-mac-gsplat` GitHub repo and is vendored into Dynaworld as the `third_party/fast-mac-gsplat` submodule. It is a real fastpath, not a scaffold. After small packaging/schema fixes and one important Metal layout correctness fix, it builds locally, registers a Torch custom op, renders on MPS, and produces backward gradients.
 
 This is best understood as a projected 2D differentiable Gaussian rasterizer for Apple Silicon:
 
