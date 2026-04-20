@@ -221,7 +221,7 @@ inline bool eval_alpha_for_pixel(
 kernel void tile_sort_render_forward(
     const device uint* tile_counts [[buffer(0)]],
     const device int* tile_offsets [[buffer(1)]],
-    const device uint* binned_ids [[buffer(2)]],
+    device uint* binned_ids [[buffer(2)]],
     const device float2* means2d [[buffer(3)]],
     const device float* conics [[buffer(4)]],
     const device float* colors [[buffer(5)]],
@@ -258,6 +258,10 @@ kernel void tile_sort_render_forward(
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
   bitonic_sort_ids(shared_ids, count, tid);
+  for (uint i = tid; i < count; i += GSP_THREADS_PER_TG) {
+    binned_ids[start + i] = shared_ids[i];
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
 
   if (tid < GSP_TILE_PIXELS) {
     uint tile_x = tg_id % uint(mi.tiles_x);
@@ -316,7 +320,8 @@ kernel void tile_sort_render_backward(
     shared_ids[i] = binned_ids[start + i];
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  bitonic_sort_ids(shared_ids, count, tid);
+  // Forward writes tile-local IDs back in sorted order, so backward can skip
+  // the second bitonic sort and use the saved ordering directly.
 
   if (tid < GSP_TILE_PIXELS) {
     uint tile_x = tg_id % uint(mi.tiles_x);

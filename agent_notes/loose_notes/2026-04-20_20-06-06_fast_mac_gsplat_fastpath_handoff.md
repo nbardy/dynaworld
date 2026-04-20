@@ -57,3 +57,15 @@ Interpretation:
 - Has a tile capacity limit: excessive splats in one tile can throw.
 
 Cleaned generated validation artifacts from the submodule after testing: local `.venv`, build directory, extension `.so`, egg-info, `__pycache__`, and `uv.lock`.
+
+Follow-up after user asked about backward being too slow:
+
+- Rebuilt locally for measurement and separated direct custom-op forward/backward timing from Python loss/autograd timing.
+- Found the `~10x` backward/forward impression is not fixed; synchronized direct-op ratio depends heavily on overlap.
+- Added a low-risk optimization: forward writes tile-local IDs back into `binned_ids` after local bitonic sort, so backward can skip re-sorting the same tile IDs.
+- Correctness after that patch still matched the 16x16 / 4-splat CPU reference at about `1e-8`.
+- Synchronized direct-op smoke after sorted-ID reuse:
+  - 4096x4096 / 65,536 splats / sigma 1-5 px: forward `9.9ms`, backward `31.4ms`, ratio `3.18x`
+  - 4096x4096 / 65,536 splats / sigma 3-8 px: forward `15.5ms`, backward `93.4ms`, ratio `6.02x`
+  - 1024x1024 / 65,536 splats / sigma 1-5 px: forward `6.36ms`, backward `30.0ms`, ratio `4.73x`
+- This confirms tile sorting was duplicated work, but medium/dense overlap is still dominated by backward recomputation plus global atomic gradient accumulation.

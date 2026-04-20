@@ -65,6 +65,8 @@ That can be up to 9 atomic gradient writes per contributing pixel-splat pair. Fo
 
 The current backward is therefore correctness-first and memory-light, not maximally optimized. It saves compact tile bins rather than huge per-pixel activation volumes, then pays for recomputation and atomics during backward.
 
+Follow-up synchronized direct-op benchmarks showed that the brutal `~10x` ratio is not a fixed property of the implementation. It is strongly overlap-dependent and measurement-method-dependent. Sparse projected 4K splats can be around `3x` backward/forward after saving sorted tile IDs, while medium-overlap 4K cases were still around `6x`.
+
 Likely backward optimization directions:
 
 - Accumulate per-splat gradients inside threadgroup memory where possible, then issue fewer global atomics.
@@ -72,6 +74,20 @@ Likely backward optimization directions:
 - Consider storing a small amount of forward state, such as final transmittance or contribution counts, if memory allows.
 - Add lower-precision or packed gradient variants only after the f32 path is fully validated.
 - Benchmark by overlap regime, not just `G`, because atomics scale with contributing pixel-splat pairs.
+
+## Follow-up backward optimization
+
+The first low-risk optimization was to avoid sorting tile IDs twice. Forward already sorts each tile's IDs locally before rendering. It now writes that sorted order back into `binned_ids`, which is part of the saved backward state. Backward can load the saved IDs directly and skip its own second bitonic sort.
+
+This does not solve the main overlap bottleneck, but it removes duplicated work and keeps the same math. The small CPU reference check still matched at about `1e-8` after this change.
+
+Synchronized direct-op smoke after this patch:
+
+- 4096x4096 / 65,536 splats / sigma 1-5 px: forward `9.9ms`, backward `31.4ms`, ratio `3.18x`
+- 4096x4096 / 65,536 splats / sigma 3-8 px: forward `15.5ms`, backward `93.4ms`, ratio `6.02x`
+- 1024x1024 / 65,536 splats / sigma 1-5 px: forward `6.36ms`, backward `30.0ms`, ratio `4.73x`
+
+The remaining gap is mostly expected to come from backward recomputation and global atomic gradient accumulation, not tile sorting.
 
 ## Is 16x16 tile specialization a problem?
 
