@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT_DIR"
 
 SEQUENCE_DIR="${SEQUENCE_DIR:-test_data/dust3r_outputs/test_video_small_all_frames}"
 CAMERA_JSON="${CAMERA_JSON:-$SEQUENCE_DIR/per_frame_cameras.json}"
@@ -43,7 +44,7 @@ echo "Render size: $SIZE"
 echo "Eval batch size: $EVAL_BATCH_SIZE"
 echo "Renderer: $RENDERER"
 
-uv run python train_scripts/dynamicTokenGS.py \
+uv run python src/train/dynamicTokenGS.py \
   --sequence-dir "$SEQUENCE_DIR" \
   --camera-json "$CAMERA_JSON" \
   --renderer "$RENDERER" \

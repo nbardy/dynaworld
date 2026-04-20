@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT_DIR"
 
 if [[ "$#" -ne 0 ]]; then
   echo "Pass overrides as environment variables, not CLI args." >&2
@@ -39,6 +40,7 @@ RENDERER="${RENDERER:-dense}"
 LR="${LR:-0.005}"
 AMP="${AMP:-false}"
 TRAIN_BACKWARD_STRATEGY="${TRAIN_BACKWARD_STRATEGY:-framewise}"
+TEMPORAL_MICROBATCH_SIZE="${TEMPORAL_MICROBATCH_SIZE:-4}"
 CAMERA_MOTION_WEIGHT="${CAMERA_MOTION_WEIGHT:-0.01}"
 CAMERA_TEMPORAL_WEIGHT="${CAMERA_TEMPORAL_WEIGHT:-0.02}"
 CAMERA_GLOBAL_WEIGHT="${CAMERA_GLOBAL_WEIGHT:-0.005}"
@@ -109,6 +111,7 @@ echo "Renderer: $RENDERER"
 echo "LR: $LR"
 echo "AMP: $AMP"
 echo "Recon backward strategy: $TRAIN_BACKWARD_STRATEGY"
+echo "Temporal microbatch size: $TEMPORAL_MICROBATCH_SIZE"
 echo "Steps: $STEPS"
 echo "Scalar log every: $LOG_EVERY"
 echo "Image log every: $IMAGE_LOG_EVERY"
@@ -149,6 +152,7 @@ export RENDERER
 export LR
 export AMP
 export TRAIN_BACKWARD_STRATEGY
+export TEMPORAL_MICROBATCH_SIZE
 export CAMERA_MOTION_WEIGHT
 export CAMERA_TEMPORAL_WEIGHT
 export CAMERA_GLOBAL_WEIGHT
@@ -162,7 +166,7 @@ export RUN_NAME
 uv run python - <<'PY'
 import sys
 
-sys.path.insert(0, "train_scripts")
+sys.path.insert(0, "src/train")
 from train_video_token_implicit_dynamic import config_from_env, main
 
 main(config_from_env())

@@ -17,7 +17,7 @@ from renderers.dense import render_pytorch_3dgs
 from renderers.tiled import render_pytorch_3dgs_tiled
 from tqdm import tqdm
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SEQUENCE_DIR = ROOT / "test_data" / "dust3r_outputs" / "test_video_small_all_frames"
 
 

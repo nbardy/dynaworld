@@ -41,7 +41,7 @@ git submodule update --init --recursive
 From the repo root:
 
 ```bash
-./get_camera.sh
+./src/train_scripts/get_camera.sh
 ```
 
 Default inputs and outputs live under `test_data/`.
@@ -51,11 +51,11 @@ Default inputs and outputs live under `test_data/`.
 Single-image baseline:
 
 ```bash
-uv run python train_scripts/tokenGS.py
+uv run python src/train/tokenGS.py
 ```
 
 Dynamic training with DUSt3R camera prebake:
 
 ```bash
-./train_full_dynamic_with_camera_prebake_all_frames.sh
+./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh
 ```

@@ -70,6 +70,7 @@ DEFAULT_CONFIG = {
         "lr": 0.005,
         "amp": False,
         "recon_backward_strategy": "framewise",
+        "temporal_microbatch_size": 4,
     },
     "losses": {
         "camera_motion_weight": 0.01,
@@ -185,6 +186,7 @@ def config_from_env(env: dict[str, str] | None = None) -> dict[str, Any]:
         },
         "train": {
             "steps": "STEPS",
+            "temporal_microbatch_size": "TEMPORAL_MICROBATCH_SIZE",
         },
         "logging": {
             "log_every": "LOG_EVERY",
@@ -239,6 +241,8 @@ def config_from_env(env: dict[str, str] | None = None) -> dict[str, Any]:
 
     if "TRAIN_FRAME_COUNT" not in env and "FRAME_INPUT_COUNT" in env:
         set_section_value("model", "train_frame_count", int(env["FRAME_INPUT_COUNT"]))
+    if "TEMPORAL_MICROBATCH_SIZE" not in env and "RENDER_MICROBATCH_SIZE" in env:
+        set_section_value("train", "temporal_microbatch_size", int(env["RENDER_MICROBATCH_SIZE"]))
 
     for section, fields in float_fields.items():
         for key, env_name in fields.items():
@@ -427,10 +431,15 @@ class Trainer:
         self.loss_cfg = self.cfg["losses"]
         self.logging_cfg = self.cfg["logging"]
         self.recon_backward_strategy = self.train_cfg["recon_backward_strategy"]
-        if self.recon_backward_strategy not in {"framewise", "batched"}:
+        if self.recon_backward_strategy not in {"framewise", "microbatch", "batched"}:
             raise ValueError(
                 f"Unsupported recon_backward_strategy={self.recon_backward_strategy!r}. "
-                "Expected one of: framewise, batched."
+                "Expected one of: framewise, microbatch, batched."
+            )
+        self.temporal_microbatch_size = int(self.train_cfg["temporal_microbatch_size"])
+        if self.temporal_microbatch_size < 1:
+            raise ValueError(
+                f"temporal_microbatch_size must be >= 1, got {self.temporal_microbatch_size}."
             )
 
         self.device = pick_device()
@@ -546,43 +555,14 @@ class Trainer:
         )
         return camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss
 
-    def batched_recon_backward(
-        self,
-        clip_frames: torch.Tensor,
-        xyz: torch.Tensor,
-        scales: torch.Tensor,
-        quats: torch.Tensor,
-        opacities: torch.Tensor,
-        rgbs: torch.Tensor,
-        cameras: list[Any],
-        camera_loss: torch.Tensor,
-        keep_preview: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        recon_losses = []
-        preview_render = None
-        for local_index, camera in enumerate(cameras):
-            render = render_clip_frame(
-                self.renderer_mode,
-                self.render_cfg,
-                self.model_cfg["size"],
-                self.dense_grid,
-                camera,
-                xyz[local_index],
-                scales[local_index],
-                quats[local_index],
-                opacities[local_index],
-                rgbs[local_index],
-            )
-            if keep_preview and local_index == 0:
-                preview_render = render.detach()
-            target = clip_frames[0, local_index]
-            recon_losses.append(F.l1_loss(render, target) + 0.2 * F.mse_loss(render, target))
+    def temporal_recon_chunk_size(self, frame_count: int) -> int:
+        if self.recon_backward_strategy == "batched":
+            return frame_count
+        if self.recon_backward_strategy == "framewise":
+            return 1
+        return min(self.temporal_microbatch_size, frame_count)
 
-        recon_loss = torch.stack(recon_losses).mean()
-        (recon_loss + camera_loss).backward()
-        return recon_loss.detach(), preview_render
-
-    def framewise_recon_backward(
+    def recon_backward(
         self,
         clip_frames: torch.Tensor,
         xyz: torch.Tensor,
@@ -597,27 +577,37 @@ class Trainer:
         recon_loss = clip_frames.new_tensor(0.0)
         preview_render = None
         frame_count = len(cameras)
-        for local_index, camera in enumerate(cameras):
-            render = render_clip_frame(
-                self.renderer_mode,
-                self.render_cfg,
-                self.model_cfg["size"],
-                self.dense_grid,
-                camera,
-                xyz[local_index],
-                scales[local_index],
-                quats[local_index],
-                opacities[local_index],
-                rgbs[local_index],
-            )
-            if keep_preview and local_index == 0:
-                preview_render = render.detach()
-            target = clip_frames[0, local_index]
-            frame_recon_loss = F.l1_loss(render, target) + 0.2 * F.mse_loss(render, target)
-            recon_loss = recon_loss + frame_recon_loss.detach() / frame_count
-            frame_recon_loss.div(frame_count).backward(retain_graph=True)
+        chunk_size = self.temporal_recon_chunk_size(frame_count)
 
-        camera_loss.backward()
+        for chunk_start in range(0, frame_count, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, frame_count)
+            chunk_losses = []
+
+            for local_index in range(chunk_start, chunk_end):
+                camera = cameras[local_index]
+                render = render_clip_frame(
+                    self.renderer_mode,
+                    self.render_cfg,
+                    self.model_cfg["size"],
+                    self.dense_grid,
+                    camera,
+                    xyz[local_index],
+                    scales[local_index],
+                    quats[local_index],
+                    opacities[local_index],
+                    rgbs[local_index],
+                )
+                if keep_preview and preview_render is None:
+                    preview_render = render.detach()
+                target = clip_frames[0, local_index]
+                chunk_losses.append(F.l1_loss(render, target) + 0.2 * F.mse_loss(render, target))
+
+            chunk_recon_loss = torch.stack(chunk_losses).sum() / frame_count
+            recon_loss = recon_loss + chunk_recon_loss.detach()
+            is_last_chunk = chunk_end == frame_count
+            backward_loss = chunk_recon_loss + (camera_loss if is_last_chunk else 0.0)
+            backward_loss.backward(retain_graph=not is_last_chunk)
+
         return recon_loss, preview_render
 
     def step(self, keep_preview: bool = False) -> StepResult:
@@ -630,30 +620,17 @@ class Trainer:
             camera_state,
         )
 
-        if self.recon_backward_strategy == "batched":
-            recon_loss, preview_render = self.batched_recon_backward(
-                clip_frames,
-                xyz,
-                scales,
-                quats,
-                opacities,
-                rgbs,
-                cameras,
-                camera_loss,
-                keep_preview,
-            )
-        else:
-            recon_loss, preview_render = self.framewise_recon_backward(
-                clip_frames,
-                xyz,
-                scales,
-                quats,
-                opacities,
-                rgbs,
-                cameras,
-                camera_loss,
-                keep_preview,
-            )
+        recon_loss, preview_render = self.recon_backward(
+            clip_frames,
+            xyz,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            cameras,
+            camera_loss,
+            keep_preview,
+        )
 
         self.optimizer.step()
         loss = recon_loss + camera_loss.detach()
@@ -777,6 +754,10 @@ class Trainer:
             f"{self.effective_gaussians} explicit Gaussians with {self.renderer_mode} renderer..."
         )
         print(f"Reconstruction backward strategy: {self.recon_backward_strategy}")
+        print(
+            "Temporal reconstruction chunk size: "
+            f"{self.temporal_recon_chunk_size(self.model_cfg['train_frame_count'])}"
+        )
         print(f"Attention backend: {self.attn_backend}")
 
         pbar = tqdm(range(1, self.train_cfg["steps"] + 1))

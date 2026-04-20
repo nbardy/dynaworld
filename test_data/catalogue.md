@@ -40,7 +40,7 @@ This folder holds small local test assets and generated outputs for the `dynawor
 From `dynaworld/`:
 
 ```bash
-./get_camera.sh
+./src/train_scripts/get_camera.sh
 ```
 
 This uses `test_video_small.mp4` by default and writes outputs under:

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT_DIR"
 
 SEQUENCE_DIR="${SEQUENCE_DIR:-test_data/dust3r_outputs/test_video_small_all_frames}"
 FRAMES_DIR="${FRAMES_DIR:-$SEQUENCE_DIR/frames}"
@@ -73,7 +74,7 @@ echo "Eval batch size: $EVAL_BATCH_SIZE"
 echo "Renderer: $RENDERER"
 echo "Model: image-encoder implicit-camera baseline (no plucker conditioning)"
 
-uv run python train_scripts/train_camera_implicit_dynamic.py \
+uv run python src/train/train_camera_implicit_dynamic.py \
   --sequence-dir "$SEQUENCE_DIR" \
   --frames-dir "$FRAMES_DIR" \
   --frame-source "$FRAME_SOURCE" \

@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DUST3R_ROOT = ROOT / "third_party" / "dust3r"
 if str(DUST3R_ROOT) not in sys.path:
     sys.path.insert(0, str(DUST3R_ROOT))

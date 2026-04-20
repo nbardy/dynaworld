@@ -4,7 +4,7 @@
 
 The current wall is mostly the rasterizer, not the video encoder.
 
-- [`train_scripts/renderers/dense.py`](/Users/nicholasbardy/git/gsplats_browser/dynaworld/train_scripts/renderers/dense.py) materializes full `G x H x W` tensors such as `dx`, `power`, `alpha`, and `weights`.
+- [`dense.py`](/Users/nicholasbardy/git/gsplats_browser/dynaworld/src/train/renderers/dense.py) materializes full `G x H x W` tensors such as `dx`, `power`, `alpha`, and `weights`.
 - At the current full run, that means roughly `G=512`, `H=W=384`, and `T=16` training frames. In batched mode, the live render graph effectively scales with `T * G * H * W`.
 - The encoder is not free, but this is why `32x32` smoke runs are fine and `384x384` dense runs fall over immediately on MPS.
 
@@ -14,8 +14,8 @@ So this is **not** mainly a ChopGrad-style temporal-backprop problem. It is a re
 
 We are already taking one useful shortcut:
 
-- The model decodes plain RGB via `rgb_head`, not higher-order spherical harmonics; see [`train_scripts/gs_models/dynamic_video_token_gs_implicit_camera.py`](/Users/nicholasbardy/git/gsplats_browser/dynaworld/train_scripts/gs_models/dynamic_video_token_gs_implicit_camera.py).
-- The renderers consume `rgbs` directly; see [`train_scripts/renderers/dense.py`](/Users/nicholasbardy/git/gsplats_browser/dynaworld/train_scripts/renderers/dense.py) and [`train_scripts/renderers/tiled.py`](/Users/nicholasbardy/git/gsplats_browser/dynaworld/train_scripts/renderers/tiled.py).
+- The model decodes plain RGB via `rgb_head`, not higher-order spherical harmonics; see [`dynamic_video_token_gs_implicit_camera.py`](/Users/nicholasbardy/git/gsplats_browser/dynaworld/src/train/gs_models/dynamic_video_token_gs_implicit_camera.py).
+- The renderers consume `rgbs` directly; see [`dense.py`](/Users/nicholasbardy/git/gsplats_browser/dynaworld/src/train/renderers/dense.py) and [`tiled.py`](/Users/nicholasbardy/git/gsplats_browser/dynaworld/src/train/renderers/tiled.py).
 
 That absolutely helps decode cost and avoids SH basis evaluation, but it does **not** remove the dominant memory terms, because those are the geometric/transmittance tensors, not the color channels.
 
