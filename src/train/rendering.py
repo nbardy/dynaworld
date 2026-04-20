@@ -18,6 +18,30 @@ def resize_images(images: torch.Tensor, image_size: int) -> torch.Tensor:
     return resized.reshape(*leading_shape, *resized.shape[-3:])
 
 
+def camera_for_viewport(
+    camera: CameraSpec,
+    source_height: int,
+    source_width: int,
+    target_height: int,
+    target_width: int,
+) -> CameraSpec:
+    """Return the same camera pose with intrinsics expressed in target viewport pixels."""
+    if source_height < 1 or source_width < 1:
+        raise ValueError(f"source viewport must be positive, got {source_width}x{source_height}.")
+    if target_height < 1 or target_width < 1:
+        raise ValueError(f"target viewport must be positive, got {target_width}x{target_height}.")
+
+    scale_x = float(target_width) / float(source_width)
+    scale_y = float(target_height) / float(source_height)
+    return CameraSpec(
+        fx=camera.fx * scale_x,
+        fy=camera.fy * scale_y,
+        cx=camera.cx * scale_x,
+        cy=camera.cy * scale_y,
+        camera_to_world=camera.camera_to_world,
+    )
+
+
 def pick_renderer_mode(
     renderer: str,
     gaussian_count: int,
@@ -95,6 +119,7 @@ def render_gaussian_frame(
 __all__ = [
     "ResolvedRendererMode",
     "build_or_reuse_grid",
+    "camera_for_viewport",
     "pick_renderer_mode",
     "render_gaussian_frame",
     "resize_images",

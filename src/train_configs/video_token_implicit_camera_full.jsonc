@@ -1,0 +1,63 @@
+{
+  // Full video-token implicit-camera baseline.
+  // The encoder still sees 384x384 video. render_size controls only splat render/loss resolution.
+  "data": {
+    "sequence_dir": "test_data",
+    "frames_dir": null,
+    "video_path": "test_data/test_video_384_3fps.mp4",
+    "frame_source": "explicit_video",
+    "max_frames": 0
+  },
+  "model": {
+    "size": 384,
+    "train_frame_count": 16,
+    "tokens": 8,
+    "gaussians_per_token": 64,
+    "model_dim": 128,
+    "bottleneck_dim": 256,
+    "num_heads": 8,
+    "mlp_ratio": 4.0,
+    "scene_extent": 1.0,
+    "tubelet_size_t": 4,
+    "patch_compression": 16,
+    "encoder_self_attn_layers": 1,
+    "bottleneck_self_attn_layers": 4,
+    "cross_attn_layers": 1
+  },
+  "camera": {
+    "base_fov_degrees": 60.0,
+    "base_radius": 3.0,
+    "max_fov_delta_degrees": 15.0,
+    "max_radius_scale": 1.5,
+    "max_rotation_degrees": 5.0,
+    "max_translation_ratio": 0.2
+  },
+  "render": {
+    "renderer": "dense",
+    "render_size": 192,
+    "auto_dense_limit": 400000,
+    "tile_size": 8,
+    "bound_scale": 3.0,
+    "alpha_threshold": 0.00392156862745098
+  },
+  "train": {
+    "steps": 1000,
+    "lr": 0.005,
+    "amp": false,
+    "recon_backward_strategy": "framewise",
+    "temporal_microbatch_size": 4
+  },
+  "losses": {
+    "camera_motion_weight": 0.01,
+    "camera_temporal_weight": 0.02,
+    "camera_global_weight": 0.005
+  },
+  "logging": {
+    "log_every": 25,
+    "image_log_every": 100,
+    "video_log_every": 200,
+    "always_log_last_step": true,
+    "wandb_project": "dynamic-tokengs-overfit",
+    "wandb_run_name": "dynamic-video-token-implicit-camera"
+  }
+}

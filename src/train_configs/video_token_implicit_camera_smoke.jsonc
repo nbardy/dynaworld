@@ -1,0 +1,62 @@
+{
+  // Fast smoke version of the same architecture. W&B stays enabled by default.
+  "data": {
+    "sequence_dir": "test_data",
+    "frames_dir": null,
+    "video_path": "test_data/test_video_384_3fps.mp4",
+    "frame_source": "explicit_video",
+    "max_frames": 0
+  },
+  "model": {
+    "size": 32,
+    "train_frame_count": 16,
+    "tokens": 4,
+    "gaussians_per_token": 16,
+    "model_dim": 64,
+    "bottleneck_dim": 64,
+    "num_heads": 4,
+    "mlp_ratio": 4.0,
+    "scene_extent": 1.0,
+    "tubelet_size_t": 4,
+    "patch_compression": 32,
+    "encoder_self_attn_layers": 1,
+    "bottleneck_self_attn_layers": 1,
+    "cross_attn_layers": 1
+  },
+  "camera": {
+    "base_fov_degrees": 60.0,
+    "base_radius": 3.0,
+    "max_fov_delta_degrees": 15.0,
+    "max_radius_scale": 1.5,
+    "max_rotation_degrees": 5.0,
+    "max_translation_ratio": 0.2
+  },
+  "render": {
+    "renderer": "dense",
+    "render_size": 16,
+    "auto_dense_limit": 400000,
+    "tile_size": 8,
+    "bound_scale": 3.0,
+    "alpha_threshold": 0.00392156862745098
+  },
+  "train": {
+    "steps": 10,
+    "lr": 0.005,
+    "amp": false,
+    "recon_backward_strategy": "framewise",
+    "temporal_microbatch_size": 4
+  },
+  "losses": {
+    "camera_motion_weight": 0.01,
+    "camera_temporal_weight": 0.02,
+    "camera_global_weight": 0.005
+  },
+  "logging": {
+    "log_every": 1,
+    "image_log_every": 1000,
+    "video_log_every": 1000,
+    "always_log_last_step": true,
+    "wandb_project": "dynamic-tokengs-overfit",
+    "wandb_run_name": "dynamic-video-token-implicit-camera-smoke"
+  }
+}

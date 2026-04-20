@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import os
+import json
+import sys
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
@@ -10,83 +11,18 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 import wandb
-from camera import CameraSpec
 from dynamicTokenGS import (
-    DEFAULT_SEQUENCE_DIR,
     configure_fast_attn,
     fast_attn_context,
     pick_device,
 )
 from gs_models import DynamicVideoTokenGSImplicitCamera
-from rendering import pick_renderer_mode as resolve_renderer_mode
+from rendering import build_or_reuse_grid, camera_for_viewport, pick_renderer_mode as resolve_renderer_mode
 from rendering import render_gaussian_frame, resize_images
-from renderers.common import build_pixel_grid
 from runtime_types import GaussianFrame
 from sequence_data import load_uncalibrated_sequence, resolve_frames_dir, select_window_indices
 from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 from tqdm import tqdm
-
-DEFAULT_CONFIG = {
-    "data": {
-        "sequence_dir": DEFAULT_SEQUENCE_DIR,
-        "frames_dir": None,
-        "video_path": None,
-        "frame_source": "explicit_video",
-        "max_frames": 0,
-    },
-    "model": {
-        "size": 384,
-        "train_frame_count": 16,
-        "tokens": 8,
-        "gaussians_per_token": 64,
-        "model_dim": 128,
-        "bottleneck_dim": 256,
-        "num_heads": 8,
-        "mlp_ratio": 4.0,
-        "scene_extent": 1.0,
-        "tubelet_size_t": 4,
-        "patch_compression": 16,
-        "encoder_self_attn_layers": 1,
-        "bottleneck_self_attn_layers": 4,
-        "cross_attn_layers": 1,
-    },
-    "camera": {
-        "base_fov_degrees": 60.0,
-        "base_radius": 3.0,
-        "max_fov_delta_degrees": 15.0,
-        "max_radius_scale": 1.5,
-        "max_rotation_degrees": 5.0,
-        "max_translation_ratio": 0.2,
-    },
-    "render": {
-        "renderer": "dense",
-        "render_size": 0,
-        "auto_dense_limit": 400_000,
-        "tile_size": 8,
-        "bound_scale": 3.0,
-        "alpha_threshold": 1.0 / 255.0,
-    },
-    "train": {
-        "steps": 100,
-        "lr": 0.005,
-        "amp": False,
-        "recon_backward_strategy": "framewise",
-        "temporal_microbatch_size": 4,
-    },
-    "losses": {
-        "camera_motion_weight": 0.01,
-        "camera_temporal_weight": 0.02,
-        "camera_global_weight": 0.005,
-    },
-    "logging": {
-        "log_every": 10,
-        "image_log_every": 50,
-        "video_log_every": 50,
-        "always_log_last_step": True,
-        "wandb_project": "dynamic-tokengs-overfit",
-        "wandb_run_name": "dynamic-video-token-implicit-camera-run",
-    },
-}
 
 
 @dataclass
@@ -101,29 +37,77 @@ class StepResult:
     camera_global_loss: torch.Tensor
 
 
-def build_default_config() -> dict[str, Any]:
-    return deepcopy(DEFAULT_CONFIG)
+def strip_jsonc_comments(text: str) -> str:
+    output = []
+    index = 0
+    in_string = False
+    escaped = False
+
+    while index < len(text):
+        char = text[index]
+
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+
+        if char == "/" and index + 1 < len(text):
+            next_char = text[index + 1]
+            if next_char == "/":
+                index += 2
+                while index < len(text) and text[index] not in "\r\n":
+                    index += 1
+                continue
+            if next_char == "*":
+                index += 2
+                while index + 1 < len(text) and not (text[index] == "*" and text[index + 1] == "/"):
+                    if text[index] in "\r\n":
+                        output.append(text[index])
+                    index += 1
+                if index + 1 >= len(text):
+                    raise ValueError("Unterminated block comment in JSONC config.")
+                index += 2
+                continue
+
+        output.append(char)
+        index += 1
+
+    return "".join(output)
 
 
-def merge_config(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    merged = deepcopy(base)
-    for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = merge_config(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
+def load_config_file(path: str | Path) -> dict[str, Any]:
+    config_path = Path(path)
+    data = json.loads(strip_jsonc_comments(config_path.read_text()))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected config object in {config_path}, got {type(data).__name__}.")
+    return data
 
 
-def resolve_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
-    cfg = build_default_config() if config is None else merge_config(build_default_config(), config)
+def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
+    if config is None:
+        raise ValueError("A train config is required. Pass a JSONC path or config dict.")
+    cfg = deepcopy(config)
+    for section in ("data", "model", "camera", "render", "train", "losses", "logging"):
+        if section not in cfg:
+            raise KeyError(f"Missing required config section: {section}")
+
     cfg["data"]["sequence_dir"] = Path(cfg["data"]["sequence_dir"])
     frames_dir = cfg["data"]["frames_dir"]
     cfg["data"]["frames_dir"] = None if frames_dir is None else Path(frames_dir)
     video_path = cfg["data"]["video_path"]
     cfg["data"]["video_path"] = None if video_path is None else Path(video_path)
-    if int(cfg["render"]["render_size"]) <= 0:
-        cfg["render"]["render_size"] = int(cfg["model"]["size"])
     return cfg
 
 
@@ -135,132 +119,6 @@ def serialize_config_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [serialize_config_value(inner) for inner in value]
     return value
-
-
-def config_from_env(env: dict[str, str] | None = None) -> dict[str, Any]:
-    env = os.environ if env is None else env
-    overrides: dict[str, Any] = {}
-
-    def set_section_value(section: str, key: str, value: Any) -> None:
-        overrides.setdefault(section, {})[key] = value
-
-    def parse_bool(value: str) -> bool:
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-        raise ValueError(f"Could not parse boolean value from {value!r}")
-
-    string_fields = {
-        "data": {
-            "sequence_dir": "SEQUENCE_DIR",
-            "video_path": "VIDEO_PATH",
-            "frame_source": "FRAME_SOURCE",
-        },
-        "render": {
-            "renderer": "RENDERER",
-        },
-        "train": {
-            "recon_backward_strategy": "TRAIN_BACKWARD_STRATEGY",
-        },
-        "logging": {
-            "wandb_project": "WANDB_PROJECT",
-            "wandb_run_name": "RUN_NAME",
-        },
-    }
-    int_fields = {
-        "data": {
-            "max_frames": "MAX_FRAMES",
-        },
-        "model": {
-            "size": "SIZE",
-            "train_frame_count": "TRAIN_FRAME_COUNT",
-            "tokens": "TOKENS",
-            "gaussians_per_token": "GAUSSIANS_PER_TOKEN",
-            "model_dim": "MODEL_DIM",
-            "bottleneck_dim": "BOTTLENECK_DIM",
-            "num_heads": "NUM_HEADS",
-            "tubelet_size_t": "TUBELET_SIZE_T",
-            "patch_compression": "PATCH_COMPRESSION",
-            "encoder_self_attn_layers": "ENCODER_SELF_ATTN_LAYERS",
-            "bottleneck_self_attn_layers": "BOTTLENECK_SELF_ATTN_LAYERS",
-            "cross_attn_layers": "CROSS_ATTN_LAYERS",
-        },
-        "train": {
-            "steps": "STEPS",
-            "temporal_microbatch_size": "TEMPORAL_MICROBATCH_SIZE",
-        },
-        "render": {
-            "render_size": "RENDER_SIZE",
-        },
-        "logging": {
-            "log_every": "LOG_EVERY",
-            "image_log_every": "IMAGE_LOG_EVERY",
-            "video_log_every": "VIDEO_LOG_EVERY",
-        },
-    }
-    float_fields = {
-        "model": {
-            "mlp_ratio": "MLP_RATIO",
-            "scene_extent": "SCENE_EXTENT",
-        },
-        "camera": {
-            "base_fov_degrees": "BASE_FOV_DEGREES",
-            "base_radius": "BASE_RADIUS",
-            "max_fov_delta_degrees": "MAX_FOV_DELTA_DEGREES",
-            "max_radius_scale": "MAX_RADIUS_SCALE",
-            "max_rotation_degrees": "MAX_ROTATION_DEGREES",
-            "max_translation_ratio": "MAX_TRANSLATION_RATIO",
-        },
-        "train": {
-            "lr": "LR",
-        },
-        "losses": {
-            "camera_motion_weight": "CAMERA_MOTION_WEIGHT",
-            "camera_temporal_weight": "CAMERA_TEMPORAL_WEIGHT",
-            "camera_global_weight": "CAMERA_GLOBAL_WEIGHT",
-        },
-        "render": {
-            "bound_scale": "BOUND_SCALE",
-            "alpha_threshold": "ALPHA_THRESHOLD",
-        },
-    }
-    bool_fields = {
-        "train": {
-            "amp": "AMP",
-        },
-        "logging": {
-            "always_log_last_step": "ALWAYS_LOG_LAST_STEP",
-        },
-    }
-
-    for section, fields in string_fields.items():
-        for key, env_name in fields.items():
-            if env_name in env:
-                set_section_value(section, key, env[env_name])
-
-    for section, fields in int_fields.items():
-        for key, env_name in fields.items():
-            if env_name in env:
-                set_section_value(section, key, int(env[env_name]))
-
-    if "TRAIN_FRAME_COUNT" not in env and "FRAME_INPUT_COUNT" in env:
-        set_section_value("model", "train_frame_count", int(env["FRAME_INPUT_COUNT"]))
-    if "TEMPORAL_MICROBATCH_SIZE" not in env and "RENDER_MICROBATCH_SIZE" in env:
-        set_section_value("train", "temporal_microbatch_size", int(env["RENDER_MICROBATCH_SIZE"]))
-
-    for section, fields in float_fields.items():
-        for key, env_name in fields.items():
-            if env_name in env:
-                set_section_value(section, key, float(env[env_name]))
-
-    for section, fields in bool_fields.items():
-        for key, env_name in fields.items():
-            if env_name in env:
-                set_section_value(section, key, parse_bool(env[env_name]))
-
-    return merge_config(build_default_config(), overrides)
 
 
 def pick_renderer_mode_from_config(config: dict[str, Any]) -> tuple[str, int]:
@@ -305,17 +163,16 @@ def render_clip_frame(
     opacities: torch.Tensor,
     rgbs: torch.Tensor,
 ) -> torch.Tensor:
-    camera_scale = float(render_size) / float(input_size)
-    scaled_camera = CameraSpec(
-        fx=camera.fx * camera_scale,
-        fy=camera.fy * camera_scale,
-        cx=camera.cx * camera_scale,
-        cy=camera.cy * camera_scale,
-        camera_to_world=camera.camera_to_world,
+    render_camera = camera_for_viewport(
+        camera,
+        source_height=input_size,
+        source_width=input_size,
+        target_height=render_size,
+        target_width=render_size,
     )
     return render_gaussian_frame(
         GaussianFrame(xyz=xyz, scales=scales, quats=quats, opacities=opacities, rgbs=rgbs),
-        camera=scaled_camera,
+        camera=render_camera,
         height=render_size,
         width=render_size,
         mode=renderer_mode,
@@ -416,7 +273,7 @@ def build_model_from_config(config: dict[str, Any]) -> DynamicVideoTokenGSImplic
 
 
 class Trainer:
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         self.cfg = resolve_config(config)
         self.data_cfg = self.cfg["data"]
         self.model_cfg = self.cfg["model"]
@@ -469,7 +326,7 @@ class Trainer:
             fused=self.device.type in {"cuda", "mps"},
         )
 
-        self.dense_grid = build_pixel_grid(self.render_size, self.render_size, self.device)
+        self.dense_grid = build_or_reuse_grid(self.render_size, self.render_size, self.device)
         self.amp_available = bool(
             self.train_cfg["amp"] and torch.amp.autocast_mode.is_autocast_available(self.device.type)
         )
@@ -777,13 +634,21 @@ class Trainer:
         print("DynamicVideoTokenGSImplicitCamera training complete. Check your Weights & Biases dashboard.")
 
 
-def run_training(config: dict[str, Any] | None = None) -> None:
+def run_training(config: dict[str, Any]) -> None:
     Trainer(config).run()
 
 
-def main(config: dict[str, Any] | None = None) -> None:
-    run_training(config)
+def main(config: dict[str, Any] | str | Path) -> None:
+    if isinstance(config, (str, Path)):
+        run_training(load_config_file(config))
+    else:
+        run_training(config)
 
 
 if __name__ == "__main__":
-    raise SystemExit("Import this module and call main(config) with a config dict.")
+    if len(sys.argv) != 2:
+        raise SystemExit(
+            "Usage: uv run python src/train/train_video_token_implicit_dynamic.py "
+            "src/train_configs/video_token_implicit_camera_full.jsonc"
+        )
+    main(sys.argv[1])
