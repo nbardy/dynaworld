@@ -114,87 +114,577 @@ Do not build a giant base-class hierarchy.
 
 Instead, add a few small explicit interfaces and move shared math into the right layer.
 
-## Proposed Unifications
+## Proposed Contracts
 
-### A. Add typed runtime payloads
+The goal is **not** one shared `BaseTrainer`. The baselines have different training loops and should keep separate readable trainer classes. The cleanup target is shared typed contracts at the boundaries:
 
-Create small dataclasses for runtime payloads:
+- loaders return the same sequence payload shape
+- models return named gaussian/camera payloads instead of tuples
+- renderers consume one stable gaussian frame type
+- implicit-camera math lives in one module
+- logging and validation helpers reuse the same payload vocabulary
 
-- `SequenceData`
-- `ClipBatch`
-- `DecodedSequence`
-- optional `CameraState`
+### A. Runtime payload types
 
-This is the highest-leverage cleanup because it removes positional coupling across trainers and models.
+Create `src/train/runtime_types.py`.
 
-### B. Extract shared implicit-camera module
+```python
+from __future__ import annotations
 
-Create one shared module for:
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Literal
 
-- `build_zero_init_head`
-- `axis_angle_to_matrix`
-- `compose_camera_with_se3_delta`
-- `GlobalCameraHead`
-- `PathCameraHead`
+import torch
 
-Both implicit-camera models should depend on that module instead of duplicating the same logic.
+from camera import CameraSpec
 
-### C. Unify render dispatch
+Tensor = torch.Tensor
 
-Create one helper that owns dense vs tiled dispatch and takes a stable payload.
+FrameSource = Literal[
+    "camera_json",
+    "summary_video",
+    "explicit_video",
+    "summary_sampled",
+    "all_frames",
+]
+RendererMode = Literal["auto", "dense", "tiled"]
+ResolvedRendererMode = Literal["dense", "tiled"]
+ReconstructionBackwardStrategy = Literal["batched", "microbatch", "framewise"]
+```
 
-Suggested shape:
+```python
+@dataclass(frozen=True)
+class SequenceData:
+    """A full training sequence after loading and resizing.
 
-- `render_gaussian_frame(render_mode, render_cfg, camera, gaussian_frame, dense_grid)`
+    frames: [T, 3, H, W], float, 0..1
+    frame_times: [T, 1], normalized to 0..1 unless source timestamps are unavailable
+    cameras: length T when cameras are known, None for implicit-camera baselines
+    """
 
-Where `gaussian_frame` is a typed object or a tiny struct containing:
+    frames: Tensor
+    frame_times: Tensor
+    video_fps: float
+    frame_source: FrameSource
+    frame_paths: tuple[Path, ...] = ()
+    cameras: tuple[CameraSpec, ...] | None = None
+    records: tuple[Mapping[str, Any], ...] = ()
+    intrinsics_summary: Mapping[str, float] = field(default_factory=dict)
 
-- `xyz`
-- `scales`
-- `quats`
-- `opacities`
-- `rgbs`
+    @property
+    def frame_count(self) -> int: ...
 
-### D. Promote one trainer pattern
+    @property
+    def image_size(self) -> int: ...
 
-Use the video trainer as the reference structure, then port the image baselines toward the same method split:
+    def to(self, device: torch.device | str) -> "SequenceData": ...
+```
 
-- `sample_batch`
-- `forward_batch`
-- `build_losses`
-- `backward_reconstruction`
-- `validation_payload`
-- `run`
+```python
+@dataclass(frozen=True)
+class ClipBatch:
+    """A sampled training window.
 
-This does not require inheritance. Matching method boundaries is enough.
+    frames: [K, 3, H, W]
+    frame_times: [K, 1]
+    frame_indices: [K]
+    cameras: length K only for known-camera training
+    """
 
-### E. Separate script concerns from library concerns
+    frames: Tensor
+    frame_times: Tensor
+    frame_indices: Tensor
+    video_fps: float
+    cameras: tuple[CameraSpec, ...] | None = None
 
-The train scripts should mostly do:
+    @property
+    def frame_count(self) -> int: ...
 
-- config assembly
-- trainer construction
-- run
+    def as_video_batch(self) -> Tensor:
+        """Return [1, K, 3, H, W] for video-token models."""
+```
 
-The reusable pieces should live under shared runtime/model modules.
+```python
+@dataclass(frozen=True)
+class CameraState:
+    """Predicted camera diagnostics and regularization payload.
+
+    fov_degrees: scalar tensor
+    radius: scalar tensor
+    global_residuals: [2]
+    rotation_delta: [T, 3]
+    translation_delta: [T, 3]
+    path_residuals: [T, 6] when available
+    """
+
+    fov_degrees: Tensor
+    radius: Tensor
+    global_residuals: Tensor
+    rotation_delta: Tensor
+    translation_delta: Tensor
+    path_residuals: Tensor | None = None
+
+    def motion_features(self) -> Tensor:
+        """Return [T, 6] for motion/temporal camera regularizers."""
+```
+
+```python
+@dataclass(frozen=True)
+class GaussianFrame:
+    """One renderable gaussian frame.
+
+    xyz: [G, 3]
+    scales: [G, 3]
+    quats: [G, 4], normalized
+    opacities: [G, 1]
+    rgbs: [G, 3], 0..1
+    """
+
+    xyz: Tensor
+    scales: Tensor
+    quats: Tensor
+    opacities: Tensor
+    rgbs: Tensor
+
+    @property
+    def gaussian_count(self) -> int: ...
+
+    def float(self) -> "GaussianFrame": ...
+```
+
+```python
+@dataclass(frozen=True)
+class GaussianSequence:
+    """Decoded model output for K frames.
+
+    Tensor shapes are [K, G, C].
+    cameras is present for implicit-camera outputs and known-camera render payloads.
+    camera_state is present only for implicit-camera models.
+    """
+
+    xyz: Tensor
+    scales: Tensor
+    quats: Tensor
+    opacities: Tensor
+    rgbs: Tensor
+    cameras: tuple[CameraSpec, ...] | None = None
+    camera_state: CameraState | None = None
+
+    @property
+    def frame_count(self) -> int: ...
+
+    @property
+    def gaussian_count(self) -> int: ...
+
+    def frame(self, index: int) -> GaussianFrame: ...
+```
+
+```python
+@dataclass(frozen=True)
+class StepLosses:
+    total: Tensor
+    reconstruction: Tensor
+    camera_motion: Tensor | None = None
+    camera_temporal: Tensor | None = None
+    camera_global: Tensor | None = None
+
+    def scalar_payload(self) -> dict[str, float]: ...
+```
+
+```python
+@dataclass(frozen=True)
+class TrainStepResult:
+    batch: ClipBatch
+    decoded: GaussianSequence
+    losses: StepLosses
+    preview_render: Tensor | None = None
+```
+
+### B. Loader signatures
+
+Create `src/train/data_loading.py`.
+
+```python
+def load_known_camera_sequence(
+    camera_json_path: Path,
+    *,
+    target_size: int,
+    camera_image_size: int,
+    max_frames: int,
+    focal_mode: Literal["per_frame", "median"],
+    device: torch.device,
+) -> SequenceData: ...
+```
+
+```python
+def load_frame_sequence(
+    sequence_dir: Path,
+    *,
+    frames_dir: Path | None,
+    video_path: Path | None,
+    frame_source: FrameSource,
+    target_size: int,
+    max_frames: int,
+    device: torch.device,
+) -> SequenceData: ...
+```
+
+```python
+def sample_contiguous_clip(
+    sequence: SequenceData,
+    *,
+    frame_count: int,
+    step: int | None = None,
+    generator: torch.Generator | None = None,
+) -> ClipBatch: ...
+```
+
+```python
+def full_sequence_clip(sequence: SequenceData) -> ClipBatch: ...
+```
+
+### C. Render dispatch signatures
+
+Create `src/train/rendering.py`.
+
+```python
+@dataclass(frozen=True)
+class RenderConfig:
+    renderer: RendererMode = "auto"
+    auto_dense_limit: int = 400_000
+    tile_size: int = 8
+    bound_scale: float = 3.0
+    alpha_threshold: float = 1.0 / 255.0
+```
+
+```python
+def resolve_renderer_mode(
+    config: RenderConfig,
+    *,
+    gaussian_count: int,
+    height: int,
+    width: int,
+) -> ResolvedRendererMode: ...
+```
+
+```python
+def render_gaussian_frame(
+    gaussian: GaussianFrame,
+    camera: CameraSpec,
+    *,
+    height: int,
+    width: int,
+    config: RenderConfig,
+    dense_grid: Tensor | None = None,
+) -> Tensor:
+    """Return [3, H, W]."""
+```
+
+```python
+def render_gaussian_sequence(
+    decoded: GaussianSequence,
+    cameras: Sequence[CameraSpec],
+    *,
+    height: int,
+    width: int,
+    config: RenderConfig,
+    dense_grid: Tensor | None = None,
+) -> Tensor:
+    """Return [K, 3, H, W]."""
+```
+
+### D. Implicit-camera shared module
+
+Create `src/train/implicit_camera.py`.
+
+The existing duplicated definitions in `dynamic_token_gs_implicit_camera.py` and `dynamic_video_token_gs_implicit_camera.py` should move here.
+
+```python
+def build_zero_init_head(in_dim: int, out_dim: int) -> torch.nn.Sequential: ...
+```
+
+```python
+def skew_symmetric(vectors: Tensor) -> Tensor:
+    """vectors: [N, 3], return [N, 3, 3]."""
+```
+
+```python
+def axis_angle_to_matrix(axis_angle: Tensor) -> Tensor:
+    """axis_angle: [N, 3], return [N, 3, 3]."""
+```
+
+```python
+def compose_camera_with_se3_delta(
+    base_camera: CameraSpec,
+    rotation_delta: Tensor,
+    translation_delta: Tensor,
+) -> tuple[CameraSpec, ...]:
+    """rotation_delta and translation_delta: [T, 3]."""
+```
+
+```python
+class GlobalCameraHead(torch.nn.Module):
+    def __init__(
+        self,
+        feat_dim: int,
+        *,
+        base_fov_degrees: float = 60.0,
+        base_radius: float = 3.0,
+        max_fov_delta_degrees: float = 15.0,
+        max_radius_scale: float = 1.5,
+    ) -> None: ...
+
+    def forward(
+        self,
+        camera_token: Tensor,
+        *,
+        image_size: int,
+    ) -> tuple[CameraSpec, CameraState]: ...
+```
+
+```python
+class PathCameraHead(torch.nn.Module):
+    def __init__(
+        self,
+        feat_dim: int,
+        *,
+        max_rotation_degrees: float = 5.0,
+        max_translation_ratio: float = 0.2,
+    ) -> None: ...
+
+    def forward(
+        self,
+        path_tokens: Tensor,
+        *,
+        base_radius: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Return rotation_delta [T, 3], translation_delta [T, 3], raw_residuals [T, 6]."""
+```
+
+### E. Model protocols
+
+Create `src/train/model_protocols.py`.
+
+These are typing contracts only. They should not force inheritance.
+
+```python
+from typing import Protocol
+
+class KnownCameraDynamicModel(Protocol):
+    def forward(
+        self,
+        frames: Tensor,
+        *,
+        cameras: Sequence[CameraSpec],
+        frame_times: Tensor,
+    ) -> GaussianSequence: ...
+```
+
+```python
+class ImageImplicitCameraDynamicModel(Protocol):
+    def forward(
+        self,
+        frames: Tensor,
+        *,
+        frame_times: Tensor,
+        global_camera_token: Tensor | None = None,
+    ) -> GaussianSequence: ...
+```
+
+```python
+class VideoImplicitCameraDynamicModel(Protocol):
+    def forward(
+        self,
+        clip_frames: Tensor,
+        *,
+        decode_times: Tensor,
+    ) -> GaussianSequence:
+        """clip_frames: [1, K, 3, H, W]."""
+```
+
+### F. Separate trainer shapes
+
+Keep three trainer classes. Do not add a shared base class unless duplication remains painful after the payload cleanup.
+
+Create or converge toward:
+
+- `src/train/trainers/known_camera.py`
+- `src/train/trainers/image_implicit_camera.py`
+- `src/train/trainers/video_implicit_camera.py`
+
+```python
+@dataclass(frozen=True)
+class KnownCameraTrainerConfig:
+    steps: int
+    lr: float
+    frames_per_step: int
+    eval_batch_size: int
+    amp: bool
+    log_every: int
+    image_log_every: int
+    video_log_every: int
+    wandb_project: str
+    wandb_run_name: str
+```
+
+```python
+class KnownCameraTrainer:
+    def __init__(
+        self,
+        *,
+        model: DynamicTokenGS,
+        sequence: SequenceData,
+        render_config: RenderConfig,
+        train_config: KnownCameraTrainerConfig,
+        device: torch.device,
+    ) -> None: ...
+
+    def sample_batch(self, step: int) -> ClipBatch: ...
+    def forward_batch(self, batch: ClipBatch) -> GaussianSequence: ...
+    def build_losses(self, batch: ClipBatch, decoded: GaussianSequence) -> StepLosses: ...
+    def train_step(self, step: int) -> TrainStepResult: ...
+    def render_validation_video(self) -> Tensor: ...
+    def log_step(self, step: int, result: TrainStepResult) -> None: ...
+    def run(self) -> None: ...
+```
+
+```python
+@dataclass(frozen=True)
+class ImageImplicitCameraTrainerConfig:
+    steps: int
+    lr: float
+    frames_per_step: int
+    eval_batch_size: int
+    amp: bool
+    camera_motion_weight: float
+    camera_temporal_weight: float
+    camera_global_weight: float
+    log_every: int
+    image_log_every: int
+    video_log_every: int
+    wandb_project: str
+    wandb_run_name: str
+```
+
+```python
+class ImageImplicitCameraTrainer:
+    def __init__(
+        self,
+        *,
+        model: DynamicTokenGSImplicitCamera,
+        sequence: SequenceData,
+        render_config: RenderConfig,
+        train_config: ImageImplicitCameraTrainerConfig,
+        device: torch.device,
+    ) -> None: ...
+
+    def sample_batch(self, step: int) -> ClipBatch: ...
+    def forward_batch(self, batch: ClipBatch) -> GaussianSequence: ...
+    def build_camera_losses(self, camera_state: CameraState) -> tuple[Tensor, Tensor, Tensor]: ...
+    def build_losses(self, batch: ClipBatch, decoded: GaussianSequence) -> StepLosses: ...
+    def train_step(self, step: int) -> TrainStepResult: ...
+    def render_validation_video(self) -> tuple[Tensor, CameraState]: ...
+    def log_step(self, step: int, result: TrainStepResult) -> None: ...
+    def run(self) -> None: ...
+```
+
+```python
+@dataclass(frozen=True)
+class VideoImplicitCameraTrainerConfig:
+    steps: int
+    lr: float
+    train_frame_count: int
+    temporal_microbatch_size: int
+    recon_backward_strategy: ReconstructionBackwardStrategy
+    amp: bool
+    camera_motion_weight: float
+    camera_temporal_weight: float
+    camera_global_weight: float
+    log_every: int
+    image_log_every: int
+    video_log_every: int
+    always_log_last_step: bool
+    wandb_project: str
+    wandb_run_name: str
+```
+
+```python
+class VideoImplicitCameraTrainer:
+    def __init__(
+        self,
+        *,
+        model: DynamicVideoTokenGSImplicitCamera,
+        sequence: SequenceData,
+        render_config: RenderConfig,
+        train_config: VideoImplicitCameraTrainerConfig,
+        device: torch.device,
+    ) -> None: ...
+
+    def sample_batch(self, step: int) -> ClipBatch: ...
+    def forward_clip(self, batch: ClipBatch) -> GaussianSequence: ...
+    def render_clip_frame(self, decoded: GaussianSequence, frame_index: int) -> Tensor: ...
+    def build_camera_losses(self, camera_state: CameraState) -> tuple[Tensor, Tensor, Tensor]: ...
+    def build_losses(self, batch: ClipBatch, decoded: GaussianSequence) -> StepLosses: ...
+    def backward_reconstruction(self, batch: ClipBatch, decoded: GaussianSequence) -> Tensor: ...
+    def train_step(self, step: int) -> TrainStepResult: ...
+    def render_validation_video(self) -> tuple[Tensor, CameraState]: ...
+    def log_step(self, step: int, result: TrainStepResult) -> None: ...
+    def run(self) -> None: ...
+```
+
+### G. Logging helpers
+
+Create `src/train/logging_utils.py`.
+
+```python
+def make_wandb_video(frames: Tensor, *, fps: float, caption: str | None = None) -> wandb.Video: ...
+```
+
+```python
+def make_preview_image(gt: Tensor, pred: Tensor, *, caption: str) -> wandb.Image:
+    """gt and pred: [3, H, W]."""
+```
+
+```python
+def camera_metrics(camera_state: CameraState, *, prefix: str = "Camera") -> dict[str, float]: ...
+```
+
+```python
+def loss_metrics(losses: StepLosses, *, prefix: str = "Loss") -> dict[str, float]: ...
+```
+
+### H. Thin script signatures
+
+Entrypoints should shrink toward config assembly and trainer construction.
+
+```python
+def build_arg_parser() -> argparse.ArgumentParser: ...
+def parse_args() -> argparse.Namespace: ...
+def config_from_args(args: argparse.Namespace) -> TrainerConfig: ...
+def build_trainer(config: TrainerConfig) -> KnownCameraTrainer | ImageImplicitCameraTrainer | VideoImplicitCameraTrainer: ...
+def main() -> None: ...
+```
 
 ## Recommended Order
 
 ### Phase 1: cheap and high value
 
-1. add `DecodedSequence`
-2. add one shared render dispatch helper
+1. add `SequenceData`, `ClipBatch`, `GaussianFrame`, and `GaussianSequence`
+2. add one shared render dispatch helper around `RenderConfig`
 3. extract shared implicit-camera heads and SE(3) math
 
 ### Phase 2: trainer cleanup
 
-4. port `train_camera_implicit_dynamic.py` to the same trainer structure as the video path
-5. move common logging and validation helpers into shared runtime utilities
+4. split each dynamic baseline into its own explicit trainer class
+5. move common logging, validation, and camera-loss helpers into shared utilities
 
 ### Phase 3: data contract cleanup
 
-6. replace loose sequence dicts with small dataclasses
-7. make loaders return one typed payload across known-camera and implicit-camera paths
+6. make loaders return `SequenceData`
+7. make models return `GaussianSequence`
+8. delete compatibility shims once the new entrypoints are stable
 
 ## Non-Goals
 
@@ -204,6 +694,7 @@ Avoid these unless they become clearly necessary:
 - a large framework-style registry
 - deep inheritance across model families
 - a rewrite of the renderer math layer
+- forcing known-camera, image-implicit, and video-implicit training into one loop
 
 The cleanup should make experiments easier to fork, not harder to understand.
 
@@ -215,4 +706,5 @@ This cleanup is done when:
 2. implicit-camera logic exists in one place
 3. renderer dispatch exists in one place
 4. model outputs are no longer positional tuple soup
-5. image and video baselines feel like variants of one system rather than separate script families
+5. each dynamic baseline has a separate readable trainer with the same payload vocabulary
+6. known-camera code has no camera-loss branches, and implicit-camera code keeps camera-loss logic explicit
