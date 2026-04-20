@@ -190,6 +190,37 @@ Result:
 - dense renderer
 - final printed loss: about `0.1975`
 
+Closure full-config smoke:
+
+```bash
+uv run python - <<'PY'
+import sys
+sys.path.insert(0, 'src/train')
+from train_video_token_implicit_dynamic import load_config_file, main
+
+cfg = load_config_file('src/train_configs/video_token_implicit_camera_full.jsonc')
+cfg['train']['steps'] = 1
+cfg['logging']['log_every'] = 1
+cfg['logging']['image_log_every'] = 1000
+cfg['logging']['video_log_every'] = 1000
+cfg['logging']['always_log_last_step'] = False
+cfg['logging']['wandb_run_name'] = 'dynamic-video-token-implicit-camera-full-1step'
+main(cfg)
+PY
+```
+
+Result:
+
+- completed 1 step
+- W&B run: `m6u2vpqk`
+- input size: 384
+- render size: 192
+- train frame count: 16
+- 512 explicit gaussians
+- dense renderer
+- final printed loss: about `0.4888`
+- step time on MPS: about 14 seconds
+
 ## Follow-Up Context
 
 The trainer is cleaner but still not fully typed end-to-end. `prepare_clip(...)`
