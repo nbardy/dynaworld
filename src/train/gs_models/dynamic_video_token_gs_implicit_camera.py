@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from runtime_types import CameraState, GaussianSequence
 
 from .implicit_camera import GlobalCameraHead, PathCameraHead, build_zero_init_head, compose_camera_with_se3_delta
 
@@ -319,14 +320,6 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
             path_token, base_radius=base_state["radius"]
         )
         camera = compose_camera_with_se3_delta(base_camera, rotation_delta, translation_delta)[0]
-        camera_state = {
-            "fov_degrees": base_state["fov_degrees"],
-            "radius": base_state["radius"],
-            "global_residuals": base_state["global_residuals"],
-            "rotation_delta": rotation_delta,
-            "translation_delta": translation_delta,
-            "path_residuals": path_residuals,
-        }
         return (
             xyz.squeeze(0),
             scales.squeeze(0),
@@ -334,7 +327,14 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
             opacities.squeeze(0),
             rgbs.squeeze(0),
             camera,
-            camera_state,
+            CameraState(
+                fov_degrees=base_state["fov_degrees"],
+                radius=base_state["radius"],
+                global_residuals=base_state["global_residuals"],
+                rotation_delta=rotation_delta,
+                translation_delta=translation_delta,
+                path_residuals=path_residuals,
+            ),
         )
 
     def forward(self, video, decode_times):
@@ -358,12 +358,20 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         opacities = torch.stack([item[3] for item in decoded], dim=0)
         rgbs = torch.stack([item[4] for item in decoded], dim=0)
         cameras = [item[5] for item in decoded]
-        camera_state = {
-            "fov_degrees": torch.stack([item[6]["fov_degrees"] for item in decoded]).mean(),
-            "radius": torch.stack([item[6]["radius"] for item in decoded]).mean(),
-            "global_residuals": torch.stack([item[6]["global_residuals"] for item in decoded]).mean(dim=0),
-            "rotation_delta": torch.cat([item[6]["rotation_delta"] for item in decoded], dim=0),
-            "translation_delta": torch.cat([item[6]["translation_delta"] for item in decoded], dim=0),
-            "path_residuals": torch.cat([item[6]["path_residuals"] for item in decoded], dim=0),
-        }
-        return xyz, scales, quats, opacities, rgbs, cameras, camera_state
+        camera_state = CameraState(
+            fov_degrees=torch.stack([item[6].fov_degrees for item in decoded]).mean(),
+            radius=torch.stack([item[6].radius for item in decoded]).mean(),
+            global_residuals=torch.stack([item[6].global_residuals for item in decoded]).mean(dim=0),
+            rotation_delta=torch.cat([item[6].rotation_delta for item in decoded], dim=0),
+            translation_delta=torch.cat([item[6].translation_delta for item in decoded], dim=0),
+            path_residuals=torch.cat([item[6].path_residuals for item in decoded], dim=0),
+        )
+        return GaussianSequence(
+            xyz=xyz,
+            scales=scales,
+            quats=quats,
+            opacities=opacities,
+            rgbs=rgbs,
+            cameras=tuple(cameras),
+            camera_state=camera_state,
+        )

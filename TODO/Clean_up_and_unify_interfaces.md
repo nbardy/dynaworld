@@ -11,6 +11,14 @@ Implemented first cleanup pass on 2026-04-20:
 - extracted implicit-camera heads and SE(3) math into `src/train/gs_models/implicit_camera.py`
 - migrated the known-camera, image-implicit, and video-implicit trainers onto the shared helper vocabulary without introducing a shared base trainer
 
+Completed config/contract pass on 2026-04-20:
+
+- moved trainer entrypoints to checked-in JSONC configs under `src/train_configs/`
+- added shared JSONC loading/serialization helpers in `src/train/config_utils.py`
+- removed the temporary `SequenceData[...]` compatibility bridge
+- made trainer-facing model forwards return `GaussianSequence` with optional `CameraState`
+- converted the remaining single-image `tokenGS.py` and `tokenGS_tiled.py` trainers to config paths
+
 ## Goal
 
 Reduce script drift in `dynaworld/` without overbuilding a framework.
@@ -32,6 +40,7 @@ There are multiple training scripts with overlapping logic:
 - `src/train/dynamicTokenGS.py`
 - `src/train/train_camera_implicit_dynamic.py`
 - `src/train/train_video_token_implicit_dynamic.py`
+- `src/train/tokenGS.py`
 
 Only the video-token path currently has a real `Trainer` class. The others are still procedural script-local training loops.
 
@@ -57,19 +66,12 @@ But render dispatch is duplicated in each train script under slightly different 
 
 ## Main Problems
 
-### 1. Tuple soup
+### 1. Boundary contract drift
 
-Models mostly return positional tuples like:
-
-- `xyz`
-- `scales`
-- `quats`
-- `opacities`
-- `rgbs`
-- `cameras`
-- `camera_state`
-
-This works for fast iteration, but it is easy to drift or reorder fields accidentally.
+Trainer-facing model forwards now return `GaussianSequence`, but some lower-level
+heads still return small internal tuples. Keep those internal tuples local to the
+model implementation; do not let trainer code depend on positional Gaussian
+fields again.
 
 ### 2. Implicit-camera logic is duplicated
 
@@ -668,14 +670,14 @@ def loss_metrics(losses: StepLosses, *, prefix: str = "Loss") -> dict[str, float
 
 ### H. Thin script signatures
 
-Entrypoints should shrink toward config assembly and trainer construction.
+Entrypoints should accept a config path or config dict and delegate to a trainer
+or explicit training loop. Config defaults live in JSONC, not in argparse,
+environment variables, or mirrored Python maps.
 
 ```python
-def build_arg_parser() -> argparse.ArgumentParser: ...
-def parse_args() -> argparse.Namespace: ...
-def config_from_args(args: argparse.Namespace) -> TrainerConfig: ...
+def resolve_config(config: dict[str, Any]) -> dict[str, Any]: ...
 def build_trainer(config: TrainerConfig) -> KnownCameraTrainer | ImageImplicitCameraTrainer | VideoImplicitCameraTrainer: ...
-def main() -> None: ...
+def main(config: dict[str, Any] | str | Path) -> None: ...
 ```
 
 ## Recommended Order
@@ -696,6 +698,10 @@ def main() -> None: ...
 6. make loaders return `SequenceData`
 7. make models return `GaussianSequence`
 8. delete compatibility shims once the new entrypoints are stable
+
+Status: items 6-8 are complete for the current trainer-facing paths. Remaining
+work is organizing the older procedural loops into explicit trainer classes
+without forcing a shared base class.
 
 ## Non-Goals
 

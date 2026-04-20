@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from runtime_types import CameraState, GaussianSequence
 
 from .blocks import ConvImageEncoder, TokenAttentionBlock, build_mlp, flatten_hw_features
 from .implicit_camera import GlobalCameraHead, PathCameraHead, compose_camera_with_se3_delta
@@ -104,4 +105,12 @@ class DynamicTokenGSImplicitCamera(nn.Module):
         camera_state["rotation_delta"] = rotation_delta
         camera_state["translation_delta"] = translation_delta
         camera_state["path_residuals"] = path_residuals
-        return xyz, scales, quats, opacities, rgbs, cameras, camera_state
+        return GaussianSequence(
+            xyz=xyz,
+            scales=scales,
+            quats=quats,
+            opacities=opacities,
+            rgbs=rgbs,
+            cameras=tuple(cameras),
+            camera_state=CameraState.from_mapping(camera_state),
+        )

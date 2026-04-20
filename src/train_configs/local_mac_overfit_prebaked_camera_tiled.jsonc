@@ -1,0 +1,39 @@
+{
+  // Known-camera dynamic TokenGS baseline pinned to the tiled renderer.
+  "arch": "tokengs_prebaked_camera_tiled",
+  "data": {
+    "sequence_dir": "test_data/dust3r_outputs/test_video_small_all_frames",
+    "camera_json": null,
+    "camera_image_size": 224,
+    "camera_focal_mode": "median",
+    "max_frames": 0
+  },
+  "model": {
+    "size": 32,
+    "tokens": 128,
+    "gaussians_per_token": 4
+  },
+  "render": {
+    "renderer": "tiled",
+    "auto_dense_limit": 400000,
+    "tile_size": 8,
+    "bound_scale": 3.0,
+    "alpha_threshold": 0.00392156862745098
+  },
+  "train": {
+    "steps": 1000,
+    "lr": 0.005,
+    "amp": false,
+    "frames_per_step": 0,
+    "eval_batch_size": 4
+  },
+  "logging": {
+    "log_every": 25,
+    "image_log_every": 25,
+    "video_log_every": 25,
+    "always_log_last_step": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-overfit-prebaked-camera-tiled",
+    "wandb_tags": ["overfit-local", "arch-tokengs", "camera-prebaked"]
+  }
+}

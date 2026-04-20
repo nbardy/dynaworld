@@ -16,10 +16,6 @@ def flatten_hw_features(feature_map):
     return feature_map.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
 
 
-def squeeze_batch_outputs(outputs):
-    return tuple(tensor.squeeze(0) for tensor in outputs)
-
-
 class ConvImageEncoder(nn.Module):
     def __init__(self, feat_dim):
         super().__init__()

@@ -51,7 +51,7 @@ Default inputs and outputs live under `test_data/`.
 Single-image baseline:
 
 ```bash
-uv run python src/train/tokenGS.py
+uv run python src/train/tokenGS.py src/train_configs/local_mac_overfit_single_image.jsonc
 ```
 
 Dynamic training with DUSt3R camera prebake:

@@ -1,0 +1,32 @@
+{
+  // Original single-image TokenGS toy overfit, kept config-based for parity with dynamic trainers.
+  "arch": "tokengs_single_image",
+  "data": {
+    "image": null
+  },
+  "model": {
+    "size": 32,
+    "tokens": 128,
+    "gaussians_per_token": 4
+  },
+  "render": {
+    "renderer": "auto",
+    "auto_dense_limit": 400000,
+    "tile_size": 8,
+    "bound_scale": 3.0,
+    "alpha_threshold": 0.00392156862745098
+  },
+  "train": {
+    "steps": 100,
+    "lr": 0.005,
+    "amp": false
+  },
+  "logging": {
+    "log_every": 10,
+    "image_log_every": 50,
+    "always_log_last_step": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-overfit-single-image",
+    "wandb_tags": ["overfit-local", "arch-tokengs"]
+  }
+}

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from camera import build_plucker_ray_grid, build_plucker_ray_grid_batch, make_default_camera
+from runtime_types import GaussianSequence
 
 from .blocks import TokenGSBackbone
 
@@ -47,4 +48,9 @@ class DynamicTokenGS(TokenGSBackbone):
         else:
             frame_times = frame_times.to(device=img.device, dtype=img.dtype).reshape(batch_size, 1)
         time_offsets = self.time_proj(frame_times).unsqueeze(1)
-        return self.predict_gaussians(img, plucker_grid, token_offsets=time_offsets)
+        xyz, scales, quats, opacities, rgbs = self.predict_gaussians(
+            img,
+            plucker_grid,
+            token_offsets=time_offsets,
+        )
+        return GaussianSequence(xyz=xyz, scales=scales, quats=quats, opacities=opacities, rgbs=rgbs)

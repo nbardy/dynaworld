@@ -70,12 +70,6 @@ class SequenceData:
     def image_size(self) -> int:
         return int(self.frames.shape[-1])
 
-    def __getitem__(self, key: str) -> Any:
-        """Temporary bridge for older trainers that still use dict-style access."""
-        if not hasattr(self, key):
-            raise KeyError(key)
-        return getattr(self, key)
-
     def to(self, device: torch.device | str) -> "SequenceData":
         cameras = None
         if self.cameras is not None:
@@ -142,6 +136,17 @@ class CameraState:
     def motion_features(self) -> Tensor:
         """Return [T, 6] for motion/temporal camera regularizers."""
         return torch.cat([self.rotation_delta, self.translation_delta], dim=-1)
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Tensor]) -> "CameraState":
+        return cls(
+            fov_degrees=values["fov_degrees"],
+            radius=values["radius"],
+            global_residuals=values["global_residuals"],
+            rotation_delta=values["rotation_delta"],
+            translation_delta=values["translation_delta"],
+            path_residuals=values.get("path_residuals"),
+        )
 
 
 @dataclass(frozen=True)

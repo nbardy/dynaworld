@@ -10,7 +10,7 @@ if [[ "$#" -gt 1 ]]; then
   exit 1
 fi
 
-CONFIG_PATH="${1:-src/train_configs/video_token_implicit_camera_full.jsonc}"
+CONFIG_PATH="${1:-src/train_configs/local_mac_overfit_video_token_full.jsonc}"
 if [[ ! -f "$CONFIG_PATH" ]]; then
   echo "Missing config: $CONFIG_PATH" >&2
   exit 1

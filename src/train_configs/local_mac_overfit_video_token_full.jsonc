@@ -1,5 +1,8 @@
 {
-  // Fast smoke version of the same architecture. W&B stays enabled by default.
+  // "Full" video-token implicit-camera baseline for local Mac dev work.
+  // This is still a local-overfit config, just larger than the smoke version:
+  // encoder sees 384x384 video, render_size controls only splat render/loss resolution.
+  "arch": "tokengs",
   "data": {
     "sequence_dir": "test_data",
     "frames_dir": null,
@@ -8,19 +11,19 @@
     "max_frames": 0
   },
   "model": {
-    "size": 32,
+    "size": 384,
     "train_frame_count": 16,
-    "tokens": 4,
-    "gaussians_per_token": 16,
-    "model_dim": 64,
-    "bottleneck_dim": 64,
-    "num_heads": 4,
+    "tokens": 8,
+    "gaussians_per_token": 64,
+    "model_dim": 128,
+    "bottleneck_dim": 256,
+    "num_heads": 8,
     "mlp_ratio": 4.0,
     "scene_extent": 1.0,
     "tubelet_size_t": 4,
-    "patch_compression": 32,
+    "patch_compression": 16,
     "encoder_self_attn_layers": 1,
-    "bottleneck_self_attn_layers": 1,
+    "bottleneck_self_attn_layers": 4,
     "cross_attn_layers": 1
   },
   "camera": {
@@ -33,14 +36,14 @@
   },
   "render": {
     "renderer": "dense",
-    "render_size": 16,
+    "render_size": 192,
     "auto_dense_limit": 400000,
     "tile_size": 8,
     "bound_scale": 3.0,
     "alpha_threshold": 0.00392156862745098
   },
   "train": {
-    "steps": 10,
+    "steps": 1000,
     "lr": 0.005,
     "amp": false,
     "recon_backward_strategy": "framewise",
@@ -52,11 +55,12 @@
     "camera_global_weight": 0.005
   },
   "logging": {
-    "log_every": 1,
-    "image_log_every": 1000,
-    "video_log_every": 1000,
+    "log_every": 25,
+    "image_log_every": 100,
+    "video_log_every": 200,
     "always_log_last_step": true,
-    "wandb_project": "dynamic-tokengs-overfit",
-    "wandb_run_name": "dynamic-video-token-implicit-camera-smoke"
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-overfit-video-token-full",
+    "wandb_tags": ["overfit-local", "arch-tokengs"]
   }
 }

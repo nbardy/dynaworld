@@ -1,4 +1,4 @@
 from train_camera_implicit_dynamic import main
 
 if __name__ == "__main__":
-    main(run_name="dynamic-image-encoder-implicit-camera-baseline")
+    main("src/train_configs/local_mac_overfit_image_implicit_camera.jsonc")

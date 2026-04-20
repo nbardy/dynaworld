@@ -17,9 +17,10 @@ file under 200 lines by recompressing it. Raw chronology belongs in
 - DUSt3R per-frame focal estimates can jitter on a phone clip. Median focal across the sequence is often a better default than trusting each frame.
 - A single shared `BaseTrainer` would hide real differences between known-camera, image-implicit, and video-token implicit training. Shared payload contracts are cleaner than shared trainer inheritance.
 - Positional tuple outputs were fine for toy iteration but became risky as soon as camera state, videos, and multiple baselines appeared. Named runtime payloads are the right boundary.
-- `SequenceData.__getitem__` is a temporary migration crutch. It reduced breakage during cleanup but should eventually disappear after trainer call sites use attributes.
+- `SequenceData.__getitem__` was useful as a temporary migration crutch, but it hid weak contracts. After trainer call sites moved to attributes and `ClipBatch`, deleting the bridge made violations easy to grep.
 - System `python3` can pass compile checks but fail import smokes because dependencies live in the `uv` environment. Use `uv run python` for meaningful Dynaworld checks.
 - The smoke wrapper lacked execute permission even though the full wrappers were executable. Always check script mode before assuming a shell script can be run with `./...`.
 - JSONC configs are better than environment-variable fanout for trainer experiments. Shell wrappers should choose config files rather than re-declaring every knob.
+- Shared JSONC helpers belong in one tiny utility. Keeping `strip_jsonc_comments(...)`, config loading, and W&B-safe serialization in `src/train/config_utils.py` avoids both parser copy-paste and a mirrored Python default map.
 - `render_size` should be treated as a viewport, not a crop. Scale `fx/fy/cx/cy` from encoder input pixels to render pixels at the render boundary, then resize GT for loss; pose and FoV stay unchanged.
 - Keep full experiment defaults in JSONC, not in a mirrored Python `DEFAULT_CONFIG`. Python should normalize runtime values, validate required sections, and keep constructor-name mapping in one boundary factory.

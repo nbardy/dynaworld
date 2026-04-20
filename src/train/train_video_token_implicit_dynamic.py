@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import sys
 from contextlib import nullcontext
-from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +9,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 import wandb
+from config_utils import load_config_file, path_or_none, resolved_config, serialize_config_value
 from dynamicTokenGS import (
     configure_fast_attn,
     fast_attn_context,
@@ -19,7 +18,7 @@ from dynamicTokenGS import (
 from gs_models import DynamicVideoTokenGSImplicitCamera
 from rendering import build_or_reuse_grid, camera_for_viewport, render_gaussian_frame, resize_images
 from rendering import pick_renderer_mode as resolve_renderer_mode
-from runtime_types import GaussianFrame
+from runtime_types import CameraState, GaussianFrame, GaussianSequence, SequenceData
 from sequence_data import load_uncalibrated_sequence, resolve_frames_dir, select_window_indices
 from tqdm import tqdm
 from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
@@ -29,7 +28,7 @@ from train_logging import build_validation_video_payload, make_preview_image, ma
 class StepResult:
     clip_frames: torch.Tensor
     preview_render: torch.Tensor | None
-    camera_state: dict[str, torch.Tensor]
+    camera_state: CameraState
     loss: torch.Tensor
     recon_loss: torch.Tensor
     camera_motion_loss: torch.Tensor
@@ -37,88 +36,14 @@ class StepResult:
     camera_global_loss: torch.Tensor
 
 
-def strip_jsonc_comments(text: str) -> str:
-    output = []
-    index = 0
-    in_string = False
-    escaped = False
-
-    while index < len(text):
-        char = text[index]
-
-        if in_string:
-            output.append(char)
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            index += 1
-            continue
-
-        if char == '"':
-            in_string = True
-            output.append(char)
-            index += 1
-            continue
-
-        if char == "/" and index + 1 < len(text):
-            next_char = text[index + 1]
-            if next_char == "/":
-                index += 2
-                while index < len(text) and text[index] not in "\r\n":
-                    index += 1
-                continue
-            if next_char == "*":
-                index += 2
-                while index + 1 < len(text) and not (text[index] == "*" and text[index + 1] == "/"):
-                    if text[index] in "\r\n":
-                        output.append(text[index])
-                    index += 1
-                if index + 1 >= len(text):
-                    raise ValueError("Unterminated block comment in JSONC config.")
-                index += 2
-                continue
-
-        output.append(char)
-        index += 1
-
-    return "".join(output)
-
-
-def load_config_file(path: str | Path) -> dict[str, Any]:
-    config_path = Path(path)
-    data = json.loads(strip_jsonc_comments(config_path.read_text()))
-    if not isinstance(data, dict):
-        raise ValueError(f"Expected config object in {config_path}, got {type(data).__name__}.")
-    return data
-
-
 def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     if config is None:
         raise ValueError("A train config is required. Pass a JSONC path or config dict.")
-    cfg = deepcopy(config)
-    for section in ("data", "model", "camera", "render", "train", "losses", "logging"):
-        if section not in cfg:
-            raise KeyError(f"Missing required config section: {section}")
-
+    cfg = resolved_config(config, ("data", "model", "camera", "render", "train", "losses", "logging"))
     cfg["data"]["sequence_dir"] = Path(cfg["data"]["sequence_dir"])
-    frames_dir = cfg["data"]["frames_dir"]
-    cfg["data"]["frames_dir"] = None if frames_dir is None else Path(frames_dir)
-    video_path = cfg["data"]["video_path"]
-    cfg["data"]["video_path"] = None if video_path is None else Path(video_path)
+    cfg["data"]["frames_dir"] = path_or_none(cfg["data"]["frames_dir"])
+    cfg["data"]["video_path"] = path_or_none(cfg["data"]["video_path"])
     return cfg
-
-
-def serialize_config_value(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {key: serialize_config_value(inner) for key, inner in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [serialize_config_value(inner) for inner in value]
-    return value
 
 
 def pick_renderer_mode_from_config(config: dict[str, Any]) -> tuple[str, int]:
@@ -144,9 +69,9 @@ def normalize_clip_times(frame_times: torch.Tensor) -> torch.Tensor:
     return torch.zeros_like(frame_times)
 
 
-def prepare_clip(sequence_data: dict[str, Any], clip_indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    clip_frames = sequence_data["frames"][clip_indices]
-    clip_times = normalize_clip_times(sequence_data["frame_times"][clip_indices].reshape(-1)).unsqueeze(0)
+def prepare_clip(sequence_data: SequenceData, clip_indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    clip_frames = sequence_data.frames[clip_indices]
+    clip_times = normalize_clip_times(sequence_data.frame_times[clip_indices].reshape(-1)).unsqueeze(0)
     return clip_frames.unsqueeze(0), clip_times
 
 
@@ -186,20 +111,20 @@ def render_clip_frame(
 @torch.no_grad()
 def render_full_sequence(
     model: torch.nn.Module,
-    sequence_data: dict[str, Any],
+    sequence_data: SequenceData,
     config: dict[str, Any],
     renderer_mode: str,
     dense_grid: torch.Tensor,
     amp_available: bool,
     amp_dtype: torch.dtype,
     device: torch.device,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor, CameraState]:
     was_training = model.training
     model.eval()
     model_cfg = config["model"]
     render_cfg = config["render"]
     clip_length = model_cfg["train_frame_count"]
-    num_frames = sequence_data["frames"].shape[0]
+    num_frames = sequence_data.frame_count
     rendered_frames = [None] * num_frames
     camera_states = []
 
@@ -211,34 +136,37 @@ def render_full_sequence(
 
         autocast_context = torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
         with fast_attn_context(device), autocast_context:
-            xyz, scales, quats, opacities, rgbs, cameras, camera_state = model(clip_frames, decode_times=clip_times)
-        camera_states.append(camera_state)
+            decoded = model(clip_frames, decode_times=clip_times)
+        camera_states.append(decoded.camera_state)
 
         for local_index, frame_index in enumerate(clip_indices.tolist()):
             if rendered_frames[frame_index] is not None:
                 continue
+            camera = decoded.cameras[local_index]
             rendered_frames[frame_index] = render_clip_frame(
                 renderer_mode,
                 render_cfg,
                 model_cfg["size"],
                 render_cfg["render_size"],
                 dense_grid,
-                cameras[local_index],
-                xyz[local_index],
-                scales[local_index],
-                quats[local_index],
-                opacities[local_index],
-                rgbs[local_index],
+                camera,
+                decoded.xyz[local_index],
+                decoded.scales[local_index],
+                decoded.quats[local_index],
+                decoded.opacities[local_index],
+                decoded.rgbs[local_index],
             ).cpu()
 
     if was_training:
         model.train()
-    merged_camera_state = {
-        "fov_degrees": torch.stack([state["fov_degrees"] for state in camera_states]).mean(),
-        "radius": torch.stack([state["radius"] for state in camera_states]).mean(),
-        "rotation_delta": torch.cat([state["rotation_delta"] for state in camera_states], dim=0),
-        "translation_delta": torch.cat([state["translation_delta"] for state in camera_states], dim=0),
-    }
+    merged_camera_state = CameraState(
+        fov_degrees=torch.stack([state.fov_degrees for state in camera_states]).mean(),
+        radius=torch.stack([state.radius for state in camera_states]).mean(),
+        global_residuals=torch.stack([state.global_residuals for state in camera_states]).mean(dim=0),
+        rotation_delta=torch.cat([state.rotation_delta for state in camera_states], dim=0),
+        translation_delta=torch.cat([state.translation_delta for state in camera_states], dim=0),
+        path_residuals=torch.cat([state.path_residuals for state in camera_states], dim=0),
+    )
     return torch.stack(rendered_frames, dim=0), merged_camera_state
 
 
@@ -298,21 +226,22 @@ class Trainer:
         print(f"Using device: {self.device}")
 
         self.sequence_data = self.load_sequence_data()
-        self.num_frames = self.sequence_data["frames"].shape[0]
+        self.num_frames = self.sequence_data.frame_count
         if self.num_frames < self.model_cfg["train_frame_count"]:
             raise ValueError(
                 f"Need at least train_frame_count={self.model_cfg['train_frame_count']} frames, "
-                f"got {self.num_frames} from {self.sequence_data['source_path']}"
+                f"got {self.num_frames} from {self.sequence_data.source_path}"
             )
 
         print(
-            f"Loaded {self.num_frames} frames from {self.sequence_data['source_path']} "
-            f"(source={self.sequence_data['frame_source']}, source_total={self.sequence_data['all_frame_count']})"
+            f"Loaded {self.num_frames} frames from {self.sequence_data.source_path} "
+            f"(source={self.sequence_data.frame_source}, source_total={self.sequence_data.all_frame_count})"
         )
 
         wandb.init(
             project=self.logging_cfg["wandb_project"],
             name=self.logging_cfg["wandb_run_name"],
+            tags=self.logging_cfg.get("wandb_tags"),
             config=serialize_config_value(self.cfg),
         )
 
@@ -333,12 +262,12 @@ class Trainer:
         self.amp_dtype = (
             torch.bfloat16 if self.device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16
         )
-        self.attn_dtype = self.amp_dtype if self.amp_available else self.sequence_data["frames"].dtype
+        self.attn_dtype = self.amp_dtype if self.amp_available else self.sequence_data.frames.dtype
         self.attn_backend = configure_fast_attn(self.device, self.attn_dtype)
         self.renderer_mode, self.effective_gaussians = pick_renderer_mode_from_config(self.cfg)
         self.gt_video_logged = False
 
-    def load_sequence_data(self) -> dict[str, Any]:
+    def load_sequence_data(self) -> SequenceData:
         if self.data_cfg["frame_source"] == "explicit_video" and self.data_cfg["video_path"] is None:
             raise ValueError("config['data']['video_path'] is required when frame_source='explicit_video'.")
         frames_dir = resolve_frames_dir(self.data_cfg["sequence_dir"], self.data_cfg["frames_dir"])
@@ -361,20 +290,20 @@ class Trainer:
         clip_indices = select_window_indices(self.num_frames, self.model_cfg["train_frame_count"], device=self.device)
         return prepare_clip(self.sequence_data, clip_indices)
 
-    def forward_clip(self, clip_frames: torch.Tensor, clip_times: torch.Tensor):
+    def forward_clip(self, clip_frames: torch.Tensor, clip_times: torch.Tensor) -> GaussianSequence:
         with fast_attn_context(self.device), self.autocast_context():
             return self.model(clip_frames, decode_times=clip_times)
 
     def compute_camera_losses(
         self,
         clip_times: torch.Tensor,
-        camera_state: dict[str, torch.Tensor],
+        camera_state: CameraState,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         camera_motion_loss = (
             torch.cat(
                 [
-                    camera_state["rotation_delta"],
-                    camera_state["translation_delta"] / camera_state["radius"].clamp_min(1e-6),
+                    camera_state.rotation_delta,
+                    camera_state.translation_delta / camera_state.radius.clamp_min(1e-6),
                 ],
                 dim=-1,
             )
@@ -383,18 +312,18 @@ class Trainer:
         )
 
         if clip_times.shape[1] > 1:
-            motion_features = torch.cat([camera_state["rotation_delta"], camera_state["translation_delta"]], dim=-1)
+            motion_features = camera_state.motion_features()
             camera_temporal_loss = (motion_features[1:] - motion_features[:-1]).pow(2).mean()
         else:
             camera_temporal_loss = camera_motion_loss.new_tensor(0.0)
 
-        camera_global_loss = camera_state["global_residuals"].pow(2).mean()
+        camera_global_loss = camera_state.global_residuals.pow(2).mean()
         return camera_motion_loss, camera_temporal_loss, camera_global_loss
 
     def build_camera_loss(
         self,
         clip_times: torch.Tensor,
-        camera_state: dict[str, torch.Tensor],
+        camera_state: CameraState,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         camera_motion_loss, camera_temporal_loss, camera_global_loss = self.compute_camera_losses(
             clip_times,
@@ -417,18 +346,15 @@ class Trainer:
     def recon_backward(
         self,
         clip_frames: torch.Tensor,
-        xyz: torch.Tensor,
-        scales: torch.Tensor,
-        quats: torch.Tensor,
-        opacities: torch.Tensor,
-        rgbs: torch.Tensor,
-        cameras: list[Any],
+        decoded: GaussianSequence,
         camera_loss: torch.Tensor,
         keep_preview: bool,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         recon_loss = clip_frames.new_tensor(0.0)
         preview_render = None
-        frame_count = len(cameras)
+        if decoded.cameras is None:
+            raise ValueError("Implicit-camera video decode must include cameras.")
+        frame_count = len(decoded.cameras)
         chunk_size = self.temporal_recon_chunk_size(frame_count)
         target_frames = resize_images(clip_frames[0], self.render_size)
 
@@ -437,7 +363,7 @@ class Trainer:
             chunk_losses = []
 
             for local_index in range(chunk_start, chunk_end):
-                camera = cameras[local_index]
+                camera = decoded.cameras[local_index]
                 render = render_clip_frame(
                     self.renderer_mode,
                     self.render_cfg,
@@ -445,11 +371,11 @@ class Trainer:
                     self.render_size,
                     self.dense_grid,
                     camera,
-                    xyz[local_index],
-                    scales[local_index],
-                    quats[local_index],
-                    opacities[local_index],
-                    rgbs[local_index],
+                    decoded.xyz[local_index],
+                    decoded.scales[local_index],
+                    decoded.quats[local_index],
+                    decoded.opacities[local_index],
+                    decoded.rgbs[local_index],
                 )
                 if keep_preview and preview_render is None:
                     preview_render = render.detach()
@@ -467,21 +393,18 @@ class Trainer:
     def step(self, keep_preview: bool = False) -> StepResult:
         self.optimizer.zero_grad(set_to_none=True)
         clip_frames, clip_times = self.sample_clip()
-        xyz, scales, quats, opacities, rgbs, cameras, camera_state = self.forward_clip(clip_frames, clip_times)
+        decoded = self.forward_clip(clip_frames, clip_times)
+        if decoded.camera_state is None:
+            raise ValueError("Implicit-camera video decode must include camera_state.")
 
         camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss = self.build_camera_loss(
             clip_times,
-            camera_state,
+            decoded.camera_state,
         )
 
         recon_loss, preview_render = self.recon_backward(
             clip_frames,
-            xyz,
-            scales,
-            quats,
-            opacities,
-            rgbs,
-            cameras,
+            decoded,
             camera_loss,
             keep_preview,
         )
@@ -491,7 +414,7 @@ class Trainer:
         return StepResult(
             clip_frames=clip_frames,
             preview_render=preview_render,
-            camera_state=camera_state,
+            camera_state=decoded.camera_state,
             loss=loss,
             recon_loss=recon_loss,
             camera_motion_loss=camera_motion_loss,
@@ -499,14 +422,14 @@ class Trainer:
             camera_global_loss=camera_global_loss,
         )
 
-    def camera_metrics(self, camera_state: dict[str, torch.Tensor]) -> dict[str, float]:
+    def camera_metrics(self, camera_state: CameraState) -> dict[str, float]:
         return {
-            "fov_degrees": camera_state["fov_degrees"].item(),
-            "radius": camera_state["radius"].item(),
+            "fov_degrees": camera_state.fov_degrees.item(),
+            "radius": camera_state.radius.item(),
             "rotation_delta_mean_degrees": (
-                torch.rad2deg(torch.linalg.norm(camera_state["rotation_delta"], dim=-1)).mean().item()
+                torch.rad2deg(torch.linalg.norm(camera_state.rotation_delta, dim=-1)).mean().item()
             ),
-            "translation_delta_mean": torch.linalg.norm(camera_state["translation_delta"], dim=-1).mean().item(),
+            "translation_delta_mean": torch.linalg.norm(camera_state.translation_delta, dim=-1).mean().item(),
         }
 
     def progress_message(self, result: StepResult) -> str:
@@ -568,24 +491,24 @@ class Trainer:
             self.amp_dtype,
             self.device,
         )
-        gt_sequence = resize_images(self.sequence_data["frames"], self.render_size).detach().cpu()
+        gt_sequence = resize_images(self.sequence_data.frames, self.render_size).detach().cpu()
         payload = {
             **build_validation_video_payload(
                 rendered_sequence,
                 gt_sequence,
-                self.sequence_data["video_fps"],
+                self.sequence_data.video_fps,
             ),
-            "Camera/EvalFOVDegrees": eval_camera_state["fov_degrees"].item(),
-            "Camera/EvalRadius": eval_camera_state["radius"].item(),
+            "Camera/EvalFOVDegrees": eval_camera_state.fov_degrees.item(),
+            "Camera/EvalRadius": eval_camera_state.radius.item(),
             "Camera/EvalRotationDeltaMeanDegrees": (
-                torch.rad2deg(torch.linalg.norm(eval_camera_state["rotation_delta"], dim=-1)).mean().item()
+                torch.rad2deg(torch.linalg.norm(eval_camera_state.rotation_delta, dim=-1)).mean().item()
             ),
             "Camera/EvalTranslationDeltaMean": (
-                torch.linalg.norm(eval_camera_state["translation_delta"], dim=-1).mean().item()
+                torch.linalg.norm(eval_camera_state.translation_delta, dim=-1).mean().item()
             ),
         }
         if not self.gt_video_logged:
-            payload["GT_Video"] = make_wandb_video(gt_sequence, self.sequence_data["video_fps"])
+            payload["GT_Video"] = make_wandb_video(gt_sequence, self.sequence_data.video_fps)
             self.gt_video_logged = True
         return payload
 
@@ -646,6 +569,6 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(
             "Usage: uv run python src/train/train_video_token_implicit_dynamic.py "
-            "src/train_configs/video_token_implicit_camera_full.jsonc"
+            "src/train_configs/local_mac_overfit_video_token_full.jsonc"
         )
     main(sys.argv[1])
