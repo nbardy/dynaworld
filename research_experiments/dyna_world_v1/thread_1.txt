@@ -1,0 +1,152 @@
+---
+
+NOTES:  This is a research thread start with gemini pro on looking at some recent papers around world models
+
+---
+
+https://github.com/nv-tlabs/TokenGS
+
+
+
+It looks like this is pre-trained, Do they pretrain from scratch? Or no a video backbone?
+
+Based on the paper and repository details for TokenGS: Decoupling 3D Gaussian Prediction from Pixels with Learnable Tokens (a CVPR 2026 paper by NVIDIA Toronto AI Lab), here are the answers to your questions:
+
+1. Do they use a video backbone?
+No, TokenGS does not use a video backbone.
+It does not rely on spatiotemporal architectures (like VideoMAE, 3D CNNs, or Video Diffusion Models) to process temporal frames.
+
+Instead, TokenGS is a feed-forward multi-view 3D reconstruction model built entirely around a spatial Transformer architecture. Here is how it works without a video backbone:
+
+Multi-View Input: It treats the input as an unordered set of posed 2D images (which can be extracted from a video, but are processed spatially).
+
+Encoder-Decoder Architecture: TokenGS replaces the standard "encoder-only" design used by previous methods with a novel encoder-decoder setup.
+
+Decoupled Tokens: Rather than mapping pixels directly to 3D depths along a camera ray, the model uses a fixed set of learnable 3DGS tokens in the decoder. These tokens act as queries that cross-attend to the compact 2D image features extracted by the encoder. The tokens then directly regress the 3D coordinates and attributes (color, scale, rotation, opacity) of the Gaussians.
+
+Because of this decoupled design, the model can look at multiple camera views simultaneously and recover 3D geometry—as well as emergent scene properties like static-dynamic decomposition and scene flow—purely through cross-view spatial attention, without needing a rigid video backbone.
+
+2. Do they pre-train from scratch?
+There are two ways to answer "from scratch" in the context of TokenGS: How the neural network was built, and how you use it.
+
+How the network is trained:
+Yes, the 3D components and the unique architecture are trained entirely from scratch. The model is trained end-to-end on large-scale multi-view datasets (such as RealEstate10K or DL3DV).
+
+It uses a purely self-supervised photometric rendering loss—meaning it learns to predict 3D geometry simply by comparing the novel views it generates against ground-truth images, without explicit 3D point-cloud supervision.
+
+While standard LRM (Large Reconstruction Models) often initialize their vision encoders with 2D pre-trained foundation weights (like DINOv2 or CroCo) to jumpstart feature extraction, the DETR-style decoder, the learnable 3DGS tokens, and the 3D coordinate regression mechanisms are trained entirely from scratch to adapt to this novel decoupled formulation.
+
+How you use it on a new scene:
+No, you do not have to optimize the 3D scene from scratch. Traditional 3D Gaussian Splatting (3DGS) requires you to run gradient descent from scratch for minutes/hours on every single new scene.
+
+Because TokenGS is globally pre-trained, it acts as a feed-forward model. You give it multi-view images of a new scene, and it predicts the 3D Gaussians instantly in a single forward pass.
+
+However, one of the main advantages of their decoupled token design is that it naturally supports highly efficient test-time optimization. If you want higher fidelity, you can quickly fine-tune the tokens on a specific scene without destroying the strong geometric priors the model has already learned.
+
+Okay and can you explain the architecture in detail.
+
+
+
+---
+
+
+
+Also
+
+
+
+https://wbjang.github.io/raysaspixels/
+
+
+
+What is the deal wiht this paper whats similiar and whats different
+
+Here is a detailed breakdown of the TokenGS architecture, followed by an explanation of the newly released "Rays as Pixels" (Raxel) paper and a comparison of how the two overlap and differ.
+
+Part 1: The TokenGS Architecture in Detail
+Most feed-forward 3D Gaussian Splatting (3DGS) models use an "encoder-only" architecture (e.g., LRM, pixelSplat). In those standard models, the network predicts Gaussian positions by taking 2D pixels and guessing a depth value along the camera's viewing ray to push that pixel into 3D space.
+
+TokenGS completely changes this by using a Transformer Encoder-Decoder architecture. Here is how the pipeline flows:
+
+1. The Image Encoder (Feature Extraction)
+
+The model takes in an unordered set of 2D images (multi-view images) with known camera poses.
+
+A Vision Transformer (ViT) or similar backbone extracts dense, compact 2D feature maps from these images. At this stage, it is purely extracting 2D visual understanding (textures, context, edges).
+
+2. The Learnable "3DGS Tokens"
+
+Instead of tying the creation of 3D Gaussians to the pixels of the input images, the model introduces a fixed set of learnable tokens (similar to the object queries in a DETR object detection model).
+
+The number of tokens is an independent hyperparameter (e.g., 50,000). Because these are independent tokens, the total number of 3D Gaussians the model predicts is completely untethered from the resolution or the number of input views.
+
+3. The Transformer Decoder (Cross-Attention)
+
+These tokens are fed into a Transformer Decoder.
+
+The tokens act as "queries" and perform cross-attention against the 2D image features extracted by the encoder.
+
+By attending to the multi-view 2D features, the tokens gather the cross-view geometric and appearance information necessary to figure out what part of the 3D scene they are responsible for recreating.
+
+4. Direct 3D Regression (Output Heads)
+
+In standard models, pixels predict depth along a camera ray. In TokenGS, the tokens pass through output heads (Multi-Layer Perceptrons) that directly regress absolute 3D coordinates (X, Y, Z) in a global world space.
+
+The heads also predict the other standard 3DGS parameters: scale, rotation (quaternions), opacity, and color (spherical harmonics).
+
+The Result: The network places Gaussians exactly where scene complexity demands it, rather than being forced to place them strictly along the camera rays of the input images. This eliminates the "spiky" geometric artifacts often caused by depth-estimation errors, allows the model to extrapolate geometry outside the immediate camera view, and natively supports extremely fast test-time optimization (by simply optimizing the tokens).
+
+Part 2: What is "Rays as Pixels"?
+Rays as Pixels: Learning a Joint Distribution of Videos and Camera Trajectories is fundamentally different in its goal. It is a Video Diffusion Model (VDM) designed to unify video generation and camera pose estimation into a single step.
+
+Normally, generating a video and estimating a camera's path are two entirely different tasks requiring different models (like Sora for video, and COLMAP/DUSt3R for camera poses) because visual pixels and mathematical camera matrices exist in different dimensional spaces.
+
+How it works:
+
+"Raxels" (Rays as Pixels): To make a diffusion model inherently understand camera math, the authors represent cameras as dense ray maps formatted into a 2D image grid. Each pixel in a "raxel image" mathematically encodes the 3D origin and direction of the camera ray passing through that specific pixel.
++1
+
+Joint Diffusion: Because camera trajectories are now formatted as "images", the model takes video frames and "raxel" frames, compresses them into a shared latent space using a standard spatial Autoencoder (VAE), and uses a single Diffusion Transformer (DiT) to denoise both at the same time.
+
+Decoupled Attention: It uses a "Decoupled Self-Cross Attention" mechanism so the network can seamlessly pass information back and forth between the video latents (appearance/motion) and the raxel latents (camera geometry) during the denoising process.
+
+Because it learns a joint distribution, a single model can do three things:
+
+Pose Prediction: Give it an unposed video, and it denoises the "raxels" to accurately extract the camera trajectory.
+
+Camera-Controlled Video Generation: Give it a single image and a user-defined camera path, and it generates a video flying through the scene.
+
+Single-Image to Video: Give it one image, and it will hallucinate both a plausible camera movement and the corresponding 3D-consistent video.
+
+Part 3: What's Similar vs. What's Different?
+At a glance, both are cutting-edge spatial vision papers trying to solve multi-view/3D problems using modern Transformer attention mechanisms, but they approach the physics of "camera rays" very differently.
+
+What is Similar?
+Unbinding Geometry from Rigid Traditions:
+
+TokenGS unbinds 3D Gaussians from camera rays and pixel arrays, treating them as independent learnable tokens.
+
+Rays as Pixels unbinds camera tracking from traditional geometric math vectors, treating camera rays as spatial map variables that can be diffused alongside images.
+
+Specialized Attention as the Bridge: Both architectures rely heavily on decoupled attention mechanisms to bridge different modalities. TokenGS uses cross-attention to bridge 3D tokens to 2D pixels. Rays as Pixels uses decoupled self-cross attention to bridge temporal video latents to camera "raxel" latents.
++1
+
+What is Different?
+The Core Output (Explicit 3D vs. Generative 2D Video):
+
+TokenGS outputs a persistent 3D asset (a Gaussian Splatting point cloud) that you can export to a game engine (like Unreal Engine) and render from any angle in real-time.
+
+Rays as Pixels outputs 2D video frames and camera poses. It does not build an underlying explicit 3D mesh or point cloud; it relies on diffusion to hallucinate temporally consistent 2D views.
+
+The Role of the "Ray":
+
+TokenGS actively moves away from rays. It argues that anchoring 3D predictions to camera rays forces bad geometry (spiky depths), so it bypasses them entirely to directly guess absolute 3D (X, Y, Z) coordinates.
+
+Rays as Pixels actively embraces rays. It argues that formatting rays into 2D grids ("raxels") is the perfect way to teach a 2D diffusion model how to understand 3D camera geometry.
++1
+
+Model Type & Objective:
+
+TokenGS is a deterministic feed-forward reconstructor trained via a photometric rendering loss (it renders its predicted 3D Gaussians and mathematically compares them to ground truth images).
+
+Rays as Pixels is a probabilistic generative diffusion model trained via a flow-matching/denoising loss (it adds noise to video/raxel latents and trains the model to recover the original signals).

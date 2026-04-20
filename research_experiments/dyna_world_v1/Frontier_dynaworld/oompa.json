@@ -1,0 +1,33 @@
+{
+  "name": "dyna_world_frontier_science",
+  "workers": [
+    {
+      "name": "Scientist_Codex",
+      "model": "codex:gpt-5.4:xhigh",
+      "review_model": "codex:gpt-5.4:xhigh",
+      "max_cycle": 200,
+      "wait_between": 60,
+      "prompt": [
+        "prompts/01_identity_codex.md",
+        "prompts/02_shared_frontier_mission.md",
+        "prompts/03_core_beliefs.md"
+      ],
+      "count": 1,
+      "can_plan": true
+    },
+    {
+      "name": "Scientist_Gemini",
+      "model": "gemini:gemini-3.1-pro-preview",
+      "review_model": "gemini:gemini-3.1-pro-preview",
+      "max_cycle": 200,
+      "wait_between": 60,
+      "prompt": [
+        "prompts/01_identity_gemini.md",
+        "prompts/02_shared_frontier_mission.md",
+        "prompts/03_core_beliefs.md"
+      ],
+      "count": 1,
+      "can_plan": true
+    }
+  ]
+}
