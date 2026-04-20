@@ -280,7 +280,6 @@ def main(config: dict[str, Any] | str | Path) -> None:
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(
-            "Usage: uv run python src/train/dynamicTokenGS.py "
-            "src/train_configs/local_mac_overfit_prebaked_camera.jsonc"
+            "Usage: uv run python src/train/dynamicTokenGS.py src/train_configs/local_mac_overfit_prebaked_camera.jsonc"
         )
     main(sys.argv[1])

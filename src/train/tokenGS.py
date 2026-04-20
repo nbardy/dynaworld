@@ -140,7 +140,6 @@ def main(config: dict[str, Any] | str | Path) -> None:
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit(
-            "Usage: uv run python src/train/tokenGS.py "
-            "src/train_configs/local_mac_overfit_single_image.jsonc"
+            "Usage: uv run python src/train/tokenGS.py src/train_configs/local_mac_overfit_single_image.jsonc"
         )
     main(sys.argv[1])

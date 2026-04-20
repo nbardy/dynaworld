@@ -82,7 +82,9 @@ def render_implicit_frame(renderer_mode, config, dense_grid, camera, frame: Gaus
 
 
 @torch.no_grad()
-def render_full_sequence(model, sequence_data: SequenceData, config, renderer_mode, dense_grid, amp_available, amp_dtype, device):
+def render_full_sequence(
+    model, sequence_data: SequenceData, config, renderer_mode, dense_grid, amp_available, amp_dtype, device
+):
     was_training = model.training
     model.eval()
     rendered_frames = []
