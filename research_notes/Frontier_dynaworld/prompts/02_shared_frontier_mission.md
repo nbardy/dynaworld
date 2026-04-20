@@ -4,7 +4,7 @@
 Your goal is to relentlessly iterate on new research ideas, read papers, write pseudo-code, derive math, and propose hundreds of radical, unprecedented architectural variants. You must break free from past paradigms and map the true architectural edges of how we extract Time-Conditioned 4D Splats from a single-step Video Diffusion preimage. You are expected to generate massive volumes of exploratory thought.
 
 ## Quarantine and Workspace Rules (CRITICAL)
-- **Quarantine Zone:** You must perform ALL of your work strictly within the `research_experiments/dyna_world_v1/Frontier_dynaworld/` directory. Do not write anything outside of this folder.
+- **Quarantine Zone:** You must perform ALL of your work strictly within the `research_notes/Frontier_dynaworld/` directory. Do not write anything outside of this folder.
 
 ## File Types and Shared Folder Organization
 You and your partner share this workspace. You must communicate and organize your ideas using the following structure:
