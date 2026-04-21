@@ -107,6 +107,22 @@ familiar-shaped bad answers. They're easy to repeat.
       load-bearing.* Re-check them before proposing anything that looks
       like it recomposes the problem.
 
+14. **Claimed an encoder could be "blind" to camera by not feeding camera
+    as input.**
+    Proposed a "Blind World Encoder" architecture whose primary mechanism
+    was input-denial for camera. User pointed out: the encoder sees
+    video, and video contains camera implicitly (motion parallax,
+    perspective, vanishing points). Inferring camera from video is an
+    easy task; denying the explicit channel does not prevent inference.
+    - Principle: *information bottleneck via input denial does not work
+      when the input is a rich signal from which the hidden variable is
+      easily derivable.* For video-input models, there is no way to hide
+      camera from the encoder without destroying the video signal
+      itself. The only real leakage-prevention mechanisms are active
+      pressure downstream (adversarial recovery, multi-condition
+      consistency, augmentation invariance), not encoder-side denial.
+      Capacity asymmetry is a routing hope, not a bottleneck.
+
 ## Checklist before proposing
 
 Run through these before saying "here's an architecture" or "here's a fix":

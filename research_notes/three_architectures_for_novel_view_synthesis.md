@@ -125,10 +125,58 @@ Architecture C relies on (4) and (5) — no architectural commitment.
 
 ---
 
-## 5. Architecture A — "Blind World Encoder" (Information Bottleneck)
+## 4.5 The Blindness Illusion (why Architecture A below is weaker than it first looks)
 
-Primary mechanism: **the encoder never sees camera, so it cannot leak
-camera.** Camera only exists as a decoder query at the rasterizer boundary.
+A design instinct is to make the encoder "blind" to camera — do not feed
+camera as an input and the encoder cannot leak it. This is wrong in a way
+worth naming explicitly.
+
+**The encoder sees video.** Video contains camera implicitly: motion
+parallax, perspective convergence, vanishing points, scene-geometry cues.
+Inferring camera from video is an easy task — any sufficiently expressive
+encoder learns it for free, because doing so helps reconstruction.
+
+There is no preprocessing step that strips camera from video without also
+destroying the signal itself. Temporal shuffling removes motion parallax
+but also destroys the dynamics signal we need. Single-frame encoding
+removes parallax but keeps perspective cues and gives up motion entirely.
+
+Consequence: **information bottleneck via input denial does not work for
+video input.** The encoder will infer camera regardless. The design
+question is not "can we hide camera from the encoder" but "where does the
+encoder route the camera info once it has inferred it." That is a
+capacity/routing question, not an access question.
+
+This collapses the mechanism-space a bit:
+
+- True information bottleneck (mechanism 1 in §4) is unavailable for
+  video-input models.
+- Dimensional routing bias (mechanism 2) is weak without active
+  downstream pressure, because there is no hard reason the encoder
+  prefers to route camera through a small head vs. pack it into spare
+  world-token capacity.
+- The two mechanisms that actually work on video input are **adversarial
+  recovery** (mechanism 3) and **multi-condition consistency** (mechanism
+  4). Augmentation invariance (mechanism 5) is a training-data version
+  of 4.
+
+With that in mind, Architecture A below should be read as a weaker
+variant of C (with a capacity trick added), not a peer architecture.
+Architectures B and C are the two real options; A is an optional
+auxiliary that can be composed with either.
+
+---
+
+## 5. Architecture A — "Dimensional Routing Bias" (weakest of the three)
+
+Primary mechanism: **asymmetric output capacity.** `camera_tokens` are
+small enough to be the path of least resistance for camera information
+the encoder has inferred; `world_tokens` are large but, in the hope that
+other content consumes their capacity, unlikely to be commandeered for
+camera. This is a routing bias, not a bottleneck.
+
+*Renamed from "Blind World Encoder" because the blindness framing is
+false; see §4.5.*
 
 ### 5.1 Forward Pass Diagram
 
@@ -179,9 +227,10 @@ camera.** Camera only exists as a decoder query at the rasterizer boundary.
 - `camera_tokens` and `time_tokens` have a small capacity (e.g.,
   D_cam=32, D_time=16). Small enough to carry C and t, too small to carry
   scene.
-- The main encoder never receives camera as input. Ordering of input tokens
-  gives it the sequence structure; any inference it makes about the
-  training camera must happen through motion parallax and content cues.
+- The main encoder never receives camera as *explicit* input. Note that
+  per §4.5 this does not prevent the encoder from inferring camera from
+  video content; it only removes a direct channel. The actual mechanism
+  here is the capacity asymmetry at the output, not input denial.
 
 ### 5.3 Training Contract
 
@@ -215,36 +264,49 @@ Per training step:
 
 ### 5.5 Leakage Prevention (F1, F2)
 
-- F1 (camera leakage): world_tokens do not see camera as input. The
-  encoder can only implicitly infer camera from video motion. The
-  dimensional bottleneck on `camera_tokens` gives an explicit place for
-  camera info to live, which reduces (but does not eliminate) the
-  incentive to hide camera in world_tokens.
+- F1 (camera leakage): relies on the encoder *preferring* to route
+  inferred camera through the small `camera_tokens` rather than packing
+  it into `world_tokens`. There is no architectural reason this should
+  happen — it depends on world_token capacity being consumed by other
+  content. In practice, transformer capacity has slack, so the preference
+  is weak. Must be combined with active pressure (chunk-swap, multi-camera
+  consistency, or adversarial) to be load-bearing.
 - F2 (cheating splats): chunk swap + crop + camera perturbation force
   world_tokens to produce correct renders under many `(C, t)` conditions.
   A splat set that only works at training cameras fails these losses.
+  This is the *real* pressure in A; the dimensional asymmetry is
+  secondary.
 
 ### 5.6 Failure Modes
 
-- The encoder can still infer camera from motion parallax and bake it into
-  world_tokens, since we have no direct way to prevent inference from
-  content. Dimensional bottleneck reduces but does not remove this
-  pressure.
-- Time leakage through frame ordering: if the encoder is causal, the
-  ordering itself carries time. Partially mitigated by randomized ordering
-  on chunk swap.
-- Small `camera_tokens` / `time_tokens` may be insufficient capacity for
-  complex camera motion; may need to scale up carefully.
+- **Camera inferable from video content.** Per §4.5 the encoder will
+  infer camera regardless of whether it is fed as an input. Dimensional
+  routing is a hope, not a proof. Without the training-time pressures in
+  §5.3, this architecture is effectively unprotected against F1.
+- **Spare world-token capacity defeats the routing bias.** If
+  `world_tokens` have capacity beyond what geometry and appearance
+  consume, camera will leak into the spare capacity. No mechanism to
+  prevent this.
+- **Time leakage through frame ordering:** if the encoder is causal, the
+  ordering itself carries time. Partially mitigated by randomized
+  ordering on chunk swap.
+- **Small `camera_tokens` / `time_tokens` may be insufficient capacity**
+  for complex camera motion; may need to scale up carefully, which
+  erodes the routing-bias mechanism further.
 
 ### 5.7 Where It Sits in Mechanism Space
 
 | Mechanism | Used? |
 |-----------|-------|
-| Information bottleneck | ★ Primary |
-| Dimensional bottleneck | ★ Primary |
+| Information bottleneck | ✗ *Unavailable for video input (§4.5)* |
+| Dimensional routing bias | ★ Primary (weak in isolation) |
 | Adversarial recovery | no (but addable) |
-| Multi-condition consistency | ✓ Secondary |
-| Augmentation invariance | ✓ Secondary |
+| Multi-condition consistency | ✓ Load-bearing when present |
+| Augmentation invariance | ✓ Load-bearing when present |
+
+Honest reading: once you add the load-bearing mechanisms to make this
+architecture actually work against F1, you have reinvented C with a
+capacity-asymmetry auxiliary. A is not a standalone architecture.
 
 ### 5.8 Iteration Ideas
 
@@ -507,15 +569,19 @@ Per step, K cameras are rendered:
 
 ## 8. Head-to-Head Debate
 
+Revised after §4.5: A is a weaker-C with a capacity trick, not a peer.
+The real choice is between B and C, with A's dimensional asymmetry as an
+optional auxiliary composable into either.
+
 ### 8.1 Against F1–F6
 
 | Failure mode | Architecture A | Architecture B | Architecture C |
 |--------------|:-:|:-:|:-:|
-| F1 camera leakage into tokens | Partial (bottleneck) | Strongest (adversarial) | Emergent (consistency) |
-| F2 cheating splats | ✓ | ✓ | ✓ |
+| F1 camera leakage into tokens | Weak (routing bias only) | Strongest (active adversarial) | Strong (consistency pressure) |
+| F2 cheating splats | ✓ (via training losses) | ✓ | ✓ |
 | F3 traj-geom ambiguity | N/A at MVP | N/A at MVP | N/A at MVP |
 | F4 long-horizon drift | Out of scope | Out of scope | Out of scope |
-| F5 latent cheating | Low risk (bottleneck) | Low risk (adversarial) | Medium risk (needs IB regularizer) |
+| F5 latent cheating | Medium risk (routing is soft) | Low risk (adversarial) | Medium risk (needs capacity check) |
 | F6 low-rank motion | Orthogonal | Orthogonal | Orthogonal |
 
 ### 8.2 Axes of Comparison
@@ -578,12 +644,15 @@ A or B if C's pressure is insufficient.
 
 ## 9. When to Pick Each
 
-- **Pick A if** you want clear architectural semantics. The blind encoder
-  makes it easy to explain and audit what the model can and can't see.
-  Good for a paper; good if you want to commit to specific invariants.
-- **Pick B if** leakage is known to be severe and you've tried C first.
-  The adversarial signal is the most direct attack on F1. Accept the
-  training instability as the cost of directness.
+- **Do not pick A alone.** It is a weaker C with a capacity trick. The
+  capacity trick (small `camera_tokens` / `time_tokens`) is a cheap
+  auxiliary that can be composed into B or C; it is not a standalone
+  architecture. Use it as a free default, not a primary bet.
+- **Pick B if** leakage is known to be severe and C alone has been tried
+  and measured insufficient. The adversarial signal is the most direct
+  attack on F1 that remains possible once the blindness illusion is
+  acknowledged. Accept the training instability as the cost of
+  directness.
 - **Pick C if** you want the minimal architectural commitment and trust
   the training-time pressure to do the work. This is the
   bitter-lesson-shaped default and the right first bet.
@@ -654,16 +723,24 @@ Where the conditioning enters:
 
 ## 12. Recommended First Experiment
 
-Gun-to-head: **start with Architecture C.** Monolithic encoder, K=2
-cameras per step (GT + one perturbed), small δ (≤10°), photometric +
-diffusion-as-loss + a simple cross-view consistency penalty. Skip the
-adversarial head and the bottleneck.
+Gun-to-head: **start with Architecture C**, optionally with A's
+dimensional asymmetry bolted in as a cheap auxiliary (it costs nothing
+to set `D_cam` and `D_time` smaller than `D_world`).
 
-If after a reasonable training budget the world tokens fail a diagnostic
-(adversarial head trained post-hoc recovers camera from them at > chance),
-add A's dimensional bottleneck on `camera_tokens` / `time_tokens`. If that
-still fails, add B's adversarial head as a real loss, accepting the
-training-instability cost.
+Concretely:
+
+- Monolithic encoder, one trunk.
+- Output heads: `world_tokens (N, D_world)`, `camera_tokens (F, D_cam)`,
+  `time_tokens (F, D_time)` with `D_cam, D_time << D_world`.
+- K=2 cameras per step (GT + one perturbed), small δ (≤10°).
+- Photometric at GT camera + diffusion-as-loss at perturbed + a simple
+  cross-view consistency penalty.
+- Skip the adversarial head initially.
+
+Add a **diagnostic** adversarial head trained post-hoc (not as a loss):
+take frozen world_tokens, try to recover camera. If the probe succeeds at
+> chance, leakage is confirmed. Upgrade to B (adversarial as a real loss
+with GRL into the encoder), accepting the training-instability cost.
 
 Do not start with B. Adversarial training is a tax you take when you know
 you need it, not a default.
