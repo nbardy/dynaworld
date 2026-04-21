@@ -15,9 +15,10 @@ PROJECT_ROOT = BENCHMARK_DIR.parents[1]
 FAST_MAC_DIR = PROJECT_ROOT / "third_party" / "fast-mac-gsplat"
 FAST_MAC_V3_DIR = FAST_MAC_DIR / "variants" / "v3"
 FAST_MAC_V5_DIR = FAST_MAC_DIR / "variants" / "v5"
+FAST_MAC_V6_DIR = FAST_MAC_DIR / "variants" / "v6"
 TAICHI_SPLATTING_DIR = PROJECT_ROOT / "third_party" / "taichi-splatting"
 
-for path in (FAST_MAC_V5_DIR, FAST_MAC_V3_DIR, FAST_MAC_DIR, TAICHI_SPLATTING_DIR):
+for path in (FAST_MAC_V6_DIR, FAST_MAC_V5_DIR, FAST_MAC_V3_DIR, FAST_MAC_DIR, TAICHI_SPLATTING_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -27,6 +28,8 @@ from torch_gsplat_bridge_v3 import RasterConfig as RasterConfigV3
 from torch_gsplat_bridge_v3 import rasterize_projected_gaussians as rasterize_v3
 from torch_gsplat_bridge_v5 import RasterConfig as RasterConfigV5
 from torch_gsplat_bridge_v5 import rasterize_projected_gaussians as rasterize_v5
+from torch_gsplat_bridge_v6 import RasterConfig as RasterConfigV6
+from torch_gsplat_bridge_v6 import rasterize_projected_gaussians as rasterize_v6
 
 
 DEFAULT_BG = (1.0, 1.0, 1.0)
@@ -227,6 +230,11 @@ def render_v5_native(inputs: tuple[torch.Tensor, ...], cfg: RasterConfigV5) -> t
     return rasterize_v5(means, conics, colors, opacities, depths, cfg)
 
 
+def render_v6_native(inputs: tuple[torch.Tensor, ...], cfg: RasterConfigV6) -> torch.Tensor:
+    means, conics, colors, opacities, depths = inputs
+    return rasterize_v6(means, conics, colors, opacities, depths, cfg)
+
+
 def make_taichi_renderer(height: int, width: int, tile_size: int) -> Callable[[tuple[torch.Tensor, ...]], torch.Tensor]:
     import taichi as ti
     from taichi_splatting.data_types import RasterConfig as TaichiRasterConfig
@@ -353,6 +361,7 @@ def run_case(
     cfg_v2 = RasterConfigV2(height=height, width=width, background=DEFAULT_BG)
     cfg_v3 = RasterConfigV3(height=height, width=width, background=DEFAULT_BG)
     cfg_v5 = RasterConfigV5(height=height, width=width, background=DEFAULT_BG, batch_strategy="flatten")
+    cfg_v6 = RasterConfigV6(height=height, width=width, background=DEFAULT_BG, batch_strategy="flatten")
     resolution = f"{height}x{width}"
     work_items = batch_size * height * width * gaussians
 
@@ -371,12 +380,14 @@ def run_case(
         ("metal_v2_loop", lambda run_inputs: render_v2_loop(run_inputs, cfg_v2), clone_fast_inputs(inputs, backward=backward), sync_mps),
         ("metal_v3_loop", lambda run_inputs: render_v3_loop(run_inputs, cfg_v3), clone_fast_inputs(inputs, backward=backward), sync_mps),
         ("metal_v5_native", lambda run_inputs: render_v5_native(run_inputs, cfg_v5), clone_fast_inputs(inputs, backward=backward), sync_mps),
+        ("metal_v6_native", lambda run_inputs: render_v6_native(run_inputs, cfg_v6), clone_fast_inputs(inputs, backward=backward), sync_mps),
     ]
     aliases = {
         "taichi": "taichi_native",
         "v2": "metal_v2_loop",
         "v3": "metal_v3_loop",
         "v5": "metal_v5_native",
+        "v6": "metal_v6_native",
     }
     requested_names = {aliases.get(name, name) for name in requested_renderers}
     renderers.extend(candidate for candidate in candidates if "all" in requested_names or candidate[0] in requested_names)
@@ -451,7 +462,7 @@ def write_csv(path: Path, rows: list[BenchRow]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare direct Torch, Taichi/Metal, and fast-mac v2/v3 projected rasterizers.")
+    parser = argparse.ArgumentParser(description="Compare direct Torch, Taichi/Metal, and fast-mac projected rasterizers.")
     parser.add_argument("--height", type=int, default=128)
     parser.add_argument("--width", type=int, default=128)
     parser.add_argument("--gaussians", type=int, default=128)
@@ -468,7 +479,7 @@ def main() -> None:
         "--renderers",
         type=str,
         default="all",
-        help="Comma-separated renderer list: all, torch/torch_direct, taichi, v2, v3, v5.",
+        help="Comma-separated renderer list: all, torch/torch_direct, taichi, v2, v3, v5, v6.",
     )
     parser.add_argument("--csv", type=Path, default=None)
     args = parser.parse_args()
