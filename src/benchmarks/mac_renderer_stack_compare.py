@@ -14,9 +14,10 @@ BENCHMARK_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BENCHMARK_DIR.parents[1]
 FAST_MAC_DIR = PROJECT_ROOT / "third_party" / "fast-mac-gsplat"
 FAST_MAC_V3_DIR = FAST_MAC_DIR / "variants" / "v3"
+FAST_MAC_V5_DIR = FAST_MAC_DIR / "variants" / "v5"
 TAICHI_SPLATTING_DIR = PROJECT_ROOT / "third_party" / "taichi-splatting"
 
-for path in (FAST_MAC_V3_DIR, FAST_MAC_DIR, TAICHI_SPLATTING_DIR):
+for path in (FAST_MAC_V5_DIR, FAST_MAC_V3_DIR, FAST_MAC_DIR, TAICHI_SPLATTING_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -24,6 +25,8 @@ from torch_gsplat_bridge_fast import RasterConfig as RasterConfigV2
 from torch_gsplat_bridge_fast import rasterize_projected_gaussians as rasterize_v2
 from torch_gsplat_bridge_v3 import RasterConfig as RasterConfigV3
 from torch_gsplat_bridge_v3 import rasterize_projected_gaussians as rasterize_v3
+from torch_gsplat_bridge_v5 import RasterConfig as RasterConfigV5
+from torch_gsplat_bridge_v5 import rasterize_projected_gaussians as rasterize_v5
 
 
 DEFAULT_BG = (1.0, 1.0, 1.0)
@@ -62,6 +65,7 @@ class BenchRow:
     per_frame_ms: float
     speedup_vs_torch: float | None
     speedup_vs_taichi: float | None
+    speedup_vs_fast: float | None
     max_abs_diff_vs_torch: float | None
     status: str = "ok"
 
@@ -218,7 +222,12 @@ def render_v3_loop(inputs: tuple[torch.Tensor, ...], cfg: RasterConfigV3) -> tor
     return torch.stack(images, dim=0)
 
 
-def make_taichi_renderer(height: int, width: int) -> Callable[[tuple[torch.Tensor, ...]], torch.Tensor]:
+def render_v5_native(inputs: tuple[torch.Tensor, ...], cfg: RasterConfigV5) -> torch.Tensor:
+    means, conics, colors, opacities, depths = inputs
+    return rasterize_v5(means, conics, colors, opacities, depths, cfg)
+
+
+def make_taichi_renderer(height: int, width: int, tile_size: int) -> Callable[[tuple[torch.Tensor, ...]], torch.Tensor]:
     import taichi as ti
     from taichi_splatting.data_types import RasterConfig as TaichiRasterConfig
     from taichi_splatting.rasterizer import rasterize, rasterize_batch
@@ -226,7 +235,7 @@ def make_taichi_renderer(height: int, width: int) -> Callable[[tuple[torch.Tenso
 
     TaichiQueue.init(arch=ti.metal, log_level=ti.ERROR)
     raster_config = TaichiRasterConfig(
-        tile_size=16,
+        tile_size=tile_size,
         alpha_threshold=1.0 / 255.0,
         clamp_max_alpha=0.99,
         saturate_threshold=0.9999,
@@ -317,6 +326,7 @@ def print_rows(rows: list[BenchRow]) -> None:
             f"max={row.max_ms:>9.3f} "
             f"speedup_vs_torch={format_speedup(row.speedup_vs_torch)} "
             f"speedup_vs_taichi={format_speedup(row.speedup_vs_taichi)} "
+            f"speedup_vs_fast={format_speedup(row.speedup_vs_fast)} "
             f"diff_vs_torch={diff}"
         )
 
@@ -341,6 +351,7 @@ def run_case(
     inputs = make_inputs(height, width, gaussians, batch_size, case.sigma_min, case.sigma_max, seed)
     cfg_v2 = RasterConfigV2(height=height, width=width, background=DEFAULT_BG)
     cfg_v3 = RasterConfigV3(height=height, width=width, background=DEFAULT_BG)
+    cfg_v5 = RasterConfigV5(height=height, width=width, background=DEFAULT_BG, batch_strategy="flatten")
     resolution = f"{height}x{width}"
     work_items = batch_size * height * width * gaussians
 
@@ -358,6 +369,7 @@ def run_case(
             ("taichi_native", taichi_render, clone_taichi_inputs(inputs, backward=backward), sync_taichi),
             ("metal_v2_loop", lambda run_inputs: render_v2_loop(run_inputs, cfg_v2), clone_fast_inputs(inputs, backward=backward), sync_mps),
             ("metal_v3_loop", lambda run_inputs: render_v3_loop(run_inputs, cfg_v3), clone_fast_inputs(inputs, backward=backward), sync_mps),
+            ("metal_v5_native", lambda run_inputs: render_v5_native(run_inputs, cfg_v5), clone_fast_inputs(inputs, backward=backward), sync_mps),
         ]
     )
 
@@ -400,18 +412,21 @@ def run_case(
                 per_frame_ms=mean_ms / float(batch_size),
                 speedup_vs_torch=None,
                 speedup_vs_taichi=None,
+                speedup_vs_fast=None,
                 max_abs_diff_vs_torch=diffs.get(name),
             )
         )
 
     torch_ms = next((row.mean_ms for row in raw_rows if row.renderer == "torch_direct"), None)
     taichi_ms = next((row.mean_ms for row in raw_rows if row.renderer == "taichi_native"), None)
+    fast_ms = min((row.mean_ms for row in raw_rows if row.renderer.startswith("metal_")), default=None)
     return [
         BenchRow(
             **{
                 **row.__dict__,
                 "speedup_vs_torch": (torch_ms / row.mean_ms if torch_ms is not None else None),
                 "speedup_vs_taichi": (taichi_ms / row.mean_ms if taichi_ms is not None else None),
+                "speedup_vs_fast": (fast_ms / row.mean_ms if fast_ms is not None else None),
             }
         )
         for row in raw_rows
@@ -440,6 +455,7 @@ def main() -> None:
     parser.add_argument("--include-torch", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--check-outputs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--torch-max-work-items", type=int, default=64_000_000)
+    parser.add_argument("--taichi-tile-size", type=int, default=16)
     parser.add_argument("--csv", type=Path, default=None)
     args = parser.parse_args()
 
@@ -456,7 +472,7 @@ def main() -> None:
         f"batch_size={args.batch_size} warmup={args.warmup} iters={args.iters} "
         f"backward={args.backward}"
     )
-    taichi_render = make_taichi_renderer(args.height, args.width)
+    taichi_render = make_taichi_renderer(args.height, args.width, args.taichi_tile_size)
     all_rows: list[BenchRow] = []
     for i, case in enumerate(cases):
         print(f"\ncase={case.name} sigma=[{case.sigma_min}, {case.sigma_max}]")
