@@ -346,6 +346,7 @@ def run_case(
     torch_max_work_items: int,
     check_outputs: bool,
     taichi_render: Callable[[tuple[torch.Tensor, ...]], torch.Tensor],
+    requested_renderers: set[str],
 ) -> list[BenchRow]:
     mode = "forward_backward" if backward else "forward"
     inputs = make_inputs(height, width, gaussians, batch_size, case.sigma_min, case.sigma_max, seed)
@@ -357,21 +358,28 @@ def run_case(
 
     renderers: list[tuple[str, Callable[[tuple[torch.Tensor, ...]], torch.Tensor], tuple[torch.Tensor, ...], Callable[[], None]]]
     renderers = []
-    if include_torch and work_items <= torch_max_work_items:
+    want_torch = "all" in requested_renderers or "torch_direct" in requested_renderers or "torch" in requested_renderers
+    if include_torch and want_torch and work_items <= torch_max_work_items:
         renderers.append(("torch_direct", lambda run_inputs: render_torch_reference(run_inputs, cfg_v3), clone_fast_inputs(inputs, backward=backward), sync_mps))
-    elif include_torch:
+    elif include_torch and want_torch:
         print(
             f"torch_direct skipped for {resolution} B={batch_size} G={gaussians}: "
             f"work_items={work_items} exceeds --torch-max-work-items={torch_max_work_items}"
         )
-    renderers.extend(
-        [
-            ("taichi_native", taichi_render, clone_taichi_inputs(inputs, backward=backward), sync_taichi),
-            ("metal_v2_loop", lambda run_inputs: render_v2_loop(run_inputs, cfg_v2), clone_fast_inputs(inputs, backward=backward), sync_mps),
-            ("metal_v3_loop", lambda run_inputs: render_v3_loop(run_inputs, cfg_v3), clone_fast_inputs(inputs, backward=backward), sync_mps),
-            ("metal_v5_native", lambda run_inputs: render_v5_native(run_inputs, cfg_v5), clone_fast_inputs(inputs, backward=backward), sync_mps),
-        ]
-    )
+    candidates = [
+        ("taichi_native", taichi_render, clone_taichi_inputs(inputs, backward=backward), sync_taichi),
+        ("metal_v2_loop", lambda run_inputs: render_v2_loop(run_inputs, cfg_v2), clone_fast_inputs(inputs, backward=backward), sync_mps),
+        ("metal_v3_loop", lambda run_inputs: render_v3_loop(run_inputs, cfg_v3), clone_fast_inputs(inputs, backward=backward), sync_mps),
+        ("metal_v5_native", lambda run_inputs: render_v5_native(run_inputs, cfg_v5), clone_fast_inputs(inputs, backward=backward), sync_mps),
+    ]
+    aliases = {
+        "taichi": "taichi_native",
+        "v2": "metal_v2_loop",
+        "v3": "metal_v3_loop",
+        "v5": "metal_v5_native",
+    }
+    requested_names = {aliases.get(name, name) for name in requested_renderers}
+    renderers.extend(candidate for candidate in candidates if "all" in requested_names or candidate[0] in requested_names)
 
     reference: torch.Tensor | None = None
     diffs: dict[str, float | None] = {}
@@ -456,6 +464,12 @@ def main() -> None:
     parser.add_argument("--check-outputs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--torch-max-work-items", type=int, default=64_000_000)
     parser.add_argument("--taichi-tile-size", type=int, default=16)
+    parser.add_argument(
+        "--renderers",
+        type=str,
+        default="all",
+        help="Comma-separated renderer list: all, torch/torch_direct, taichi, v2, v3, v5.",
+    )
     parser.add_argument("--csv", type=Path, default=None)
     args = parser.parse_args()
 
@@ -473,6 +487,7 @@ def main() -> None:
         f"backward={args.backward}"
     )
     taichi_render = make_taichi_renderer(args.height, args.width, args.taichi_tile_size)
+    requested_renderers = {part.strip() for part in args.renderers.split(",") if part.strip()}
     all_rows: list[BenchRow] = []
     for i, case in enumerate(cases):
         print(f"\ncase={case.name} sigma=[{case.sigma_min}, {case.sigma_max}]")
@@ -490,6 +505,7 @@ def main() -> None:
             torch_max_work_items=args.torch_max_work_items,
             check_outputs=args.check_outputs,
             taichi_render=taichi_render,
+            requested_renderers=requested_renderers,
         )
         print_rows(rows)
         all_rows.extend(rows)
