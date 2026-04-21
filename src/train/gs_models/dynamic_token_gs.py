@@ -7,11 +7,40 @@ from .blocks import TokenGSBackbone
 
 
 class DynamicTokenGS(TokenGSBackbone):
-    def __init__(self, num_tokens=128, feat_dim=128, gaussians_per_token=4):
+    def __init__(
+        self,
+        num_tokens=128,
+        feat_dim=128,
+        gaussians_per_token=4,
+        xy_extent=1.5,
+        z_min=0.5,
+        z_max=2.5,
+        scale_init=0.05,
+        scale_init_log_jitter=0.0,
+        opacity_init=None,
+        token_init_std=1.0,
+        head_hidden_dim=64,
+        head_hidden_layers=1,
+        head_output_init_std=None,
+        position_init_extent_coverage=0.0,
+        rotation_init="random",
+    ):
         super().__init__(
             num_tokens=num_tokens,
             feat_dim=feat_dim,
             gaussians_per_token=gaussians_per_token,
+            xy_extent=xy_extent,
+            z_min=z_min,
+            z_max=z_max,
+            scale_init=scale_init,
+            scale_init_log_jitter=scale_init_log_jitter,
+            opacity_init=opacity_init,
+            token_init_std=token_init_std,
+            head_hidden_dim=head_hidden_dim,
+            head_hidden_layers=head_hidden_layers,
+            head_output_init_std=head_output_init_std,
+            position_init_extent_coverage=position_init_extent_coverage,
+            rotation_init=rotation_init,
         )
         self.time_proj = nn.Sequential(
             nn.Linear(1, feat_dim),

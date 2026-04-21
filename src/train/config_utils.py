@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,20 @@ def resolved_config(config: dict[str, Any], sections: tuple[str, ...]) -> dict[s
     cfg = deepcopy(config)
     require_config_sections(cfg, sections)
     return cfg
+
+
+def apply_defaults(section: dict[str, Any], defaults: Mapping[str, Any]) -> None:
+    for key, value in defaults.items():
+        if key not in section:
+            section[key] = deepcopy(value)
+
+
+def select_keys(values: Mapping[str, Any], keys: Sequence[str]) -> dict[str, Any]:
+    return {key: values[key] for key in keys}
+
+
+def format_key_values(values: Mapping[str, Any]) -> str:
+    return ", ".join(f"{key}={value}" for key, value in values.items())
 
 
 def serialize_config_value(value: Any) -> Any:

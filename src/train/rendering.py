@@ -4,9 +4,11 @@ import torch
 import torch.nn.functional as F
 from camera import CameraSpec
 from renderers.common import build_pixel_grid
-from renderers.dense import render_pytorch_3dgs
+from renderers.dense import render_pytorch_3dgs, render_pytorch_3dgs_batch
+from renderers.fast_mac import FastMacRendererConfig, render_fast_mac_3dgs, render_fast_mac_3dgs_batch
+from renderers.taichi import TaichiRendererConfig, render_taichi_3dgs, render_taichi_3dgs_batch
 from renderers.tiled import render_pytorch_3dgs_tiled
-from runtime_types import GaussianFrame, ResolvedRendererMode
+from runtime_types import GaussianFrame, GaussianSequence, ResolvedRendererMode
 
 
 def resize_images(images: torch.Tensor, image_size: int) -> torch.Tensor:
@@ -51,7 +53,7 @@ def pick_renderer_mode(
 ) -> ResolvedRendererMode:
     if renderer == "auto":
         return "dense" if gaussian_count * height * width <= auto_dense_limit else "tiled"
-    if renderer == "dense" or renderer == "tiled":
+    if renderer == "dense" or renderer == "tiled" or renderer == "taichi" or renderer == "fast_mac":
         return renderer
     raise ValueError(f"Unknown renderer mode: {renderer}")
 
@@ -78,7 +80,11 @@ def render_gaussian_frame(
     tile_size: int = 8,
     bound_scale: float = 3.0,
     alpha_threshold: float = 1.0 / 255.0,
-) -> torch.Tensor:
+    near_plane: float = 1.0e-4,
+    taichi_options: dict | None = None,
+    fast_mac_options: dict | None = None,
+    return_aux: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if mode == "dense":
         return render_pytorch_3dgs(
             frame.xyz.float(),
@@ -94,6 +100,52 @@ def render_gaussian_frame(
             camera.cy,
             grid=build_or_reuse_grid(height, width, frame.xyz.device, dense_grid),
             camera_to_world=camera.camera_to_world.float(),
+            near_plane=near_plane,
+            return_aux=return_aux,
+        )
+    if return_aux:
+        raise ValueError("return_aux is only supported by the dense renderer.")
+    if mode == "taichi":
+        return render_taichi_3dgs(
+            frame.xyz,
+            frame.scales,
+            frame.quats,
+            frame.opacities,
+            frame.rgbs,
+            height,
+            width,
+            camera.fx,
+            camera.fy,
+            camera.cx,
+            camera.cy,
+            camera_to_world=camera.camera_to_world,
+            near_plane=near_plane,
+            config=TaichiRendererConfig.from_mapping(
+                taichi_options,
+                fallback_tile_size=tile_size,
+                fallback_alpha_threshold=alpha_threshold,
+            ),
+        )
+    if mode == "fast_mac":
+        return render_fast_mac_3dgs(
+            frame.xyz,
+            frame.scales,
+            frame.quats,
+            frame.opacities,
+            frame.rgbs,
+            height,
+            width,
+            camera.fx,
+            camera.fy,
+            camera.cx,
+            camera.cy,
+            camera_to_world=camera.camera_to_world,
+            near_plane=near_plane,
+            config=FastMacRendererConfig.from_mapping(
+                fast_mac_options,
+                fallback_tile_size=tile_size,
+                fallback_alpha_threshold=alpha_threshold,
+            ),
         )
     if mode == "tiled":
         return render_pytorch_3dgs_tiled(
@@ -112,8 +164,139 @@ def render_gaussian_frame(
             bound_scale=bound_scale,
             alpha_threshold=alpha_threshold,
             camera_to_world=camera.camera_to_world.float(),
+            near_plane=near_plane,
         )
     raise ValueError(f"Unknown renderer mode: {mode}")
+
+
+def _camera_scalar_vector(cameras: list[CameraSpec] | tuple[CameraSpec, ...], field_name: str, device) -> torch.Tensor:
+    values = [getattr(camera, field_name) for camera in cameras]
+    if any(torch.is_tensor(value) for value in values):
+        return torch.stack(
+            [
+                value.to(device=device, dtype=torch.float32)
+                if torch.is_tensor(value)
+                else torch.tensor(value, device=device, dtype=torch.float32)
+                for value in values
+            ],
+            dim=0,
+        ).reshape(-1)
+    return torch.tensor(values, device=device, dtype=torch.float32)
+
+
+def render_gaussian_frames(
+    sequence: GaussianSequence,
+    cameras: list[CameraSpec] | tuple[CameraSpec, ...],
+    height: int,
+    width: int,
+    mode: str,
+    dense_grid: torch.Tensor | None = None,
+    tile_size: int = 8,
+    bound_scale: float = 3.0,
+    alpha_threshold: float = 1.0 / 255.0,
+    near_plane: float = 1.0e-4,
+    taichi_options: dict | None = None,
+    fast_mac_options: dict | None = None,
+    return_aux: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if sequence.frame_count != len(cameras):
+        raise ValueError(f"Expected {sequence.frame_count} cameras, got {len(cameras)}.")
+
+    if mode == "dense":
+        device = sequence.xyz.device
+        return render_pytorch_3dgs_batch(
+            sequence.xyz.float(),
+            sequence.scales.float(),
+            sequence.quats.float(),
+            sequence.opacities.float(),
+            sequence.rgbs.float(),
+            height,
+            width,
+            _camera_scalar_vector(cameras, "fx", device),
+            _camera_scalar_vector(cameras, "fy", device),
+            _camera_scalar_vector(cameras, "cx", device),
+            _camera_scalar_vector(cameras, "cy", device),
+            grid=build_or_reuse_grid(height, width, device, dense_grid),
+            camera_to_world=torch.stack(
+                [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
+                dim=0,
+            ),
+            near_plane=near_plane,
+            return_aux=return_aux,
+        )
+
+    if return_aux:
+        raise ValueError("return_aux is only supported by the dense renderer.")
+    if mode == "taichi":
+        device = sequence.xyz.device
+        return render_taichi_3dgs_batch(
+            sequence.xyz,
+            sequence.scales,
+            sequence.quats,
+            sequence.opacities,
+            sequence.rgbs,
+            height,
+            width,
+            _camera_scalar_vector(cameras, "fx", device),
+            _camera_scalar_vector(cameras, "fy", device),
+            _camera_scalar_vector(cameras, "cx", device),
+            _camera_scalar_vector(cameras, "cy", device),
+            camera_to_world=torch.stack(
+                [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
+                dim=0,
+            ),
+            near_plane=near_plane,
+            config=TaichiRendererConfig.from_mapping(
+                taichi_options,
+                fallback_tile_size=tile_size,
+                fallback_alpha_threshold=alpha_threshold,
+            ),
+        )
+    if mode == "fast_mac":
+        device = sequence.xyz.device
+        return render_fast_mac_3dgs_batch(
+            sequence.xyz,
+            sequence.scales,
+            sequence.quats,
+            sequence.opacities,
+            sequence.rgbs,
+            height,
+            width,
+            _camera_scalar_vector(cameras, "fx", device),
+            _camera_scalar_vector(cameras, "fy", device),
+            _camera_scalar_vector(cameras, "cx", device),
+            _camera_scalar_vector(cameras, "cy", device),
+            camera_to_world=torch.stack(
+                [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
+                dim=0,
+            ),
+            near_plane=near_plane,
+            config=FastMacRendererConfig.from_mapping(
+                fast_mac_options,
+                fallback_tile_size=tile_size,
+                fallback_alpha_threshold=alpha_threshold,
+            ),
+        )
+    return torch.stack(
+        [
+            render_gaussian_frame(
+                sequence.frame(index),
+                camera=camera,
+                height=height,
+                width=width,
+                mode=mode,
+                dense_grid=dense_grid,
+                tile_size=tile_size,
+                bound_scale=bound_scale,
+                alpha_threshold=alpha_threshold,
+                near_plane=near_plane,
+                taichi_options=taichi_options,
+                fast_mac_options=fast_mac_options,
+            )
+            for index, camera in enumerate(cameras)
+        ],
+        dim=0,
+    )
 
 
 __all__ = [
@@ -122,5 +305,6 @@ __all__ = [
     "camera_for_viewport",
     "pick_renderer_mode",
     "render_gaussian_frame",
+    "render_gaussian_frames",
     "resize_images",
 ]

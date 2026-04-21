@@ -6,6 +6,7 @@ __pycache__/
 .dust3r_probe_frames/
 tea_debug.log
 wandb/
+benchmark_outputs/
 
 test_data/dust3r_outputs/
 

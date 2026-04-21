@@ -1,0 +1,53 @@
+{
+  // 128px/4fps known-camera run with wider Gaussian depth support and larger frame windows.
+  // This targets late-frame windows where raw DUSt3R cameras move past the old z_max=2.5 slab.
+  "arch": "tokengs_prebaked_camera",
+  "data": {
+    "video_variant": "small_128_4fps",
+    "sequence_dir": null,
+    "camera_json": null,
+    "camera_image_size": 224,
+    "camera_focal_mode": "median",
+    "max_frames": 0
+  },
+  "model": {
+    "size": 128,
+    "tokens": 128,
+    "gaussians_per_token": 4,
+    "xy_extent": 1.5,
+    "z_min": 0.5,
+    "z_max": 5.0,
+    "scale_init": 0.05
+  },
+  "render": {
+    "renderer": "dense",
+    "auto_dense_limit": 400000,
+    "tile_size": 8,
+    "bound_scale": 3.0,
+    "alpha_threshold": 0.00392156862745098
+  },
+  "train": {
+    "steps": 1000,
+    "lr": 0.001,
+    "amp": false,
+    "frames_per_step": 8,
+    "eval_batch_size": 1
+  },
+  "logging": {
+    "log_every": 25,
+    "image_log_every": 50,
+    "video_log_every": 500,
+    "with_metrics": {
+      "renderer": true,
+      "optimizer": false,
+      "every": 25,
+      "print_summary": true,
+      "wandb": true,
+      "fail_fast": true
+    },
+    "always_log_last_step": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-overfit-prebaked-camera-128-4fps-wide-depth-8frames",
+    "wandb_tags": ["overfit-local", "arch-tokengs", "camera-prebaked", "128px", "4fps", "wide-depth", "8frames"]
+  }
+}

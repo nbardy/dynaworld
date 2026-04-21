@@ -1,0 +1,44 @@
+{
+  // Known-camera dynamic TokenGS baseline on the 64x64, 4fps local clip.
+  // Windowed frames keep this higher-FPS visibility check usable on MPS.
+  "arch": "tokengs_prebaked_camera",
+  "data": {
+    // Options: small_32_2fps, small_64_4fps, small_128_4fps.
+    // Set sequence_dir to a path to override the variant mapping.
+    "video_variant": "small_64_4fps",
+    "sequence_dir": null,
+    "camera_json": null,
+    "camera_image_size": 224,
+    "camera_focal_mode": "median",
+    "max_frames": 0
+  },
+  "model": {
+    "size": 64,
+    "tokens": 128,
+    "gaussians_per_token": 4
+  },
+  "render": {
+    "renderer": "dense",
+    "auto_dense_limit": 400000,
+    "tile_size": 8,
+    "bound_scale": 3.0,
+    "alpha_threshold": 0.00392156862745098
+  },
+  "train": {
+    "steps": 1000,
+    // Higher-res prebaked runs collapsed to a mean-color render at 0.005.
+    "lr": 0.001,
+    "amp": false,
+    "frames_per_step": 4,
+    "eval_batch_size": 4
+  },
+  "logging": {
+    "log_every": 25,
+    "image_log_every": 50,
+    "video_log_every": 500,
+    "always_log_last_step": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-overfit-prebaked-camera-64-4fps",
+    "wandb_tags": ["overfit-local", "arch-tokengs", "camera-prebaked", "64px", "4fps"]
+  }
+}

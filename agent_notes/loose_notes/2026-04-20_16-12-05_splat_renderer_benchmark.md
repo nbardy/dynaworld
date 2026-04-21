@@ -1,0 +1,119 @@
+# Splat Renderer Benchmark Setup
+
+- Added a benchmark harness for differentiable splat rendering under `src/benchmarks/splat_renderer_benchmark.py`.
+- Copied the requested downloaded rasterizer implementations into the repo without rewriting them:
+  - `src/benchmarks/vectorized_sparse_splat_rasterizer.py`
+  - `src/benchmarks/memory_efficient_splat_rasterizer.py`
+- Added `src/benchmark_configs/splat_renderer_benchmark.jsonc` as the checked-in benchmark matrix config.
+- The benchmark generates one baked random 3D Gaussian set per resolution/count/set-index combination, then clones that same set for each renderer so timing starts after input generation.
+- The default renderer matrix is:
+  - current custom renderer through `render_gaussian_frame`, defaulting to `custom.mode = "tiled"`
+  - `taichi-splatting`, optional and skipped unless the runtime is CUDA and the package imports
+  - copied vectorized sparse PyTorch rasterizer
+  - copied memory-efficient sparse PyTorch rasterizer
+- The sparse rasterizers consume 2D means/conics, so the harness projects the same baked 3D Gaussian frame through the repo's `project_gaussians_2d` before invoking them.
+- Set `sparse.pixel_center_offset = 0.0` by default because Dynaworld's current renderer builds integer pixel grids, not `+0.5` pixel-center grids.
+- `uv pip install taichi-splatting` failed in this Python 3.11 environment because `taichi-splatting` depends on `taichi-nightly` wheels that only advertised old CPython ABI tags (`cp36m`, `cp37m`, `cp38`). I installed it once with `--no-deps` only to inspect the API, then uninstalled it. The benchmark keeps this package as an optional backend and reports a skip reason instead of failing the matrix. Important nuance: generic Taichi has Metal/macOS backends, but this specific `taichi-splatting` rasterizer imports `cuda_lib` for radix sort/cumsum and its examples initialize `ti.cuda`, so it is not a generic Metal splat renderer.
+- Follow-up from a real MPS run: `memory_efficient_sparse` is a bad default here. At 64x64/128 splats it was roughly 670-780 ms total after warmup while custom/vectorized sparse were mostly tens of ms; at 64x64/512 splats one set hit ~15.4 s total. This path is memory-efficient in design, but its Python-loop custom autograd implementation sucks for this MPS benchmark. It remains available by explicit `--renderers memory_efficient_sparse` for investigation, but was removed from default renderer lists.
+- Follow-up benchmark cleanup: default custom rendering is now split into `custom_dense` and `custom_tiled`. The prior `custom` key remains available for compatibility and uses `custom.mode`, but defaults should compare old dense custom against tiled explicitly because tiled was not universally faster on MPS.
+- Added optional `gsplat` backend using `gsplat.rendering.rasterization(...)`. It is skipped unless running on CUDA with the package installed, matching gsplat's CUDA rasterization design; having a renderer API does not imply MPS/Metal support.
+- Summary output now includes skipped and errored renderer cases. Previously the mean timing summary only grouped `status == ok`, so Taichi skips appeared in per-case logs but vanished from the summary.
+- Added forward FPS reporting and `src/benchmark_configs/splat_renderer_64k_throughput.jsonc` for the real-time target. It runs forward-only at 4k/16k/64k splats, excludes dense by default, and uses `compare_outputs=false` so the throughput path measures render speed rather than reference comparison.
+- Current checked-in trainer configs are far smaller than the real-time target: prebaked-camera configs use 128 tokens x 4 splats/token = 512 splats. The video-token "full" config is also 8 x 64 = 512 splats; only a hypothetical 1024 x 64 setup would reach 65,536 splats.
+- Cloned upstream `uc-vision/taichi-splatting` into `third_party/taichi-splatting` and started a local Metal-forward patch. The first CUDA wall was `taichi_splatting.cuda_lib` (`full_cumsum`, `radix_sort_pairs`), so added `taichi_splatting/backend_sort.py` with CUDA passthrough and Torch fallback for non-CUDA tensors. Patched `mapper/tile_mapper.py` to use it via `sort_backend="auto"`.
+- The next Metal wall was Taichi SIMT intrinsics in `rasterizer/forward.py`: `ti.simt.block.sync_all_nonzero`, block shared arrays, and warp ops are not supported on Metal. Added `RasterConfig(metal_compatible=True)` and a simple global-memory forward kernel that avoids those primitives. It is forward-only and intentionally slower than the CUDA/SIMT kernel.
+- Patched benchmark Taichi backend to prefer the vendored package, initialize `TaichiQueue` with `ti.metal` on MPS, and convert Dynaworld projected covariance to Taichi's `[mean, axis, sigma, alpha]` 2D format.
+- Added a simple Metal-compatible backward kernel in `rasterizer/backward.py`. It avoids block/warp intrinsics by looping per pixel over tile overlaps and atomically accumulating point/feature gradients. This makes `taichi_metal` differentiable, but it is a reference path, not a tuned Metal renderer.
+- Smoke checks after the local Taichi patch:
+  - `PYTHONPATH=third_party/taichi-splatting uv run python` map-to-tiles works on CPU and MPS/Metal for a tiny packed 2D case.
+  - `RasterConfig(tile_size=16, metal_compatible=True)` forward rasterize works on MPS/Metal for a tiny 16x16 case.
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --device mps --renderers taichi --resolutions 16 --splat-counts 8 --sets-per-case 1 --warmup-iters 1 --timed-iters 3 --forward-only --fail-fast` ran `taichi_metal` at ~16 ms forward after warmup for the tiny 8-splat case.
+  - Direct MPS backward through `rasterize(... RasterConfig(tile_size=16, metal_compatible=True))` produced finite point and feature gradients.
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --device mps --renderers taichi --resolutions 16 --splat-counts 8 --sets-per-case 1 --warmup-iters 1 --timed-iters 2 --fail-fast` ran `taichi_metal` forward+backward.
+- 64k MPS/Metal check for the simple Taichi path:
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --config src/benchmark_configs/splat_renderer_benchmark.jsonc --device mps --renderers taichi --resolutions 64,128 --splat-counts 65536 --sets-per-case 3 --warmup-iters 1 --timed-iters 3 --fail-fast`
+  - `64x64, G=65536`: mean forward 26.041 ms (~38.4 FPS), backward 45.591 ms, total 71.632 ms.
+  - `128x128, G=65536`: mean forward 23.840 ms (~41.9 FPS), backward 49.001 ms, total 72.841 ms.
+  - This proves the reference Metal path can execute forward and backward at 64k splats. It is still not a validated or optimized Metal implementation; timings are surprisingly resolution-insensitive because the current random splats are small and tile work dominates.
+- 4k vs 64k MPS/Metal check, same Taichi reference path:
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --config src/benchmark_configs/splat_renderer_benchmark.jsonc --device mps --renderers taichi --resolutions 64,128 --splat-counts 4096,65536 --sets-per-case 3 --warmup-iters 1 --timed-iters 3 --fail-fast`
+  - `64x64, G=4096`: mean forward 13.585 ms (~73.6 FPS), backward 29.112 ms, total 42.697 ms.
+  - `128x128, G=4096`: mean forward 12.367 ms (~80.9 FPS), backward 23.260 ms, total 35.627 ms.
+  - `64x64, G=65536`: mean forward 26.082 ms (~38.3 FPS), backward 45.045 ms, total 71.127 ms.
+  - `128x128, G=65536`: mean forward 24.414 ms (~41.0 FPS), backward 48.321 ms, total 72.735 ms.
+- Rechecked the 4k-vs-64k numbers after adding a Taichi-specific sync hook (`TaichiQueue.run_sync(ti.sync)`) to the benchmark. In this note, `4k` means 4096 splats, not 4K image resolution. The image resolutions were 64x64 and 128x128.
+  - `16x16, G=8`, backward enabled: mean forward 15.290 ms, backward 11.800 ms, total 27.090 ms.
+  - `64x64, G=4096`: mean forward 15.975 ms (~62.6 FPS), backward 24.776 ms, total 40.751 ms.
+  - `128x128, G=4096`: mean forward 12.276 ms (~81.5 FPS), backward 20.421 ms, total 32.697 ms.
+  - `64x64, G=65536`: mean forward 26.844 ms (~37.3 FPS), backward 46.795 ms, total 73.640 ms.
+  - `128x128, G=65536`: mean forward 23.278 ms (~43.0 FPS), backward 48.037 ms, total 71.315 ms.
+- Added representative PNG output for benchmark render checks. By default the benchmark saves one image per successful renderer at the largest resolution, largest splat count, and `set_index=0` under `benchmark_outputs/splat_renderer_images/`. The directory is gitignored. CLI overrides: `--save-images <dir>` and `--no-save-images`.
+  - Smoke verified selection with `--resolutions 16,24 --splat-counts 8,16`: only `taichi_metal__24x24__G16__set0.png` was saved.
+  - Saved a real 64k representative image: `benchmark_outputs/splat_renderer_images/taichi_metal__128x128__G65536__set0.png`, verified as RGB `(128, 128)`.
+- Added `src/benchmark_configs/splat_renderer_taichi_metal_scale.jsonc` for Taichi/Metal-only forward scaling. It runs 128/256/512/1024 square outputs against 65,536 / 131,072 / 262,144 splats, saves only the largest representative image, and keeps backward disabled by default.
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --config src/benchmark_configs/splat_renderer_taichi_metal_scale.jsonc --device mps --fail-fast`
+  - Forward-only summary after fixing forward-only total timing:
+    - `128x128, G=65536`: 22.972 ms (~43.5 FPS)
+    - `128x128, G=131072`: 48.408 ms (~20.7 FPS)
+    - `128x128, G=262144`: 86.748 ms (~11.5 FPS)
+    - `256x256, G=65536`: 23.832 ms (~42.0 FPS)
+    - `256x256, G=131072`: 37.440 ms (~26.7 FPS)
+    - `256x256, G=262144`: 70.614 ms (~14.2 FPS)
+    - `512x512, G=65536`: 28.479 ms (~35.1 FPS)
+    - `512x512, G=131072`: 48.383 ms (~20.7 FPS)
+    - `512x512, G=262144`: 97.832 ms (~10.2 FPS)
+    - `1024x1024, G=65536`: 38.054 ms (~26.3 FPS)
+    - `1024x1024, G=131072`: 74.716 ms (~13.4 FPS)
+    - `1024x1024, G=262144`: 96.637 ms (~10.3 FPS)
+  - Representative largest image saved and verified as RGB `(1024, 1024)`: `benchmark_outputs/taichi_scale_images/taichi_metal__1024x1024__G262144__set0.png`.
+  - Single largest backward probe with current timing code: `512x512, G=262144` forward 69.401 ms, backward 261.962 ms, total 331.363 ms.
+- Added `src/benchmarks/splat_renderer_accuracy.py` and `src/benchmark_configs/splat_renderer_accuracy.jsonc` for correctness checks. This uses a direct Torch 2D packed-Gaussian baseline instead of the 3D projection path, so it isolates Taichi raster/blend math and backward gradients wrt packed `[mean, axis, sigma, alpha]` plus RGB features.
+  - Baseline defaults to CPU float64; Taichi defaults to auto device float32. On Mac this compares CPU double Torch against `taichi_metal`.
+  - The Torch reference matches Taichi's non-antialiased Gaussian PDF, `x+0.5/y+0.5` pixel centers, alpha threshold, alpha clamp, front-to-back alpha blending, and background compositing.
+  - Full small MPS run: `uv run python src/benchmarks/splat_renderer_accuracy.py --config src/benchmark_configs/splat_renderer_accuracy.jsonc --device mps`
+  - Matrix was 16x16 and 32x32 against 4/8/16 splats, 3 random sets each. All 18 cases passed.
+  - Worst observed errors: image max abs `8.307e-08`, image mean abs `1.312e-08`, packed grad max abs `1.309e-08`, feature grad max abs `6.700e-09`.
+  - Larger probe with failure-on-mismatch: `uv run python src/benchmarks/splat_renderer_accuracy.py --config src/benchmark_configs/splat_renderer_accuracy.jsonc --device mps --resolutions 64 --splat-counts 32 --sets-per-case 2 --no-save-images --fail-on-mismatch`; both cases passed, worst image max abs `5.751e-08`, packed grad max abs `1.625e-09`.
+  - Saved accuracy images verified as RGB `(32, 32)`: `torch_reference__32x32__G16__set0.png`, `taichi_metal__32x32__G16__set0.png`, and `abs_diff_x20__taichi_metal__32x32__G16__set0.png`.
+- Split Taichi benchmark surface into explicit variants and moved the vendored checkout to local branch `dynaworld-metal-reference`.
+  - Stable implemented renderer key: `taichi_reference`, reported as `taichi_metal_reference` on MPS.
+  - `taichi` still resolves automatically to `cuda_simt` on CUDA and `metal_reference` on MPS/CPU.
+  - Added config fields: `variant`, `sort_backend`, `backward_variant`, `metal_block_dim`, `use_depth16`, and `precision.compute_dtype`.
+  - Experimental renderer keys now fail cleanly with skip reasons instead of tracebacks: `taichi_fast_forward`, `taichi_metal_sort`, `taichi_fp16`, `taichi_per_splat_backward`.
+  - `taichi_metal_sort` is skipped because Taichi 1.7.4 `parallel_sort` is field-only and `PrefixSumExecutor` does not support Metal; replacing the Torch MPS fallback needs dedicated bin/sort kernels.
+  - `taichi_fp16` is skipped because the current mapper imports f32 `Gaussian2D` and requires f32 depth arrays; low precision needs separate kernels.
+  - `taichi_per_splat_backward` is skipped because only the pixel-reference backward kernel exists.
+  - `taichi_fast_forward` is reserved but not implemented; the reference path remains the correctness oracle.
+- Added `src/benchmark_configs/splat_renderer_taichi_experiments.jsonc` to show this variant surface in one small run.
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --config src/benchmark_configs/splat_renderer_taichi_experiments.jsonc --device mps`
+  - `taichi_metal_reference` ran at `64x64, G=1024`: forward 18.712 ms, backward 29.373 ms, total 48.085 ms.
+  - The four experimental variants skipped with explicit reasons.
+- Wired `use_depth16` as a real implemented variant (`taichi_depth16`) using upstream's 16-bit depth-key path.
+  - Accuracy smoke passed for `32x32, G=16`.
+  - Speed probe at `256x256, G=65536` showed no improvement in this run: reference forward 32.933 ms, depth16 forward 33.061 ms.
+  - Current-code short scale checks are noisy and slower than one earlier scale run: `256x256, G=65536` landed around 34-40 ms forward across repeated short runs. Treat these as current reference timings, not a proven optimized path.
+- Implemented `sort_backend="taichi_field"` as custom Taichi/Metal kernels over Torch MPS ndarrays:
+  - `backend_sort.full_cumsum(..., backend="taichi_field")` now uses a Taichi Hillis-Steele-style scan over int32 tensors.
+  - `backend_sort.radix_sort_pairs(..., backend="taichi_field")` now uses a Taichi odd-even pair sort over uint32/uint64 keys plus int32 values.
+  - Direct primitive test on MPS passed: cumsum `[0,2,2,5,6]`, sorted uint32/uint64 keys `[1,1,2,3,5]` with stable values `[10,11,20,30,50]`.
+  - Raster tiny test passed against reference: `16x16, G=8`, `taichi_metal_sort` max_abs `0.0`.
+  - Accuracy test against Torch CPU float64 passed for `16x16/32x32` and 4/8/16 splats, set 0 for each.
+  - Speed is bad: `128x128, G=4096` reference 18.977 ms vs metal sort 221.367 ms; `128x128, G=65536` metal sort 1495.226 ms. This proves the backend works, but odd-even sort is not the fast path.
+- Implemented `sort_backend="ordered_taichi"` as a second Metal-native tile mapper that avoids global sorting and fills each tile in input order. It is only correct when inputs are already front-to-back sorted.
+  - Exposed as benchmark renderer key `taichi_ordered`, reported as `taichi_metal_ordered`.
+  - Tiny sorted-depth benchmark matched reference: `16x16, G=8`, max_abs `0.0`.
+  - `128x128, G=4096` compare-output run matched reference max_abs `0.0`.
+  - Faster than generic Metal sort but still slower than the Torch-sort reference: `128x128, G=4096` reference 18.245 ms vs ordered 34.922 ms; `128x128, G=65536` reference 31.103 ms vs ordered 68.492 ms.
+  - Current experiments config with forward-only at `64x64, G=1024`: reference 15.123 ms, depth16 15.790 ms, ordered 23.397 ms, metal sort 126.128 ms. `fast_forward`, `fp16`, and `per_splat_backward` remain skipped with explicit reasons.
+- Reworked `taichi_metal_sort` into a Taichi-side compact per-tile bucket sorter:
+  - It now uses splat-major tile counting, Taichi ndarray prefix sum over tile counts, atomic fill into compact per-tile ranges, and a per-tile insertion sort in one Taichi kernel. This keeps the experiment inside the `third_party/taichi-splatting` fork and does not touch the separate raw Metal/MLX shader experiment.
+  - `taichi_global_sort` keeps the earlier Taichi ndarray global odd-even sort reference.
+  - Correctness: bucket sort passed the packed-2D CPU float64 accuracy check for 16x16/32x32, 4/8 splats, including packed/features gradients, with max errors around `1e-8`.
+  - Speed at `64x64, G=1024`, backward enabled, 1 warmup/3 timed: reference forward 19.137 ms, backward 32.037 ms, total 51.174 ms; compact bucket sort forward 50.944 ms, backward 24.535 ms, total 75.479 ms; global Taichi sort forward 136.254 ms, backward 28.931 ms, total 165.185 ms.
+  - Scale probe, forward-only: `1024x1024, G=65536` reference 52.051 ms vs compact bucket sort 125.604 ms. `128x128, G=65536` reference 53.050 ms vs compact bucket sort 538.410 ms. The Taichi-only bucket path is correct and better than the old global Taichi sort for moderate cases, but it is not faster than the Torch-sort reference.
+  - Main conclusion: the Gemini-style algorithm needs actual fused tile-local sort/raster using threadgroup memory to win. Taichi/Metal can express the binning pieces, but not the important shared-memory fused kernel shape in the current path.
+- Smoke checks run:
+  - `uv run python -m compileall src/benchmarks src/benchmark_configs`
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --device cpu --renderers custom,vectorized_sparse,memory_efficient_sparse,taichi --resolutions 16 --splat-counts 8 --sets-per-case 1 --warmup-iters 0 --timed-iters 1 --forward-only`
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --device cpu --renderers custom,vectorized_sparse,memory_efficient_sparse --resolutions 12 --splat-counts 5 --sets-per-case 1 --warmup-iters 0 --timed-iters 1`
+  - `uv run python src/benchmarks/splat_renderer_benchmark.py --config src/benchmark_configs/splat_renderer_benchmark.jsonc --device cpu --renderers custom,vectorized_sparse --resolutions 8 --splat-counts 3 --sets-per-case 1 --warmup-iters 0 --timed-iters 1 --forward-only`

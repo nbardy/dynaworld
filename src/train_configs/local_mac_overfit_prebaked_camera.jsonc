@@ -2,7 +2,10 @@
   // Known-camera dynamic TokenGS baseline using DUSt3R prebaked cameras.
   "arch": "tokengs_prebaked_camera",
   "data": {
-    "sequence_dir": "test_data/dust3r_outputs/test_video_small_all_frames",
+    // Options: small_32_2fps, small_64_4fps, small_128_4fps.
+    // Set sequence_dir to a path to override the variant mapping.
+    "video_variant": "small_32_2fps",
+    "sequence_dir": null,
     "camera_json": null,
     "camera_image_size": 224,
     "camera_focal_mode": "median",
@@ -18,6 +21,7 @@
     "auto_dense_limit": 400000,
     "tile_size": 8,
     "bound_scale": 3.0,
+    "near_plane": 0.0001,
     "alpha_threshold": 0.00392156862745098
   },
   "train": {
@@ -35,5 +39,10 @@
     "wandb_project": "dynaworld",
     "wandb_run_name": "local-mac-overfit-prebaked-camera",
     "wandb_tags": ["overfit-local", "arch-tokengs", "camera-prebaked"]
+  },
+  "losses": {
+    "type": "l1_mse",
+    "l1_weight": 1.0,
+    "mse_weight": 0.2
   }
 }

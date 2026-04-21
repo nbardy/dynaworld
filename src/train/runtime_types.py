@@ -21,8 +21,8 @@ FrameSource = Literal[
     "summary_sampled",
     "all_frames",
 ]
-RendererMode = Literal["auto", "dense", "tiled"]
-ResolvedRendererMode = Literal["dense", "tiled"]
+RendererMode = Literal["auto", "dense", "tiled", "taichi", "fast_mac"]
+ResolvedRendererMode = Literal["dense", "tiled", "taichi", "fast_mac"]
 ReconstructionBackwardStrategy = Literal["batched", "microbatch", "framewise"]
 
 

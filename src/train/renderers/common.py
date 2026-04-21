@@ -3,6 +3,13 @@ import torch
 MIN_RENDER_DEPTH = 1e-4
 
 
+def _validate_near_plane(near_plane):
+    near_plane = float(near_plane)
+    if near_plane <= 0.0:
+        raise ValueError(f"near_plane must be positive, got {near_plane}.")
+    return near_plane
+
+
 def build_pixel_grid(H, W, device):
     gy, gx = torch.meshgrid(
         torch.arange(H, device=device, dtype=torch.float32),
@@ -44,7 +51,20 @@ def transform_world_to_camera_batch(means3D, cov3D, camera_to_world):
     return means_camera, cov_camera
 
 
-def project_gaussians_2d(means3D, scales, quats, opacities, rgbs, fx, fy, cx, cy, camera_to_world=None):
+def project_gaussians_2d(
+    means3D,
+    scales,
+    quats,
+    opacities,
+    rgbs,
+    fx,
+    fy,
+    cx,
+    cy,
+    camera_to_world=None,
+    near_plane=MIN_RENDER_DEPTH,
+):
+    near_plane = _validate_near_plane(near_plane)
     fx = _camera_scalar_tensor(fx, device=means3D.device, dtype=means3D.dtype)
     fy = _camera_scalar_tensor(fy, device=means3D.device, dtype=means3D.dtype)
     cx = _camera_scalar_tensor(cx, device=means3D.device, dtype=means3D.dtype)
@@ -79,8 +99,8 @@ def project_gaussians_2d(means3D, scales, quats, opacities, rgbs, fx, fy, cx, cy
     rgbs = rgbs[sorted_idx]
 
     x, y, z = means3D[:, 0], means3D[:, 1], means3D[:, 2]
-    front_mask_bool = z > MIN_RENDER_DEPTH
-    z_safe = torch.where(front_mask_bool, torch.clamp(z, min=MIN_RENDER_DEPTH), torch.ones_like(z))
+    front_mask_bool = z > near_plane
+    z_safe = torch.where(front_mask_bool, torch.clamp(z, min=near_plane), torch.ones_like(z))
     x_project = torch.where(front_mask_bool, x, torch.zeros_like(x))
     y_project = torch.where(front_mask_bool, y, torch.zeros_like(y))
     front_mask = front_mask_bool.to(opacities.dtype).unsqueeze(-1)
@@ -126,7 +146,20 @@ def _gather_gaussian_batch(values, sorted_idx):
     return torch.gather(values, dim=1, index=gather_idx.expand_as(values))
 
 
-def project_gaussians_2d_batch(means3D, scales, quats, opacities, rgbs, fx, fy, cx, cy, camera_to_world=None):
+def project_gaussians_2d_batch(
+    means3D,
+    scales,
+    quats,
+    opacities,
+    rgbs,
+    fx,
+    fy,
+    cx,
+    cy,
+    camera_to_world=None,
+    near_plane=MIN_RENDER_DEPTH,
+):
+    near_plane = _validate_near_plane(near_plane)
     batch_size, gaussian_count, _channels = means3D.shape
     fx = _camera_scalar_batch(fx, batch_size, device=means3D.device, dtype=means3D.dtype)
     fy = _camera_scalar_batch(fy, batch_size, device=means3D.device, dtype=means3D.dtype)
@@ -162,8 +195,8 @@ def project_gaussians_2d_batch(means3D, scales, quats, opacities, rgbs, fx, fy, 
     rgbs = _gather_gaussian_batch(rgbs, sorted_idx)
 
     x, y, z = means3D[..., 0], means3D[..., 1], means3D[..., 2]
-    front_mask_bool = z > MIN_RENDER_DEPTH
-    z_safe = torch.where(front_mask_bool, torch.clamp(z, min=MIN_RENDER_DEPTH), torch.ones_like(z))
+    front_mask_bool = z > near_plane
+    z_safe = torch.where(front_mask_bool, torch.clamp(z, min=near_plane), torch.ones_like(z))
     x_project = torch.where(front_mask_bool, x, torch.zeros_like(x))
     y_project = torch.where(front_mask_bool, y, torch.zeros_like(y))
     front_mask = front_mask_bool.to(opacities.dtype).unsqueeze(-1)

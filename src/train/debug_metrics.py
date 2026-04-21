@@ -13,6 +13,9 @@ from renderers.overlap_metrics import (
     selected_overlap_summary,
 )
 
+DEFAULT_PIXEL_DIAG_MAX_WORK_ITEMS = 64_000_000
+DEFAULT_TILE_DIAG_MAX_GAUSSIANS = 4096
+
 
 @dataclass(frozen=True)
 class MetricConfig:
@@ -149,8 +152,10 @@ def dense_render_diagnostics(config, dense_grid, cameras, decoded, renders=None)
         dim=0,
     )
     camera_means, _camera_cov = transform_world_to_camera_batch(xyz, cov3d, camera_to_world)
+    render_cfg = config.get("render", {})
+    near_plane = float(render_cfg.get("near_plane", 1.0e-4))
     z = camera_means[..., 2]
-    front_counts = (z > 1e-4).sum(dim=1).float()
+    front_counts = (z > near_plane).sum(dim=1).float()
 
     fx = _camera_values(cameras, "fx", device)
     fy = _camera_values(cameras, "fy", device)
@@ -167,19 +172,14 @@ def dense_render_diagnostics(config, dense_grid, cameras, decoded, renders=None)
         cx,
         cy,
         camera_to_world=camera_to_world,
+        near_plane=near_plane,
     )
 
-    grid = dense_grid if dense_grid is not None else build_pixel_grid(height, width, device)
-    dx = grid.view(1, 1, height, width, 2) - means2d.view(batch_size, gaussian_count, 1, 1, 2)
-    dx0 = dx[..., 0]
-    dx1 = dx[..., 1]
-    power = -0.5 * (
-        inv_cov2d[..., 0, 0].view(batch_size, gaussian_count, 1, 1) * dx0.square()
-        + (inv_cov2d[..., 0, 1] + inv_cov2d[..., 1, 0]).view(batch_size, gaussian_count, 1, 1) * dx0 * dx1
-        + inv_cov2d[..., 1, 1].view(batch_size, gaussian_count, 1, 1) * dx1.square()
-    )
-    alpha_pre = projected_opacities.squeeze(-1).view(batch_size, gaussian_count, 1, 1) * torch.exp(power)
     raw_det = cov2d[..., 0, 0] * cov2d[..., 1, 1] - cov2d[..., 0, 1] * cov2d[..., 1, 0]
+    pixel_work_items = int(batch_size) * int(gaussian_count) * int(height) * int(width)
+    pixel_diag_max_work_items = int(
+        render_cfg.get("render_diag_pixel_max_work_items", DEFAULT_PIXEL_DIAG_MAX_WORK_ITEMS)
+    )
 
     metrics = {
         "RenderDiag/XYZMin": _safe_stat(xyz, "min"),
@@ -188,6 +188,7 @@ def dense_render_diagnostics(config, dense_grid, cameras, decoded, renders=None)
         "RenderDiag/ScaleMax": _safe_stat(scales, "max"),
         "RenderDiag/CameraZMin": _safe_stat(z, "min"),
         "RenderDiag/CameraZMax": _safe_stat(z, "max"),
+        "RenderDiag/NearPlane": near_plane,
         "RenderDiag/FrontGaussiansMin": float(front_counts.min().detach().cpu()),
         "RenderDiag/FrontGaussiansMean": float(front_counts.mean().detach().cpu()),
         "RenderDiag/NearOrBehindGaussiansMean": float((gaussian_count - front_counts).mean().detach().cpu()),
@@ -198,24 +199,45 @@ def dense_render_diagnostics(config, dense_grid, cameras, decoded, renders=None)
         "RenderDiag/RawDetNegativeCount": float((raw_det < 0).sum().detach().cpu()),
         "RenderDiag/InvCovMin": _safe_stat(inv_cov2d, "min"),
         "RenderDiag/InvCovMax": _safe_stat(inv_cov2d, "max"),
-        "RenderDiag/PowerMin": _safe_stat(power, "min"),
-        "RenderDiag/PowerMax": _safe_stat(power, "max"),
-        "RenderDiag/PowerGt80Count": float((power > 80).sum().detach().cpu()),
-        "RenderDiag/PowerNonfiniteCount": float((~torch.isfinite(power)).sum().detach().cpu()),
-        "RenderDiag/AlphaPreNonfiniteCount": float((~torch.isfinite(alpha_pre)).sum().detach().cpu()),
+        "RenderDiag/PixelWorkItems": float(pixel_work_items),
+        "RenderDiag/PixelDiagSkipped": float(pixel_work_items > pixel_diag_max_work_items),
     }
-    metrics.update(
-        tile_overlap_diagnostics(
-            config,
-            means2d=means2d,
-            inv_cov2d=inv_cov2d,
-            cov2d=cov2d,
-            opacities=projected_opacities,
-            image_size=(height, width),
-        )
-    )
     if renders is not None:
         metrics["RenderDiag/RenderNonfiniteCount"] = float((~torch.isfinite(renders.detach())).sum().detach().cpu())
+
+    if pixel_work_items <= pixel_diag_max_work_items:
+        grid = dense_grid if dense_grid is not None else build_pixel_grid(height, width, device)
+        dx = grid.view(1, 1, height, width, 2) - means2d.view(batch_size, gaussian_count, 1, 1, 2)
+        dx0 = dx[..., 0]
+        dx1 = dx[..., 1]
+        power = -0.5 * (
+            inv_cov2d[..., 0, 0].view(batch_size, gaussian_count, 1, 1) * dx0.square()
+            + (inv_cov2d[..., 0, 1] + inv_cov2d[..., 1, 0]).view(batch_size, gaussian_count, 1, 1) * dx0 * dx1
+            + inv_cov2d[..., 1, 1].view(batch_size, gaussian_count, 1, 1) * dx1.square()
+        )
+        alpha_pre = projected_opacities.squeeze(-1).view(batch_size, gaussian_count, 1, 1) * torch.exp(power)
+        metrics.update(
+            {
+                "RenderDiag/PowerMin": _safe_stat(power, "min"),
+                "RenderDiag/PowerMax": _safe_stat(power, "max"),
+                "RenderDiag/PowerGt80Count": float((power > 80).sum().detach().cpu()),
+                "RenderDiag/PowerNonfiniteCount": float((~torch.isfinite(power)).sum().detach().cpu()),
+                "RenderDiag/AlphaPreNonfiniteCount": float((~torch.isfinite(alpha_pre)).sum().detach().cpu()),
+            }
+        )
+    tile_diag_max_gaussians = int(render_cfg.get("render_diag_tile_max_gaussians", DEFAULT_TILE_DIAG_MAX_GAUSSIANS))
+    metrics["TileDiag/Skipped"] = float(gaussian_count > tile_diag_max_gaussians)
+    if gaussian_count <= tile_diag_max_gaussians:
+        metrics.update(
+            tile_overlap_diagnostics(
+                config,
+                means2d=means2d,
+                inv_cov2d=inv_cov2d,
+                cov2d=cov2d,
+                opacities=projected_opacities,
+                image_size=(height, width),
+            )
+        )
     return metrics
 
 
@@ -331,6 +353,8 @@ def render_aux_diagnostics(aux: dict[str, torch.Tensor] | None, support_eps: flo
 def optimizer_diagnostics(model: torch.nn.Module, optimizer: torch.optim.Optimizer) -> dict[str, float]:
     grad_sq_sum = 0.0
     param_sq_sum = 0.0
+    grad_sq_sum_by_group: dict[str, float] = {}
+    param_sq_sum_by_group: dict[str, float] = {}
     grad_abs_max = 0.0
     param_abs_max = 0.0
     grad_nonfinite_count = 0
@@ -339,13 +363,24 @@ def optimizer_diagnostics(model: torch.nn.Module, optimizer: torch.optim.Optimiz
     param_count = 0
     grad_param_count = 0
 
-    for parameter in model.parameters():
+    def group_name(parameter_name: str) -> str:
+        if parameter_name == "tokens":
+            return "tokens"
+        parts = parameter_name.split(".")
+        if len(parts) >= 2 and parts[0] == "gaussian_heads":
+            return f"gaussian_heads_{parts[1]}"
+        return parts[0]
+
+    for name, parameter in model.named_parameters():
+        group = group_name(name)
         detached = parameter.detach()
         param_count += detached.numel()
         param_nonfinite_count += int((~torch.isfinite(detached)).sum().detach().cpu())
         finite_param = detached[torch.isfinite(detached)]
         if finite_param.numel() > 0:
-            param_sq_sum += float(finite_param.float().square().sum().detach().cpu())
+            param_sq = float(finite_param.float().square().sum().detach().cpu())
+            param_sq_sum += param_sq
+            param_sq_sum_by_group[group] = param_sq_sum_by_group.get(group, 0.0) + param_sq
             param_abs_max = max(param_abs_max, float(finite_param.abs().max().detach().cpu()))
 
         if parameter.grad is None:
@@ -358,11 +393,13 @@ def optimizer_diagnostics(model: torch.nn.Module, optimizer: torch.optim.Optimiz
             grad_nonfinite_param_count += 1
         finite_grad = grad[torch.isfinite(grad)]
         if finite_grad.numel() > 0:
-            grad_sq_sum += float(finite_grad.float().square().sum().detach().cpu())
+            grad_sq = float(finite_grad.float().square().sum().detach().cpu())
+            grad_sq_sum += grad_sq
+            grad_sq_sum_by_group[group] = grad_sq_sum_by_group.get(group, 0.0) + grad_sq
             grad_abs_max = max(grad_abs_max, float(finite_grad.abs().max().detach().cpu()))
 
     learning_rates = [float(group["lr"]) for group in optimizer.param_groups]
-    return {
+    payload = {
         "OptDiag/LR": learning_rates[0] if learning_rates else 0.0,
         "OptDiag/GradL2": grad_sq_sum**0.5,
         "OptDiag/GradAbsMax": grad_abs_max,
@@ -374,6 +411,11 @@ def optimizer_diagnostics(model: torch.nn.Module, optimizer: torch.optim.Optimiz
         "OptDiag/ParamNonfiniteCount": float(param_nonfinite_count),
         "OptDiag/ParamCount": float(param_count),
     }
+    for group, value in sorted(grad_sq_sum_by_group.items()):
+        payload[f"OptDiag/GradL2ByGroup/{group}"] = value**0.5
+    for group, value in sorted(param_sq_sum_by_group.items()):
+        payload[f"OptDiag/ParamL2ByGroup/{group}"] = value**0.5
+    return payload
 
 
 def format_metric_summary(metrics: dict[str, float]) -> str:
@@ -383,6 +425,8 @@ def format_metric_summary(metrics: dict[str, float]) -> str:
         "RenderDiag/CameraZMax",
         "RenderDiag/FrontGaussiansMin",
         "RenderDiag/NearOrBehindGaussiansMean",
+        "RenderDiag/PixelWorkItems",
+        "RenderDiag/PixelDiagSkipped",
         "RenderDiag/PowerMax",
         "RenderDiag/PowerGt80Count",
         "RenderDiag/AlphaPreNonfiniteCount",
@@ -392,6 +436,7 @@ def format_metric_summary(metrics: dict[str, float]) -> str:
         "RenderAux/ContributingGaussiansMean",
         "RenderAux/NoAlphaSupportSlotFraction",
         "RenderAux/NoContributionSlotFraction",
+        "TileDiag/Skipped",
         "TileDiag/ExactConic_total_overlap_keys_mean",
         "TileDiag/ExactConic_duplication_factor_mean",
         "TileDiag/ExactConic_max_tiles_per_splat_max",

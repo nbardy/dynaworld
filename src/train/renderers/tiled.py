@@ -1,6 +1,6 @@
 import torch
 
-from .common import build_pixel_grid, project_gaussians_2d
+from .common import MIN_RENDER_DEPTH, build_pixel_grid, project_gaussians_2d
 
 
 def compute_gaussian_bounds(means2D, Cov2D, opacities, H, W, bound_scale=3.0, alpha_threshold=1.0 / 255.0):
@@ -87,6 +87,7 @@ def render_pytorch_3dgs_tiled(
     bound_scale=3.0,
     alpha_threshold=1.0 / 255.0,
     camera_to_world=None,
+    near_plane=None,
 ):
     raw_means3D = means3D
     raw_scales = scales
@@ -94,7 +95,17 @@ def render_pytorch_3dgs_tiled(
     raw_opacities = opacities
     raw_rgbs = rgbs
     means2D, invCov2D, Cov2D, opacities, rgbs = project_gaussians_2d(
-        means3D, scales, quats, opacities, rgbs, fx, fy, cx, cy, camera_to_world=camera_to_world
+        means3D,
+        scales,
+        quats,
+        opacities,
+        rgbs,
+        fx,
+        fy,
+        cx,
+        cy,
+        camera_to_world=camera_to_world,
+        near_plane=near_plane if near_plane is not None else MIN_RENDER_DEPTH,
     )
     min_x, max_x, min_y, max_y, valid = compute_gaussian_bounds(
         means2D,
@@ -125,6 +136,7 @@ def render_pytorch_3dgs_tiled(
             cy,
             grid=grid,
             camera_to_world=camera_to_world,
+            near_plane=near_plane,
         )
 
     unique_tile_ids, packed_gaussian_ids, valid_positions = assignments

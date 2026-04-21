@@ -97,10 +97,79 @@ handles that let you control the dynamic scene, not just re-view it.
 No planned Phase III for text-to-world generation. Generate new dynamic worlds
 somewhere else, then use DynaWorld to make them exploratory.
 
-## Status
+## Progress
 
-Local Mac overfit baselines today. Real dataset and scaling next. The
-longer-form research notes live under `research_notes/`.
+Current work is focused on small single-video overfit runs. The goal is to keep
+training loops working, fast, and convergent before moving to larger data.
+Completed items here have been tested on small single-video overfit runs unless
+noted otherwise.
+Longer-form research notes live under `research_notes/`.
+
+### Baselines
+
+- [x] Top-level video to splat baseline, reproducing TokenGS as the reference baseline.
+- [x] Implicit camera baseline, extending the TokenGS baseline.
+
+### Renderer
+
+- [x] Fast differentiable Gaussian rasterizer on Mac local GPU for local experimentation.
+- [x] Differentiable renderer integration set up for trainer loops.
+- [x] Debug metrics added to trainer loops.
+- [ ] Attach to a video diffusion model for video diffusion features.
+- [ ] Run single-step Marigold-style features for maximum information extraction.
+
+### Viewer
+
+- [ ] Set up an HTML viewer that can open the token format, load the MLPs, bake splats, sort them, and render with WGPU.
+
+### Pretraining Setup
+
+- [ ] Collect diverse single-camera video datasets for the first pretraining pass.
+- [ ] Collect multi-camera data for novel-view-synthesis finetuning.
+- [ ] Decide whether scene cuts should be marked and split during preprocessing.
+
+### Model Architecture
+
+- [ ] Sort out how to handle time.
+- [ ] Support longer videos and sliding-window training.
+- [ ] Better support novel camera angles when training mostly from the input camera angle.
+- [ ] Separate camera and video representations well enough that camera changes do not collapse into video-embed leakage.
+- [ ] Test the direct path: pretrain on single-camera source video, then finetune on paired camera data so the model can encode one view, swap the camera token, and decode another view.
+- [ ] Find pretraining pressure that encourages camera-token swapping behavior before paired-camera finetuning.
+- [ ] Test same-video chunk mixing: encode two chunks from the same video, combine the first chunk's video tokens with the second chunk's camera token, and train against the second chunk's ground truth so shared video tokens learn to render under a different camera path and time.
+- [ ] Turn each clip into "multi view" with a crop and perspective warp. Classic videography trick where you take high resolution footage, crop a corner, and rescale so the perspective looks like it is in the center of each frame. Feels valuable, but downsides: it is still from the same angle, and too much perspective warp is a bit cheap and does not exactly align to GT camera data.
+- [ ] Try the crop variant without perspective warp: shift the rays so the crop is defined as a camera extrinsic. More honest, but then it is sort of learning crop shift only, and might not generalize as well to non-crop shifts where the shift is not the center of the camera.
+- [ ] Try doing both crop variants plus chunk mixing together in pretrain and see if that is enough to get a good prior.
+- [ ] Worry about the wrong task forcing the camera implicitly into image tokens if we try to hide camera position too much in non-principled ways.
+- [ ] Try a BERT-like random masking dropout scheme in pretrain as an alternative to only chopping the video in half. Might be more robust, but worry that it will force the camera data to hide itself in the image tokens.
+- [ ] Stop and reflect on the bigger architecture / objective question: AR vs diffusion, rolling vs forcing diffusion, and the rolling window stuff. We need to more natively extend to partial / long context and rolling context. Maybe even AR on tokens per frame. End up robust to noise at inference time by training on noisier data. Get away from the single encoder => decode paradigm toward something more elegant.
+
+### Novel View Post-Training
+
+- [ ] Second stage post-training: render novel passes and train a GAN on them, so we do a GAN for novel and non-novel views. It has to learn to make them both look the same.
+- [ ] Maybe some sort of reward style training here as well. See Chopgrad ([arxiv 2603.17812](https://arxiv.org/abs/2603.17812)) which recently did really high quality correction.
+- [ ] The plan is a bit of both: (1) give the model some prior off-camera capability in pretrain, (2) refine that in post training.
+
+### Video Diffusion Bootstrap
+
+- [ ] Evaluate whether score distillation is useful by noising rendered output images or using a differentiable diffusion technique to push gradients back into the renderer.
+- [ ] Test direct video features from a single-step zero-SNR schedule.
+- [ ] Work out how video diffusion features interact with windowing and memory limits.
+
+### Future Directions
+
+#### Auto-Research
+
+- [ ] Set up auto-research swarm configs.
+- [ ] Keep local Mac shader support fast enough that contributors can run this locally without cloud GPU cost.
+- [ ] Set up "World Model at Home".
+- [ ] Document how to contribute auto-research so users can run local experiments and contribute findings back.
+- [ ] Investigate async training across users' home GPUs.
+
+#### Foundation Model Training
+
+- [ ] Benchmark whether splat decoding is a useful inductive bias for video generation itself versus standard video diffusion.
+- [ ] Compare learning efficiency from scratch for splat-decoding video models against standard video diffusion baselines.
 
 ## Setup
 
@@ -127,8 +196,40 @@ Single-image baseline:
 uv run python src/train/tokenGS.py src/train_configs/local_mac_overfit_single_image.jsonc
 ```
 
-Dynamic training with DUSt3R camera prebake:
+Current recommended local dynamic run:
 
 ```bash
 ./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh
+```
+
+This defaults to the 128px/4fps known-camera fast-mac-gsplat v5 baseline:
+
+```bash
+src/train_configs/local_mac_overfit_prebaked_camera_128_4fps_wide_depth_fast_mac_8192splats.jsonc
+```
+
+It uses 128 learned tokens, 64 Gaussians per token, native batched fast-mac v5
+rendering, low-opacity randomized scale init, Adam, cosine LR decay, and
+gradient clipping. That is the current "make it work decently first" baseline,
+not the final quality target.
+
+Taichi remains available for comparison:
+
+```bash
+./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh \
+  src/train_configs/local_mac_overfit_prebaked_camera_128_4fps_wide_depth_taichi_8192splats.jsonc
+```
+
+Legacy 32px dense comparison:
+
+```bash
+./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh \
+  src/train_configs/local_mac_overfit_prebaked_camera.jsonc
+```
+
+Smaller 64px/4fps comparison:
+
+```bash
+./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh \
+  src/train_configs/local_mac_overfit_prebaked_camera_64_4fps.jsonc
 ```

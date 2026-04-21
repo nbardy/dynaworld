@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
-import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -18,6 +17,16 @@ except ImportError:  # pragma: no cover - supports package-style imports in test
     from .runtime_types import ClipBatch, FrameSource, SequenceData
 
 FocalMode = Literal["per_frame", "median"]
+
+
+def _import_cv2():
+    try:
+        import cv2
+    except ImportError as exc:  # pragma: no cover - depends on optional local video deps.
+        raise ImportError(
+            "OpenCV is required for direct video loading. Use frame/camera JSON data or install cv2."
+        ) from exc
+    return cv2
 
 
 def infer_video_fps(records: Sequence[Mapping[str, Any]]) -> float:
@@ -167,6 +176,7 @@ def load_video_sequence(
     max_frames: int = 0,
     frame_source: FrameSource = "explicit_video",
 ) -> SequenceData:
+    cv2 = _import_cv2()
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise FileNotFoundError(f"Could not open video: {video_path}")

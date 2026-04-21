@@ -1,0 +1,117 @@
+{
+  // 128px/4fps known-camera run using fast-mac-gsplat v5 native batch rendering.
+  // Capacity probe: 128 tokens x 64 gaussians/token = 8192 explicit Gaussians.
+  "arch": "tokengs_prebaked_camera",
+  "data": {
+    "video_variant": "small_128_4fps",
+    "sequence_dir": null,
+    "camera_json": null,
+    "camera_image_size": 224,
+    "camera_focal_mode": "median",
+    "max_frames": 0
+  },
+  "model": {
+    "size": 128,
+    "tokens": 128,
+    "gaussians_per_token": 64,
+    "xy_extent": 1.5,
+    "z_min": 0.5,
+    "z_max": 5.0,
+    // Center initial splat size smaller than the old 0.05 run, but do not make
+    // every splat exactly the same size. The log jitter makes initial scales
+    // roughly scale_init * exp(U[-0.7, 0.7]) = about 0.01..0.04.
+    "scale_init": 0.02,
+    "scale_init_log_jitter": 0.7,
+    // With 8192 splats, opacity near 0.5 saturates alpha immediately, while
+    // opacity near 0.02 makes renderers evaluate too many transparent splats per
+    // pixel. This is a working middle ground for local iteration.
+    "opacity_init": 0.1,
+    // Bounded-random init: position biases are sampled so decoded xyz starts
+    // roughly uniform inside the allowed bounds, while non-tiny token/head
+    // noise gives different tokens different offsets instead of repeating the
+    // same 64 sibling anchors across all 128 tokens.
+    "token_init_std": 0.3,
+    "head_output_init_std": 0.06,
+    "position_init_extent_coverage": 0.9,
+    "rotation_init": "random"
+  },
+  "render": {
+    "renderer": "fast_mac",
+    "auto_dense_limit": 400000,
+    "tile_size": 16,
+    "bound_scale": 3.0,
+    // Training-space near plane. This is not a far-depth cutoff; it prevents
+    // the projection Jacobian from exploding when optimized splats cross very
+    // close to a camera.
+    "near_plane": 0.05,
+    "alpha_threshold": 0.00392156862745098,
+    "fast_mac": {
+      "tile_size": 16,
+      "max_fast_pairs": 2048,
+      "alpha_threshold": 0.00392156862745098,
+      "transmittance_threshold": 0.0001,
+      "background": [1.0, 1.0, 1.0],
+      "enable_overflow_fallback": true,
+      "batch_strategy": "flatten",
+      "batch_launch_limit_tiles": 262144,
+      "batch_launch_limit_gaussians": 262144
+    }
+  },
+  "train": {
+    "steps": 1000,
+    "lr": 0.0005,
+    "lr_schedule": {
+      "type": "cosine",
+      "final_lr_scale": 0.1
+    },
+    "optimizer": {
+      // No weight decay for this local overfit probe; regularizing token/head
+      // weights pulls per-token variation back toward shared output biases.
+      "type": "adam",
+      "weight_decay": 0.0,
+      "exclude_bias_norm": false
+    },
+    "clip_grad_norm": 1.0,
+    "amp": false,
+    "frames_per_step": 8,
+    "eval_batch_size": 1
+  },
+  "losses": {
+    // Standard 3DGS reconstruction objective:
+    // 0.8 * L1 + 0.2 * D-SSIM.
+    // Other supported types for ablations: mse, l1, l1_mse.
+    "type": "standard_gs",
+    "l1_weight": 0.8,
+    "dssim_weight": 0.2,
+    "ssim_window_size": 11
+  },
+  "logging": {
+    "log_every": 25,
+    "image_log_every": 50,
+    "video_log_every": 500,
+    "with_metrics": {
+      "renderer": false,
+      "optimizer": false,
+      "every": 25,
+      "print_summary": false,
+      "wandb": true,
+      "fail_fast": true
+    },
+    "always_log_last_step": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-overfit-prebaked-camera-128-4fps-wide-depth-fast-mac-8192splats-bounded-random-init",
+    "wandb_tags": [
+      "overfit-local",
+      "arch-tokengs",
+      "camera-prebaked",
+      "128px",
+      "4fps",
+      "wide-depth",
+      "fast-mac",
+      "v5",
+      "8192splats",
+      "bounded-random-init",
+      "adam"
+    ]
+  }
+}

@@ -1,5 +1,14 @@
 # Dynaworld Agent Guide
 
+## Project Skills
+
+Project-local Codex skills live under `.agents/skills/`. Use them when their
+names or trigger phrases match the user request.
+
+- `.agents/skills/deep-critical-thought/SKILL.md`: Use for durable thinking
+  documents, "continue" expansion passes, branching/backtracking analysis,
+  proofs, derivations, red-team hypothesis challenges, and rigorous agent notes.
+
 ## Agent Notes
 
 There are two agent memory layers. Use both, but do not blur them.
@@ -71,6 +80,9 @@ Training hyperparameters should be defined once, in checked-in JSONC files under
 - Do not add argparse blocks that duplicate the config schema.
 - Shell scripts should choose a config file and call the trainer with that path.
 - Python trainers should accept a config dict or config path, normalize only runtime concerns such as `Path` values, and fail loudly when required keys are missing.
+- If a backward-compatible default is needed for an older config, apply it once during config load/normalization. Do not scatter `cfg.get("key", magic_number)` across model construction, logging, or train-loop code.
+- Runtime code should read normalized configs with explicit keys. Repeated `.get(..., default)` at use sites is a smell unless the value is truly optional and `None` has semantic meaning.
+- For status prints, prefer small dictionary/summary helpers that iterate over named keys. Do not hand-build long f-string chains that duplicate config defaults or quietly drift from the schema.
 
 Keep code lean by passing config sections through warm paths instead of destructuring and rebuilding the same data repeatedly. When a boundary needs renamed constructor parameters, keep that mapping in one small factory function close to the boundary.
 

@@ -2,7 +2,10 @@
   // Known-camera dynamic TokenGS baseline pinned to the tiled renderer.
   "arch": "tokengs_prebaked_camera_tiled",
   "data": {
-    "sequence_dir": "test_data/dust3r_outputs/test_video_small_all_frames",
+    // Options: small_32_2fps, small_64_4fps, small_128_4fps.
+    // Set sequence_dir to a path to override the variant mapping.
+    "video_variant": "small_32_2fps",
+    "sequence_dir": null,
     "camera_json": null,
     "camera_image_size": 224,
     "camera_focal_mode": "median",
