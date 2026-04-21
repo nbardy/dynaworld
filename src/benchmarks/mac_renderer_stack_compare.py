@@ -31,7 +31,6 @@ from torch_gsplat_bridge_v5 import rasterize_projected_gaussians as rasterize_v5
 from torch_gsplat_bridge_v6 import RasterConfig as RasterConfigV6
 from torch_gsplat_bridge_v6 import rasterize_projected_gaussians as rasterize_v6
 
-
 DEFAULT_BG = (1.0, 1.0, 1.0)
 
 
@@ -109,9 +108,7 @@ def make_inputs(
     inv_var_cpu = 1.0 / (sigma_cpu * sigma_cpu)
     conics_cpu = torch.stack([inv_var_cpu, torch.zeros_like(inv_var_cpu), inv_var_cpu], dim=-1)
     colors_cpu = torch.rand((batch_size, gaussians, 3), dtype=torch.float32, generator=generator)
-    opacities_cpu = torch.empty((batch_size, gaussians), dtype=torch.float32).uniform_(
-        0.08, 0.85, generator=generator
-    )
+    opacities_cpu = torch.empty((batch_size, gaussians), dtype=torch.float32).uniform_(0.08, 0.85, generator=generator)
     depths_cpu = torch.rand((batch_size, gaussians), dtype=torch.float32, generator=generator)
 
     means = means_cpu.to(device).contiguous()
@@ -365,11 +362,20 @@ def run_case(
     resolution = f"{height}x{width}"
     work_items = batch_size * height * width * gaussians
 
-    renderers: list[tuple[str, Callable[[tuple[torch.Tensor, ...]], torch.Tensor], tuple[torch.Tensor, ...], Callable[[], None]]]
+    renderers: list[
+        tuple[str, Callable[[tuple[torch.Tensor, ...]], torch.Tensor], tuple[torch.Tensor, ...], Callable[[], None]]
+    ]
     renderers = []
     want_torch = "all" in requested_renderers or "torch_direct" in requested_renderers or "torch" in requested_renderers
     if include_torch and want_torch and work_items <= torch_max_work_items:
-        renderers.append(("torch_direct", lambda run_inputs: render_torch_reference(run_inputs, cfg_v3), clone_fast_inputs(inputs, backward=backward), sync_mps))
+        renderers.append(
+            (
+                "torch_direct",
+                lambda run_inputs: render_torch_reference(run_inputs, cfg_v3),
+                clone_fast_inputs(inputs, backward=backward),
+                sync_mps,
+            )
+        )
     elif include_torch and want_torch:
         print(
             f"torch_direct skipped for {resolution} B={batch_size} G={gaussians}: "
@@ -377,10 +383,30 @@ def run_case(
         )
     candidates = [
         ("taichi_native", taichi_render, clone_taichi_inputs(inputs, backward=backward), sync_taichi),
-        ("metal_v2_loop", lambda run_inputs: render_v2_loop(run_inputs, cfg_v2), clone_fast_inputs(inputs, backward=backward), sync_mps),
-        ("metal_v3_loop", lambda run_inputs: render_v3_loop(run_inputs, cfg_v3), clone_fast_inputs(inputs, backward=backward), sync_mps),
-        ("metal_v5_native", lambda run_inputs: render_v5_native(run_inputs, cfg_v5), clone_fast_inputs(inputs, backward=backward), sync_mps),
-        ("metal_v6_native", lambda run_inputs: render_v6_native(run_inputs, cfg_v6), clone_fast_inputs(inputs, backward=backward), sync_mps),
+        (
+            "metal_v2_loop",
+            lambda run_inputs: render_v2_loop(run_inputs, cfg_v2),
+            clone_fast_inputs(inputs, backward=backward),
+            sync_mps,
+        ),
+        (
+            "metal_v3_loop",
+            lambda run_inputs: render_v3_loop(run_inputs, cfg_v3),
+            clone_fast_inputs(inputs, backward=backward),
+            sync_mps,
+        ),
+        (
+            "metal_v5_native",
+            lambda run_inputs: render_v5_native(run_inputs, cfg_v5),
+            clone_fast_inputs(inputs, backward=backward),
+            sync_mps,
+        ),
+        (
+            "metal_v6_native",
+            lambda run_inputs: render_v6_native(run_inputs, cfg_v6),
+            clone_fast_inputs(inputs, backward=backward),
+            sync_mps,
+        ),
     ]
     aliases = {
         "taichi": "taichi_native",
@@ -390,7 +416,9 @@ def run_case(
         "v6": "metal_v6_native",
     }
     requested_names = {aliases.get(name, name) for name in requested_renderers}
-    renderers.extend(candidate for candidate in candidates if "all" in requested_names or candidate[0] in requested_names)
+    renderers.extend(
+        candidate for candidate in candidates if "all" in requested_names or candidate[0] in requested_names
+    )
 
     reference: torch.Tensor | None = None
     diffs: dict[str, float | None] = {}
@@ -462,7 +490,9 @@ def write_csv(path: Path, rows: list[BenchRow]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare direct Torch, Taichi/Metal, and fast-mac projected rasterizers.")
+    parser = argparse.ArgumentParser(
+        description="Compare direct Torch, Taichi/Metal, and fast-mac projected rasterizers."
+    )
     parser.add_argument("--height", type=int, default=128)
     parser.add_argument("--width", type=int, default=128)
     parser.add_argument("--gaussians", type=int, default=128)

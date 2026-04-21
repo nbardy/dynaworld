@@ -10,7 +10,6 @@ import torch
 
 from renderers.common import MIN_RENDER_DEPTH, project_gaussians_2d, project_gaussians_2d_batch
 
-
 VENDORED_TAICHI_SPLATTING_DIR = Path(__file__).resolve().parents[3] / "third_party" / "taichi-splatting"
 
 
@@ -45,9 +44,7 @@ class TaichiRendererConfig:
             sort_backend=str(values.get("sort_backend", cls.sort_backend)),
             backward_variant=str(values.get("backward_variant", cls.backward_variant)),
             metal_block_dim=int(values.get("metal_block_dim", cls.metal_block_dim)),
-            metal_compatible=(
-                None if values.get("metal_compatible") is None else bool(values.get("metal_compatible"))
-            ),
+            metal_compatible=(None if values.get("metal_compatible") is None else bool(values.get("metal_compatible"))),
             use_depth16=bool(values.get("use_depth16", cls.use_depth16)),
         )
 

@@ -166,9 +166,7 @@ def normalize_loss_config(cfg: dict[str, Any]) -> None:
     loss_cfg = cfg["losses"]
     loss_cfg["type"] = str(loss_cfg["type"]).lower()
     if loss_cfg["type"] not in {"standard_gs", "l1_mse", "l1", "mse"}:
-        raise ValueError(
-            f"Unknown losses.type={loss_cfg['type']!r}. Expected one of: standard_gs, l1_mse, l1, mse."
-        )
+        raise ValueError(f"Unknown losses.type={loss_cfg['type']!r}. Expected one of: standard_gs, l1_mse, l1, mse.")
     window_size = int(loss_cfg["ssim_window_size"])
     if window_size < 1 or window_size % 2 != 1:
         raise ValueError(f"losses.ssim_window_size must be a positive odd integer, got {window_size}.")
@@ -190,8 +188,7 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     if "position_init_raw_jitter" in cfg["model"]:
         if "position_init_extent_coverage" in cfg["model"]:
             raise ValueError(
-                "Config cannot set both model.position_init_raw_jitter and "
-                "model.position_init_extent_coverage."
+                "Config cannot set both model.position_init_raw_jitter and model.position_init_extent_coverage."
             )
         cfg["model"]["position_init_extent_coverage"] = cfg["model"].pop("position_init_raw_jitter")
     apply_defaults(cfg["model"], MODEL_OPTION_DEFAULTS)
@@ -356,10 +353,7 @@ def gaussian_sequence_nonfinite_counts(decoded) -> dict[str, int]:
         "opacities": decoded.opacities,
         "rgbs": decoded.rgbs,
     }
-    return {
-        name: int((~torch.isfinite(value.detach())).sum().detach().cpu())
-        for name, value in fields.items()
-    }
+    return {name: int((~torch.isfinite(value.detach())).sum().detach().cpu()) for name, value in fields.items()}
 
 
 def raise_for_nonfinite_decoded(decoded, *, step: int, frame_indices: list[int]) -> None:

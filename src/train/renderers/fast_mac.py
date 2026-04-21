@@ -9,7 +9,6 @@ import torch
 
 from renderers.common import MIN_RENDER_DEPTH, project_gaussians_2d, project_gaussians_2d_batch
 
-
 FAST_MAC_V5_DIR = Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v5"
 
 
@@ -89,7 +88,9 @@ def _conics_from_inv_cov(inv_cov2d: torch.Tensor) -> torch.Tensor:
     ).contiguous()
 
 
-def _rank_depths(gaussian_count: int, *, batch_size: int | None, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+def _rank_depths(
+    gaussian_count: int, *, batch_size: int | None, device: torch.device, dtype: torch.dtype
+) -> torch.Tensor:
     depths = torch.arange(gaussian_count, device=device, dtype=dtype)
     if gaussian_count > 1:
         depths = depths / float(gaussian_count - 1)

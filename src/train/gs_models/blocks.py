@@ -110,10 +110,7 @@ class GaussianParameterHeads(nn.Module):
                 f"position_init_extent_coverage must be non-negative, got {position_init_extent_coverage}."
             )
         if position_init_extent_coverage >= 1.0:
-            raise ValueError(
-                "position_init_extent_coverage must be < 1.0, "
-                f"got {position_init_extent_coverage}."
-            )
+            raise ValueError(f"position_init_extent_coverage must be < 1.0, got {position_init_extent_coverage}.")
         if opacity_init is not None and not (0.0 < opacity_init < 1.0):
             raise ValueError(f"opacity_init must be in (0, 1), got {opacity_init}.")
         if rotation_init not in {"random", "identity"}:
