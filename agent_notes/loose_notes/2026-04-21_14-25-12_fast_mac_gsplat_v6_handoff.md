@@ -112,3 +112,49 @@ pathological occupancy to win; uniform splat distributions mostly pay overhead.
 - v6 forward kernel profile against v5 to find the 3x forward regression
 - possible v6.1 direction: keep the faster backward idea but restore a v5-like
   forward path for normal tiles
+
+## Addendum: Fair Rerun And Direct-Kernel Fix
+
+The first v5/v6 comparison had one contaminated pair of concurrent GPU reruns,
+which I discarded. A later same-process alternating benchmark gave stable
+evidence under the current machine state:
+
+```text
+MODE forward H=4096 W=4096 B=4 G=65536 warmup=2 iters=7
+v5           total_mean=   34.198 total_median=   34.168
+v6_default   total_mean=  112.878 total_median=  112.565
+v6_noactive  total_mean=   38.014 total_median=   34.121
+
+MODE forward_backward H=4096 W=4096 B=4 G=65536 warmup=2 iters=7
+v5           total_mean=  250.827 total_median=  250.705 fwd_mean=   37.988 bwd_mean=  212.839
+v6_default   total_mean=  309.647 total_median=  310.049 fwd_mean=  116.164 bwd_mean=  193.484
+v6_noactive  total_mean=  232.186 total_median=  231.956 fwd_mean=   38.189 bwd_mean=  193.997
+```
+
+The reason became obvious in code. v6 had v5-style direct tile kernels already
+present in ObjC++/Metal (`metal_render_fast_forward_eval/state` and
+`metal_render_fast_backward_saved`), but the bindings did not expose them. So
+`use_active_tiles=False` still constructed an `arange(total_tiles)` active list
+and called the active-tile kernels. Worse, active forward allocated output via
+`make_background_output`, which fills every channel of the full BxHxWx3 image
+before rendering. At B=4 4K RGB float, that is about 805 MB of extra writes.
+
+Fix made:
+
+- exposed v6 direct tile forward/state/backward ops in bindings
+- changed `use_active_tiles=False` to call those direct ops
+- changed v6 default to `use_active_tiles=False`
+- kept active scheduling as opt-in for sparse-screen or overflow-heavy scenes
+- updated reference check to cover both direct and active modes
+
+New model: v6 direct path is now the best measured B=4 4K forward+backward path
+on the uniform synthetic workload. Active scheduling remains an experimental
+mode and needs a scene with many empty tiles or pathological tile occupancy to
+justify its overhead.
+
+After changing v6 default to direct mode, the standalone v6 benchmark reported:
+
+```text
+case=medium_sigma_3_8 B=4 strat=auto stop=adaptive forward_backward active=False
+mean_ms=229.489 median_ms=228.060 fwd_ms=37.539 bwd_ms=191.950
+```
