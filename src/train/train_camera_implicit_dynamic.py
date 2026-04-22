@@ -13,7 +13,7 @@ from dynamicTokenGS import (
     pick_device,
     select_window_indices,
 )
-from gs_models import DynamicTokenGSImplicitCamera
+from gs_models import DynamicTokenGSImplicitCamera, DynamicTokenGSSeparatedImplicitCamera
 from renderers.common import build_pixel_grid
 from rendering import pick_renderer_mode as resolve_renderer_mode
 from rendering import render_gaussian_frame
@@ -28,6 +28,12 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg["data"]["sequence_dir"] = Path(cfg["data"]["sequence_dir"])
     cfg["data"]["frames_dir"] = path_or_none(cfg["data"]["frames_dir"])
     cfg["data"]["video_path"] = path_or_none(cfg["data"]["video_path"])
+    cfg["model"].setdefault("variant", "joint_attention")
+    if cfg["model"]["variant"] not in {"joint_attention", "separated_camera"}:
+        raise ValueError(
+            "model.variant must be one of {'joint_attention', 'separated_camera'}, "
+            f"got {cfg['model']['variant']!r}."
+        )
     return cfg
 
 
@@ -63,6 +69,18 @@ def pick_renderer_mode(config: dict[str, Any]) -> tuple[str, int]:
         auto_dense_limit=render_cfg["auto_dense_limit"],
     )
     return renderer_mode, effective_gaussians
+
+
+def build_model_from_config(model_cfg: dict[str, Any]):
+    model_cls = (
+        DynamicTokenGSSeparatedImplicitCamera
+        if model_cfg["variant"] == "separated_camera"
+        else DynamicTokenGSImplicitCamera
+    )
+    return model_cls(
+        num_tokens=model_cfg["tokens"],
+        gaussians_per_token=model_cfg["gaussians_per_token"],
+    )
 
 
 def render_implicit_frame(renderer_mode, config, dense_grid, camera, frame: GaussianFrame):
@@ -171,10 +189,7 @@ def run_training(config: dict[str, Any]):
         config=serialize_config_value(cfg),
     )
 
-    model = DynamicTokenGSImplicitCamera(
-        num_tokens=model_cfg["tokens"],
-        gaussians_per_token=model_cfg["gaussians_per_token"],
-    ).to(device)
+    model = build_model_from_config(model_cfg).to(device)
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=train_cfg["lr"], fused=device.type in {"cuda", "mps"})
 
@@ -188,8 +203,10 @@ def run_training(config: dict[str, Any]):
     renderer_mode, effective_gaussians = pick_renderer_mode(cfg)
 
     print(
-        "Starting DynamicTokenGSImplicitCamera image-encoder baseline training: "
-        f"{num_frames} frames, 1 global camera token + 1 path token + {model_cfg['tokens']} splat tokens x {model_cfg['gaussians_per_token']} gaussians/token "
+        f"Starting {model.__class__.__name__} image-encoder baseline training "
+        f"(variant={model_cfg['variant']}): "
+        f"{num_frames} frames, {model.num_tokens} splat tokens ({model.total_tokens} attention tokens) x "
+        f"{model_cfg['gaussians_per_token']} gaussians/token "
         f"= {effective_gaussians} explicit Gaussians with implicit cameras, no plucker conditioning, and {renderer_mode} renderer..."
     )
     print(f"Attention backend: {attn_backend}")

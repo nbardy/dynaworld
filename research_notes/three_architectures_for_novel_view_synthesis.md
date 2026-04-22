@@ -12,6 +12,20 @@ This doc treats architecture as a downstream variable of the training
 recipe, not the other way around. The recipe is fixed; the architecture is
 the question.
 
+## See also
+
+- `framing_the_problem/framing_1.md` — information-theoretic view. The
+  three architectures below are three different estimators of a
+  gauge-invariant W. A has no formal guarantee on I(W; C); B provides a
+  variational bound; C enforces structural C-equivariance.
+- `framing_the_problem/framing_2.md` — contract-based view. The three
+  architectures below are three different attempts to satisfy constraint
+  C1 (self-sufficient decode) and C2 (4D consistency). Use this doc to
+  audit an architecture against the contract.
+- `meta_philosophy/architecture_design_north_star.md` — principles the
+  architectures are scored against.
+- `meta_philosophy/our_problem_core_requirements_and_goals_and_current_philosophy_and_insight.md` — failure modes F1–F7 referenced in the debate section.
+
 ---
 
 ## 1. Fixed Assumptions (the recipe is decided)
@@ -573,7 +587,7 @@ Revised after §4.5: A is a weaker-C with a capacity trick, not a peer.
 The real choice is between B and C, with A's dimensional asymmetry as an
 optional auxiliary composable into either.
 
-### 8.1 Against F1–F6
+### 8.1 Against F1–F7
 
 | Failure mode | Architecture A | Architecture B | Architecture C |
 |--------------|:-:|:-:|:-:|
@@ -583,6 +597,7 @@ optional auxiliary composable into either.
 | F4 long-horizon drift | Out of scope | Out of scope | Out of scope |
 | F5 latent cheating | Medium risk (routing is soft) | Low risk (adversarial) | Medium risk (needs capacity check) |
 | F6 low-rank motion | Orthogonal | Orthogonal | Orthogonal |
+| F7 world-agreement collapse | N/A unless agreement loss added | N/A unless agreement loss added | N/A unless agreement loss added |
 
 ### 8.2 Axes of Comparison
 

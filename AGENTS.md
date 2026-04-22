@@ -71,6 +71,31 @@ Use `research_notes/` for more curated research writeups, paper notes, or
 durable conclusions. Use `agent_notes/loose_notes/` for raw chronology and
 decision history.
 
+### Strategic docs (read before proposing architecture)
+
+`research_notes/` has two strategic subfolders that supersede ad-hoc
+derivation. Read these before re-inventing:
+
+- `research_notes/meta_philosophy/` — north star, problem doc with
+  failure modes F1–F7, mistakes-to-not-repeat log (append-only), and
+  the required-XML driver prompt for external LLMs. Start with that
+  folder's `README.md`.
+- `research_notes/framing_the_problem/` — three framings of the
+  novel-view bottleneck. Framing 1 is information-theoretic (use to
+  derive losses); framing 2 is the self-sufficiency / generative-
+  reconstruction contract (use to audit architectures for frame-local
+  leaks); **framing 3 is the patched bitter-lesson predictive-quotient
+  baseline and the current default** — start there when proposing
+  anything new.
+  That folder's `README.md` explains when to use which.
+- `research_notes/training_contract_v1.md` — operational contract for
+  patched framing 3: sampler, model signatures, baseline losses,
+  diagnostics, escape hatches, support assumptions, and export tripwires.
+- `research_notes/three_architectures_for_novel_view_synthesis.md` —
+  concrete A/B/C candidates cross-referenced against all three framings.
+
+See `research_notes/README.md` for the full navigation index.
+
 ## Config Style
 
 Training hyperparameters should be defined once, in checked-in JSONC files under `src/train_configs/`.

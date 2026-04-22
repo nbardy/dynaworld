@@ -23,8 +23,8 @@ Phase II is interactive manipulation (physics handles, agents). No planned Phase
 ## 2. Training-data contract (load-bearing)
 
 - **Primary data**: self-supervised, single-camera, posed video. Posed either via DUSt3R-style prebake or via an implicit-camera branch that predicts camera from the video itself.
-- **Not available**: large-scale multi-view paired data. We explicitly do not want to require it, because robust web-scale multi-view data does not exist.
-- **Supervision signal**: pixel-space reconstruction against GT frames after differentiable rendering. Optional depth/flow/mask aux losses. No direct 3D labels.
+- **Not required, but welcome**: multi-view data (real or synthetic, e.g. Kubric-style with 3D labels). Large-scale multi-view is not *required* because robust web-scale multi-view data does not exist, so the deployed system must work without it. But multi-view clips — when available — are strictly additive as richer samples in the observation-budget distribution, not a separate regime. See framing_3 EH-4.
+- **Supervision signal**: pixel-space reconstruction against GT frames after differentiable rendering. 3D labels (depth, flow) where they happen to exist are optional auxiliary targets on the budgets where labels are present — never required on the baseline.
 
 ### What this signal does supervise
 
@@ -106,6 +106,7 @@ Named explicitly so the architecture can be asked "what rules this out":
 - **F4 — Long-horizon drift.** Recurrent scene memory accumulates error; small per-step mistakes compound over hundreds of frames.
 - **F5 — Latent cheating.** Scene memory or backbone features absorb geometry that should live in the explicit splats, leaving splats as a thin rendering shell rather than a real 3D asset.
 - **F6 — Low-rank motion assumption breaks.** Water, smoke, crowds, and topology changes are not naturally low-rank; compressions that assume they are collapse quality.
+- **F7 — World-agreement collapse.** A student-teacher distillation loss between sparse-context and rich-context world tokens (`W_s` toward `sg(W_r)`, or its render-agreement form) has a trivial degenerate solution: both collapse to a constant `W`, satisfying agreement with zero scene content. Mitigation requires a strong photometric anchor on `W_s` against held-out real frames, bounded `λ_agree`, and possibly an EMA teacher or diversity regularizer. Named here because it is the specific failure mode the variable-budget regime introduces; without naming it explicitly, it is easy to bolt on a distillation loss that silently kills the representation.
 
 ## 7. Ideas surfaced during exploration (NON-load-bearing — do not anchor on these)
 
@@ -155,12 +156,12 @@ Architectural responses that miss the point tend to:
 - Stack weak regularizers (masking + crop + chunk swap + GAN) to compensate for a factorization unwilling to be committed to.
 - Map deep-learning modules to classical-CV names (ICP, BA, loop closure) as mnemonics masquerading as proofs.
 
-If a proposal pattern-matches to any of these, audit it explicitly against F1–F6 before defending it.
+If a proposal pattern-matches to any of these, audit it explicitly against F1–F7 before defending it.
 
 ## 9. What a good response looks like
 
 - Answers the five-axis alignment check before proposing anything.
-- Identifies which of F1–F6 each branch rules out and which it does not.
+- Identifies which of F1–F7 each branch rules out and which it does not.
 - Spans at least three supervision-mechanism families across branches (objective, augmentation, architectural-seam, post-training, emergent). A response that only proposes variants of the scene/camera/time split has failed the divergence requirement.
 - Names the concrete writable loss / objective / augmentation pipeline for each branch, not just "we condition on camera".
 - Explicitly addresses: is the supervision mechanism in the architecture, the objective, the data pipeline, the post-training step, or emergent from scale — and *why that family* for our data regime.
