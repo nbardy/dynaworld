@@ -8,9 +8,9 @@ from typing import Any, Literal
 import torch
 
 try:
-    from camera import CameraSpec
+    from camera import CameraSpec, make_camera_like
 except ImportError:  # pragma: no cover - supports package-style imports in tests.
-    from .camera import CameraSpec
+    from .camera import CameraSpec, make_camera_like
 
 Tensor = torch.Tensor
 
@@ -32,12 +32,14 @@ def _move_camera(camera: CameraSpec, device: torch.device | str) -> CameraSpec:
             return value.to(device=device)
         return value
 
-    return CameraSpec(
+    return make_camera_like(
+        camera,
         fx=move_value(camera.fx),
         fy=move_value(camera.fy),
         cx=move_value(camera.cx),
         cy=move_value(camera.cy),
         camera_to_world=camera.camera_to_world.to(device=device),
+        distortion=move_value(camera.distortion),
     )
 
 
@@ -120,7 +122,7 @@ class CameraState:
 
     fov_degrees: scalar tensor
     radius: scalar tensor
-    global_residuals: [2]
+    global_residuals: raw output vector from the configured global camera head
     rotation_delta: [T, 3]
     translation_delta: [T, 3]
     path_residuals: [T, 6] when available
@@ -196,6 +198,7 @@ class GaussianSequence:
     rgbs: Tensor
     cameras: tuple[CameraSpec, ...] | None = None
     camera_state: CameraState | None = None
+    auxiliary: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def frame_count(self) -> int:

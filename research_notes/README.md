@@ -32,6 +32,8 @@
 Layered, strategic → tactical:
 
 - **`meta_philosophy/`** — strategic core. Read its `README.md` first. How to design architectures, failure modes F1–F7, mistakes log (regression-prevention), prompt-guidance notes, and the driver-prompt template for external LLMs.
+- **`meta_philosophy/world_splat_tokens_vs_observed_modality_tokens.md`** — token philosophy. Defines observation/world/splat/memory/camera tokens, explains why splat tokenizers differ from text/image/video tokenizers, and records when two-stage tokenizer training is legitimate versus degeneracy-freezing.
+- **`meta_philosophy/dynaworld_architecture_solution_prompt.md`** — paste-ready external-model prompt for generating 3-4 DynaWorld architecture solutions with compact rationale fields, anti-degeneracy arguments, falsification tests, and synthesis.
 - **`framing_the_problem/`** — three framings of the novel-view bottleneck. Framing 1 is information-theoretic (for deriving losses); framing 2 is the self-sufficiency / generative-reconstruction contract (for auditing architectures); **framing 3 is the patched bitter-lesson predictive-quotient baseline and the current default** — start there for proposing anything new. Has its own `README.md` with when-to-use guidance.
 - **`training_contract_v1.md`** — operational contract for patched framing 3: `D_var` sampler, model signatures, baseline losses, diagnostics, escape hatches, support assumptions, deployment/export contract, and failure tripwires.
 - **`three_architectures_for_novel_view_synthesis.md`** — concrete architecture candidates (A/B/C), diagrams, head-to-head debate, pioneer pick. Cross-references the framings.

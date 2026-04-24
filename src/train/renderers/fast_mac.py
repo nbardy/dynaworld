@@ -8,6 +8,7 @@ from typing import Any
 import torch
 
 from renderers.common import MIN_RENDER_DEPTH, project_gaussians_2d, project_gaussians_2d_batch
+from renderers.projection import project_gaussians_2d_camera, project_gaussians_2d_camera_batch
 
 FAST_MAC_V5_DIR = Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v5"
 
@@ -109,22 +110,40 @@ def project_for_fast_mac(
     fy,
     cx,
     cy,
+    *,
+    camera=None,
+    projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    means2d, inv_cov2d, _cov2d, opacities, colors = project_gaussians_2d(
-        means3d,
-        scales,
-        quats,
-        opacities,
-        rgbs,
-        fx,
-        fy,
-        cx,
-        cy,
-        camera_to_world=camera_to_world,
-        near_plane=near_plane,
-    )
+    if projection_mode == "camera_model":
+        if camera is None:
+            raise ValueError("camera_model projection requires a CameraSpec.")
+        means2d, inv_cov2d, _cov2d, opacities, colors = project_gaussians_2d_camera(
+            means3d,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            camera,
+            near_plane=near_plane,
+        )
+    elif projection_mode == "legacy_pinhole":
+        means2d, inv_cov2d, _cov2d, opacities, colors = project_gaussians_2d(
+            means3d,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            fx,
+            fy,
+            cx,
+            cy,
+            camera_to_world=camera_to_world,
+            near_plane=near_plane,
+        )
+    else:
+        raise ValueError(f"Unknown projection_mode: {projection_mode}")
     depths = _rank_depths(means2d.shape[0], batch_size=None, device=means2d.device, dtype=means2d.dtype)
     return (
         means2d.contiguous(),
@@ -145,22 +164,40 @@ def project_for_fast_mac_batch(
     fy,
     cx,
     cy,
+    *,
+    cameras=None,
+    projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    means2d, inv_cov2d, _cov2d, opacities, colors = project_gaussians_2d_batch(
-        means3d,
-        scales,
-        quats,
-        opacities,
-        rgbs,
-        fx,
-        fy,
-        cx,
-        cy,
-        camera_to_world=camera_to_world,
-        near_plane=near_plane,
-    )
+    if projection_mode == "camera_model":
+        if cameras is None:
+            raise ValueError("camera_model batch projection requires CameraSpec values.")
+        means2d, inv_cov2d, _cov2d, opacities, colors = project_gaussians_2d_camera_batch(
+            means3d,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            cameras,
+            near_plane=near_plane,
+        )
+    elif projection_mode == "legacy_pinhole":
+        means2d, inv_cov2d, _cov2d, opacities, colors = project_gaussians_2d_batch(
+            means3d,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            fx,
+            fy,
+            cx,
+            cy,
+            camera_to_world=camera_to_world,
+            near_plane=near_plane,
+        )
+    else:
+        raise ValueError(f"Unknown projection_mode: {projection_mode}")
     depths = _rank_depths(
         means2d.shape[1],
         batch_size=means2d.shape[0],
@@ -189,6 +226,8 @@ def render_fast_mac_3dgs(
     cx,
     cy,
     *,
+    camera=None,
+    projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
     config: FastMacRendererConfig,
@@ -206,6 +245,8 @@ def render_fast_mac_3dgs(
         fy,
         cx,
         cy,
+        camera=camera,
+        projection_mode=projection_mode,
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
     )
@@ -233,6 +274,8 @@ def render_fast_mac_3dgs_batch(
     cx,
     cy,
     *,
+    cameras=None,
+    projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
     config: FastMacRendererConfig,
@@ -250,6 +293,8 @@ def render_fast_mac_3dgs_batch(
         fy,
         cx,
         cy,
+        cameras=cameras,
+        projection_mode=projection_mode,
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
     )

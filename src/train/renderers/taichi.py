@@ -9,6 +9,7 @@ from typing import Any
 import torch
 
 from renderers.common import MIN_RENDER_DEPTH, project_gaussians_2d, project_gaussians_2d_batch
+from renderers.projection import project_gaussians_2d_camera, project_gaussians_2d_camera_batch
 
 VENDORED_TAICHI_SPLATTING_DIR = Path(__file__).resolve().parents[3] / "third_party" / "taichi-splatting"
 
@@ -113,22 +114,40 @@ def project_for_taichi_axis(
     fy,
     cx,
     cy,
+    *,
+    camera=None,
+    projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    means2d, _inv_cov2d, cov2d, opacities, colors = project_gaussians_2d(
-        means3d,
-        scales,
-        quats,
-        opacities,
-        rgbs,
-        fx,
-        fy,
-        cx,
-        cy,
-        camera_to_world=camera_to_world,
-        near_plane=near_plane,
-    )
+    if projection_mode == "camera_model":
+        if camera is None:
+            raise ValueError("camera_model projection requires a CameraSpec.")
+        means2d, _inv_cov2d, cov2d, opacities, colors = project_gaussians_2d_camera(
+            means3d,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            camera,
+            near_plane=near_plane,
+        )
+    elif projection_mode == "legacy_pinhole":
+        means2d, _inv_cov2d, cov2d, opacities, colors = project_gaussians_2d(
+            means3d,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            fx,
+            fy,
+            cx,
+            cy,
+            camera_to_world=camera_to_world,
+            near_plane=near_plane,
+        )
+    else:
+        raise ValueError(f"Unknown projection_mode: {projection_mode}")
 
     cov_xx = cov2d[:, 0, 0]
     cov_xy = cov2d[:, 0, 1]
@@ -167,22 +186,40 @@ def project_for_taichi_axis_batch(
     fy,
     cx,
     cy,
+    *,
+    cameras=None,
+    projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    means2d, _inv_cov2d, cov2d, opacities, colors = project_gaussians_2d_batch(
-        means3d,
-        scales,
-        quats,
-        opacities,
-        rgbs,
-        fx,
-        fy,
-        cx,
-        cy,
-        camera_to_world=camera_to_world,
-        near_plane=near_plane,
-    )
+    if projection_mode == "camera_model":
+        if cameras is None:
+            raise ValueError("camera_model batch projection requires CameraSpec values.")
+        means2d, _inv_cov2d, cov2d, opacities, colors = project_gaussians_2d_camera_batch(
+            means3d,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            cameras,
+            near_plane=near_plane,
+        )
+    elif projection_mode == "legacy_pinhole":
+        means2d, _inv_cov2d, cov2d, opacities, colors = project_gaussians_2d_batch(
+            means3d,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            fx,
+            fy,
+            cx,
+            cy,
+            camera_to_world=camera_to_world,
+            near_plane=near_plane,
+        )
+    else:
+        raise ValueError(f"Unknown projection_mode: {projection_mode}")
 
     cov_xx = cov2d[..., 0, 0]
     cov_xy = cov2d[..., 0, 1]
@@ -223,6 +260,8 @@ def render_taichi_3dgs(
     cx,
     cy,
     *,
+    camera=None,
+    projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
     config: TaichiRendererConfig,
@@ -241,6 +280,8 @@ def render_taichi_3dgs(
         fy,
         cx,
         cy,
+        camera=camera,
+        projection_mode=projection_mode,
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
     )
@@ -282,6 +323,8 @@ def render_taichi_3dgs_batch(
     cx,
     cy,
     *,
+    cameras=None,
+    projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
     config: TaichiRendererConfig,
@@ -300,6 +343,8 @@ def render_taichi_3dgs_batch(
         fy,
         cx,
         cy,
+        cameras=cameras,
+        projection_mode=projection_mode,
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
     )

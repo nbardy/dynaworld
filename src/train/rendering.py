@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
-from camera import CameraSpec
+from camera import CameraSpec, make_camera_like
 from renderers.common import build_pixel_grid
 from renderers.dense import render_pytorch_3dgs, render_pytorch_3dgs_batch
 from renderers.fast_mac import FastMacRendererConfig, render_fast_mac_3dgs, render_fast_mac_3dgs_batch
 from renderers.taichi import TaichiRendererConfig, render_taichi_3dgs, render_taichi_3dgs_batch
 from renderers.tiled import render_pytorch_3dgs_tiled
 from runtime_types import GaussianFrame, GaussianSequence, ResolvedRendererMode
+
+CAMERA_PROJECTION_MODES = {"auto", "legacy_pinhole", "camera_model"}
 
 
 def resize_images(images: torch.Tensor, image_size: int) -> torch.Tensor:
@@ -35,7 +37,8 @@ def camera_for_viewport(
 
     scale_x = float(target_width) / float(source_width)
     scale_y = float(target_height) / float(source_height)
-    return CameraSpec(
+    return make_camera_like(
+        camera,
         fx=camera.fx * scale_x,
         fy=camera.fy * scale_y,
         cx=camera.cx * scale_x,
@@ -70,6 +73,36 @@ def build_or_reuse_grid(
     return build_pixel_grid(height, width, resolved_device)
 
 
+def _normalize_camera_projection_mode(camera_projection: str | None) -> str:
+    mode = "auto" if camera_projection is None else str(camera_projection).lower()
+    if mode == "legacy":
+        mode = "legacy_pinhole"
+    if mode not in CAMERA_PROJECTION_MODES:
+        raise ValueError(
+            f"Unknown render.camera_projection={camera_projection!r}. "
+            "Expected auto, legacy_pinhole, or camera_model."
+        )
+    return mode
+
+
+def _resolve_camera_projection_mode(
+    cameras: CameraSpec | list[CameraSpec] | tuple[CameraSpec, ...],
+    camera_projection: str | None,
+) -> str:
+    mode = _normalize_camera_projection_mode(camera_projection)
+    camera_list = list(cameras) if isinstance(cameras, (list, tuple)) else [cameras]
+    has_non_pinhole = any(camera.lens_model != "pinhole" for camera in camera_list)
+    if mode == "legacy_pinhole" and has_non_pinhole:
+        lens_models = sorted({camera.lens_model for camera in camera_list})
+        raise ValueError(
+            "render.camera_projection='legacy_pinhole' cannot render non-pinhole CameraSpec values "
+            f"(lens models: {lens_models}). Use render.camera_projection='camera_model' or 'auto'."
+        )
+    if mode == "auto":
+        return "camera_model" if has_non_pinhole else "legacy_pinhole"
+    return mode
+
+
 def render_gaussian_frame(
     frame: GaussianFrame,
     camera: CameraSpec,
@@ -83,8 +116,10 @@ def render_gaussian_frame(
     near_plane: float = 1.0e-4,
     taichi_options: dict | None = None,
     fast_mac_options: dict | None = None,
+    camera_projection: str | None = "auto",
     return_aux: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    projection_mode = _resolve_camera_projection_mode(camera, camera_projection)
     if mode == "dense":
         return render_pytorch_3dgs(
             frame.xyz.float(),
@@ -102,6 +137,8 @@ def render_gaussian_frame(
             camera_to_world=camera.camera_to_world.float(),
             near_plane=near_plane,
             return_aux=return_aux,
+            camera=camera,
+            projection_mode=projection_mode,
         )
     if return_aux:
         raise ValueError("return_aux is only supported by the dense renderer.")
@@ -120,6 +157,8 @@ def render_gaussian_frame(
             camera.cy,
             camera_to_world=camera.camera_to_world,
             near_plane=near_plane,
+            camera=camera,
+            projection_mode=projection_mode,
             config=TaichiRendererConfig.from_mapping(
                 taichi_options,
                 fallback_tile_size=tile_size,
@@ -141,6 +180,8 @@ def render_gaussian_frame(
             camera.cy,
             camera_to_world=camera.camera_to_world,
             near_plane=near_plane,
+            camera=camera,
+            projection_mode=projection_mode,
             config=FastMacRendererConfig.from_mapping(
                 fast_mac_options,
                 fallback_tile_size=tile_size,
@@ -165,6 +206,8 @@ def render_gaussian_frame(
             alpha_threshold=alpha_threshold,
             camera_to_world=camera.camera_to_world.float(),
             near_plane=near_plane,
+            camera=camera,
+            projection_mode=projection_mode,
         )
     raise ValueError(f"Unknown renderer mode: {mode}")
 
@@ -197,11 +240,13 @@ def render_gaussian_frames(
     near_plane: float = 1.0e-4,
     taichi_options: dict | None = None,
     fast_mac_options: dict | None = None,
+    camera_projection: str | None = "auto",
     return_aux: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if sequence.frame_count != len(cameras):
         raise ValueError(f"Expected {sequence.frame_count} cameras, got {len(cameras)}.")
 
+    projection_mode = _resolve_camera_projection_mode(cameras, camera_projection)
     if mode == "dense":
         device = sequence.xyz.device
         return render_pytorch_3dgs_batch(
@@ -223,6 +268,8 @@ def render_gaussian_frames(
             ),
             near_plane=near_plane,
             return_aux=return_aux,
+            cameras=cameras,
+            projection_mode=projection_mode,
         )
 
     if return_aux:
@@ -246,6 +293,8 @@ def render_gaussian_frames(
                 dim=0,
             ),
             near_plane=near_plane,
+            cameras=cameras,
+            projection_mode=projection_mode,
             config=TaichiRendererConfig.from_mapping(
                 taichi_options,
                 fallback_tile_size=tile_size,
@@ -271,6 +320,8 @@ def render_gaussian_frames(
                 dim=0,
             ),
             near_plane=near_plane,
+            cameras=cameras,
+            projection_mode=projection_mode,
             config=FastMacRendererConfig.from_mapping(
                 fast_mac_options,
                 fallback_tile_size=tile_size,
@@ -292,6 +343,7 @@ def render_gaussian_frames(
                 near_plane=near_plane,
                 taichi_options=taichi_options,
                 fast_mac_options=fast_mac_options,
+                camera_projection=camera_projection,
             )
             for index, camera in enumerate(cameras)
         ],

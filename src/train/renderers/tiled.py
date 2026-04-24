@@ -1,6 +1,7 @@
 import torch
 
 from .common import MIN_RENDER_DEPTH, build_pixel_grid, project_gaussians_2d
+from .projection import project_gaussians_2d_camera
 
 
 def compute_gaussian_bounds(means2D, Cov2D, opacities, H, W, bound_scale=3.0, alpha_threshold=1.0 / 255.0):
@@ -88,25 +89,42 @@ def render_pytorch_3dgs_tiled(
     alpha_threshold=1.0 / 255.0,
     camera_to_world=None,
     near_plane=None,
+    camera=None,
+    projection_mode="legacy_pinhole",
 ):
     raw_means3D = means3D
     raw_scales = scales
     raw_quats = quats
     raw_opacities = opacities
     raw_rgbs = rgbs
-    means2D, invCov2D, Cov2D, opacities, rgbs = project_gaussians_2d(
-        means3D,
-        scales,
-        quats,
-        opacities,
-        rgbs,
-        fx,
-        fy,
-        cx,
-        cy,
-        camera_to_world=camera_to_world,
-        near_plane=near_plane if near_plane is not None else MIN_RENDER_DEPTH,
-    )
+    if projection_mode == "camera_model":
+        if camera is None:
+            raise ValueError("camera_model projection requires a CameraSpec.")
+        means2D, invCov2D, Cov2D, opacities, rgbs = project_gaussians_2d_camera(
+            means3D,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            camera,
+            near_plane=near_plane if near_plane is not None else MIN_RENDER_DEPTH,
+        )
+    elif projection_mode == "legacy_pinhole":
+        means2D, invCov2D, Cov2D, opacities, rgbs = project_gaussians_2d(
+            means3D,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            fx,
+            fy,
+            cx,
+            cy,
+            camera_to_world=camera_to_world,
+            near_plane=near_plane if near_plane is not None else MIN_RENDER_DEPTH,
+        )
+    else:
+        raise ValueError(f"Unknown projection_mode: {projection_mode}")
     min_x, max_x, min_y, max_y, valid = compute_gaussian_bounds(
         means2D,
         Cov2D,
@@ -137,6 +155,8 @@ def render_pytorch_3dgs_tiled(
             grid=grid,
             camera_to_world=camera_to_world,
             near_plane=near_plane,
+            camera=camera,
+            projection_mode=projection_mode,
         )
 
     unique_tile_ids, packed_gaussian_ids, valid_positions = assignments

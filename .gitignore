@@ -18,9 +18,11 @@ data/youtube_motion/logs/
 data/external/neural_3d_video/raw/
 data/external/neural_3d_video/extracted/
 data/external/neural_3d_video/logs/
+data/external/neural_3d_video/metadata/
 data/external/vivo/raw/
 data/external/vivo/extracted/
 data/external/vivo/rgb_mp4/
 data/external/vivo/logs/
+data/external/vivo/metadata/
 
 third_party/dust3r/croco/

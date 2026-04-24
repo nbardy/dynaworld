@@ -1,12 +1,12 @@
+import math
 import sys
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 import wandb
-from config_utils import load_config_file, path_or_none, resolved_config, serialize_config_value
+from config_utils import apply_defaults, load_config_file, path_or_none, resolved_config, serialize_config_value
 from dynamicTokenGS import (
     configure_fast_attn,
     fast_attn_context,
@@ -14,6 +14,7 @@ from dynamicTokenGS import (
     select_window_indices,
 )
 from gs_models import DynamicTokenGSImplicitCamera, DynamicTokenGSSeparatedImplicitCamera
+from losses import reconstruction_loss_per_image, ssim_per_image
 from renderers.common import build_pixel_grid
 from rendering import pick_renderer_mode as resolve_renderer_mode
 from rendering import render_gaussian_frame
@@ -21,6 +22,20 @@ from runtime_types import CameraState, GaussianFrame, SequenceData
 from sequence_data import load_uncalibrated_sequence, resolve_frames_dir
 from tqdm import tqdm
 from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
+
+
+LOSS_OPTION_DEFAULTS = {
+    "type": "l1_mse",
+    "l1_weight": 1.0,
+    "mse_weight": 0.2,
+    "dssim_weight": 0.2,
+    "ssim_window_size": 11,
+    "ssim_c1": 0.0001,
+    "ssim_c2": 0.0009,
+    "camera_motion_weight": 0.01,
+    "camera_temporal_weight": 0.02,
+    "camera_global_weight": 0.005,
+}
 
 
 def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -34,6 +49,20 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
             "model.variant must be one of {'joint_attention', 'separated_camera'}, "
             f"got {cfg['model']['variant']!r}."
         )
+    apply_defaults(cfg["losses"], LOSS_OPTION_DEFAULTS)
+    cfg["losses"]["type"] = str(cfg["losses"]["type"]).lower()
+    if cfg["losses"]["type"] not in {"standard_gs", "l1_mse", "l1", "mse"}:
+        raise ValueError(
+            f"Unknown losses.type={cfg['losses']['type']!r}. Expected one of: standard_gs, l1_mse, l1, mse."
+        )
+    window_size = int(cfg["losses"]["ssim_window_size"])
+    if window_size < 1 or window_size % 2 != 1:
+        raise ValueError(f"losses.ssim_window_size must be a positive odd integer, got {window_size}.")
+    cfg["losses"]["ssim_window_size"] = window_size
+    if "near_plane" not in cfg["render"]:
+        cfg["render"]["near_plane"] = 1.0e-4
+    if "fast_mac" not in cfg["render"]:
+        cfg["render"]["fast_mac"] = None
     return cfg
 
 
@@ -96,7 +125,39 @@ def render_implicit_frame(renderer_mode, config, dense_grid, camera, frame: Gaus
         tile_size=render_cfg["tile_size"],
         bound_scale=render_cfg["bound_scale"],
         alpha_threshold=render_cfg["alpha_threshold"],
+        near_plane=render_cfg["near_plane"],
+        fast_mac_options=render_cfg["fast_mac"],
     )
+
+
+def eval_metric_payload(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    loss_cfg: dict[str, Any],
+) -> dict[str, float]:
+    prediction = prediction.float()
+    target = target.float()
+    delta = prediction - target
+    l1 = delta.abs().flatten(1).mean()
+    mse = delta.square().flatten(1).mean()
+    ssim = ssim_per_image(
+        prediction,
+        target,
+        window_size=loss_cfg["ssim_window_size"],
+        c1=float(loss_cfg["ssim_c1"]),
+        c2=float(loss_cfg["ssim_c2"]),
+    ).mean()
+    dssim = (1.0 - ssim) * 0.5
+    recon_loss = reconstruction_loss_per_image(prediction, target, loss_cfg).mean()
+    psnr = -10.0 * math.log10(max(float(mse.item()), 1.0e-12))
+    return {
+        "Eval/Loss": float(recon_loss.item()),
+        "Eval/L1": float(l1.item()),
+        "Eval/MSE": float(mse.item()),
+        "Eval/SSIM": float(ssim.item()),
+        "Eval/DSSIM": float(dssim.item()),
+        "Eval/PSNR": psnr,
+    }
 
 
 @torch.no_grad()
@@ -237,7 +298,7 @@ def run_training(config: dict[str, Any]):
             )
             target = batch_frames[local_index]
             renders.append(render)
-            recon_losses.append(F.l1_loss(render, target) + 0.2 * F.mse_loss(render, target))
+            recon_losses.append(reconstruction_loss_per_image(render.unsqueeze(0), target.unsqueeze(0), loss_cfg)[0])
 
         recon_loss = torch.stack(recon_losses).mean()
         camera_motion_loss = (
@@ -322,6 +383,7 @@ def run_training(config: dict[str, Any]):
                         sequence_data.video_fps,
                     )
                 )
+                payload.update(eval_metric_payload(rendered_sequence, gt_sequence, loss_cfg))
                 payload["Camera/EvalFOVDegrees"] = eval_camera_state.fov_degrees.item()
                 payload["Camera/EvalRadius"] = eval_camera_state.radius.item()
                 payload["Camera/EvalRotationDeltaMeanDegrees"] = (

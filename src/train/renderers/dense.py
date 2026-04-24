@@ -1,6 +1,97 @@
 import torch
 
 from .common import MIN_RENDER_DEPTH, build_pixel_grid, project_gaussians_2d, project_gaussians_2d_batch
+from .projection import project_gaussians_2d_camera, project_gaussians_2d_camera_batch
+
+
+def _project_single(
+    means3D,
+    scales,
+    quats,
+    opacities,
+    rgbs,
+    fx,
+    fy,
+    cx,
+    cy,
+    *,
+    camera=None,
+    projection_mode="legacy_pinhole",
+    camera_to_world=None,
+    near_plane=MIN_RENDER_DEPTH,
+):
+    if projection_mode == "camera_model":
+        if camera is None:
+            raise ValueError("camera_model projection requires a CameraSpec.")
+        return project_gaussians_2d_camera(
+            means3D,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            camera,
+            near_plane=near_plane,
+        )
+    if projection_mode != "legacy_pinhole":
+        raise ValueError(f"Unknown projection_mode: {projection_mode}")
+    return project_gaussians_2d(
+        means3D,
+        scales,
+        quats,
+        opacities,
+        rgbs,
+        fx,
+        fy,
+        cx,
+        cy,
+        camera_to_world=camera_to_world,
+        near_plane=near_plane,
+    )
+
+
+def _project_batch(
+    means3D,
+    scales,
+    quats,
+    opacities,
+    rgbs,
+    fx,
+    fy,
+    cx,
+    cy,
+    *,
+    cameras=None,
+    projection_mode="legacy_pinhole",
+    camera_to_world=None,
+    near_plane=MIN_RENDER_DEPTH,
+):
+    if projection_mode == "camera_model":
+        if cameras is None:
+            raise ValueError("camera_model batch projection requires CameraSpec values.")
+        return project_gaussians_2d_camera_batch(
+            means3D,
+            scales,
+            quats,
+            opacities,
+            rgbs,
+            cameras,
+            near_plane=near_plane,
+        )
+    if projection_mode != "legacy_pinhole":
+        raise ValueError(f"Unknown projection_mode: {projection_mode}")
+    return project_gaussians_2d_batch(
+        means3D,
+        scales,
+        quats,
+        opacities,
+        rgbs,
+        fx,
+        fy,
+        cx,
+        cy,
+        camera_to_world=camera_to_world,
+        near_plane=near_plane,
+    )
 
 
 def _render_aux(alpha, weights):
@@ -27,8 +118,10 @@ def render_pytorch_3dgs(
     camera_to_world=None,
     near_plane=None,
     return_aux=False,
+    camera=None,
+    projection_mode="legacy_pinhole",
 ):
-    means2D, invCov2D, _cov2D, opacities, rgbs = project_gaussians_2d(
+    means2D, invCov2D, _cov2D, opacities, rgbs = _project_single(
         means3D,
         scales,
         quats,
@@ -38,6 +131,8 @@ def render_pytorch_3dgs(
         fy,
         cx,
         cy,
+        camera=camera,
+        projection_mode=projection_mode,
         camera_to_world=camera_to_world,
         near_plane=near_plane if near_plane is not None else MIN_RENDER_DEPTH,
     )
@@ -88,8 +183,10 @@ def render_pytorch_3dgs_batch(
     camera_to_world=None,
     near_plane=None,
     return_aux=False,
+    cameras=None,
+    projection_mode="legacy_pinhole",
 ):
-    means2D, invCov2D, _cov2D, opacities, rgbs = project_gaussians_2d_batch(
+    means2D, invCov2D, _cov2D, opacities, rgbs = _project_batch(
         means3D,
         scales,
         quats,
@@ -99,6 +196,8 @@ def render_pytorch_3dgs_batch(
         fy,
         cx,
         cy,
+        cameras=cameras,
+        projection_mode=projection_mode,
         camera_to_world=camera_to_world,
         near_plane=near_plane if near_plane is not None else MIN_RENDER_DEPTH,
     )

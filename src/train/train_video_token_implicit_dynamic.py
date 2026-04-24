@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -7,21 +8,87 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 import wandb
-from config_utils import load_config_file, path_or_none, resolved_config, serialize_config_value
+from config_utils import apply_defaults, load_config_file, path_or_none, resolved_config, serialize_config_value
 from dynamicTokenGS import (
     configure_fast_attn,
     fast_attn_context,
     pick_device,
 )
-from gs_models import DynamicVideoTokenGSImplicitCamera
-from rendering import build_or_reuse_grid, camera_for_viewport, render_gaussian_frame, resize_images
+from gs_models import (
+    DynamicVideoTokenGSImplicitCamera,
+    DynamicVideoTokenGSImplicitCameraPoseToPlucker,
+    DynamicVideoTokenGSImplicitCameraSinusoidalTime,
+)
+from losses import reconstruction_loss_per_image, ssim_per_image
+from rendering import build_or_reuse_grid, camera_for_viewport, render_gaussian_frames, resize_images
 from rendering import pick_renderer_mode as resolve_renderer_mode
-from runtime_types import CameraState, GaussianFrame, GaussianSequence, SequenceData
+from runtime_types import CameraState, GaussianSequence, SequenceData
 from sequence_data import load_uncalibrated_sequence, resolve_frames_dir, select_window_indices
 from tqdm import tqdm
 from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
+
+LOSS_OPTION_DEFAULTS = {
+    "type": "l1_mse",
+    "l1_weight": 1.0,
+    "mse_weight": 0.2,
+    "dssim_weight": 0.2,
+    "ssim_window_size": 11,
+    "ssim_c1": 0.0001,
+    "ssim_c2": 0.0009,
+    "camera_motion_weight": 0.01,
+    "camera_temporal_weight": 0.02,
+    "camera_global_weight": 0.005,
+    "static_alpha_rate_weight": 0.0,
+    "dynamic_alpha_rate_weight": 0.0,
+    "dynamic_motion_rate_weight": 0.0,
+    "dynamic_rotation_rate_weight": 0.0,
+    "dynamic_alpha_time_rate_weight": 0.0,
+}
+
+
+MODEL_OPTION_DEFAULTS = {
+    "variant": "learned_time_orbit_path",
+    "xy_extent": None,
+    "z_min": None,
+    "z_max": None,
+    "scale_init": 0.05,
+    "scale_init_log_jitter": 0.0,
+    "opacity_init": None,
+    "query_token_init_std": 0.02,
+    "head_hidden_dim": 64,
+    "head_hidden_layers": 1,
+    "head_output_init_std": None,
+    "position_init_extent_coverage": 0.0,
+    "rotation_init": "random",
+    "time_fourier_bands": 8,
+    "time_max_frequency": 128.0,
+    "ray_condition_grid_size": 16,
+    "static_tokens": None,
+    "dynamic_tokens": None,
+    "dynamic_time_basis_count": 8,
+    "dynamic_time_max_frequency": 8.0,
+    "dynamic_motion_extent": None,
+    "dynamic_rotation_degrees": 10.0,
+    "dynamic_alpha_logit_extent": 2.0,
+    "dynamic_coeff_output_init_std": 1.0e-4,
+}
+
+
+CAMERA_OPTION_DEFAULTS = {
+    "global_head": "legacy_orbit",
+    "lens_model": "pinhole",
+    "base_fov_degrees": 60.0,
+    "base_radius": 3.0,
+    "max_fov_delta_degrees": 15.0,
+    "max_radius_scale": 1.5,
+    "max_aspect_log_delta": 0.0,
+    "max_principal_point_delta": 0.0,
+    "distortion_max_abs": 0.0,
+    "base_distortion": None,
+    "max_rotation_degrees": 5.0,
+    "max_translation_ratio": 0.2,
+}
 
 
 @dataclass
@@ -34,6 +101,8 @@ class StepResult:
     camera_motion_loss: torch.Tensor
     camera_temporal_loss: torch.Tensor
     camera_global_loss: torch.Tensor
+    bank_rate_loss: torch.Tensor
+    bank_rate_terms: dict[str, torch.Tensor]
 
 
 def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -43,6 +112,90 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg["data"]["sequence_dir"] = Path(cfg["data"]["sequence_dir"])
     cfg["data"]["frames_dir"] = path_or_none(cfg["data"]["frames_dir"])
     cfg["data"]["video_path"] = path_or_none(cfg["data"]["video_path"])
+    apply_defaults(cfg["model"], MODEL_OPTION_DEFAULTS)
+    cfg["model"]["variant"] = str(cfg["model"]["variant"]).lower()
+    if cfg["model"]["xy_extent"] is None:
+        cfg["model"]["xy_extent"] = cfg["model"]["scene_extent"]
+    if cfg["model"]["z_min"] is None:
+        cfg["model"]["z_min"] = -cfg["model"]["scene_extent"]
+    if cfg["model"]["z_max"] is None:
+        cfg["model"]["z_max"] = cfg["model"]["scene_extent"]
+    has_static_dynamic_split = (
+        cfg["model"]["static_tokens"] is not None or cfg["model"]["dynamic_tokens"] is not None
+    )
+    cfg["model"]["use_static_dynamic_split"] = has_static_dynamic_split
+    if has_static_dynamic_split:
+        if cfg["model"]["variant"] == "token_to_pose_to_plucker":
+            raise ValueError("static/dynamic splat split is not wired for token_to_pose_to_plucker yet.")
+        total_tokens = int(cfg["model"]["tokens"])
+        static_tokens = cfg["model"]["static_tokens"]
+        dynamic_tokens = cfg["model"]["dynamic_tokens"]
+        if static_tokens is None and dynamic_tokens is None:
+            static_tokens = max(1, int(round(total_tokens * 0.75)))
+            dynamic_tokens = total_tokens - static_tokens
+        elif static_tokens is None:
+            dynamic_tokens = int(dynamic_tokens)
+            static_tokens = total_tokens - dynamic_tokens
+        elif dynamic_tokens is None:
+            static_tokens = int(static_tokens)
+            dynamic_tokens = total_tokens - static_tokens
+        else:
+            static_tokens = int(static_tokens)
+            dynamic_tokens = int(dynamic_tokens)
+        if static_tokens < 1 or dynamic_tokens < 1:
+            raise ValueError(
+                f"static/dynamic split requires positive static/dynamic tokens, "
+                f"got static_tokens={static_tokens}, dynamic_tokens={dynamic_tokens}."
+            )
+        if static_tokens + dynamic_tokens != total_tokens:
+            raise ValueError(
+                f"static_tokens + dynamic_tokens must equal model.tokens={total_tokens}, "
+                f"got {static_tokens} + {dynamic_tokens}."
+            )
+        cfg["model"]["static_tokens"] = static_tokens
+        cfg["model"]["dynamic_tokens"] = dynamic_tokens
+    apply_defaults(cfg["camera"], CAMERA_OPTION_DEFAULTS)
+    cfg["camera"]["global_head"] = str(cfg["camera"]["global_head"]).lower()
+    cfg["camera"]["lens_model"] = str(cfg["camera"]["lens_model"]).lower()
+    if cfg["camera"]["global_head"] not in {"legacy_orbit", "legacy_pinhole", "simple_pinhole", "central_lens"}:
+        raise ValueError(
+            f"Unknown camera.global_head={cfg['camera']['global_head']!r}. "
+            "Expected legacy_orbit or central_lens."
+        )
+    if cfg["camera"]["lens_model"] not in {"pinhole", "radial_tangential", "opencv_fisheye"}:
+        raise ValueError(
+            f"Unknown camera.lens_model={cfg['camera']['lens_model']!r}. "
+            "Expected pinhole, radial_tangential, or opencv_fisheye."
+        )
+    if cfg["camera"]["global_head"] in {"legacy_orbit", "legacy_pinhole", "simple_pinhole"}:
+        if cfg["camera"]["lens_model"] != "pinhole":
+            raise ValueError("camera.global_head='legacy_orbit' requires camera.lens_model='pinhole'.")
+    apply_defaults(cfg["losses"], LOSS_OPTION_DEFAULTS)
+    cfg["losses"]["type"] = str(cfg["losses"]["type"]).lower()
+    if cfg["losses"]["type"] not in {"standard_gs", "l1_mse", "l1", "mse"}:
+        raise ValueError(
+            f"Unknown losses.type={cfg['losses']['type']!r}. Expected one of: standard_gs, l1_mse, l1, mse."
+        )
+    window_size = int(cfg["losses"]["ssim_window_size"])
+    if window_size < 1 or window_size % 2 != 1:
+        raise ValueError(f"losses.ssim_window_size must be a positive odd integer, got {window_size}.")
+    cfg["losses"]["ssim_window_size"] = window_size
+    if "near_plane" not in cfg["render"]:
+        cfg["render"]["near_plane"] = 1.0e-4
+    if "camera_projection" not in cfg["render"]:
+        cfg["render"]["camera_projection"] = "auto"
+    cfg["render"]["camera_projection"] = str(cfg["render"]["camera_projection"]).lower()
+    if cfg["render"]["camera_projection"] == "legacy":
+        cfg["render"]["camera_projection"] = "legacy_pinhole"
+    if cfg["render"]["camera_projection"] not in {"auto", "legacy_pinhole", "camera_model"}:
+        raise ValueError(
+            f"Unknown render.camera_projection={cfg['render']['camera_projection']!r}. "
+            "Expected auto, legacy_pinhole, or camera_model."
+        )
+    if cfg["camera"]["lens_model"] != "pinhole" and cfg["render"]["camera_projection"] == "legacy_pinhole":
+        raise ValueError("Non-pinhole camera.lens_model requires render.camera_projection='auto' or 'camera_model'.")
+    if "fast_mac" not in cfg["render"]:
+        cfg["render"]["fast_mac"] = None
     return cfg
 
 
@@ -60,44 +213,61 @@ def pick_renderer_mode_from_config(config: dict[str, Any]) -> tuple[str, int]:
     return renderer_mode, effective_gaussians
 
 
-def normalize_clip_times(frame_times: torch.Tensor) -> torch.Tensor:
-    frame_times = frame_times.to(dtype=torch.float32)
-    minimum = frame_times.min()
-    maximum = frame_times.max()
-    if float(maximum - minimum) > 1e-6:
-        return (frame_times - minimum) / (maximum - minimum)
-    return torch.zeros_like(frame_times)
-
-
 def prepare_clip(sequence_data: SequenceData, clip_indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     clip_frames = sequence_data.frames[clip_indices]
-    clip_times = normalize_clip_times(sequence_data.frame_times[clip_indices].reshape(-1)).unsqueeze(0)
+    time_denominator = max(sequence_data.frame_count - 1, 1)
+    clip_times = (clip_indices.to(dtype=torch.float32) / float(time_denominator)).reshape(1, -1)
     return clip_frames.unsqueeze(0), clip_times
 
 
-def render_clip_frame(
+def viewport_cameras(
+    cameras: tuple[Any, ...],
+    *,
+    input_size: int,
+    render_size: int,
+) -> tuple[Any, ...]:
+    return tuple(
+        camera_for_viewport(
+            camera,
+            source_height=input_size,
+            source_width=input_size,
+            target_height=render_size,
+            target_width=render_size,
+        )
+        for camera in cameras
+    )
+
+
+def gaussian_sequence_slice(sequence: GaussianSequence, start: int, end: int) -> GaussianSequence:
+    cameras = None
+    if sequence.cameras is not None:
+        cameras = tuple(sequence.cameras[start:end])
+    return GaussianSequence(
+        xyz=sequence.xyz[start:end],
+        scales=sequence.scales[start:end],
+        quats=sequence.quats[start:end],
+        opacities=sequence.opacities[start:end],
+        rgbs=sequence.rgbs[start:end],
+        cameras=cameras,
+        camera_state=sequence.camera_state,
+        auxiliary=sequence.auxiliary,
+    )
+
+
+def render_clip_sequence(
+    sequence: GaussianSequence,
+    cameras: tuple[Any, ...],
+    *,
     renderer_mode: str,
     render_cfg: dict[str, Any],
     input_size: int,
     render_size: int,
     dense_grid: torch.Tensor,
-    camera: Any,
-    xyz: torch.Tensor,
-    scales: torch.Tensor,
-    quats: torch.Tensor,
-    opacities: torch.Tensor,
-    rgbs: torch.Tensor,
 ) -> torch.Tensor:
-    render_camera = camera_for_viewport(
-        camera,
-        source_height=input_size,
-        source_width=input_size,
-        target_height=render_size,
-        target_width=render_size,
-    )
-    return render_gaussian_frame(
-        GaussianFrame(xyz=xyz, scales=scales, quats=quats, opacities=opacities, rgbs=rgbs),
-        camera=render_camera,
+    render_cameras = viewport_cameras(cameras, input_size=input_size, render_size=render_size)
+    return render_gaussian_frames(
+        sequence,
+        render_cameras,
         height=render_size,
         width=render_size,
         mode=renderer_mode,
@@ -105,7 +275,80 @@ def render_clip_frame(
         tile_size=render_cfg["tile_size"],
         bound_scale=render_cfg["bound_scale"],
         alpha_threshold=render_cfg["alpha_threshold"],
+        near_plane=render_cfg["near_plane"],
+        fast_mac_options=render_cfg["fast_mac"],
+        camera_projection=render_cfg["camera_projection"],
     )
+
+
+def eval_metric_payload(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    loss_cfg: dict[str, Any],
+) -> dict[str, float]:
+    prediction = prediction.float()
+    target = target.float()
+    delta = prediction - target
+    l1 = delta.abs().flatten(1).mean()
+    mse = delta.square().flatten(1).mean()
+    ssim = ssim_per_image(
+        prediction,
+        target,
+        window_size=loss_cfg["ssim_window_size"],
+        c1=float(loss_cfg["ssim_c1"]),
+        c2=float(loss_cfg["ssim_c2"]),
+    ).mean()
+    dssim = (1.0 - ssim) * 0.5
+    recon_loss = reconstruction_loss_per_image(prediction, target, loss_cfg).mean()
+    psnr = -10.0 * math.log10(max(float(mse.item()), 1.0e-12))
+    return {
+        "Eval/Loss": float(recon_loss.item()),
+        "Eval/L1": float(l1.item()),
+        "Eval/MSE": float(mse.item()),
+        "Eval/SSIM": float(ssim.item()),
+        "Eval/DSSIM": float(dssim.item()),
+        "Eval/PSNR": psnr,
+    }
+
+
+def temporal_similarity_payload(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    loss_cfg: dict[str, Any],
+) -> dict[str, float]:
+    if prediction.shape[0] < 2:
+        return {}
+
+    prediction = prediction.float()
+    target = target.float()
+    pred_adj_l1 = (prediction[1:] - prediction[:-1]).abs().flatten(1).mean().mean()
+    gt_adj_l1 = (target[1:] - target[:-1]).abs().flatten(1).mean().mean()
+    pred_to_first_l1 = (prediction[1:] - prediction[:1]).abs().flatten(1).mean().mean()
+    gt_to_first_l1 = (target[1:] - target[:1]).abs().flatten(1).mean().mean()
+    pred_adj_ssim = ssim_per_image(
+        prediction[1:],
+        prediction[:-1],
+        window_size=loss_cfg["ssim_window_size"],
+        c1=float(loss_cfg["ssim_c1"]),
+        c2=float(loss_cfg["ssim_c2"]),
+    ).mean()
+    gt_adj_ssim = ssim_per_image(
+        target[1:],
+        target[:-1],
+        window_size=loss_cfg["ssim_window_size"],
+        c1=float(loss_cfg["ssim_c1"]),
+        c2=float(loss_cfg["ssim_c2"]),
+    ).mean()
+    return {
+        "Eval/TemporalPredAdjacentL1": float(pred_adj_l1.item()),
+        "Eval/TemporalGTAdjacentL1": float(gt_adj_l1.item()),
+        "Eval/TemporalAdjacentL1Ratio": float((pred_adj_l1 / gt_adj_l1.clamp_min(1.0e-8)).item()),
+        "Eval/TemporalPredToFirstL1": float(pred_to_first_l1.item()),
+        "Eval/TemporalGTToFirstL1": float(gt_to_first_l1.item()),
+        "Eval/TemporalToFirstL1Ratio": float((pred_to_first_l1 / gt_to_first_l1.clamp_min(1.0e-8)).item()),
+        "Eval/TemporalPredAdjacentSSIM": float(pred_adj_ssim.item()),
+        "Eval/TemporalGTAdjacentSSIM": float(gt_adj_ssim.item()),
+    }
 
 
 @torch.no_grad()
@@ -137,25 +380,25 @@ def render_full_sequence(
         autocast_context = torch.autocast(device_type=device.type, dtype=amp_dtype) if amp_available else nullcontext()
         with fast_attn_context(device), autocast_context:
             decoded = model(clip_frames, decode_times=clip_times)
+        if decoded.cameras is None:
+            raise ValueError("Implicit-camera video decode must include cameras.")
+        if decoded.camera_state is None:
+            raise ValueError("Implicit-camera video decode must include camera_state.")
         camera_states.append(decoded.camera_state)
+        rendered_clip = render_clip_sequence(
+            decoded,
+            decoded.cameras,
+            renderer_mode=renderer_mode,
+            render_cfg=render_cfg,
+            input_size=model_cfg["size"],
+            render_size=render_cfg["render_size"],
+            dense_grid=dense_grid,
+        ).cpu()
 
         for local_index, frame_index in enumerate(clip_indices.tolist()):
             if rendered_frames[frame_index] is not None:
                 continue
-            camera = decoded.cameras[local_index]
-            rendered_frames[frame_index] = render_clip_frame(
-                renderer_mode,
-                render_cfg,
-                model_cfg["size"],
-                render_cfg["render_size"],
-                dense_grid,
-                camera,
-                decoded.xyz[local_index],
-                decoded.scales[local_index],
-                decoded.quats[local_index],
-                decoded.opacities[local_index],
-                decoded.rgbs[local_index],
-            ).cpu()
+            rendered_frames[frame_index] = rendered_clip[local_index]
 
     if was_training:
         model.train()
@@ -173,7 +416,19 @@ def render_full_sequence(
 def build_model_from_config(config: dict[str, Any]) -> DynamicVideoTokenGSImplicitCamera:
     model_cfg = config["model"]
     camera_cfg = config["camera"]
-    return DynamicVideoTokenGSImplicitCamera(
+    model_variant = str(model_cfg["variant"]).lower()
+    if model_variant == "learned_time_orbit_path":
+        model_cls = DynamicVideoTokenGSImplicitCamera
+    elif model_variant == "sinusoidal_time_path_mlp":
+        model_cls = DynamicVideoTokenGSImplicitCameraSinusoidalTime
+    elif model_variant == "token_to_pose_to_plucker":
+        model_cls = DynamicVideoTokenGSImplicitCameraPoseToPlucker
+    else:
+        raise ValueError(
+            f"Unknown model.variant={model_variant!r}. "
+            "Expected one of: learned_time_orbit_path, sinusoidal_time_path_mlp, token_to_pose_to_plucker."
+        )
+    model_kwargs = dict(
         clip_length=model_cfg["train_frame_count"],
         image_size=model_cfg["size"],
         num_tokens=model_cfg["tokens"],
@@ -183,6 +438,18 @@ def build_model_from_config(config: dict[str, Any]) -> DynamicVideoTokenGSImplic
         mlp_ratio=model_cfg["mlp_ratio"],
         gaussians_per_token=model_cfg["gaussians_per_token"],
         scene_extent=model_cfg["scene_extent"],
+        xy_extent=model_cfg["xy_extent"],
+        z_min=model_cfg["z_min"],
+        z_max=model_cfg["z_max"],
+        scale_init=model_cfg["scale_init"],
+        scale_init_log_jitter=model_cfg["scale_init_log_jitter"],
+        opacity_init=model_cfg["opacity_init"],
+        query_token_init_std=model_cfg["query_token_init_std"],
+        head_hidden_dim=model_cfg["head_hidden_dim"],
+        head_hidden_layers=model_cfg["head_hidden_layers"],
+        head_output_init_std=model_cfg["head_output_init_std"],
+        position_init_extent_coverage=model_cfg["position_init_extent_coverage"],
+        rotation_init=model_cfg["rotation_init"],
         tubelet_size=(
             model_cfg["tubelet_size_t"],
             model_cfg["patch_compression"],
@@ -195,9 +462,29 @@ def build_model_from_config(config: dict[str, Any]) -> DynamicVideoTokenGSImplic
         base_radius=camera_cfg["base_radius"],
         max_fov_delta_degrees=camera_cfg["max_fov_delta_degrees"],
         max_radius_scale=camera_cfg["max_radius_scale"],
+        camera_global_head=camera_cfg["global_head"],
+        lens_model=camera_cfg["lens_model"],
+        max_aspect_log_delta=camera_cfg["max_aspect_log_delta"],
+        max_principal_point_delta=camera_cfg["max_principal_point_delta"],
+        distortion_max_abs=camera_cfg["distortion_max_abs"],
+        base_distortion=camera_cfg["base_distortion"],
         max_rotation_degrees=camera_cfg["max_rotation_degrees"],
         max_translation_ratio=camera_cfg["max_translation_ratio"],
+        static_tokens=model_cfg["static_tokens"],
+        dynamic_tokens=model_cfg["dynamic_tokens"],
+        dynamic_time_basis_count=model_cfg["dynamic_time_basis_count"],
+        dynamic_time_max_frequency=model_cfg["dynamic_time_max_frequency"],
+        dynamic_motion_extent=model_cfg["dynamic_motion_extent"],
+        dynamic_rotation_degrees=model_cfg["dynamic_rotation_degrees"],
+        dynamic_alpha_logit_extent=model_cfg["dynamic_alpha_logit_extent"],
+        dynamic_coeff_output_init_std=model_cfg["dynamic_coeff_output_init_std"],
     )
+    if model_variant in {"sinusoidal_time_path_mlp", "token_to_pose_to_plucker"}:
+        model_kwargs["time_fourier_bands"] = model_cfg["time_fourier_bands"]
+        model_kwargs["time_max_frequency"] = model_cfg["time_max_frequency"]
+    if model_variant == "token_to_pose_to_plucker":
+        model_kwargs["ray_condition_grid_size"] = model_cfg["ray_condition_grid_size"]
+    return model_cls(**model_kwargs)
 
 
 class Trainer:
@@ -336,6 +623,42 @@ class Trainer:
         )
         return camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss
 
+    def build_bank_rate_loss(self, decoded: GaussianSequence) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        zero = decoded.xyz.new_tensor(0.0)
+        terms = {
+            "static_alpha": zero,
+            "dynamic_alpha": zero,
+            "dynamic_motion": zero,
+            "dynamic_rotation": zero,
+            "dynamic_alpha_time": zero,
+        }
+        auxiliary = decoded.auxiliary
+        required_keys = {
+            "static_opacities",
+            "dynamic_opacities",
+            "dynamic_A_mu",
+            "dynamic_A_rot",
+            "dynamic_A_alpha",
+        }
+        if not required_keys.issubset(auxiliary.keys()):
+            return zero, terms
+
+        terms = {
+            "static_alpha": auxiliary["static_opacities"].mean(),
+            "dynamic_alpha": auxiliary["dynamic_opacities"].mean(),
+            "dynamic_motion": auxiliary["dynamic_A_mu"].abs().mean(),
+            "dynamic_rotation": auxiliary["dynamic_A_rot"].abs().mean(),
+            "dynamic_alpha_time": auxiliary["dynamic_A_alpha"].abs().mean(),
+        }
+        rate_loss = (
+            float(self.loss_cfg["static_alpha_rate_weight"]) * terms["static_alpha"]
+            + float(self.loss_cfg["dynamic_alpha_rate_weight"]) * terms["dynamic_alpha"]
+            + float(self.loss_cfg["dynamic_motion_rate_weight"]) * terms["dynamic_motion"]
+            + float(self.loss_cfg["dynamic_rotation_rate_weight"]) * terms["dynamic_rotation"]
+            + float(self.loss_cfg["dynamic_alpha_time_rate_weight"]) * terms["dynamic_alpha_time"]
+        )
+        return rate_loss, terms
+
     def temporal_recon_chunk_size(self, frame_count: int) -> int:
         if self.recon_backward_strategy == "batched":
             return frame_count
@@ -347,7 +670,7 @@ class Trainer:
         self,
         clip_frames: torch.Tensor,
         decoded: GaussianSequence,
-        camera_loss: torch.Tensor,
+        regularizer_loss: torch.Tensor,
         keep_preview: bool,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         recon_loss = clip_frames.new_tensor(0.0)
@@ -360,32 +683,24 @@ class Trainer:
 
         for chunk_start in range(0, frame_count, chunk_size):
             chunk_end = min(chunk_start + chunk_size, frame_count)
-            chunk_losses = []
-
-            for local_index in range(chunk_start, chunk_end):
-                camera = decoded.cameras[local_index]
-                render = render_clip_frame(
-                    self.renderer_mode,
-                    self.render_cfg,
-                    self.model_cfg["size"],
-                    self.render_size,
-                    self.dense_grid,
-                    camera,
-                    decoded.xyz[local_index],
-                    decoded.scales[local_index],
-                    decoded.quats[local_index],
-                    decoded.opacities[local_index],
-                    decoded.rgbs[local_index],
-                )
-                if keep_preview and preview_render is None:
-                    preview_render = render.detach()
-                target = target_frames[local_index]
-                chunk_losses.append(F.l1_loss(render, target) + 0.2 * F.mse_loss(render, target))
-
-            chunk_recon_loss = torch.stack(chunk_losses).sum() / frame_count
+            chunk_sequence = gaussian_sequence_slice(decoded, chunk_start, chunk_end)
+            chunk_renders = render_clip_sequence(
+                chunk_sequence,
+                tuple(decoded.cameras[chunk_start:chunk_end]),
+                renderer_mode=self.renderer_mode,
+                render_cfg=self.render_cfg,
+                input_size=self.model_cfg["size"],
+                render_size=self.render_size,
+                dense_grid=self.dense_grid,
+            )
+            if keep_preview and preview_render is None:
+                preview_render = chunk_renders[0].detach()
+            target = target_frames[chunk_start:chunk_end]
+            chunk_losses = reconstruction_loss_per_image(chunk_renders, target, self.loss_cfg)
+            chunk_recon_loss = chunk_losses.sum() / frame_count
             recon_loss = recon_loss + chunk_recon_loss.detach()
             is_last_chunk = chunk_end == frame_count
-            backward_loss = chunk_recon_loss + (camera_loss if is_last_chunk else 0.0)
+            backward_loss = chunk_recon_loss + (regularizer_loss if is_last_chunk else 0.0)
             backward_loss.backward(retain_graph=not is_last_chunk)
 
         return recon_loss, preview_render
@@ -401,16 +716,17 @@ class Trainer:
             clip_times,
             decoded.camera_state,
         )
+        bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
 
         recon_loss, preview_render = self.recon_backward(
             clip_frames,
             decoded,
-            camera_loss,
+            camera_loss + bank_rate_loss,
             keep_preview,
         )
 
         self.optimizer.step()
-        loss = recon_loss + camera_loss.detach()
+        loss = recon_loss + camera_loss.detach() + bank_rate_loss.detach()
         return StepResult(
             clip_frames=clip_frames,
             preview_render=preview_render,
@@ -420,6 +736,8 @@ class Trainer:
             camera_motion_loss=camera_motion_loss,
             camera_temporal_loss=camera_temporal_loss,
             camera_global_loss=camera_global_loss,
+            bank_rate_loss=bank_rate_loss.detach(),
+            bank_rate_terms={key: value.detach() for key, value in bank_rate_terms.items()},
         )
 
     def camera_metrics(self, camera_state: CameraState) -> dict[str, float]:
@@ -458,12 +776,13 @@ class Trainer:
 
     def scalar_payload(self, result: StepResult) -> dict[str, Any]:
         metrics = self.camera_metrics(result.camera_state)
-        return {
+        payload = {
             "Loss": result.loss.item(),
             "Loss/Reconstruction": result.recon_loss.item(),
             "Loss/CameraMotion": result.camera_motion_loss.item(),
             "Loss/CameraTemporal": result.camera_temporal_loss.item(),
             "Loss/CameraGlobal": result.camera_global_loss.item(),
+            "Loss/BankRate": result.bank_rate_loss.item(),
             "TrainFrameCount": int(self.model_cfg["train_frame_count"]),
             "SequenceFrames": self.num_frames,
             "InputSize": int(self.model_cfg["size"]),
@@ -473,6 +792,9 @@ class Trainer:
             "Camera/RotationDeltaMeanDegrees": metrics["rotation_delta_mean_degrees"],
             "Camera/TranslationDeltaMean": metrics["translation_delta_mean"],
         }
+        for key, value in result.bank_rate_terms.items():
+            payload[f"BankRate/{key}"] = value.item()
+        return payload
 
     def render_preview_image(self, result: StepResult, step: int) -> wandb.Image:
         if result.preview_render is None:
@@ -498,6 +820,8 @@ class Trainer:
                 gt_sequence,
                 self.sequence_data.video_fps,
             ),
+            **eval_metric_payload(rendered_sequence, gt_sequence, self.loss_cfg),
+            **temporal_similarity_payload(rendered_sequence, gt_sequence, self.loss_cfg),
             "Camera/EvalFOVDegrees": eval_camera_state.fov_degrees.item(),
             "Camera/EvalRadius": eval_camera_state.radius.item(),
             "Camera/EvalRotationDeltaMeanDegrees": (
@@ -527,15 +851,28 @@ class Trainer:
         wandb.log(payload, step=step)
 
     def run(self) -> None:
+        token_summary = (
+            f"{self.model_cfg['tokens']} 3DGS tokens"
+            if not self.model_cfg["use_static_dynamic_split"]
+            else (
+                f"{self.model_cfg['static_tokens']} static + "
+                f"{self.model_cfg['dynamic_tokens']} dynamic 3DGS tokens"
+            )
+        )
         print(
             "Starting DynamicVideoTokenGSImplicitCamera Training: "
             f"{self.num_frames} frames, train_frame_count={self.model_cfg['train_frame_count']}, "
             f"input_size={self.model_cfg['size']}, render_size={self.render_size}, "
-            f"1 global camera token + 1 path token + {self.model_cfg['tokens']} 3DGS tokens x "
+            f"1 global camera token + 1 path token + {token_summary} x "
             f"{self.model_cfg['gaussians_per_token']} gaussians/token = "
             f"{self.effective_gaussians} explicit Gaussians with {self.renderer_mode} renderer..."
         )
         print(f"Reconstruction backward strategy: {self.recon_backward_strategy}")
+        print(
+            "Camera model: "
+            f"global_head={self.cfg['camera']['global_head']}, "
+            f"lens_model={self.cfg['camera']['lens_model']}"
+        )
         print(
             f"Temporal reconstruction chunk size: {self.temporal_recon_chunk_size(self.model_cfg['train_frame_count'])}"
         )
