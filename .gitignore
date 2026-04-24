@@ -10,4 +10,17 @@ benchmark_outputs/
 
 test_data/dust3r_outputs/
 
+# Large local datasets and downloaded media. Keep configs/docs/scripts tracked.
+data/youtube_motion/raw/
+data/youtube_motion/segments/
+data/youtube_motion/clip_sets/
+data/youtube_motion/logs/
+data/external/neural_3d_video/raw/
+data/external/neural_3d_video/extracted/
+data/external/neural_3d_video/logs/
+data/external/vivo/raw/
+data/external/vivo/extracted/
+data/external/vivo/rgb_mp4/
+data/external/vivo/logs/
+
 third_party/dust3r/croco/

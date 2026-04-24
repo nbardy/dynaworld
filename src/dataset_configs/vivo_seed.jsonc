@@ -1,0 +1,43 @@
+{
+  // ViVo is accessed via project form/email or temporary Google Drive links.
+  // This config tracks local placement and does not automate form submission.
+  "dataset_name": "vivo_seed",
+  "root_dir": "data/external/vivo",
+  "source": {
+    "project_url": "https://vivo-bvicr.github.io/",
+    "temporary_drive_url": "https://drive.google.com/drive/folders/1uG4JB2GDWrIRMqmbI6NCP2kA0jUDAbvp?usp=sharing",
+    "code_url": "https://github.com/azzarelli/ViVo-DataProcessing",
+    "access_note": "Dataset download requires MS Form submission and email link; full zipped dataset is documented as >1 TB."
+  },
+  "expected_structure": {
+    "camera_pairs": 14,
+    "train_cameras": 10,
+    "test_cameras": 4,
+    "frames_per_camera_in_docs": 300
+  },
+  "inspect": {
+    "scene_glob": "*",
+    "max_scenes": 20
+  },
+  "compact_rgb": {
+    "fps": 30,
+    "crf": 18,
+    "preset": "veryfast",
+    "image_source_dirs": [
+      "color",
+      "colour",
+      "color_corrected",
+      "colour_corrected"
+    ],
+    "heavy_dirs": [
+      "depth",
+      "depth_corrected",
+      "pointcloud",
+      "pointclouds",
+      "masks"
+    ],
+    "heavy_filename_markers": [
+      "depth-image"
+    ]
+  }
+}

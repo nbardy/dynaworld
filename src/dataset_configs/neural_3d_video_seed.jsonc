@@ -1,0 +1,22 @@
+{
+  // Curated external dataset ingest. This is deliberately separate from the
+  // YouTube camera-motion miner.
+  "dataset_name": "neural_3d_video_seed",
+  "root_dir": "data/external/neural_3d_video",
+  "github": {
+    "owner": "facebookresearch",
+    "repo": "Neural_3D_Video",
+    "tag": "v1.0"
+  },
+  "download": {
+    // Start with one smaller scene before pulling the whole release.
+    // Set to [] or pass --all-assets to download every release asset.
+    "asset_names": [
+      "coffee_martini.zip"
+    ],
+    "overwrite": false
+  },
+  "extract": {
+    "overwrite": false
+  }
+}

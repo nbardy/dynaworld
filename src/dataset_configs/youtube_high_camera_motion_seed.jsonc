@@ -1,0 +1,45 @@
+{
+  // Seed config for mining YouTube videos that are likely to contain strong
+  // camera translation/rotation and few hard scene cuts.
+  "dataset_name": "youtube_high_camera_motion_seed_128_4fps_46f",
+  "root_dir": "data/youtube_motion",
+
+  "search": {
+    "max_results_per_query": 20,
+    "queries": [
+      "walking tour pov no cuts 4k",
+      "bike ride pov stabilized 4k city",
+      "drone fly through forest no cuts",
+      "fpv drone cinematic one shot",
+      "gopro walking through market pov",
+      "roller coaster pov 4k",
+      "train cab ride forward view 4k",
+      "dashcam scenic mountain road no cuts",
+      "real estate walkthrough one take",
+      "museum walkthrough pov no cuts"
+    ]
+  },
+
+  "download": {
+    "limit": 25,
+    "max_height": 1080,
+    "cookies_from_browser": null
+  },
+
+  "segment": {
+    "min_seconds": 11.5,
+    "max_seconds": 16.0,
+    "target_clip_seconds": 11.5,
+    "analysis_fps": 4.0,
+    "scene_cut_threshold": 0.58,
+    "min_motion_score": 0.85,
+    "max_windows_per_video": 4
+  },
+
+  "clip_dataset": {
+    "target_count": 100,
+    "clip_frames": 46,
+    "fps": 4.0,
+    "target_size": 128
+  }
+}
