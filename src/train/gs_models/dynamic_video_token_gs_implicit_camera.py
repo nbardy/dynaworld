@@ -1,4 +1,6 @@
 import math
+from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import torch
@@ -16,6 +18,54 @@ from .implicit_camera import (
     compose_camera_with_se3_delta,
 )
 from .time_conditioning import SinusoidalTimeConditioner, build_time_projector
+
+
+VJEPA_TORCHHUB_CHECKPOINTS = {
+    "vjepa2_1_vit_base_384": (
+        "https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitb_dist_vitG_384.pt",
+        "ema_encoder",
+    ),
+    "vjepa2_1_vit_large_384": (
+        "https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitl_dist_vitG_384.pt",
+        "ema_encoder",
+    ),
+    "vjepa2_1_vit_giant_384": (
+        "https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitg_384.pt",
+        "target_encoder",
+    ),
+    "vjepa2_1_vit_gigantic_384": (
+        "https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitG_384.pt",
+        "target_encoder",
+    ),
+}
+
+
+def _clean_torchhub_backbone_state_dict(state_dict):
+    return {
+        key.replace("module.", "").replace("backbone.", ""): value
+        for key, value in state_dict.items()
+    }
+
+
+def _load_torchhub_encoder_checkpoint(encoder, model_id, checkpoint_url=None, checkpoint_key=None):
+    default = VJEPA_TORCHHUB_CHECKPOINTS.get(str(model_id))
+    if checkpoint_url is None:
+        checkpoint_url = default[0] if default is not None else None
+    if checkpoint_key is None:
+        checkpoint_key = default[1] if default is not None else "target_encoder"
+    if checkpoint_url is None:
+        return False
+
+    state_dict = torch.hub.load_state_dict_from_url(checkpoint_url, map_location="cpu")
+    if checkpoint_key not in state_dict:
+        available = ", ".join(sorted(state_dict.keys()))
+        raise KeyError(
+            f"Checkpoint for {model_id!r} does not contain encoder key {checkpoint_key!r}. "
+            f"Available keys: {available}"
+        )
+    encoder_state_dict = _clean_torchhub_backbone_state_dict(state_dict[checkpoint_key])
+    encoder.load_state_dict(encoder_state_dict, strict=True)
+    return True
 
 
 class RMSNorm(nn.Module):
@@ -306,6 +356,432 @@ class VideoEncoder(nn.Module):
         return flatten_video_tokens(merged_tokens_3d)
 
 
+def _first_parameter_dtype(module):
+    for parameter in module.parameters():
+        return parameter.dtype
+    return torch.float32
+
+
+def _first_parameter_device(module):
+    for parameter in module.parameters():
+        return parameter.device
+    return torch.device("cpu")
+
+
+def _resolve_vjepa_dtype(dtype_name):
+    if dtype_name is None:
+        return None
+    dtype_name = str(dtype_name).lower()
+    if dtype_name in {"none", "null"}:
+        return None
+    if dtype_name == "auto":
+        return torch.float16 if torch.cuda.is_available() else torch.float32
+    dtype_by_name = {
+        "float16": torch.float16,
+        "fp16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+        "float32": torch.float32,
+        "fp32": torch.float32,
+    }
+    if dtype_name not in dtype_by_name:
+        known = ", ".join(sorted(set(dtype_by_name) | {"auto", "none"}))
+        raise ValueError(f"Unknown vjepa_dtype={dtype_name!r}. Expected one of: {known}.")
+    return dtype_by_name[dtype_name]
+
+
+def _infer_encoder_feature_dim(module):
+    for attr_name in ("hidden_size", "embed_dim", "num_features"):
+        value = getattr(module, attr_name, None)
+        if value is not None:
+            return int(value)
+    config = getattr(module, "config", None)
+    if config is not None:
+        for attr_name in ("hidden_size", "embed_dim", "num_features"):
+            value = getattr(config, attr_name, None)
+            if value is not None:
+                return int(value)
+    return None
+
+
+def _as_feature_tokens(features, feature_dim=None):
+    if hasattr(features, "last_hidden_state"):
+        features = features.last_hidden_state
+    if isinstance(features, (tuple, list)):
+        features = features[0]
+    if features.ndim == 3:
+        return features
+    if features.ndim == 5:
+        if feature_dim is not None and features.shape[1] == feature_dim:
+            return flatten_video_tokens(features)
+        if feature_dim is not None and features.shape[-1] == feature_dim:
+            batch_size, depth, height, width, channels = features.shape
+            return features.reshape(batch_size, depth * height * width, channels)
+    raise ValueError(f"Expected V-JEPA features with rank 3 or 5, got shape {tuple(features.shape)}.")
+
+
+def _safe_module_key(name):
+    return str(name).replace(".", "__").replace("-", "_")
+
+
+def _flatten_precomputed_feature(value, channels):
+    if not torch.is_tensor(value):
+        raise TypeError(f"Expected cached video feature tensor, got {type(value).__name__}.")
+    if value.ndim == 2:
+        if value.shape[-1] != channels:
+            raise ValueError(f"Expected feature channels={channels}, got shape {tuple(value.shape)}.")
+        return value.unsqueeze(0)
+    if value.ndim == 3:
+        if value.shape[-1] != channels:
+            raise ValueError(f"Expected feature channels={channels}, got shape {tuple(value.shape)}.")
+        return value
+    if value.ndim == 4:
+        if value.shape[1] == channels:
+            return flatten_hw_features(value)
+        if value.shape[-1] == channels:
+            batch_size, height, width, _ = value.shape
+            return value.reshape(batch_size, height * width, channels)
+    if value.ndim == 5:
+        if value.shape[1] == channels:
+            return flatten_video_tokens(value)
+        if value.shape[-1] == channels:
+            batch_size, depth, height, width, _ = value.shape
+            return value.reshape(batch_size, depth * height * width, channels)
+    raise ValueError(
+        f"Could not interpret cached feature shape {tuple(value.shape)} with channels={channels}. "
+        "Expected [B,N,C], [B,C,H,W], [B,H,W,C], [B,C,T,H,W], or [B,T,H,W,C]."
+    )
+
+
+class PrecomputedVideoFeatureAdapter(nn.Module):
+    """Project cached native feature tensors into the query decoder memory.
+
+    The adapter deliberately keeps each layer at its native token/grid
+    resolution. It flattens native maps into memory tokens and lets the Gaussian
+    query decoder attend across the resulting multi-scale feature set.
+    """
+
+    def __init__(self, output_dim, feature_channels, feature_layers=None):
+        super().__init__()
+        if not isinstance(feature_channels, Mapping) or not feature_channels:
+            raise ValueError("video_feature_channels must be a non-empty mapping for precomputed features.")
+        self.feature_channels = {str(name): int(channels) for name, channels in feature_channels.items()}
+        self.feature_layers = tuple(str(name) for name in (feature_layers or self.feature_channels.keys()))
+        missing = [name for name in self.feature_layers if name not in self.feature_channels]
+        if missing:
+            raise ValueError(
+                f"video_feature_layers contains layer(s) without channel counts: {missing}. "
+                f"Known layers: {sorted(self.feature_channels)}"
+            )
+
+        self.safe_names = {name: _safe_module_key(name) for name in self.feature_layers}
+        self.input_norms = nn.ModuleDict()
+        self.output_projs = nn.ModuleDict()
+        self.layer_embeddings = nn.ParameterDict()
+        for name in self.feature_layers:
+            safe_name = self.safe_names[name]
+            channels = self.feature_channels[name]
+            if channels <= 0:
+                raise ValueError(f"Feature channel count for {name!r} must be positive, got {channels}.")
+            self.input_norms[safe_name] = nn.LayerNorm(channels)
+            self.output_projs[safe_name] = nn.Linear(channels, output_dim)
+            self.layer_embeddings[safe_name] = nn.Parameter(torch.zeros(output_dim))
+
+    def forward(self, feature_payload, frame_times=None):
+        del frame_times
+        if torch.is_tensor(feature_payload):
+            if len(self.feature_layers) != 1:
+                raise ValueError(
+                    "Tensor feature payloads require exactly one configured video_feature_layer; "
+                    f"got {self.feature_layers}."
+                )
+            feature_payload = {self.feature_layers[0]: feature_payload}
+        if not isinstance(feature_payload, Mapping):
+            raise TypeError(
+                "Precomputed video features must be a tensor or a mapping of layer name to tensor, "
+                f"got {type(feature_payload).__name__}."
+            )
+
+        projected = []
+        for name in self.feature_layers:
+            if name not in feature_payload:
+                raise KeyError(f"Missing cached video feature layer {name!r}.")
+            safe_name = self.safe_names[name]
+            channels = self.feature_channels[name]
+            tokens = _flatten_precomputed_feature(feature_payload[name], channels)
+            proj = self.output_projs[safe_name]
+            tokens = tokens.to(device=proj.weight.device, dtype=proj.weight.dtype)
+            tokens = proj(self.input_norms[safe_name](tokens))
+            tokens = tokens + self.layer_embeddings[safe_name].view(1, 1, -1)
+            projected.append(tokens)
+
+        return torch.cat(projected, dim=1)
+
+
+class HuggingFaceVJEPAVideoEncoder(nn.Module):
+    def __init__(
+        self,
+        output_dim,
+        model_id="facebook/vjepa2-vitl-fpc64-256",
+        feature_dim=None,
+        freeze=True,
+        attn_implementation="sdpa",
+        dtype="auto",
+    ):
+        super().__init__()
+        try:
+            from transformers import AutoModel, AutoVideoProcessor
+        except ImportError as exc:
+            raise ImportError(
+                "video_encoder_backend='vjepa_hf' requires transformers. "
+                "Install the current V-JEPA-capable build with: "
+                "pip install -U git+https://github.com/huggingface/transformers"
+            ) from exc
+
+        self.model_id = model_id
+        self.freeze = bool(freeze)
+        self.processor = AutoVideoProcessor.from_pretrained(model_id)
+        model_kwargs = {}
+        load_dtype = _resolve_vjepa_dtype(dtype)
+        if load_dtype is not None:
+            model_kwargs["torch_dtype"] = load_dtype
+        if attn_implementation:
+            model_kwargs["attn_implementation"] = attn_implementation
+        try:
+            self.encoder = AutoModel.from_pretrained(model_id, **model_kwargs)
+        except TypeError:
+            if "torch_dtype" not in model_kwargs:
+                raise
+            model_kwargs["dtype"] = model_kwargs.pop("torch_dtype")
+            self.encoder = AutoModel.from_pretrained(model_id, **model_kwargs)
+
+        self.encoder.eval()
+        if self.freeze:
+            for parameter in self.encoder.parameters():
+                parameter.requires_grad_(False)
+
+        hidden_dim = int(feature_dim or _infer_encoder_feature_dim(self.encoder) or 0)
+        if hidden_dim <= 0:
+            raise ValueError(
+                f"Could not infer hidden size for V-JEPA model {model_id!r}; set model.vjepa_feature_dim."
+            )
+        self.input_norm = nn.LayerNorm(hidden_dim)
+        self.output_proj = nn.Linear(hidden_dim, output_dim)
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.freeze:
+            self.encoder.eval()
+        return self
+
+    @staticmethod
+    def _processor_video(video):
+        video = video.detach().clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8).cpu()
+        if video.shape[0] == 1:
+            return video[0]
+        return [video[index] for index in range(video.shape[0])]
+
+    def _processor_inputs(self, video):
+        processed = self.processor(self._processor_video(video), return_tensors="pt")
+        model_device = _first_parameter_device(self.encoder)
+        model_dtype = _first_parameter_dtype(self.encoder)
+        inputs = {}
+        for key, value in processed.items():
+            value = value.to(model_device)
+            if torch.is_floating_point(value):
+                value = value.to(dtype=model_dtype)
+            inputs[key] = value
+        return inputs
+
+    def _extract_features(self, inputs):
+        if hasattr(self.encoder, "get_vision_features"):
+            try:
+                return self.encoder.get_vision_features(**inputs)
+            except TypeError:
+                return self.encoder.get_vision_features(inputs["pixel_values_videos"])
+        try:
+            outputs = self.encoder(**inputs, skip_predictor=True)
+        except TypeError:
+            outputs = self.encoder(**inputs)
+        return outputs.last_hidden_state
+
+    def forward(self, video, frame_times=None):
+        del frame_times
+        inputs = self._processor_inputs(video)
+        context = torch.no_grad() if self.freeze else nullcontext()
+        with context:
+            features = self._extract_features(inputs)
+        features = _as_feature_tokens(features, feature_dim=self.input_norm.normalized_shape[0])
+        features = features.to(device=self.output_proj.weight.device, dtype=self.output_proj.weight.dtype)
+        return self.output_proj(self.input_norm(features))
+
+
+class TorchHubVJEPAVideoEncoder(nn.Module):
+    def __init__(
+        self,
+        output_dim,
+        model_id="vjepa2_1_vit_base_384",
+        feature_dim=None,
+        freeze=True,
+        pretrained=True,
+        crop_size=None,
+        checkpoint_url=None,
+        checkpoint_key=None,
+    ):
+        super().__init__()
+        self.model_id = model_id
+        self.freeze = bool(freeze)
+        self.crop_size = int(crop_size or (384 if "384" in model_id else 256))
+        self.checkpoint_url = checkpoint_url
+        self.checkpoint_key = checkpoint_key
+        load_weights_after_init = bool(pretrained) and (
+            checkpoint_url is not None or str(model_id) in VJEPA_TORCHHUB_CHECKPOINTS
+        )
+        hub_pretrained = bool(pretrained) and not load_weights_after_init
+        try:
+            try:
+                loaded = torch.hub.load("facebookresearch/vjepa2", model_id, pretrained=hub_pretrained)
+            except TypeError:
+                loaded = torch.hub.load("facebookresearch/vjepa2", model_id)
+        except ImportError as exc:
+            raise ImportError(
+                "video_encoder_backend='vjepa_torchhub' requires the V-JEPA 2 repo dependencies "
+                "(notably timm and einops). Install them before loading the torchhub encoder."
+            ) from exc
+        self.encoder = loaded[0] if isinstance(loaded, (tuple, list)) else loaded
+        if load_weights_after_init:
+            _load_torchhub_encoder_checkpoint(
+                self.encoder,
+                model_id=model_id,
+                checkpoint_url=checkpoint_url,
+                checkpoint_key=checkpoint_key,
+            )
+        self.encoder.eval()
+        if self.freeze:
+            for parameter in self.encoder.parameters():
+                parameter.requires_grad_(False)
+
+        hidden_dim = int(feature_dim or _infer_encoder_feature_dim(self.encoder) or 0)
+        if hidden_dim <= 0:
+            raise ValueError(
+                f"Could not infer hidden size for torchhub V-JEPA model {model_id!r}; "
+                "set model.vjepa_feature_dim."
+            )
+        self.feature_dim = hidden_dim
+        self.input_norm = nn.LayerNorm(hidden_dim)
+        self.output_proj = nn.Linear(hidden_dim, output_dim)
+        mean = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32).view(1, 1, 3, 1, 1)
+        std = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32).view(1, 1, 3, 1, 1)
+        self.register_buffer("imagenet_mean", mean, persistent=False)
+        self.register_buffer("imagenet_std", std, persistent=False)
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.freeze:
+            self.encoder.eval()
+        return self
+
+    def _preprocess(self, video):
+        batch_size, frame_count, channels, height, width = video.shape
+        video = video.detach().float().clamp(0.0, 1.0)
+        if (height, width) != (self.crop_size, self.crop_size):
+            flat = video.reshape(batch_size * frame_count, channels, height, width)
+            flat = F.interpolate(
+                flat,
+                size=(self.crop_size, self.crop_size),
+                mode="bilinear",
+                align_corners=False,
+            )
+            video = flat.reshape(batch_size, frame_count, channels, self.crop_size, self.crop_size)
+        video = (video - self.imagenet_mean) / self.imagenet_std
+        return video.permute(0, 2, 1, 3, 4)
+
+    def forward(self, video, frame_times=None):
+        del frame_times
+        encoder_device = _first_parameter_device(self.encoder)
+        encoder_dtype = _first_parameter_dtype(self.encoder)
+        inputs = self._preprocess(video).to(device=encoder_device, dtype=encoder_dtype)
+        context = torch.no_grad() if self.freeze else nullcontext()
+        with context:
+            features = self.encoder(inputs)
+        features = _as_feature_tokens(features, feature_dim=self.feature_dim)
+        features = features.to(device=self.output_proj.weight.device, dtype=self.output_proj.weight.dtype)
+        return self.output_proj(self.input_norm(features))
+
+
+def build_video_encoder(
+    backend,
+    *,
+    clip_length,
+    image_size,
+    output_dim,
+    bottleneck_dim,
+    num_heads,
+    mlp_ratio,
+    tubelet_size,
+    encoder_self_attn_layers,
+    bottleneck_self_attn_layers,
+    vjepa_model_id,
+    vjepa_feature_dim,
+    vjepa_freeze,
+    vjepa_attn_implementation,
+    vjepa_dtype,
+    vjepa_pretrained,
+    vjepa_crop_size,
+    vjepa_checkpoint_url,
+    video_feature_layers=None,
+    video_feature_channels=None,
+):
+    backend = str(backend).lower()
+    if backend == "local":
+        return VideoEncoder(
+            clip_length=clip_length,
+            image_size=image_size,
+            dim=output_dim,
+            bottleneck_dim=bottleneck_dim,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            tubelet_size=tubelet_size,
+            encoder_self_attn_layers=encoder_self_attn_layers,
+            bottleneck_self_attn_layers=bottleneck_self_attn_layers,
+        )
+    if backend == "vjepa_hf":
+        if vjepa_model_id is None:
+            vjepa_model_id = "facebook/vjepa2-vitl-fpc64-256"
+        return HuggingFaceVJEPAVideoEncoder(
+            output_dim=output_dim,
+            model_id=vjepa_model_id,
+            feature_dim=vjepa_feature_dim,
+            freeze=vjepa_freeze,
+            attn_implementation=vjepa_attn_implementation,
+            dtype=vjepa_dtype,
+        )
+    if backend == "vjepa_torchhub":
+        if vjepa_model_id is None or str(vjepa_model_id).startswith("facebook/"):
+            vjepa_model_id = "vjepa2_1_vit_base_384"
+        if vjepa_feature_dim is None and str(vjepa_model_id) == "vjepa2_1_vit_base_384":
+            vjepa_feature_dim = 768
+        return TorchHubVJEPAVideoEncoder(
+            output_dim=output_dim,
+            model_id=vjepa_model_id,
+            feature_dim=vjepa_feature_dim,
+            freeze=vjepa_freeze,
+            pretrained=vjepa_pretrained,
+            crop_size=vjepa_crop_size,
+            checkpoint_url=vjepa_checkpoint_url,
+        )
+    if backend in {"precomputed", "precomputed_ltx"}:
+        return PrecomputedVideoFeatureAdapter(
+            output_dim=output_dim,
+            feature_channels=video_feature_channels,
+            feature_layers=video_feature_layers,
+        )
+    raise ValueError(
+        f"Unknown video_encoder_backend={backend!r}. "
+        "Expected one of: local, vjepa_hf, vjepa_torchhub, precomputed, precomputed_ltx."
+    )
+
+
 class LearnedQueryTokenBank(nn.Module):
     def __init__(self, total_tokens, dim, init_std=0.02):
         super().__init__()
@@ -499,9 +975,20 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         head_output_init_std=None,
         position_init_extent_coverage=0.0,
         rotation_init="random",
+        video_encoder_backend="local",
         tubelet_size=(4, 16, 16),
         encoder_self_attn_layers=1,
         bottleneck_self_attn_layers=4,
+        vjepa_model_id=None,
+        vjepa_feature_dim=None,
+        vjepa_freeze=True,
+        vjepa_attn_implementation="sdpa",
+        vjepa_dtype="auto",
+        vjepa_pretrained=True,
+        vjepa_crop_size=None,
+        vjepa_checkpoint_url=None,
+        video_feature_layers=None,
+        video_feature_channels=None,
         cross_attn_layers=1,
         base_fov_degrees=60.0,
         base_radius=3.0,
@@ -549,16 +1036,28 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         self.gaussians_per_token = gaussians_per_token
         self.dynamic_time_basis_count = int(dynamic_time_basis_count)
         self.dynamic_time_max_frequency = float(dynamic_time_max_frequency)
-        self.video_encoder = VideoEncoder(
+        self.video_encoder_backend = str(video_encoder_backend).lower()
+        self.video_encoder = build_video_encoder(
+            self.video_encoder_backend,
             clip_length=clip_length,
             image_size=image_size,
-            dim=feat_dim,
+            output_dim=feat_dim,
             bottleneck_dim=bottleneck_dim,
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
             tubelet_size=tubelet_size,
             encoder_self_attn_layers=encoder_self_attn_layers,
             bottleneck_self_attn_layers=bottleneck_self_attn_layers,
+            vjepa_model_id=vjepa_model_id,
+            vjepa_feature_dim=vjepa_feature_dim,
+            vjepa_freeze=vjepa_freeze,
+            vjepa_attn_implementation=vjepa_attn_implementation,
+            vjepa_dtype=vjepa_dtype,
+            vjepa_pretrained=vjepa_pretrained,
+            vjepa_crop_size=vjepa_crop_size,
+            vjepa_checkpoint_url=vjepa_checkpoint_url,
+            video_feature_layers=video_feature_layers,
+            video_feature_channels=video_feature_channels,
         )
         self.query_tokens = LearnedQueryTokenBank(
             total_tokens=self.total_tokens,
@@ -790,22 +1289,26 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         )
 
     def forward(self, video, decode_times, input_times=None):
-        if video.ndim != 5:
-            raise ValueError(f"Expected video of shape (B, T, C, H, W), got {tuple(video.shape)}")
         if decode_times.ndim != 2:
             raise ValueError(f"Expected decode_times of shape (B, T), got {tuple(decode_times.shape)}")
-        if video.shape[0] != 1:
-            raise ValueError("DynamicVideoTokenGSImplicitCamera currently expects clip batch size 1.")
-        if video.shape[1] != decode_times.shape[1]:
-            raise ValueError("decode_times must have one value per frame in the clip.")
+        precomputed_input = self.video_encoder_backend in {"precomputed", "precomputed_ltx"}
+        if not precomputed_input:
+            if video.ndim != 5:
+                raise ValueError(f"Expected video of shape (B, T, C, H, W), got {tuple(video.shape)}")
+            if video.shape[0] != 1:
+                raise ValueError("DynamicVideoTokenGSImplicitCamera currently expects clip batch size 1.")
+            if video.shape[1] != decode_times.shape[1]:
+                raise ValueError("decode_times must have one value per frame in the clip.")
         if input_times is None:
             input_times = decode_times
         if input_times.ndim != 2:
             raise ValueError(f"Expected input_times of shape (B, T), got {tuple(input_times.shape)}")
-        if video.shape[1] != input_times.shape[1]:
+        if not precomputed_input and video.shape[1] != input_times.shape[1]:
             raise ValueError("input_times must have one value per input frame in the clip.")
 
         video_tokens = self.video_encoder(video, frame_times=input_times)
+        if video_tokens.shape[0] != 1:
+            raise ValueError("DynamicVideoTokenGSImplicitCamera currently expects feature batch size 1.")
         fixed_camera_queries = self.refine_queries(video_tokens, decode_time=None)
         fixed_global_camera_token = fixed_camera_queries[:, 0, :]
         if self.use_static_dynamic_split:
@@ -851,10 +1354,11 @@ class DynamicVideoTokenGSImplicitCameraSinusoidalTime(DynamicVideoTokenGSImplici
             "num_bands": time_fourier_bands,
             "max_frequency": time_max_frequency,
         }
-        self.video_encoder.stage1_time_proj = SinusoidalTimeConditioner(1, feat_dim, **conditioner_kwargs)
-        self.video_encoder.stage1_span_proj = SinusoidalTimeConditioner(2, feat_dim, **conditioner_kwargs)
-        self.video_encoder.stage2_time_proj = SinusoidalTimeConditioner(1, bottleneck_dim, **conditioner_kwargs)
-        self.video_encoder.stage2_span_proj = SinusoidalTimeConditioner(2, bottleneck_dim, **conditioner_kwargs)
+        if isinstance(self.video_encoder, VideoEncoder):
+            self.video_encoder.stage1_time_proj = SinusoidalTimeConditioner(1, feat_dim, **conditioner_kwargs)
+            self.video_encoder.stage1_span_proj = SinusoidalTimeConditioner(2, feat_dim, **conditioner_kwargs)
+            self.video_encoder.stage2_time_proj = SinusoidalTimeConditioner(1, bottleneck_dim, **conditioner_kwargs)
+            self.video_encoder.stage2_span_proj = SinusoidalTimeConditioner(2, bottleneck_dim, **conditioner_kwargs)
         self.time_proj = SinusoidalTimeConditioner(1, feat_dim, **conditioner_kwargs)
         self.head_time_proj = SinusoidalTimeConditioner(1, feat_dim, **conditioner_kwargs)
         self.path_camera_head = TimeConditionedPathCameraHead(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import sys
 from contextlib import nullcontext
@@ -47,6 +48,15 @@ LOSS_OPTION_DEFAULTS = {
 }
 
 
+DATA_OPTION_DEFAULTS = {
+    "manifest_path": None,
+    "split": "train",
+    "eval_manifest_path": None,
+    "eval_split": "test",
+    "eval_max_sequences": 1,
+}
+
+
 MODEL_OPTION_DEFAULTS = {
     "variant": "learned_time_orbit_path",
     "xy_extent": None,
@@ -61,6 +71,17 @@ MODEL_OPTION_DEFAULTS = {
     "head_output_init_std": None,
     "position_init_extent_coverage": 0.0,
     "rotation_init": "random",
+    "video_encoder_backend": "local",
+    "vjepa_model_id": None,
+    "vjepa_feature_dim": None,
+    "vjepa_freeze": True,
+    "vjepa_attn_implementation": "sdpa",
+    "vjepa_dtype": "auto",
+    "vjepa_pretrained": True,
+    "vjepa_crop_size": None,
+    "vjepa_checkpoint_url": None,
+    "video_feature_layers": None,
+    "video_feature_channels": None,
     "time_fourier_bands": 8,
     "time_max_frequency": 128.0,
     "ray_condition_grid_size": 16,
@@ -93,6 +114,8 @@ CAMERA_OPTION_DEFAULTS = {
 
 @dataclass
 class StepResult:
+    source_path: Path | None
+    sequence_frame_count: int
     clip_frames: torch.Tensor
     preview_render: torch.Tensor | None
     camera_state: CameraState
@@ -109,11 +132,47 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     if config is None:
         raise ValueError("A train config is required. Pass a JSONC path or config dict.")
     cfg = resolved_config(config, ("data", "model", "camera", "render", "train", "losses", "logging"))
-    cfg["data"]["sequence_dir"] = Path(cfg["data"]["sequence_dir"])
+    apply_defaults(cfg["data"], DATA_OPTION_DEFAULTS)
+    cfg["data"]["sequence_dir"] = path_or_none(cfg["data"].get("sequence_dir"))
     cfg["data"]["frames_dir"] = path_or_none(cfg["data"]["frames_dir"])
     cfg["data"]["video_path"] = path_or_none(cfg["data"]["video_path"])
+    cfg["data"]["manifest_path"] = path_or_none(cfg["data"]["manifest_path"])
+    cfg["data"]["eval_manifest_path"] = path_or_none(cfg["data"]["eval_manifest_path"])
+    cfg["data"]["split"] = str(cfg["data"]["split"])
+    cfg["data"]["eval_split"] = str(cfg["data"]["eval_split"])
+    cfg["data"]["eval_max_sequences"] = int(cfg["data"]["eval_max_sequences"])
+    if cfg["data"]["manifest_path"] is None and cfg["data"]["sequence_dir"] is None:
+        raise ValueError("config['data'] requires either sequence_dir or manifest_path.")
+    if cfg["data"]["eval_max_sequences"] < 0:
+        raise ValueError("config['data']['eval_max_sequences'] must be >= 0.")
     apply_defaults(cfg["model"], MODEL_OPTION_DEFAULTS)
     cfg["model"]["variant"] = str(cfg["model"]["variant"]).lower()
+    cfg["model"]["video_encoder_backend"] = str(cfg["model"]["video_encoder_backend"]).lower()
+    if cfg["model"]["video_encoder_backend"] not in {
+        "local",
+        "vjepa_hf",
+        "vjepa_torchhub",
+        "precomputed",
+        "precomputed_ltx",
+    }:
+        raise ValueError(
+            f"Unknown model.video_encoder_backend={cfg['model']['video_encoder_backend']!r}. "
+            "Expected one of: local, vjepa_hf, vjepa_torchhub, precomputed, precomputed_ltx."
+        )
+    if cfg["model"]["vjepa_feature_dim"] is not None:
+        cfg["model"]["vjepa_feature_dim"] = int(cfg["model"]["vjepa_feature_dim"])
+    if cfg["model"]["vjepa_crop_size"] is not None:
+        cfg["model"]["vjepa_crop_size"] = int(cfg["model"]["vjepa_crop_size"])
+    if cfg["model"]["vjepa_checkpoint_url"] is not None:
+        cfg["model"]["vjepa_checkpoint_url"] = str(cfg["model"]["vjepa_checkpoint_url"])
+    if cfg["model"]["video_feature_layers"] is not None:
+        cfg["model"]["video_feature_layers"] = [str(name) for name in cfg["model"]["video_feature_layers"]]
+    if cfg["model"]["video_feature_channels"] is not None:
+        if not isinstance(cfg["model"]["video_feature_channels"], dict):
+            raise ValueError("model.video_feature_channels must be a mapping of layer name to channel count.")
+        cfg["model"]["video_feature_channels"] = {
+            str(name): int(channels) for name, channels in cfg["model"]["video_feature_channels"].items()
+        }
     if cfg["model"]["xy_extent"] is None:
         cfg["model"]["xy_extent"] = cfg["model"]["scene_extent"]
     if cfg["model"]["z_min"] is None:
@@ -218,6 +277,72 @@ def prepare_clip(sequence_data: SequenceData, clip_indices: torch.Tensor) -> tup
     time_denominator = max(sequence_data.frame_count - 1, 1)
     clip_times = (clip_indices.to(dtype=torch.float32) / float(time_denominator)).reshape(1, -1)
     return clip_frames.unsqueeze(0), clip_times
+
+
+def load_manifest_entries(manifest_path: Path, split: str | None = None) -> list[dict[str, Any]]:
+    entries = []
+    with manifest_path.open() as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            entry = json.loads(stripped)
+            if not isinstance(entry, dict):
+                raise ValueError(f"Expected object on {manifest_path}:{line_number}.")
+            if split is None or str(entry.get("split", "train")) == split:
+                entries.append(entry)
+    if not entries:
+        split_text = f" split={split!r}" if split is not None else ""
+        raise ValueError(f"No manifest entries found in {manifest_path}{split_text}.")
+    return entries
+
+
+def load_manifest_sequence(
+    entry: dict[str, Any],
+    *,
+    data_cfg: dict[str, Any],
+    model_cfg: dict[str, Any],
+    device: torch.device,
+) -> SequenceData:
+    sequence_dir = Path(entry["sequence_dir"])
+    frames_dir = path_or_none(entry.get("frames_dir"))
+    if frames_dir is None:
+        frames_dir = resolve_frames_dir(sequence_dir, data_cfg["frames_dir"])
+    video_path = path_or_none(entry.get("video_path"))
+    frame_source = entry.get("frame_source", data_cfg["frame_source"])
+    max_frames = int(entry.get("max_frames", data_cfg["max_frames"]))
+    return load_uncalibrated_sequence(
+        sequence_dir=sequence_dir,
+        frames_dir=frames_dir,
+        video_path=video_path,
+        target_size=model_cfg["size"],
+        max_frames=max_frames,
+        frame_source=frame_source,
+        device=device,
+    )
+
+
+def load_manifest_sequences(
+    manifest_path: Path,
+    *,
+    split: str,
+    data_cfg: dict[str, Any],
+    model_cfg: dict[str, Any],
+    device: torch.device,
+    limit: int = 0,
+) -> list[SequenceData]:
+    entries = load_manifest_entries(manifest_path, split=split)
+    if limit > 0:
+        entries = entries[:limit]
+    return [
+        load_manifest_sequence(
+            entry,
+            data_cfg=data_cfg,
+            model_cfg=model_cfg,
+            device=device,
+        )
+        for entry in entries
+    ]
 
 
 def viewport_cameras(
@@ -450,6 +575,7 @@ def build_model_from_config(config: dict[str, Any]) -> DynamicVideoTokenGSImplic
         head_output_init_std=model_cfg["head_output_init_std"],
         position_init_extent_coverage=model_cfg["position_init_extent_coverage"],
         rotation_init=model_cfg["rotation_init"],
+        video_encoder_backend=model_cfg["video_encoder_backend"],
         tubelet_size=(
             model_cfg["tubelet_size_t"],
             model_cfg["patch_compression"],
@@ -457,6 +583,16 @@ def build_model_from_config(config: dict[str, Any]) -> DynamicVideoTokenGSImplic
         ),
         encoder_self_attn_layers=model_cfg["encoder_self_attn_layers"],
         bottleneck_self_attn_layers=model_cfg["bottleneck_self_attn_layers"],
+        vjepa_model_id=model_cfg["vjepa_model_id"],
+        vjepa_feature_dim=model_cfg["vjepa_feature_dim"],
+        vjepa_freeze=model_cfg["vjepa_freeze"],
+        vjepa_attn_implementation=model_cfg["vjepa_attn_implementation"],
+        vjepa_dtype=model_cfg["vjepa_dtype"],
+        vjepa_pretrained=model_cfg["vjepa_pretrained"],
+        vjepa_crop_size=model_cfg["vjepa_crop_size"],
+        vjepa_checkpoint_url=model_cfg["vjepa_checkpoint_url"],
+        video_feature_layers=model_cfg["video_feature_layers"],
+        video_feature_channels=model_cfg["video_feature_channels"],
         cross_attn_layers=model_cfg["cross_attn_layers"],
         base_fov_degrees=camera_cfg["base_fov_degrees"],
         base_radius=camera_cfg["base_radius"],
@@ -488,8 +624,12 @@ def build_model_from_config(config: dict[str, Any]) -> DynamicVideoTokenGSImplic
 
 
 class Trainer:
+    @classmethod
+    def resolve_config(cls, config: dict[str, Any]) -> dict[str, Any]:
+        return resolve_config(config)
+
     def __init__(self, config: dict[str, Any]) -> None:
-        self.cfg = resolve_config(config)
+        self.cfg = self.resolve_config(config)
         self.data_cfg = self.cfg["data"]
         self.model_cfg = self.cfg["model"]
         self.render_cfg = self.cfg["render"]
@@ -512,18 +652,28 @@ class Trainer:
         self.device = pick_device()
         print(f"Using device: {self.device}")
 
-        self.sequence_data = self.load_sequence_data()
+        self.train_sequences = self.load_train_sequences()
+        self.sequence_data = self.train_sequences[0]
         self.num_frames = self.sequence_data.frame_count
-        if self.num_frames < self.model_cfg["train_frame_count"]:
-            raise ValueError(
-                f"Need at least train_frame_count={self.model_cfg['train_frame_count']} frames, "
-                f"got {self.num_frames} from {self.sequence_data.source_path}"
-            )
+        self.eval_sequences = self.load_eval_sequences()
+        self.validate_train_sequences()
 
+        train_frames = [sequence.frame_count for sequence in self.train_sequences]
+        eval_frames = [sequence.frame_count for sequence in self.eval_sequences]
         print(
-            f"Loaded {self.num_frames} frames from {self.sequence_data.source_path} "
+            f"Loaded {len(self.train_sequences)} train sequence(s), "
+            f"frames min/median/max={min(train_frames)}/{sorted(train_frames)[len(train_frames) // 2]}/{max(train_frames)}"
+        )
+        if self.eval_sequences:
+            print(
+                f"Loaded {len(self.eval_sequences)} eval sequence(s), "
+                f"frames min/median/max={min(eval_frames)}/{sorted(eval_frames)[len(eval_frames) // 2]}/{max(eval_frames)}"
+            )
+        print(
+            f"Primary train source: {self.sequence_data.source_path} "
             f"(source={self.sequence_data.frame_source}, source_total={self.sequence_data.all_frame_count})"
         )
+        self.on_sequences_loaded()
 
         wandb.init(
             project=self.logging_cfg["wandb_project"],
@@ -554,7 +704,12 @@ class Trainer:
         self.renderer_mode, self.effective_gaussians = pick_renderer_mode_from_config(self.cfg)
         self.gt_video_logged = False
 
-    def load_sequence_data(self) -> SequenceData:
+    def on_sequences_loaded(self) -> None:
+        pass
+
+    def load_single_sequence_data(self) -> SequenceData:
+        if self.data_cfg["sequence_dir"] is None:
+            raise ValueError("config['data']['sequence_dir'] is required when manifest_path is not set.")
         if self.data_cfg["frame_source"] == "explicit_video" and self.data_cfg["video_path"] is None:
             raise ValueError("config['data']['video_path'] is required when frame_source='explicit_video'.")
         frames_dir = resolve_frames_dir(self.data_cfg["sequence_dir"], self.data_cfg["frames_dir"])
@@ -568,18 +723,82 @@ class Trainer:
             device=self.device,
         )
 
+    def load_train_sequences(self) -> list[SequenceData]:
+        if self.data_cfg["manifest_path"] is None:
+            return [self.load_single_sequence_data()]
+        return load_manifest_sequences(
+            self.data_cfg["manifest_path"],
+            split=self.data_cfg["split"],
+            data_cfg=self.data_cfg,
+            model_cfg=self.model_cfg,
+            device=self.device,
+        )
+
+    def load_eval_sequences(self) -> list[SequenceData]:
+        eval_limit = int(self.data_cfg["eval_max_sequences"])
+        if eval_limit == 0:
+            return []
+        eval_manifest_path = self.data_cfg["eval_manifest_path"] or self.data_cfg["manifest_path"]
+        if eval_manifest_path is None:
+            return [self.sequence_data] if hasattr(self, "sequence_data") else []
+        return load_manifest_sequences(
+            eval_manifest_path,
+            split=self.data_cfg["eval_split"],
+            data_cfg=self.data_cfg,
+            model_cfg=self.model_cfg,
+            device=self.device,
+            limit=eval_limit,
+        )
+
+    def validate_train_sequences(self) -> None:
+        if not self.train_sequences:
+            raise ValueError("No train sequences were loaded.")
+        minimum_required = int(self.model_cfg["train_frame_count"])
+        too_short = [
+            sequence
+            for sequence in self.train_sequences
+            if sequence.frame_count < minimum_required
+        ]
+        if too_short:
+            examples = ", ".join(str(sequence.source_path) for sequence in too_short[:3])
+            raise ValueError(
+                f"Need at least train_frame_count={minimum_required} frames in every train sequence; "
+                f"{len(too_short)} sequence(s) were too short. Examples: {examples}"
+            )
+
     def autocast_context(self):
         if self.amp_available:
             return torch.autocast(device_type=self.device.type, dtype=self.amp_dtype)
         return nullcontext()
 
-    def sample_clip(self) -> tuple[torch.Tensor, torch.Tensor]:
-        clip_indices = select_window_indices(self.num_frames, self.model_cfg["train_frame_count"], device=self.device)
-        return prepare_clip(self.sequence_data, clip_indices)
+    def sample_sequence(self) -> SequenceData:
+        if len(self.train_sequences) == 1:
+            return self.train_sequences[0]
+        index = int(torch.randint(len(self.train_sequences), (1,)).item())
+        return self.train_sequences[index]
 
-    def forward_clip(self, clip_frames: torch.Tensor, clip_times: torch.Tensor) -> GaussianSequence:
+    def sample_clip(self) -> tuple[SequenceData, torch.Tensor, torch.Tensor]:
+        sequence_data = self.sample_sequence()
+        clip_indices = select_window_indices(
+            sequence_data.frame_count,
+            self.model_cfg["train_frame_count"],
+            device=self.device,
+        )
+        clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
+        return sequence_data, clip_frames, clip_times
+
+    def model_input_for_clip(
+        self,
+        sequence_data: SequenceData,
+        clip_frames: torch.Tensor,
+        clip_times: torch.Tensor,
+    ) -> Any:
+        del sequence_data, clip_times
+        return clip_frames
+
+    def forward_clip(self, model_input: Any, clip_times: torch.Tensor) -> GaussianSequence:
         with fast_attn_context(self.device), self.autocast_context():
-            return self.model(clip_frames, decode_times=clip_times)
+            return self.model(model_input, decode_times=clip_times)
 
     def compute_camera_losses(
         self,
@@ -707,8 +926,9 @@ class Trainer:
 
     def step(self, keep_preview: bool = False) -> StepResult:
         self.optimizer.zero_grad(set_to_none=True)
-        clip_frames, clip_times = self.sample_clip()
-        decoded = self.forward_clip(clip_frames, clip_times)
+        sequence_data, clip_frames, clip_times = self.sample_clip()
+        model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
+        decoded = self.forward_clip(model_input, clip_times)
         if decoded.camera_state is None:
             raise ValueError("Implicit-camera video decode must include camera_state.")
 
@@ -728,6 +948,8 @@ class Trainer:
         self.optimizer.step()
         loss = recon_loss + camera_loss.detach() + bank_rate_loss.detach()
         return StepResult(
+            source_path=sequence_data.source_path,
+            sequence_frame_count=sequence_data.frame_count,
             clip_frames=clip_frames,
             preview_render=preview_render,
             camera_state=decoded.camera_state,
@@ -784,7 +1006,9 @@ class Trainer:
             "Loss/CameraGlobal": result.camera_global_loss.item(),
             "Loss/BankRate": result.bank_rate_loss.item(),
             "TrainFrameCount": int(self.model_cfg["train_frame_count"]),
-            "SequenceFrames": self.num_frames,
+            "SequenceFrames": result.sequence_frame_count,
+            "TrainSequenceCount": len(self.train_sequences),
+            "EvalSequenceCount": len(self.eval_sequences),
             "InputSize": int(self.model_cfg["size"]),
             "RenderSize": int(self.render_size),
             "Camera/FOVDegrees": metrics["fov_degrees"],
@@ -802,38 +1026,93 @@ class Trainer:
         target = resize_images(result.clip_frames[0, 0], self.render_size)
         return make_preview_image(target, result.preview_render, caption=f"Step {step}")
 
-    def validation_video_payload(self) -> dict[str, Any]:
-        rendered_sequence, eval_camera_state = render_full_sequence(
-            self.model,
-            self.sequence_data,
-            self.cfg,
-            self.renderer_mode,
-            self.dense_grid,
-            self.amp_available,
-            self.amp_dtype,
-            self.device,
+    @torch.no_grad()
+    def render_full_sequence(self, sequence_data: SequenceData) -> tuple[torch.Tensor, CameraState]:
+        was_training = self.model.training
+        self.model.eval()
+        clip_length = self.model_cfg["train_frame_count"]
+        num_frames = sequence_data.frame_count
+        rendered_frames = [None] * num_frames
+        camera_states = []
+
+        for end in range(clip_length, num_frames + clip_length, clip_length):
+            clip_end = min(end, num_frames)
+            clip_start = max(0, clip_end - clip_length)
+            clip_indices = torch.arange(clip_start, clip_end, device=self.device)
+            clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
+            model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
+            decoded = self.forward_clip(model_input, clip_times)
+            if decoded.cameras is None:
+                raise ValueError("Implicit-camera video decode must include cameras.")
+            if decoded.camera_state is None:
+                raise ValueError("Implicit-camera video decode must include camera_state.")
+            camera_states.append(decoded.camera_state)
+            rendered_clip = render_clip_sequence(
+                decoded,
+                decoded.cameras,
+                renderer_mode=self.renderer_mode,
+                render_cfg=self.render_cfg,
+                input_size=self.model_cfg["size"],
+                render_size=self.render_size,
+                dense_grid=self.dense_grid,
+            ).cpu()
+
+            for local_index, frame_index in enumerate(clip_indices.tolist()):
+                if rendered_frames[frame_index] is not None:
+                    continue
+                rendered_frames[frame_index] = rendered_clip[local_index]
+
+        if was_training:
+            self.model.train()
+        merged_camera_state = CameraState(
+            fov_degrees=torch.stack([state.fov_degrees for state in camera_states]).mean(),
+            radius=torch.stack([state.radius for state in camera_states]).mean(),
+            global_residuals=torch.stack([state.global_residuals for state in camera_states]).mean(dim=0),
+            rotation_delta=torch.cat([state.rotation_delta for state in camera_states], dim=0),
+            translation_delta=torch.cat([state.translation_delta for state in camera_states], dim=0),
+            path_residuals=torch.cat([state.path_residuals for state in camera_states], dim=0),
         )
-        gt_sequence = resize_images(self.sequence_data.frames, self.render_size).detach().cpu()
-        payload = {
-            **build_validation_video_payload(
-                rendered_sequence,
-                gt_sequence,
-                self.sequence_data.video_fps,
-            ),
-            **eval_metric_payload(rendered_sequence, gt_sequence, self.loss_cfg),
-            **temporal_similarity_payload(rendered_sequence, gt_sequence, self.loss_cfg),
-            "Camera/EvalFOVDegrees": eval_camera_state.fov_degrees.item(),
-            "Camera/EvalRadius": eval_camera_state.radius.item(),
-            "Camera/EvalRotationDeltaMeanDegrees": (
-                torch.rad2deg(torch.linalg.norm(eval_camera_state.rotation_delta, dim=-1)).mean().item()
-            ),
-            "Camera/EvalTranslationDeltaMean": (
-                torch.linalg.norm(eval_camera_state.translation_delta, dim=-1).mean().item()
-            ),
+        return torch.stack(rendered_frames, dim=0), merged_camera_state
+
+    def validation_video_payload(self) -> dict[str, Any]:
+        sequences = self.eval_sequences or [self.sequence_data]
+        metric_payloads = []
+        payload: dict[str, Any] = {
+            "Eval/SequenceCount": len(sequences),
         }
-        if not self.gt_video_logged:
-            payload["GT_Video"] = make_wandb_video(gt_sequence, self.sequence_data.video_fps)
-            self.gt_video_logged = True
+        for sequence_index, sequence_data in enumerate(sequences):
+            rendered_sequence, eval_camera_state = self.render_full_sequence(sequence_data)
+            gt_sequence = resize_images(sequence_data.frames, self.render_size).detach().cpu()
+            metric_payloads.append(
+                {
+                    **eval_metric_payload(rendered_sequence, gt_sequence, self.loss_cfg),
+                    **temporal_similarity_payload(rendered_sequence, gt_sequence, self.loss_cfg),
+                    "Camera/EvalFOVDegrees": eval_camera_state.fov_degrees.item(),
+                    "Camera/EvalRadius": eval_camera_state.radius.item(),
+                    "Camera/EvalRotationDeltaMeanDegrees": (
+                        torch.rad2deg(torch.linalg.norm(eval_camera_state.rotation_delta, dim=-1)).mean().item()
+                    ),
+                    "Camera/EvalTranslationDeltaMean": (
+                        torch.linalg.norm(eval_camera_state.translation_delta, dim=-1).mean().item()
+                    ),
+                }
+            )
+            if sequence_index == 0:
+                payload.update(
+                    build_validation_video_payload(
+                        rendered_sequence,
+                        gt_sequence,
+                        sequence_data.video_fps,
+                    )
+                )
+                if not self.gt_video_logged:
+                    payload["GT_Video"] = make_wandb_video(gt_sequence, sequence_data.video_fps)
+                    self.gt_video_logged = True
+
+        metric_keys = sorted({key for item in metric_payloads for key in item})
+        for key in metric_keys:
+            values = [item[key] for item in metric_payloads if key in item]
+            payload[key] = sum(values) / len(values)
         return payload
 
     def val_log(self, step: int, result: StepResult) -> None:
@@ -861,7 +1140,7 @@ class Trainer:
         )
         print(
             "Starting DynamicVideoTokenGSImplicitCamera Training: "
-            f"{self.num_frames} frames, train_frame_count={self.model_cfg['train_frame_count']}, "
+            f"{len(self.train_sequences)} train sequence(s), train_frame_count={self.model_cfg['train_frame_count']}, "
             f"input_size={self.model_cfg['size']}, render_size={self.render_size}, "
             f"1 global camera token + 1 path token + {token_summary} x "
             f"{self.model_cfg['gaussians_per_token']} gaussians/token = "
@@ -872,6 +1151,11 @@ class Trainer:
             "Camera model: "
             f"global_head={self.cfg['camera']['global_head']}, "
             f"lens_model={self.cfg['camera']['lens_model']}"
+        )
+        print(
+            "Video encoder: "
+            f"backend={self.model_cfg['video_encoder_backend']}, "
+            f"vjepa_model_id={self.model_cfg['vjepa_model_id']}"
         )
         print(
             f"Temporal reconstruction chunk size: {self.temporal_recon_chunk_size(self.model_cfg['train_frame_count'])}"

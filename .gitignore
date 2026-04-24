@@ -7,6 +7,7 @@ __pycache__/
 tea_debug.log
 wandb/
 benchmark_outputs/
+data/feature_cache/
 
 test_data/dust3r_outputs/
 

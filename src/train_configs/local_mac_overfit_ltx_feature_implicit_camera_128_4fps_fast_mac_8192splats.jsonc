@@ -1,0 +1,143 @@
+{
+  // LTX single-step feature-cache fork of the video-token implicit-camera baseline.
+  // Requires a Diffusers build with LTXConditionPipeline before first cache bake.
+  "arch": "ltx_feature_implicit_camera",
+  "data": {
+    "sequence_dir": "test_data",
+    "frames_dir": null,
+    "video_path": "test_data/test_video_small_128_4fps.mp4",
+    "frame_source": "explicit_video",
+    "max_frames": 0
+  },
+  "features": {
+    "extractor": "ltx",
+    "model_id": "Lightricks/LTX-Video-0.9.5",
+    "cache_dir": "data/feature_cache/ltx",
+    // Change this whenever the layer list, timestep policy, or preprocessing
+    // semantics change and every sample feature cache should be busted.
+    "sample_cache_key": "ltx095-zero-snr-transformer-blocks-4-12-20-v1",
+    "cache_version": 1,
+    "force_rebake": false,
+    "keep_in_memory": true,
+    "save_dtype": "float16",
+    "torch_dtype": "float32",
+    // These are module paths under pipeline.transformer. If a future Diffusers
+    // LTX build renames blocks, the trainer error prints candidate paths.
+    "layers": [
+      "transformer_blocks.4",
+      "transformer_blocks.12",
+      "transformer_blocks.20"
+    ],
+    "prompt": "",
+    "negative_prompt": null,
+    "height": 128,
+    "width": 128,
+    "num_frames": null,
+    "num_inference_steps": 1,
+    "timestep": 999,
+    "guidance_scale": 1.0,
+    "output_type": "latent"
+  },
+  "model": {
+    "variant": "learned_time_orbit_path",
+    "video_encoder_backend": "precomputed_ltx",
+    // Left null intentionally: the LTX trainer infers these after the first
+    // successful bake, then builds the trainable projection adapter.
+    "video_feature_layers": null,
+    "video_feature_channels": null,
+    "size": 128,
+    "train_frame_count": 16,
+    "tokens": 128,
+    "gaussians_per_token": 64,
+    "model_dim": 128,
+    "bottleneck_dim": 256,
+    "num_heads": 8,
+    "mlp_ratio": 4.0,
+    "scene_extent": 1.5,
+    "xy_extent": 1.5,
+    "z_min": 0.5,
+    "z_max": 5.0,
+    "scale_init": 0.02,
+    "scale_init_log_jitter": 0.7,
+    "opacity_init": 0.1,
+    "query_token_init_std": 0.3,
+    "head_hidden_dim": 64,
+    "head_hidden_layers": 1,
+    "head_output_init_std": 0.06,
+    "position_init_extent_coverage": 0.9,
+    "rotation_init": "random",
+    "tubelet_size_t": 4,
+    "patch_compression": 16,
+    "encoder_self_attn_layers": 1,
+    "bottleneck_self_attn_layers": 2,
+    "cross_attn_layers": 1,
+    "time_fourier_bands": 8,
+    "time_max_frequency": 128.0
+  },
+  "camera": {
+    "global_head": "legacy_orbit",
+    "lens_model": "pinhole",
+    "base_fov_degrees": 60.0,
+    "base_radius": 3.0,
+    "max_fov_delta_degrees": 15.0,
+    "max_radius_scale": 1.5,
+    "max_rotation_degrees": 5.0,
+    "max_translation_ratio": 0.2
+  },
+  "render": {
+    "renderer": "fast_mac",
+    "render_size": 128,
+    "auto_dense_limit": 400000,
+    "tile_size": 16,
+    "bound_scale": 3.0,
+    "near_plane": 0.05,
+    "alpha_threshold": 0.00392156862745098,
+    "fast_mac": {
+      "tile_size": 16,
+      "max_fast_pairs": 2048,
+      "alpha_threshold": 0.00392156862745098,
+      "transmittance_threshold": 0.0001,
+      "background": [1.0, 1.0, 1.0],
+      "enable_overflow_fallback": true,
+      "batch_strategy": "flatten",
+      "batch_launch_limit_tiles": 262144,
+      "batch_launch_limit_gaussians": 262144
+    }
+  },
+  "train": {
+    "steps": 1000,
+    "lr": 0.001,
+    "amp": false,
+    "recon_backward_strategy": "batched",
+    "temporal_microbatch_size": 4
+  },
+  "losses": {
+    "type": "standard_gs",
+    "l1_weight": 0.8,
+    "dssim_weight": 0.2,
+    "mse_weight": 0.2,
+    "ssim_window_size": 11,
+    "camera_motion_weight": 0.01,
+    "camera_temporal_weight": 0.02,
+    "camera_global_weight": 0.005
+  },
+  "logging": {
+    "log_every": 25,
+    "image_log_every": 50,
+    "video_log_every": 250,
+    "always_log_last_step": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-overfit-ltx-feature-implicit-camera-128-4fps-fast-mac-8192splats",
+    "wandb_tags": [
+      "overfit-local",
+      "arch-tokengs",
+      "camera-implicit",
+      "ltx-features",
+      "prebaked-features",
+      "128px",
+      "4fps",
+      "fast-mac",
+      "8192splats"
+    ]
+  }
+}
