@@ -17,8 +17,9 @@ SRC_TRAIN_DIR = PROJECT_ROOT / "src" / "train"
 FAST_MAC_DIR = PROJECT_ROOT / "third_party" / "fast-mac-gsplat"
 FAST_MAC_V5_DIR = FAST_MAC_DIR / "variants" / "v5"
 FAST_MAC_V8_DIR = FAST_MAC_DIR / "variants" / "v8_project3d"
+FAST_MAC_V9_DIR = FAST_MAC_DIR / "variants" / "v9_project3d_train"
 
-for path in (FAST_MAC_V8_DIR, FAST_MAC_V5_DIR, SRC_TRAIN_DIR):
+for path in (FAST_MAC_V9_DIR, FAST_MAC_V8_DIR, FAST_MAC_V5_DIR, SRC_TRAIN_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -32,6 +33,8 @@ DEFAULT_BG = (0.0, 0.0, 0.0)
 NEAR_PLANE = 1e-4
 RasterConfigV8 = None
 rasterize_v8_project3d = None
+RasterConfigV9 = None
+rasterize_v9_project3d = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,18 @@ def make_v8_config(case: Case) -> RasterConfigV8:
     )
 
 
+def make_v9_config(case: Case) -> RasterConfigV9:
+    if RasterConfigV9 is None:
+        raise RuntimeError("v9_project3d_train package has not been loaded")
+    return RasterConfigV9(
+        height=case.size,
+        width=case.size,
+        background=DEFAULT_BG,
+        batch_strategy="auto",
+        enable_overflow_fallback=True,
+    )
+
+
 def render_current_v5(scene: Scene, config: RasterConfigV5) -> torch.Tensor:
     means2d, conics, colors, opacities, depths = project_for_fast_mac_batch(
         scene.means3d,
@@ -155,6 +170,25 @@ def render_project3d_v8(scene: Scene, config: RasterConfigV8) -> torch.Tensor:
     if rasterize_v8_project3d is None:
         raise RuntimeError("v8_project3d package has not been loaded")
     return rasterize_v8_project3d(
+        scene.means3d,
+        scene.scales,
+        scene.quats,
+        scene.opacities,
+        scene.colors,
+        scene.fx,
+        scene.fy,
+        scene.cx,
+        scene.cy,
+        camera_to_world=scene.camera_to_world,
+        near_plane=NEAR_PLANE,
+        config=config,
+    )
+
+
+def render_project3d_v9(scene: Scene, config: RasterConfigV9) -> torch.Tensor:
+    if rasterize_v9_project3d is None:
+        raise RuntimeError("v9_project3d_train package has not been loaded")
+    return rasterize_v9_project3d(
         scene.means3d,
         scene.scales,
         scene.quats,
@@ -249,28 +283,28 @@ def _scene_grads(scene: Scene) -> dict[str, torch.Tensor]:
     return {name: value.detach().reshape(-1) for name, value in values.items()}
 
 
-def full_grad_check(scene: Scene, v5_config: RasterConfigV5, v8_config: RasterConfigV8) -> tuple[float, float]:
+def full_grad_check(scene: Scene, v5_config: RasterConfigV5, candidate_config, candidate_render_fn) -> tuple[float, float]:
     ref_scene = make_train_scene(scene)
-    v8_scene = make_train_scene(scene)
+    candidate_scene = make_train_scene(scene)
 
     ref_loss = render_current_v5(ref_scene, v5_config).sum()
     ref_loss.backward()
     sync_mps()
 
-    v8_loss = render_project3d_v8(v8_scene, v8_config).sum()
-    v8_loss.backward()
+    candidate_loss = candidate_render_fn(candidate_scene, candidate_config).sum()
+    candidate_loss.backward()
     sync_mps()
 
     diffs = []
     for name, ref_grad in _scene_grads(ref_scene).items():
-        v8_grad = _scene_grads(v8_scene)[name]
-        diffs.append((ref_grad - v8_grad).abs())
+        candidate_grad = _scene_grads(candidate_scene)[name]
+        diffs.append((ref_grad - candidate_grad).abs())
     all_diffs = torch.cat(diffs, dim=0)
     return float(all_diffs.max().item()), float(all_diffs.mean().item())
 
 
-def maybe_build_v8() -> None:
-    subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"], cwd=FAST_MAC_V8_DIR, check=True)
+def maybe_build_variant(path: Path) -> None:
+    subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"], cwd=path, check=True)
 
 
 def load_v8() -> None:
@@ -282,32 +316,59 @@ def load_v8() -> None:
     rasterize_v8_project3d = _rasterize_v8_project3d
 
 
-def ensure_runtime_ready() -> None:
+def load_v9() -> None:
+    global RasterConfigV9, rasterize_v9_project3d
+    from torch_gsplat_bridge_v9_project3d_train import RasterConfig as _RasterConfigV9
+    from torch_gsplat_bridge_v9_project3d_train import rasterize_pinhole_gaussians as _rasterize_v9_project3d
+
+    RasterConfigV9 = _RasterConfigV9
+    rasterize_v9_project3d = _rasterize_v9_project3d
+
+
+def ensure_runtime_ready(*, include_v8: bool, include_v9: bool) -> None:
     if not torch.backends.mps.is_available():
         raise RuntimeError("MPS is not available; this benchmark only runs on Apple Silicon/MPS.")
-    if not hasattr(torch.ops.gsplat_metal_v8_project3d, "project_pinhole_forward"):
+    if include_v8 and not hasattr(torch.ops.gsplat_metal_v8_project3d, "project_pinhole_forward"):
         raise RuntimeError(
             "v8_project3d extension is not loaded. Build it with:\n"
             f"  cd {FAST_MAC_V8_DIR}\n"
             "  python setup.py build_ext --inplace\n"
             "or rerun this benchmark with --build-v8."
         )
+    if include_v9 and not hasattr(torch.ops.gsplat_metal_v9_project3d_train, "project_pinhole_forward"):
+        raise RuntimeError(
+            "v9_project3d_train extension is not loaded. Build it with:\n"
+            f"  cd {FAST_MAC_V9_DIR}\n"
+            "  python setup.py build_ext --inplace\n"
+            "or rerun this benchmark with --build-v9."
+        )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare v5 Torch projection+raster vs v8 Metal projection+raster.")
+    parser = argparse.ArgumentParser(description="Compare v5 Torch projection+raster vs Metal project3d variants.")
     parser.add_argument("--cases", default=DEFAULT_CASES, help="Comma-separated name:size:gaussians:batch cases.")
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--iters", type=int, default=10)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--build-v8", action="store_true", help="Build the v8 extension before running.")
+    parser.add_argument("--build-v9", action="store_true", help="Build the v9 training extension before running.")
+    parser.add_argument("--include-v8", action="store_true", help="Also include the v8 project3d variant.")
+    parser.add_argument("--skip-v9", action="store_true", help="Skip the v9 training variant.")
     parser.add_argument("--skip-grad-check", action="store_true", help="Skip full gradient parity on the first case.")
     args = parser.parse_args()
 
     if args.build_v8:
-        maybe_build_v8()
-    load_v8()
-    ensure_runtime_ready()
+        maybe_build_variant(FAST_MAC_V8_DIR)
+    if args.build_v9:
+        maybe_build_variant(FAST_MAC_V9_DIR)
+
+    include_v8 = bool(args.include_v8 or args.build_v8)
+    include_v9 = not bool(args.skip_v9)
+    if include_v8:
+        load_v8()
+    if include_v9:
+        load_v9()
+    ensure_runtime_ready(include_v8=include_v8, include_v9=include_v9)
 
     cases = parse_cases(args.cases)
     print(
@@ -317,19 +378,13 @@ def main() -> None:
     for i, case in enumerate(cases):
         scene = make_scene(case, args.seed + i)
         v5_config = make_v5_config(case)
-        v8_config = make_v8_config(case)
+        candidates = []
+        if include_v8:
+            candidates.append(("v8_metal_project_plus_metal", render_project3d_v8, make_v8_config(case)))
+        if include_v9:
+            candidates.append(("v9_metal_project_train", render_project3d_v9, make_v9_config(case)))
 
         v5_mean, v5_min, v5_max, img_v5 = measure_ms(lambda: render_current_v5(scene, v5_config), args.warmup, args.iters)
-        v8_mean, v8_min, v8_max, img_v8 = measure_ms(lambda: render_project3d_v8(scene, v8_config), args.warmup, args.iters)
-
-        err = (img_v5 - img_v8).abs()
-        grad_max = float("nan")
-        grad_mean = float("nan")
-        if i == 0 and not args.skip_grad_check:
-            grad_max, grad_mean = full_grad_check(scene, v5_config, v8_config)
-
-        max_err = float(err.max().item())
-        mean_err = float(err.mean().item())
         v5_train_mean, v5_train_min, v5_train_max, _v5_loss = measure_forward_backward_ms(
             render_current_v5,
             scene,
@@ -337,34 +392,48 @@ def main() -> None:
             args.warmup,
             args.iters,
         )
-        v8_train_mean, v8_train_min, v8_train_max, _v8_loss = measure_forward_backward_ms(
-            render_project3d_v8,
-            scene,
-            v8_config,
-            args.warmup,
-            args.iters,
-        )
 
         print(
             f"{case.name},{case.size},{case.gaussians},{case.batch_size},"
             f"forward_eval,v5_torch_project_plus_metal,{v5_mean:.4f},{v5_min:.4f},{v5_max:.4f},"
-            f"{max_err:.6g},{mean_err:.6g},{grad_max:.6g},{grad_mean:.6g}"
-        )
-        print(
-            f"{case.name},{case.size},{case.gaussians},{case.batch_size},"
-            f"forward_eval,v8_metal_project_plus_metal,{v8_mean:.4f},{v8_min:.4f},{v8_max:.4f},"
-            f"{max_err:.6g},{mean_err:.6g},{grad_max:.6g},{grad_mean:.6g}"
+            "0,0,0,0"
         )
         print(
             f"{case.name},{case.size},{case.gaussians},{case.batch_size},"
             f"forward_backward,v5_torch_project_plus_metal,{v5_train_mean:.4f},{v5_train_min:.4f},"
-            f"{v5_train_max:.4f},{max_err:.6g},{mean_err:.6g},{grad_max:.6g},{grad_mean:.6g}"
+            f"{v5_train_max:.4f},0,0,0,0"
         )
-        print(
-            f"{case.name},{case.size},{case.gaussians},{case.batch_size},"
-            f"forward_backward,v8_metal_project_plus_metal,{v8_train_mean:.4f},{v8_train_min:.4f},"
-            f"{v8_train_max:.4f},{max_err:.6g},{mean_err:.6g},{grad_max:.6g},{grad_mean:.6g}"
-        )
+
+        for path_name, render_fn, candidate_config in candidates:
+            candidate_mean, candidate_min, candidate_max, img_candidate = measure_ms(
+                lambda render_fn=render_fn, candidate_config=candidate_config: render_fn(scene, candidate_config),
+                args.warmup,
+                args.iters,
+            )
+            err = (img_v5 - img_candidate).abs()
+            max_err = float(err.max().item())
+            mean_err = float(err.mean().item())
+            grad_max = float("nan")
+            grad_mean = float("nan")
+            if i == 0 and not args.skip_grad_check:
+                grad_max, grad_mean = full_grad_check(scene, v5_config, candidate_config, render_fn)
+            candidate_train_mean, candidate_train_min, candidate_train_max, _candidate_loss = measure_forward_backward_ms(
+                render_fn,
+                scene,
+                candidate_config,
+                args.warmup,
+                args.iters,
+            )
+            print(
+                f"{case.name},{case.size},{case.gaussians},{case.batch_size},"
+                f"forward_eval,{path_name},{candidate_mean:.4f},{candidate_min:.4f},{candidate_max:.4f},"
+                f"{max_err:.6g},{mean_err:.6g},{grad_max:.6g},{grad_mean:.6g}"
+            )
+            print(
+                f"{case.name},{case.size},{case.gaussians},{case.batch_size},"
+                f"forward_backward,{path_name},{candidate_train_mean:.4f},{candidate_train_min:.4f},"
+                f"{candidate_train_max:.4f},{max_err:.6g},{mean_err:.6g},{grad_max:.6g},{grad_mean:.6g}"
+            )
 
 
 if __name__ == "__main__":

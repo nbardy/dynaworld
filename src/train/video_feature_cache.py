@@ -66,8 +66,15 @@ def _feature_fingerprint(feature_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "timesteps",
         "timestep",
         "guidance_scale",
+        "guidance_scale_2",
+        "conditioning_scale",
+        "flow_shift",
         "output_type",
         "torch_dtype",
+        "vae_torch_dtype",
+        "mask_mode",
+        "module_root",
+        "max_sequence_length",
         "vjepa_feature_dim",
         "vjepa_freeze",
         "vjepa_attn_implementation",
@@ -330,6 +337,155 @@ class LTXVideoFeatureExtractor:
         return features
 
 
+class WanVACEVideoFeatureExtractor:
+    """Hook-based Wan-VACE feature extractor for editing-conditioned hidden states.
+
+    The first experiment uses the source video as known conditioning everywhere
+    via a black VACE mask, then caches selected transformer block activations.
+    Layer paths are config-owned because Diffusers Wan/VACE module names are not
+    stable enough to bake into the trainer.
+    """
+
+    def __init__(self, feature_cfg: Mapping[str, Any], device: torch.device | str):
+        self.feature_cfg = dict(feature_cfg)
+        self.device = torch.device(device)
+        self.pipeline = None
+
+    def _load_pipeline(self):
+        if self.pipeline is not None:
+            return self.pipeline
+        try:
+            from diffusers import AutoencoderKLWan, WanVACEPipeline
+            from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+        except ImportError:
+            try:
+                from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan
+                from diffusers.pipelines.wan.pipeline_wan_vace import WanVACEPipeline
+                from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
+            except ImportError as exc:
+                raise ImportError(
+                    "features.extractor='wan_vace' requires a Diffusers build with WanVACEPipeline "
+                    "and AutoencoderKLWan. Install latest diffusers plus Wan dependencies, then rerun "
+                    "the feature bake."
+                ) from exc
+
+        model_id = self.feature_cfg.get("model_id") or "Wan-AI/Wan2.1-VACE-1.3B-diffusers"
+        dtype = _dtype_from_name(self.feature_cfg.get("torch_dtype", "float32"))
+        vae_dtype = _dtype_from_name(self.feature_cfg.get("vae_torch_dtype", "float32"))
+
+        vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=vae_dtype)
+        self.pipeline = WanVACEPipeline.from_pretrained(model_id, vae=vae, torch_dtype=dtype)
+
+        flow_shift = self.feature_cfg.get("flow_shift")
+        if flow_shift is not None:
+            self.pipeline.scheduler = UniPCMultistepScheduler.from_config(
+                self.pipeline.scheduler.config,
+                flow_shift=float(flow_shift),
+            )
+
+        self.pipeline.to(self.device)
+        if hasattr(self.pipeline, "set_progress_bar_config"):
+            self.pipeline.set_progress_bar_config(disable=True)
+        return self.pipeline
+
+    def _module_root(self, pipeline):
+        root_name = str(self.feature_cfg.get("module_root") or "transformer")
+        if hasattr(pipeline, root_name) and getattr(pipeline, root_name) is not None:
+            return getattr(pipeline, root_name)
+        available = [
+            name
+            for name in ("transformer", "transformer_2", "unet")
+            if hasattr(pipeline, name) and getattr(pipeline, name) is not None
+        ]
+        raise AttributeError(
+            f"Could not find Wan-VACE module root {root_name!r}. Available roots: {available}."
+        )
+
+    def _resolve_layer(self, root, layer_path: str):
+        try:
+            return root.get_submodule(layer_path)
+        except AttributeError:
+            available = [name for name, _module in root.named_modules() if name][:30]
+            raise KeyError(
+                f"Could not resolve Wan-VACE feature layer {layer_path!r}. "
+                f"First available module paths: {available}"
+            ) from None
+
+    def _known_everywhere_mask(self, width: int, height: int, num_frames: int) -> list[Image.Image]:
+        mask_mode = str(self.feature_cfg.get("mask_mode") or "known").lower()
+        if mask_mode not in {"known", "known_everywhere", "black"}:
+            raise ValueError(
+                f"Unsupported Wan-VACE mask_mode={mask_mode!r}. "
+                "The feature-cache path currently supports only known/black masks."
+            )
+        return [Image.new("L", (width, height), 0) for _ in range(num_frames)]
+
+    def _call_pipeline(self, pipeline, frames: Sequence[Image.Image]) -> None:
+        num_frames = int(self.feature_cfg.get("num_frames") or len(frames))
+        height = int(self.feature_cfg.get("height") or frames[0].height)
+        width = int(self.feature_cfg.get("width") or frames[0].width)
+        if len(frames) < num_frames:
+            raise ValueError(
+                f"Wan-VACE feature bake requested {num_frames} frames but sample only has {len(frames)}."
+            )
+        resized_frames = [frame.resize((width, height)) for frame in list(frames)[:num_frames]]
+        mask = self._known_everywhere_mask(width, height, num_frames)
+        kwargs: dict[str, Any] = {
+            "prompt": self.feature_cfg.get("prompt", ""),
+            "negative_prompt": self.feature_cfg.get("negative_prompt"),
+            "video": resized_frames,
+            "mask": mask,
+            "height": height,
+            "width": width,
+            "num_frames": num_frames,
+            "num_inference_steps": int(self.feature_cfg.get("num_inference_steps", 1)),
+            "guidance_scale": float(self.feature_cfg.get("guidance_scale", 1.0)),
+            "conditioning_scale": self.feature_cfg.get("conditioning_scale", 1.0),
+            "output_type": self.feature_cfg.get("output_type", "latent"),
+            "return_dict": True,
+        }
+        guidance_scale_2 = self.feature_cfg.get("guidance_scale_2")
+        if guidance_scale_2 is not None:
+            kwargs["guidance_scale_2"] = float(guidance_scale_2)
+        max_sequence_length = self.feature_cfg.get("max_sequence_length")
+        if max_sequence_length is not None:
+            kwargs["max_sequence_length"] = int(max_sequence_length)
+        with torch.no_grad():
+            pipeline(**kwargs)
+
+    def __call__(self, sequence_data: SequenceData) -> dict[str, torch.Tensor]:
+        pipeline = self._load_pipeline()
+        root = self._module_root(pipeline)
+        layers = [str(name) for name in self.feature_cfg.get("layers", [])]
+        if not layers:
+            raise ValueError("features.layers must name at least one Wan-VACE module path to cache.")
+
+        features: dict[str, torch.Tensor] = {}
+        hooks = []
+
+        def hook_fn(name):
+            def hook(_module, _inputs, output):
+                tensor = _first_tensor(output)
+                if tensor is None:
+                    raise TypeError(f"Wan-VACE feature hook {name!r} did not return a tensor-like output.")
+                features[name] = tensor.detach().cpu()
+
+            return hook
+
+        for name in layers:
+            hooks.append(self._resolve_layer(root, name).register_forward_hook(hook_fn(name)))
+        try:
+            self._call_pipeline(pipeline, _sequence_to_pil_frames(sequence_data))
+        finally:
+            for hook in hooks:
+                hook.remove()
+
+        missing = [name for name in layers if name not in features]
+        if missing:
+            raise RuntimeError(f"Wan-VACE feature bake completed but did not capture layer(s): {missing}")
+        return features
+
+
 class HuggingFaceVJEPAFeatureExtractor:
     """Frozen HF V-JEPA feature extractor for the shared disk cache."""
 
@@ -445,6 +601,8 @@ def build_feature_extractor(feature_cfg: Mapping[str, Any], device: torch.device
     extractor = str(feature_cfg.get("extractor", "ltx")).lower()
     if extractor == "ltx":
         return LTXVideoFeatureExtractor(feature_cfg, device=device)
+    if extractor in {"wan_vace", "wan2_1_vace", "vace_wan"}:
+        return WanVACEVideoFeatureExtractor(feature_cfg, device=device)
     if extractor == "vjepa_hf":
         return HuggingFaceVJEPAFeatureExtractor(feature_cfg, device=device)
     if extractor in {"vjepa_torchhub", "vjepa2_torchhub", "vjepa2_1_torchhub"}:
@@ -453,7 +611,7 @@ def build_feature_extractor(feature_cfg: Mapping[str, Any], device: torch.device
         return RGBPyramidFeatureExtractor(feature_cfg)
     raise ValueError(
         f"Unknown features.extractor={extractor!r}. "
-        "Expected ltx, vjepa_hf, vjepa_torchhub, or rgb_pyramid."
+        "Expected ltx, wan_vace, vjepa_hf, vjepa_torchhub, or rgb_pyramid."
     )
 
 

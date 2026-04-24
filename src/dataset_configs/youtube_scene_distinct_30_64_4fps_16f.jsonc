@@ -1,0 +1,53 @@
+{
+  // Small scene-diverse local dataset pass. The goal is one short clip from
+  // each source video so the 20/10 split is scene/source-distinct instead of
+  // camera-distinct within the same scene.
+  "dataset_name": "youtube_scene_distinct_30_64_4fps_16f",
+  "root_dir": "data/youtube_scene_distinct",
+
+  "search": {
+    "max_results_per_query": 8,
+    "queries": [
+      "walking tour pov no cuts 4k",
+      "bike ride pov stabilized city",
+      "drone fly through forest no cuts",
+      "fpv drone cinematic one shot",
+      "gopro walking through market pov",
+      "roller coaster pov 4k",
+      "train cab ride forward view",
+      "dashcam scenic mountain road no cuts",
+      "real estate walkthrough one take",
+      "museum walkthrough pov no cuts"
+    ]
+  },
+
+  "download": {
+    "limit": 45,
+    "max_height": 360,
+    "section_start_seconds": 12.0,
+    "section_duration_seconds": 8.0,
+    "cookies_from_browser": null,
+    "continue_on_error": true
+  },
+
+  "segment": {
+    "min_seconds": 4.0,
+    "max_seconds": 6.0,
+    "target_clip_seconds": 4.0,
+    "analysis_fps": 4.0,
+    "scene_cut_threshold": 0.58,
+    "min_motion_score": 0.25,
+    "max_windows_per_video": 1,
+    "continue_on_error": true
+  },
+
+  "clip_dataset": {
+    "target_count": 30,
+    "train_count": 20,
+    "test_count": 10,
+    "clip_frames": 16,
+    "fps": 4.0,
+    "target_size": 64,
+    "max_clips_per_source": 1
+  }
+}

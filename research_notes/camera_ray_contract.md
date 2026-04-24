@@ -242,9 +242,8 @@ This is for benchmarking whether moving the current pinhole `3D -> 2D` packet
 build out of Torch saves enough time to wire into production training. The v8
 path is now training-ready for pinhole benchmarks: forward projection runs in
 Metal, raster backward runs through the copied v5 Metal kernels, and projection
-gradients are computed by a Torch rematerialization of the pinhole projection
-math. It is not a pure Metal projection-backward kernel yet, and it does not
-implement non-pinhole radial/fisheye projection.
+gradients run through a per-splat Metal VJP kernel. It does not implement
+non-pinhole radial/fisheye projection.
 
 ## Current Limits
 

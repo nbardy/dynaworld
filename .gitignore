@@ -12,10 +12,18 @@ data/feature_cache/
 test_data/dust3r_outputs/
 
 # Large local datasets and downloaded media. Keep configs/docs/scripts tracked.
+data/clip_sets/
 data/youtube_motion/raw/
 data/youtube_motion/segments/
 data/youtube_motion/clip_sets/
 data/youtube_motion/logs/
+data/youtube_scene_distinct/raw/
+data/youtube_scene_distinct/segments/
+data/youtube_scene_distinct/clip_sets/
+data/youtube_scene_distinct/logs/
+data/youtube_curated_spans/raw/
+data/youtube_curated_spans/clip_sets/
+data/youtube_curated_spans/logs/
 data/external/neural_3d_video/raw/
 data/external/neural_3d_video/extracted/
 data/external/neural_3d_video/logs/
@@ -27,5 +35,9 @@ data/external/vivo/rgb_mp4/
 data/external/vivo/logs/
 data/external/vivo/metadata/
 data/external/vivo/
+
+# Large local research corpora. Keep curated notes and indexes tracked.
+research_notes/blur_dof_motion_papers/pdfs/
+research_notes/blur_dof_motion_papers/text/
 
 third_party/dust3r/croco/

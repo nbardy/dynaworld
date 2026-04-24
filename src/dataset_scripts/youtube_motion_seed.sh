@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 
 CONFIG="${1:-src/dataset_configs/youtube_high_camera_motion_seed.jsonc}"
 
-uv run python src/dataset_pipeline/youtube_ingest.py search --config "$CONFIG"
-uv run python src/dataset_pipeline/youtube_ingest.py download --config "$CONFIG"
-uv run python src/dataset_pipeline/youtube_ingest.py segment --config "$CONFIG"
-uv run python src/dataset_pipeline/youtube_ingest.py build-clips --config "$CONFIG" --overwrite
+uv run --with yt-dlp python src/dataset_pipeline/youtube_ingest.py search --config "$CONFIG"
+uv run --with yt-dlp python src/dataset_pipeline/youtube_ingest.py download --config "$CONFIG"
+uv run --with yt-dlp python src/dataset_pipeline/youtube_ingest.py segment --config "$CONFIG"
+uv run --with yt-dlp python src/dataset_pipeline/youtube_ingest.py build-clips --config "$CONFIG" --overwrite

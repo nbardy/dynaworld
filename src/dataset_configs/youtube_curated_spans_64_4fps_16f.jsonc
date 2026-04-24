@@ -1,0 +1,37 @@
+{
+  "dataset_name": "youtube_curated_spans_64_4fps_16f",
+  "root_dir": "data/youtube_curated_spans",
+  "source_manifests": [
+    "../corrective_splat_trainer/manual_list.jsonl"
+  ],
+  "defaults": {
+    "split": "train",
+    "default_segment_seconds": 8.0
+  },
+  "records": [
+    {
+      "clip_id": "matrix_bullettime",
+      "url": "https://www.youtube.com/watch?v=8DajVKAkL50",
+      "title": "matrix bullettime",
+      "source": "user_curated",
+      "split": "test",
+      "start_time": "0:37",
+      "start_seconds": 37.0,
+      "end_time": "0:46",
+      "end_seconds": 46.0,
+      "notes": "User requested Matrix bullet-time test clip."
+    }
+  ],
+  "download": {
+    "max_height": 360,
+    "continue_on_error": true
+  },
+  "clip_dataset": {
+    "clip_frames": 16,
+    "fps": 4.0,
+    "target_size": 64,
+    "max_clips_per_source": 1,
+    "source_schedule": "round_robin",
+    "require_target_count": false
+  }
+}

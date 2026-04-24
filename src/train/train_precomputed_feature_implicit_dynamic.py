@@ -34,7 +34,14 @@ FEATURE_OPTION_DEFAULTS = {
     "timesteps": None,
     "timestep": None,
     "guidance_scale": 1.0,
+    "guidance_scale_2": None,
+    "conditioning_scale": 1.0,
+    "flow_shift": None,
     "output_type": "latent",
+    "vae_torch_dtype": "float32",
+    "mask_mode": "known",
+    "module_root": "transformer",
+    "max_sequence_length": None,
     "vjepa_feature_dim": None,
     "vjepa_freeze": True,
     "vjepa_attn_implementation": "sdpa",
@@ -65,15 +72,26 @@ class PrecomputedFeatureImplicitTrainer(VideoTokenImplicitTrainer):
             feature_cfg["timesteps"] = [int(timestep) for timestep in feature_cfg["timesteps"]]
         if feature_cfg["timestep"] is not None:
             feature_cfg["timestep"] = int(feature_cfg["timestep"])
-        for key in ("height", "width", "num_frames", "vjepa_crop_size", "vjepa_feature_dim"):
+        for key in ("height", "width", "num_frames", "vjepa_crop_size", "vjepa_feature_dim", "max_sequence_length"):
             if feature_cfg[key] is not None:
                 feature_cfg[key] = int(feature_cfg[key])
         feature_cfg["num_inference_steps"] = int(feature_cfg["num_inference_steps"])
         feature_cfg["guidance_scale"] = float(feature_cfg["guidance_scale"])
+        if feature_cfg["guidance_scale_2"] is not None:
+            feature_cfg["guidance_scale_2"] = float(feature_cfg["guidance_scale_2"])
+        if isinstance(feature_cfg["conditioning_scale"], list):
+            feature_cfg["conditioning_scale"] = [float(value) for value in feature_cfg["conditioning_scale"]]
+        else:
+            feature_cfg["conditioning_scale"] = float(feature_cfg["conditioning_scale"])
+        if feature_cfg["flow_shift"] is not None:
+            feature_cfg["flow_shift"] = float(feature_cfg["flow_shift"])
         feature_cfg["sample_cache_key"] = str(feature_cfg["sample_cache_key"])
         feature_cfg["cache_version"] = int(feature_cfg["cache_version"])
         if feature_cfg["vjepa_checkpoint_url"] is not None:
             feature_cfg["vjepa_checkpoint_url"] = str(feature_cfg["vjepa_checkpoint_url"])
+        feature_cfg["vae_torch_dtype"] = str(feature_cfg["vae_torch_dtype"])
+        feature_cfg["mask_mode"] = str(feature_cfg["mask_mode"])
+        feature_cfg["module_root"] = str(feature_cfg["module_root"])
         feature_cfg["extractor"] = str(feature_cfg["extractor"]).lower()
 
         if cfg["model"]["video_encoder_backend"] not in {"precomputed", "precomputed_ltx"}:

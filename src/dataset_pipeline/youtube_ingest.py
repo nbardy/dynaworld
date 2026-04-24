@@ -85,6 +85,13 @@ def require_tool(name: str) -> None:
         raise RuntimeError(f"Missing required command: {name}")
 
 
+def yt_dlp_command() -> list[str]:
+    executable = shutil.which("yt-dlp")
+    if executable is not None:
+        return [executable]
+    return [sys.executable, "-m", "yt_dlp"]
+
+
 def canonical_youtube_url(record: dict[str, Any]) -> str | None:
     for key in ("webpage_url", "url"):
         value = record.get(key)
@@ -97,7 +104,6 @@ def canonical_youtube_url(record: dict[str, Any]) -> str | None:
 
 
 def search(config: dict[str, Any], paths: Paths) -> None:
-    require_tool("yt-dlp")
     search_cfg = config["search"]
     max_results = int(search_cfg["max_results_per_query"])
     seen: set[str] = set()
@@ -105,7 +111,7 @@ def search(config: dict[str, Any], paths: Paths) -> None:
 
     for query in search_cfg["queries"]:
         target = f"ytsearch{max_results}:{query}"
-        result = run_command(["yt-dlp", "--dump-single-json", "--flat-playlist", target])
+        result = run_command([*yt_dlp_command(), "--dump-single-json", "--flat-playlist", target])
         payload = json.loads(result.stdout)
         for entry in payload.get("entries", []):
             video_id = entry.get("id") or entry.get("url")
@@ -130,7 +136,6 @@ def search(config: dict[str, Any], paths: Paths) -> None:
 
 
 def download(config: dict[str, Any], paths: Paths) -> None:
-    require_tool("yt-dlp")
     candidates = read_jsonl(paths.candidates / "search_results.jsonl")
     if not candidates:
         raise RuntimeError("No search candidates found. Run the search stage first.")
@@ -139,15 +144,20 @@ def download(config: dict[str, Any], paths: Paths) -> None:
     limit = int(download_cfg["limit"])
     max_height = int(download_cfg["max_height"])
     cookies_from_browser = download_cfg.get("cookies_from_browser")
+    continue_on_error = bool(download_cfg.get("continue_on_error", False))
+    section_start = download_cfg.get("section_start_seconds")
+    section_duration = download_cfg.get("section_duration_seconds")
     downloaded: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
 
     for index, candidate in enumerate(candidates[:limit]):
         url = canonical_youtube_url(candidate)
         if not url:
             continue
         output_template = str(paths.raw / "%(id)s.%(ext)s")
+        base_command = yt_dlp_command()
         command = [
-            "yt-dlp",
+            *base_command,
             "-f",
             f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={max_height}][ext=mp4]/best",
             "--merge-output-format",
@@ -157,17 +167,37 @@ def download(config: dict[str, Any], paths: Paths) -> None:
             output_template,
             url,
         ]
+        if section_start is not None and section_duration is not None:
+            start = float(section_start)
+            end = start + float(section_duration)
+            command[len(base_command):len(base_command)] = [
+                "--download-sections",
+                f"*{start:.3f}-{end:.3f}",
+                "--force-keyframes-at-cuts",
+            ]
         if cookies_from_browser:
-            command[1:1] = ["--cookies-from-browser", str(cookies_from_browser)]
+            command[len(base_command):len(base_command)] = ["--cookies-from-browser", str(cookies_from_browser)]
         log_path = paths.logs / f"download_{index:04d}_{candidate['id']}.log"
-        run_command(command, log_path=log_path)
+        try:
+            run_command(command, log_path=log_path)
+        except RuntimeError as exc:
+            failure = {**candidate, "error": str(exc), "log_path": str(log_path.resolve())}
+            failures.append(failure)
+            print(f"Skipping failed download {candidate.get('id')}: {exc}")
+            if continue_on_error:
+                continue
+            raise
         matches = sorted(paths.raw.glob(f"{candidate['id']}.*"))
         if matches:
             downloaded.append({**candidate, "local_path": str(matches[-1].resolve())})
 
     output_path = paths.candidates / "downloads.jsonl"
     write_jsonl(output_path, downloaded)
+    failure_path = paths.candidates / "download_failures.jsonl"
+    write_jsonl(failure_path, failures)
     print(f"Wrote {len(downloaded)} download records to {output_path}")
+    if failures:
+        print(f"Wrote {len(failures)} download failures to {failure_path}")
 
 
 def probe_video(path: Path, cv2: Any) -> tuple[float, int]:
@@ -274,46 +304,60 @@ def segment(config: dict[str, Any], paths: Paths) -> None:
     cut_threshold = float(segment_cfg["scene_cut_threshold"])
     min_motion = float(segment_cfg["min_motion_score"])
     max_windows = int(segment_cfg["max_windows_per_video"])
+    continue_on_error = bool(segment_cfg.get("continue_on_error", False))
     records: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
 
     for download_record in downloads:
         source = Path(download_record["local_path"])
-        source_fps, frame_count = probe_video(source, cv2)
-        duration = frame_count / source_fps
-        frames, times = sample_gray_frames(source, analysis_fps, cv2)
-        cuts = detect_scene_cuts(frames, times, cut_threshold, cv2)
-        candidate_windows = windows_between_cuts(duration, cuts, target_seconds)
+        try:
+            source_fps, frame_count = probe_video(source, cv2)
+            duration = frame_count / source_fps
+            frames, times = sample_gray_frames(source, analysis_fps, cv2)
+            cuts = detect_scene_cuts(frames, times, cut_threshold, cv2)
+            candidate_windows = windows_between_cuts(duration, cuts, target_seconds)
 
-        scored = []
-        for start, end in candidate_windows:
-            window_frames = [frame for frame, t in zip(frames, times) if start <= t < end]
-            score = motion_score(window_frames, cv2)
-            if score >= min_motion:
-                scored.append((score, start, end))
-        scored.sort(reverse=True)
+            scored = []
+            for start, end in candidate_windows:
+                window_frames = [frame for frame, t in zip(frames, times) if start <= t < end]
+                score = motion_score(window_frames, cv2)
+                if score >= min_motion:
+                    scored.append((score, start, end))
+            scored.sort(reverse=True)
 
-        for local_index, (score, start, end) in enumerate(scored[:max_windows]):
-            segment_id = f"{source.stem}_seg_{local_index:03d}"
-            output = paths.segments / f"{segment_id}.mp4"
-            extract_segment(source, output, start, end - start)
-            records.append(
-                {
-                    "segment_id": segment_id,
-                    "path": str(output.resolve()),
-                    "source_path": str(source.resolve()),
-                    "youtube_id": download_record.get("id"),
-                    "title": download_record.get("title"),
-                    "start_seconds": start,
-                    "end_seconds": end,
-                    "duration_seconds": end - start,
-                    "motion_score": score,
-                    "scene_cut_count_in_source": len(cuts),
-                }
-            )
+            for local_index, (score, start, end) in enumerate(scored[:max_windows]):
+                segment_id = f"{source.stem}_seg_{local_index:03d}"
+                output = paths.segments / f"{segment_id}.mp4"
+                extract_segment(source, output, start, end - start)
+                records.append(
+                    {
+                        "segment_id": segment_id,
+                        "path": str(output.resolve()),
+                        "source_path": str(source.resolve()),
+                        "youtube_id": download_record.get("id"),
+                        "title": download_record.get("title"),
+                        "start_seconds": start,
+                        "end_seconds": end,
+                        "duration_seconds": end - start,
+                        "motion_score": score,
+                        "scene_cut_count_in_source": len(cuts),
+                    }
+                )
+        except RuntimeError as exc:
+            failure = {**download_record, "error": str(exc)}
+            failures.append(failure)
+            print(f"Skipping failed segment source {source}: {exc}")
+            if continue_on_error:
+                continue
+            raise
 
     output_path = paths.candidates / "segments_manifest.jsonl"
     write_jsonl(output_path, records)
+    failure_path = paths.candidates / "segment_failures.jsonl"
+    write_jsonl(failure_path, failures)
     print(f"Wrote {len(records)} high-motion segments to {output_path}")
+    if failures:
+        print(f"Wrote {len(failures)} segment failures to {failure_path}")
 
 
 def build_clips(config: dict[str, Any], paths: Paths, overwrite: bool) -> None:
@@ -323,24 +367,62 @@ def build_clips(config: dict[str, Any], paths: Paths, overwrite: bool) -> None:
     clip_cfg = config["clip_dataset"]
     dataset_name = config["dataset_name"]
     output_dir = paths.clip_sets / dataset_name
-    command = [
-        sys.executable,
-        "src/train/build_clip_dataset.py",
-        "--input",
-        *[record["path"] for record in segments],
-        "--output-dir",
-        str(output_dir),
-        "--dataset-name",
-        dataset_name,
-        "--target-count",
-        str(int(clip_cfg["target_count"])),
-        "--clip-frames",
-        str(int(clip_cfg["clip_frames"])),
-        "--fps",
-        str(float(clip_cfg["fps"])),
-        "--target-size",
-        str(int(clip_cfg["target_size"])),
-    ]
+    train_count = int(clip_cfg.get("train_count", 0))
+    test_count = int(clip_cfg.get("test_count", 0))
+    if train_count > 0 or test_count > 0:
+        needed = train_count + test_count
+        if len(segments) < needed:
+            raise RuntimeError(f"Need {needed} segments for train/test split, found {len(segments)}.")
+        train_segments = segments[:train_count]
+        test_segments = segments[train_count:needed]
+        command = [
+            sys.executable,
+            "src/train/build_clip_dataset.py",
+            "--train-input",
+            *[record["path"] for record in train_segments],
+            "--test-input",
+            *[record["path"] for record in test_segments],
+            "--output-dir",
+            str(output_dir),
+            "--dataset-name",
+            dataset_name,
+            "--target-count",
+            str(needed),
+            "--train-count",
+            str(train_count),
+            "--test-count",
+            str(test_count),
+            "--clip-frames",
+            str(int(clip_cfg["clip_frames"])),
+            "--fps",
+            str(float(clip_cfg["fps"])),
+            "--target-size",
+            str(int(clip_cfg["target_size"])),
+            "--max-clips-per-source",
+            str(int(clip_cfg.get("max_clips_per_source", 0))),
+            "--require-target-count",
+        ]
+    else:
+        command = [
+            sys.executable,
+            "src/train/build_clip_dataset.py",
+            "--input",
+            *[record["path"] for record in segments],
+            "--output-dir",
+            str(output_dir),
+            "--dataset-name",
+            dataset_name,
+            "--target-count",
+            str(int(clip_cfg["target_count"])),
+            "--clip-frames",
+            str(int(clip_cfg["clip_frames"])),
+            "--fps",
+            str(float(clip_cfg["fps"])),
+            "--target-size",
+            str(int(clip_cfg["target_size"])),
+        ]
+        if int(clip_cfg.get("max_clips_per_source", 0)) > 0:
+            command.extend(["--max-clips-per-source", str(int(clip_cfg["max_clips_per_source"]))])
     if overwrite:
         command.append("--overwrite")
     run_command(command)

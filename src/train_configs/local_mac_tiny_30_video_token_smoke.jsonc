@@ -1,0 +1,91 @@
+{
+  // Default tiny split baseline for local Mac iteration. This points at the
+  // scene/source-distinct mined-video dataset, not the local multi-camera
+  // ViVo/Neural3D camera sample.
+  // Build the dataset with:
+  //   ./src/dataset_scripts/youtube_scene_distinct_30_seed.sh
+  "arch": "tokengs_video_implicit_camera",
+  "data": {
+    "sequence_dir": null,
+    "frames_dir": null,
+    "video_path": null,
+    "manifest_path": "data/youtube_scene_distinct/clip_sets/youtube_scene_distinct_30_64_4fps_16f/manifest.jsonl",
+    "split": "train",
+    "eval_manifest_path": "data/youtube_scene_distinct/clip_sets/youtube_scene_distinct_30_64_4fps_16f/manifest.jsonl",
+    "eval_split": "test",
+    "eval_max_sequences": 2,
+    "frame_source": "summary_sampled",
+    "max_frames": 0
+  },
+  "model": {
+    "variant": "learned_time_orbit_path",
+    "size": 64,
+    "train_frame_count": 16,
+    "tokens": 8,
+    "gaussians_per_token": 16,
+    "model_dim": 64,
+    "bottleneck_dim": 64,
+    "num_heads": 4,
+    "mlp_ratio": 4.0,
+    "scene_extent": 1.0,
+    "tubelet_size_t": 4,
+    "patch_compression": 32,
+    "encoder_self_attn_layers": 1,
+    "bottleneck_self_attn_layers": 1,
+    "cross_attn_layers": 1
+  },
+  "camera": {
+    "global_head": "legacy_orbit",
+    "lens_model": "pinhole",
+    "base_fov_degrees": 60.0,
+    "base_radius": 3.0,
+    "max_fov_delta_degrees": 15.0,
+    "max_radius_scale": 1.5,
+    "max_rotation_degrees": 5.0,
+    "max_translation_ratio": 0.2
+  },
+  "render": {
+    "renderer": "dense",
+    "render_size": 32,
+    "auto_dense_limit": 400000,
+    "tile_size": 8,
+    "bound_scale": 3.0,
+    "near_plane": 0.05,
+    "alpha_threshold": 0.00392156862745098
+  },
+  "train": {
+    "steps": 50,
+    "lr": 0.003,
+    "amp": false,
+    "recon_backward_strategy": "framewise",
+    "temporal_microbatch_size": 4
+  },
+  "losses": {
+    "type": "l1_mse",
+    "l1_weight": 1.0,
+    "mse_weight": 0.2,
+    "dssim_weight": 0.2,
+    "ssim_window_size": 11,
+    "camera_motion_weight": 0.01,
+    "camera_temporal_weight": 0.02,
+    "camera_global_weight": 0.005
+  },
+  "logging": {
+    "log_every": 5,
+    "image_log_every": 10,
+    "video_log_every": 50,
+    "always_log_last_step": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-tiny-30-scene-distinct-video-token-smoke",
+    "wandb_tags": [
+      "local-mac",
+      "tiny-dataset",
+      "30clips",
+      "20train",
+      "10test",
+      "scene-distinct",
+      "arch-tokengs",
+      "camera-implicit"
+    ]
+  }
+}

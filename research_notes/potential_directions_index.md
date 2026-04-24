@@ -15,25 +15,29 @@ Status labels:
 
 ## Current Research North Star
 
-The near-term product path is still: high-quality dynamic splats, fast
-experimentation, and diffusion-assisted refinement rather than trying to make
-the splat geometry solve every artifact alone. The parent project goal keeps
+The near-term product path is a base `video => world token` model. World tokens
+are scene-state tokens that decode to splats and stay consistent across novel
+camera angles. High-quality dynamic splats, fast experimentation, and
+diffusion-assisted refinement all serve that first proof.
+
+The follow-up path is world-token prediction. Once the tokens are stable enough
+to be a real scene state, train AR or diffusion models over those tokens for
+video continuation, image=>video, and text=>video. The parent project goal keeps
 FasterGS as the stable baseline and treats diffusion as a render/refinement
 lever: [CORE_GOAL.md](../../CORE_GOAL.md).
-
-The deeper Dyna World hypothesis is: video/world models already encode geometry,
-so we should extract or distill that geometry into explicit 3D/4D Gaussian
-tokens with as little 3D-labeled supervision as possible.
 
 ## Direction Map
 
 | Direction | Short description | Status | Dense documentation |
 |---|---|---:|---|
 | Fast rendering and training throughput | Make rasterization, viewport sizing, and training iteration speed stop being the bottleneck. | Now | [key_learnings.md](../agent_notes/key_learnings.md), [trainer cleanup note](TRAINER_INTERFACE_CLEANUP_2026_04_20.md), [rendering session journal](../agent_notes/loose_notes/2026-04-20_13-10-06_jsonc_config_and_viewport_rendering.md) |
+| Video-to-world-token base model | Train `video => world tokens` where the tokens decode to splats that remain coherent under source and novel cameras. | Now | [training contract](training_contract_v1.md), [world/splat token philosophy](meta_philosophy/world_splat_tokens_vs_observed_modality_tokens.md), [framing 3](framing_the_problem/framing_3.md) |
 | TokenGS-style splat tokens | Decouple Gaussian count and placement from pixels; predict global 3D/4D tokens through a decoder. | Probe | [gemini_thread_3.md](gemini_thread_3.md), [thread_1.txt](thread_1.txt), [KEY_ARCHITECTURE_DECISIONS.md](KEY_ARCHITECTURE_DECISIONS.md) |
 | Single-step video diffusion -> splats | Use a frozen/frozen-mostly video diffusion model as a one-step geometry feature extractor, then train splat tokens through render loss. | Probe | [single_step/STUDY_NOTES.md](single_step/STUDY_NOTES.md), [gemini_thread_3.md](gemini_thread_3.md), [SESSION_Q_AND_A_SYNTHESIS.md](SESSION_Q_AND_A_SYNTHESIS.md) |
 | Pixel-space SDS from rendered splats | Keep 3D tokens clean, render them to 2D, noise the rendered pixels/latents, and use a frozen video diffusion teacher for score gradients. | Probe | [KEY_ARCHITECTURE_DECISIONS.md](KEY_ARCHITECTURE_DECISIONS.md), [gemini_thread_3.md](gemini_thread_3.md), [diffusion forcing synthesis](chats/diffusion_splat_forcing_apr_20th_gemini/result.md) |
 | Diffusion as loss vs diffusion as conditioning | Name the two distinct roles a pretrained video diffusion model plays — input-side feature conditioning vs. output-side score supervision — and design around both, especially for novel-view supervision without multi-view data. | Probe | [meta_philosophy/architecture_design_north_star.md](meta_philosophy/architecture_design_north_star.md), [meta_philosophy/our_problem_core_requirements_and_goals_and_current_philosophy_and_insight.md](meta_philosophy/our_problem_core_requirements_and_goals_and_current_philosophy_and_insight.md) |
+| World-token AR/diffusion generation | Predict future or conditional world tokens for video continuation, image=>video, and text=>video after the base tokens pass novel-camera checks. | Speculative | [diffusion forcing synthesis](chats/diffusion_splat_forcing_apr_20th_gemini/result.md), [path B causal notes](proposed_architectures/path_b_causal_autoregressive/01_CAUSAL_STATE_UPDATE.md), [ChopGrad path B](proposed_architectures/path_b_causal_autoregressive/02_CHOPGRAD_TRAINING.md) |
+| Physical lens and shutter blur | Model f-stop / focal length / finite-aperture DoF, camera motion blur, and dynamic-object blur as capture-state in the renderer rather than baked scene content. | Probe | [blur_dof_motion_paper_review.md](blur_dof_motion_paper_review.md), [paper corpus](blur_dof_motion_papers/paper_index.md) |
 | Video diffusion distillation | Compress high-quality or bidirectional video diffusion teachers into faster students, usually via DMD-style objectives. | Background | [diffusion forcing synthesis](chats/diffusion_splat_forcing_apr_20th_gemini/result.md), [gemini_thread_3.md](gemini_thread_3.md) |
 | Rolling / diffusion forcing | Use AR diffusion, rolling-window denoising, attention sinks, and self-forcing to support long or streaming worlds. | Speculative | [diffusion forcing synthesis](chats/diffusion_splat_forcing_apr_20th_gemini/result.md), [path B causal notes](proposed_architectures/path_b_causal_autoregressive/01_CAUSAL_STATE_UPDATE.md), [ChopGrad path B](proposed_architectures/path_b_causal_autoregressive/02_CHOPGRAD_TRAINING.md) |
 | ChopGrad and memory-safe pixel losses | Truncate temporal gradients when a recurrent/cached decoder or backbone makes pixel losses scale with sequence length. | Background | [video_diffusion_loss/STUDY_NOTES.md](video_diffusion_loss/STUDY_NOTES.md), [SESSION_Q_AND_A_SYNTHESIS.md](SESSION_Q_AND_A_SYNTHESIS.md), [v1 beta ChopGrad](proposed_architectures/v1_beta/04_CHOPGRAD_INTEGRATION.md) |
@@ -65,6 +69,29 @@ Promising sub-directions:
   scaled at the render boundary.
 - Add culling/sorting only where profiling shows dense all-Gaussians/all-pixels
   math is the bottleneck.
+
+### Video-To-World-Token Base Model
+
+This is the current first goal. The model consumes observed video and emits
+world tokens. Those tokens are decoded to splats, rendered through real camera
+paths, and trained against video. The token set is not allowed to be a hidden
+view cache: it only counts if it stays coherent when rendered from held-out or
+perturbed cameras.
+
+Minimum contract:
+
+- source-camera reconstruction should keep working as the basic adapter test;
+- held-out-frame reconstruction should force preimage information into the
+  tokens instead of memorizing only encoded frames;
+- novel-camera renders should be evaluated for floaters, holes, scale drift,
+  and camera-token leakage;
+- the exported token format should name camera, time, static scene state, and
+  dynamic scene state boundaries clearly enough for a later generator to
+  predict them.
+
+Stage 2 depends on this. AR or diffusion over world tokens is only meaningful if
+the tokens already behave like scene state. Otherwise the generator is just
+learning a video model with extra baggage.
 
 ### TokenGS-Style Splat Tokens
 
@@ -104,9 +131,11 @@ should be tested with a small static probe before dynamic or open-ended claims.
 
 ### Pixel-Space SDS From Rendered Splats
 
-This is the direction from the current prompt. It keeps end-to-end training
-without explicit 3D ground truth, but moves the diffusion noise into 2D rendered
-image/video space instead of corrupting 3D Gaussian parameters directly.
+This keeps end-to-end training without explicit 3D ground truth, but moves the
+diffusion noise into 2D rendered image/video space instead of corrupting 3D
+Gaussian parameters directly. In the current plan it is either novel-camera
+pressure for the base world-token model or a later generation prior, not a
+replacement for the source-camera render contract.
 
 Proposed loop:
 
@@ -209,6 +238,30 @@ Risks:
 - SDS has known mode-collapse behavior; VSD or DiffRep-style formulations may
   be necessary in practice.
 
+### Physical Lens And Shutter Blur
+
+This direction treats real camera artifacts as capture-state in the renderer:
+finite aperture creates depth-of-field / defocus blur, while shutter integration
+creates camera and object motion blur. The target is a sharp exported splat
+world plus inferred lens/shutter state, not splats that permanently bake blur.
+
+The key renderer quantities are:
+
+- projection intrinsics (`fx/fy/cx/cy`) and crop/resize state;
+- focus distance, preferably represented as inverse focus depth;
+- effective CoC strength `Q = F * D = F^2 / f_number`, not raw focal length
+  alone;
+- exposure duration, shutter curve, and SE(3) camera trajectory during exposure;
+- dynamic splat/object trajectories during exposure.
+
+Use [blur_dof_motion_paper_review.md](blur_dof_motion_paper_review.md) before
+implementing this, then use the [paper corpus](blur_dof_motion_papers/paper_index.md)
+and [extraction notes](blur_dof_motion_papers/extraction_notes.md) for local
+PDFs/text, equation anchors, and follow-up formula/dataset tables. The practical
+plan is exact sub-shutter/aperture sampling first, CoC/screen-velocity
+diagnostics second, and covariance/kernel shortcuts only after synthetic tests
+prove they match the sampled renderer.
+
 ### Video Diffusion Distillation
 
 Distillation is about making a capable video generator cheap enough for
@@ -253,6 +306,25 @@ Potential Dyna World translation:
 This is the right vocabulary for continuous worlds, but it is still speculative
 until the smaller TokenGS and single-step extraction probes work.
 
+### World-Token AR/Diffusion Generation
+
+This is stage 2. Once `video => world tokens` works, train a model that predicts
+world tokens themselves:
+
+- video continuation: condition on observed world tokens and predict future
+  world tokens;
+- image=>video: initialize or condition the first world-token state from an
+  image, then roll forward;
+- text=>video: condition token generation on text while keeping the renderer as
+  the final contract;
+- hybrid refinement: use diffusion to denoise token trajectories while AR keeps
+  streaming state.
+
+This should not be confused with using a second-stage generator to repair novel
+views. Novel-camera consistency is a base-token requirement. Generation is for
+unobserved time, new prompts, and conditional creation after that requirement is
+met.
+
 ### ChopGrad And Memory-Safe Pixel Losses
 
 ChopGrad matters when the path from latent/token predictions to pixels is
@@ -283,17 +355,21 @@ Use these to answer:
 
 ## Suggested Next Probes
 
-1. **Renderer throughput probe:** benchmark the current dense path against any
+1. **World-token contract smoke:** define the minimal exported token schema and
+   source/novel-camera eval that decides whether a representation counts as
+   world tokens.
+2. **Renderer throughput probe:** benchmark the current dense path against any
    available fused/FasterGS-compatible path at fixed token counts, render sizes,
    and camera counts.
-2. **Static IT-DiT probe:** freeze a small video/image diffusion backbone, add
+3. **Static IT-DiT probe:** freeze a small video/image diffusion backbone, add
    TokenGS-style queries, and test whether one-step activations beat a
    from-scratch TokenGS baseline on a tiny static multiview set.
-3. **2D SDS toy:** optimize a small clean splat token set from rendered SDS
+4. **2D SDS toy:** optimize a small clean splat token set from rendered SDS
    gradients with multiple camera perturbations; verify that geometry improves,
    not just the teacher-view render.
-4. **AR TokenGS forcing paper pass:** compress the forcing synthesis into a
-   smaller implementation note before building anything long-horizon.
+5. **World-token generation paper pass:** compress the AR/diffusion forcing
+   synthesis into a smaller implementation note, but keep it behind the base
+   token consistency proof.
 
 ## Maintenance Rules
 

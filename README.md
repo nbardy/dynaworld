@@ -2,11 +2,15 @@
 
 **Hollywood's Open Source World Model.**
 
-Dynamic video => compressed splats.
+Dynamic video => world tokens => compressed splats.
 
-DynaWorld is less about making new worlds and more about modality shifts.
-It lets you go from `Video <=> splats` both directions, so you can use splats
-when they're best and video when its best.
+The first broad goal is training a `video => world token` model. World tokens
+are scene-state tokens. They count as world tokens only if they can be decoded
+to splats that stay consistent across novel camera angles.
+
+DynaWorld starts as a modality-shift system. It lets you move between video,
+world tokens, and splats, so you can use splats when they're best and video
+when its best.
 
 The first use case is camera change. You shot the footage. Now you want a
 different angle. DynaWorld turns that video into a compact dynamic splat scene,
@@ -19,9 +23,9 @@ representations are better when we want the control of traditional generative
 algorithms.
 
 This is made to be used in conjunction with video diffusion for upscaling,
-editing, and final-pixel cleanup. They are complementary, not opposites.
-Video diffusion is the generative portion. DynaWorld is focused on the
-exploratory portion.
+editing, final-pixel cleanup, and later generation. They are complementary, not
+opposites. First make the tokens 3D-consistent. Then make the tokens
+predictive.
 
 You can shoot a clip, or generate one with video diffusion. Then DynaWorld
 creates an exploratory version of that clip.
@@ -37,13 +41,17 @@ Everything else requires expensive labeling, and labels don't scale.
 The training contract is simple:
 
 1. encode video
-2. decode splats
-3. render video
-4. compare to the video you started from
+2. emit world tokens
+3. decode world tokens to splats
+4. render source-camera video for loss and novel-camera passes for consistency
+5. compare the source render to the video you started from
 
 Splats sit in the middle as the compact intermediate. No fake 3D labels. No
 synthetic ground truth. Render splats and compare directly against
 ground-truth video.
+
+If a token set only works from the camera that encoded it, it is not a world
+token yet. It is a view cache.
 
 The useful signal is in the preimage.
 
@@ -52,20 +60,24 @@ The useful signal is in the preimage.
 Modalities don't require pretraining. The implicit latents in video models are
 the key. Decoding them to splats is cheap adapter training.
 
-A lightweight splat head on a frozen video backbone. Not a new foundation
-model.
+A lightweight world-token and splat head on a frozen video backbone. Not a new
+foundation model.
 
-## Generative Capacity
+## World-Token Generation
 
-There is not a generative phase planned for generating the initial world. Leave
-that phase to world models that generate the starting world.
+Generation is the follow-up goal, not the first proof. First train
+`video => world tokens`: observed video goes in, stable scene tokens come out,
+and those tokens decode to splats that can be rendered under new cameras.
 
-DynaWorld still needs generative capacity. Novel camera angles mean the model
-has to know whats back there, even if the input has not seen it. Looking behind
-an object is hallucinating some content. Extending the background is
-hallucinating some content. But it is not fully generating in time.
+Once those tokens are worth predicting, train models over the token space
+itself. That can be autoregressive or diffusion: continue a video by predicting
+future world tokens, condition on an image to initialize them, or condition on
+text to generate them. The renderer remains the pressure. Generated tokens
+should still decode to a coherent dynamic splat world, not just plausible
+pixels.
 
-For now, keep the model focused. It only generates novel angles.
+The sequencing matters. Stage 2 should not be used to hide camera leakage in
+stage 1. The base world tokens need to already hold up under camera changes.
 
 The stronger training task is probably to force the model to render images it
 didn't encode. Encode part of a clip, decode splats as a function of `t`, then
@@ -78,28 +90,38 @@ renderer, and the time-conditioned decoder.
 See `research_notes/README.md` for the long-form rationale.
 
 1. World models are video models. A strong video backbone already carries geometry, motion, and lighting structure.
-2. DynaWorld is less about making new worlds and more about modality shifts.
-3. `Video <=> Video` is the training contract. It is the only training data for world models that scales. Splats sit in the middle.
-4. The useful signal is in the preimage.
-5. Static and dynamic are the same problem.
-6. Foundations are sacred. Modalities don't require pretraining. A lightweight splat head on a frozen video backbone is cheap adapter training.
-7. Supervision should stay in pixel space. Render splats and compare to video.
-8. Memory should be spent on dynamic scene state, not luxury parameters.
+2. The first broad goal is `video => world tokens`, where world tokens decode
+   to splats that stay consistent across novel cameras.
+3. DynaWorld starts as a modality-shift system: `Video <=> splats`, with world
+   tokens in the middle.
+4. `Video <=> Video` is the training contract. It is the only training data for
+   world models that scales. World tokens and splats sit in the middle.
+5. The useful signal is in the preimage.
+6. Static and dynamic are the same problem.
+7. Foundations are sacred. Modalities don't require pretraining. A lightweight
+   world-token and splat head on a frozen video backbone is cheap adapter
+   training.
+8. Supervision should stay in pixel space. Render splats and compare to video.
+9. Memory should be spent on dynamic scene state, not luxury parameters.
+10. Pure generation comes after the representation works: AR or diffusion over
+    world tokens for continuation, text=>video, and image=>video.
 
 ## Phases
 
-**Phase I - `Video <=> splats`.** Dynamic reconstruction and fast camera
-editing. Where we are today.
+**Phase I - `video => world tokens => splats`.** Dynamic reconstruction, fast
+camera editing, and the base representation. Where we are today.
 
-**Phase II - Interaction.** Actions inside the world model. Agents and physics
+**Phase II - world-token prediction.** AR or diffusion over world tokens. This
+is the path to video continuation, image=>video, and text=>video without making
+pixels the main state.
+
+**Phase III - interaction.** Actions inside the world model. Agents and physics
 handles that let you control the dynamic scene, not just re-view it.
-
-No planned Phase III for text-to-world generation. Generate new dynamic worlds
-somewhere else, then use DynaWorld to make them exploratory.
 
 ## Progress
 
-Current work is focused on small single-video overfit runs. The goal is to keep
+Current work is focused on the base world-token model through small
+single-video overfit runs and tiny scene-diverse datasets. The goal is to keep
 training loops working, fast, and convergent before moving to larger data.
 Completed items here have been tested on small single-video overfit runs unless
 noted otherwise.
@@ -128,8 +150,12 @@ Longer-form research notes live under `research_notes/`.
 - [ ] Collect multi-camera data for novel-view-synthesis finetuning.
 - [ ] Decide whether scene cuts should be marked and split during preprocessing.
 
-### Model Architecture
+### World Token Base Model
 
+- [ ] Define the exported world-token contract: token shapes, time
+  conditioning, decoder inputs, and the minimum novel-camera consistency checks.
+- [ ] Train the direct base path: encode video, emit world tokens, decode
+  splats, render source and novel cameras.
 - [ ] Sort out how to handle time.
 - [ ] Support longer videos and sliding-window training.
 - [ ] Better support novel camera angles when training mostly from the input camera angle.
@@ -142,7 +168,8 @@ Longer-form research notes live under `research_notes/`.
 - [ ] Try doing both crop variants plus chunk mixing together in pretrain and see if that is enough to get a good prior.
 - [ ] Worry about the wrong task forcing the camera implicitly into image tokens if we try to hide camera position too much in non-principled ways.
 - [ ] Try a BERT-like random masking dropout scheme in pretrain as an alternative to only chopping the video in half. Might be more robust, but worry that it will force the camera data to hide itself in the image tokens.
-- [ ] Stop and reflect on the bigger architecture / objective question: AR vs diffusion, rolling vs forcing diffusion, and the rolling window stuff. We need to more natively extend to partial / long context and rolling context. Maybe even AR on tokens per frame. End up robust to noise at inference time by training on noisier data. Get away from the single encoder => decode paradigm toward something more elegant.
+- [ ] Keep AR/diffusion generation out of the base-model proof until the world
+  tokens pass source-camera and novel-camera consistency checks.
 
 ### Novel View Post-Training
 
@@ -166,10 +193,14 @@ Longer-form research notes live under `research_notes/`.
 - [ ] Document how to contribute auto-research so users can run local experiments and contribute findings back.
 - [ ] Investigate async training across users' home GPUs.
 
-#### Foundation Model Training
+#### World-Token Generation
 
-- [ ] Benchmark whether splat decoding is a useful inductive bias for video generation itself versus standard video diffusion.
-- [ ] Compare learning efficiency from scratch for splat-decoding video models against standard video diffusion baselines.
+- [ ] Train an AR predictor over world tokens for video continuation.
+- [ ] Train a diffusion predictor over world tokens for video continuation.
+- [ ] Test image=>video by initializing or conditioning the world-token stream from an image.
+- [ ] Test text=>video by conditioning world-token generation on text.
+- [ ] Benchmark whether world-token decoding is a useful inductive bias for
+  video generation itself versus standard video diffusion.
 
 ## Setup
 
@@ -188,12 +219,36 @@ From the repo root:
 
 Default inputs and outputs live under `test_data/`.
 
+## Local Mac Data
+
+The default tiny split dataset is now 30 short mined-video clips from 30
+distinct source videos: 20 train and 10 test.
+
+```bash
+./src/dataset_scripts/youtube_scene_distinct_30_seed.sh
+```
+
+That writes `data/youtube_scene_distinct/clip_sets/youtube_scene_distinct_30_64_4fps_16f/`.
+
+The older local multi-camera sample builder is still available for camera-path
+debugging:
+
+```bash
+./src/train_scripts/build_local_mac_30_clip_dataset.sh --overwrite
+```
+
 ## Train
 
 Single-image baseline:
 
 ```bash
 uv run python src/train/tokenGS.py src/train_configs/local_mac_overfit_single_image.jsonc
+```
+
+Tiny 30-clip local baseline:
+
+```bash
+./src/train_scripts/train_local_mac_30_clip_baseline.sh
 ```
 
 Current recommended local dynamic run:
