@@ -355,7 +355,14 @@ def main() -> None:
     parser.add_argument("--include-v8", action="store_true", help="Also include the v8 project3d variant.")
     parser.add_argument("--skip-v9", action="store_true", help="Skip the v9 training variant.")
     parser.add_argument("--skip-grad-check", action="store_true", help="Skip full gradient parity on the first case.")
+    parser.add_argument(
+        "--grad-check",
+        choices=("first", "all", "none"),
+        default=None,
+        help="Which cases should run full gradient parity. Defaults to first unless --skip-grad-check is set.",
+    )
     args = parser.parse_args()
+    grad_check_mode = "none" if args.skip_grad_check else (args.grad_check or "first")
 
     if args.build_v8:
         maybe_build_variant(FAST_MAC_V8_DIR)
@@ -415,7 +422,7 @@ def main() -> None:
             mean_err = float(err.mean().item())
             grad_max = float("nan")
             grad_mean = float("nan")
-            if i == 0 and not args.skip_grad_check:
+            if grad_check_mode == "all" or (grad_check_mode == "first" and i == 0):
                 grad_max, grad_mean = full_grad_check(scene, v5_config, candidate_config, render_fn)
             candidate_train_mean, candidate_train_min, candidate_train_max, _candidate_loss = measure_forward_backward_ms(
                 render_fn,
