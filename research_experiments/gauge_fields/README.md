@@ -196,6 +196,29 @@ uv run python research_experiments/gauge_fields/make_sweep_configs.py \
   --steps 150
 ```
 
+Summarize completed sweep outputs:
+
+```bash
+uv run python research_experiments/gauge_fields/summarize_runs.py \
+  'outputs/gauge_fields/sweeps/gauge_fields_material_surfel_motion_128_16f_*' \
+  --out-md outputs/gauge_fields/sweeps/summary.md \
+  --out-json outputs/gauge_fields/sweeps/summary.json
+```
+
+The first compact 80-step sweep found:
+
+```text
+2048/r0.09: PSNR 17.78, coverage budget 4.30, xmap_occ 0.226
+2048/r0.07: PSNR 17.68, coverage budget 2.85, xmap_occ 0.240
+1024/r0.09: PSNR 17.60, coverage budget 2.50, xmap_occ 0.229
+1024/r0.07: PSNR 17.04, coverage budget 1.74, xmap_occ 0.258
+```
+
+Early conclusion: increasing radius can substitute for element count in short
+RGB overfit, but it pushes the model toward heavier coverage/smear and lower
+canonical-coordinate occupancy. Keep both PSNR and xmap/coverage certificates
+in the table.
+
 ## Current Limits
 
 This is still a pure Torch projected-disk renderer. It uses chunked pixels, but
