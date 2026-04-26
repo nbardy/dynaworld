@@ -90,6 +90,15 @@ LOGGING_DEFAULTS = {
     "output_dir": "outputs/gauge_fields/material_surfel_128_16f_512el",
 }
 
+DIAGNOSTIC_DEFAULTS = {
+    "projection_stats": True,
+    "xmap_metrics": True,
+    "motion_stats": True,
+    "flow_stats": False,
+    "xmap_bins": 16,
+    "xmap_alpha_min": 0.05,
+}
+
 
 # ----------------------------
 # Utilities
@@ -167,6 +176,47 @@ def build_knn_edges(x0: torch.Tensor, k: int = 8):
 
 def robust_l1(x, eps=1e-3):
     return torch.sqrt(x * x + eps * eps).mean()
+
+
+def tensor_scalar(value: torch.Tensor | float | int) -> float:
+    if torch.is_tensor(value):
+        return float(value.detach().cpu())
+    return float(value)
+
+
+def finite_values(values: torch.Tensor) -> torch.Tensor:
+    values = values.detach().reshape(-1).float().cpu()
+    return values[torch.isfinite(values)]
+
+
+def stats_for_tensor(prefix: str, values: torch.Tensor) -> dict[str, float]:
+    finite = finite_values(values)
+    if finite.numel() == 0:
+        return {
+            f"{prefix}_mean": 0.0,
+            f"{prefix}_p05": 0.0,
+            f"{prefix}_p50": 0.0,
+            f"{prefix}_p95": 0.0,
+            f"{prefix}_max": 0.0,
+        }
+    return {
+        f"{prefix}_mean": float(finite.mean()),
+        f"{prefix}_p05": float(torch.quantile(finite, 0.05)),
+        f"{prefix}_p50": float(torch.quantile(finite, 0.50)),
+        f"{prefix}_p95": float(torch.quantile(finite, 0.95)),
+        f"{prefix}_max": float(finite.max()),
+    }
+
+
+def mean_metric_rows(rows: list[dict[str, float]]) -> dict[str, float]:
+    if not rows:
+        return {}
+    keys = sorted({key for row in rows for key in row})
+    out: dict[str, float] = {}
+    for key in keys:
+        vals = [row[key] for row in rows if key in row and math.isfinite(row[key])]
+        out[key] = float(sum(vals) / max(len(vals), 1))
+    return out
 
 
 # ----------------------------
@@ -721,20 +771,40 @@ def render_sequence(
     K: torch.Tensor,
     w2c: torch.Tensor,
     cfg: RenderConfig,
+    include_flow: bool = False,
 ) -> dict[str, torch.Tensor]:
     rgbs = []
     alphas = []
     depths = []
+    xmaps = []
+    flows = []
     for t in range(model.T):
-        out = render_material_field(model, t=t, K=K, w2c=w2c[t], cfg=cfg)
+        use_flow = include_flow and t < model.T - 1
+        out = render_material_field(
+            model,
+            t=t,
+            K=K[t] if K.ndim == 3 else K,
+            w2c=w2c[t],
+            cfg=cfg,
+            K_next=(K[t + 1] if K.ndim == 3 else K) if use_flow else None,
+            w2c_next=w2c[t + 1] if use_flow else None,
+            t_next=t + 1 if use_flow else None,
+        )
         rgbs.append(out["rgb"])
         alphas.append(out["alpha"])
         depths.append(out["depth"])
-    return {
+        xmaps.append(out["xmap"])
+        if use_flow:
+            flows.append(out["flow"])
+    rendered = {
         "rgb": torch.stack(rgbs, dim=0),
         "alpha": torch.stack(alphas, dim=0),
         "depth": torch.stack(depths, dim=0),
+        "xmap": torch.stack(xmaps, dim=0),
     }
+    if flows:
+        rendered["flow"] = torch.stack(flows, dim=0)
+    return rendered
 
 
 def video_metrics(rendered: torch.Tensor, target: torch.Tensor) -> dict[str, float]:
@@ -754,6 +824,8 @@ def alpha_metrics(alpha: torch.Tensor) -> dict[str, float]:
         "alpha_mean": float(alpha.mean().detach().cpu()),
         "alpha_coverage_005": float((alpha > 0.05).float().mean().detach().cpu()),
         "alpha_coverage_050": float((alpha > 0.50).float().mean().detach().cpu()),
+        "alpha_coverage_090": float((alpha > 0.90).float().mean().detach().cpu()),
+        "alpha_hole_fraction": float((alpha < 0.05).float().mean().detach().cpu()),
         "alpha_max": float(alpha.max().detach().cpu()),
     }
 
@@ -765,6 +837,152 @@ def model_metrics(model: MaterialSurfelField) -> dict[str, float]:
         "model_radius_max": float(model.radius().max().detach().cpu()),
         "model_motion_smooth": float(model.motion_smoothness_loss().detach().cpu()),
     }
+
+
+@torch.no_grad()
+def projection_health_metrics(
+    model: MaterialSurfelField,
+    K: torch.Tensor,
+    w2c: torch.Tensor,
+    cfg: RenderConfig,
+    frames: Optional[list[int]] = None,
+) -> dict[str, float]:
+    frames = list(range(model.T)) if frames is None else frames
+    rows: list[dict[str, float]] = []
+    for t in frames:
+        K_t = K[t] if K.ndim == 3 else K
+        x = model.positions(int(t))
+        _, z, valid = project_points(x, K_t, w2c[int(t)], cfg.near, cfg.far)
+        fx = K_t[0, 0].abs().clamp_min(1e-6)
+        radius_raw = model.radius()[:, 0] * fx / z.abs().clamp_min(cfg.near)
+        radius_clamped = radius_raw.clamp(cfg.min_radius_px, cfg.max_radius_px)
+        valid_radius = radius_clamped[valid]
+        if valid_radius.numel() == 0:
+            coverage_budget = 0.0
+        else:
+            coverage_budget = tensor_scalar(math.pi * valid_radius.square().sum() / float(cfg.H * cfg.W))
+        row = {
+            "projection_valid_fraction": tensor_scalar(valid.float().mean()),
+            "projection_radius_min_clamp_fraction": tensor_scalar((radius_raw <= cfg.min_radius_px).float().mean()),
+            "projection_radius_max_clamp_fraction": tensor_scalar((radius_raw >= cfg.max_radius_px).float().mean()),
+            "projection_coverage_budget": coverage_budget,
+        }
+        row.update(stats_for_tensor("projection_radius_px", valid_radius))
+        row.update(stats_for_tensor("projection_depth", z[valid]))
+        rows.append(row)
+    return mean_metric_rows(rows)
+
+
+@torch.no_grad()
+def motion_health_metrics(model: MaterialSurfelField) -> dict[str, float]:
+    if model.L == 0:
+        return {
+            "motion_delta_mean": 0.0,
+            "motion_delta_p50": 0.0,
+            "motion_delta_p95": 0.0,
+            "motion_delta_max": 0.0,
+            "motion_basis_norm_mean": 0.0,
+            "motion_basis_norm_p95": 0.0,
+            "motion_coeff_norm_mean": 0.0,
+            "motion_coeff_velocity_mean": 0.0,
+            "motion_coeff_acceleration_mean": 0.0,
+        }
+
+    deltas = []
+    for t in range(model.T):
+        deltas.append((model.positions(t) - model.x0).norm(dim=-1))
+    delta = torch.stack(deltas, dim=0)
+    basis_norm = model.nr_basis.norm(dim=-1).reshape(-1)
+    coeff_abs = model.nr_coeff.abs().reshape(-1)
+    velocity = model.nr_coeff[1:] - model.nr_coeff[:-1]
+
+    metrics = {
+        **stats_for_tensor("motion_delta", delta),
+        "motion_basis_norm_mean": float(finite_values(basis_norm).mean()) if basis_norm.numel() else 0.0,
+        "motion_basis_norm_p95": float(torch.quantile(finite_values(basis_norm), 0.95)) if basis_norm.numel() else 0.0,
+        "motion_coeff_norm_mean": float(finite_values(coeff_abs).mean()) if coeff_abs.numel() else 0.0,
+        "motion_coeff_velocity_mean": float(finite_values(velocity.norm(dim=-1)).mean()) if velocity.numel() else 0.0,
+        "motion_coeff_acceleration_mean": 0.0,
+    }
+    if model.T >= 3:
+        acc = model.nr_coeff[2:] - 2 * model.nr_coeff[1:-1] + model.nr_coeff[:-2]
+        metrics["motion_coeff_acceleration_mean"] = float(finite_values(acc.norm(dim=-1)).mean())
+    return metrics
+
+
+@torch.no_grad()
+def xmap_health_metrics(
+    xmap: torch.Tensor,
+    alpha: torch.Tensor,
+    canonical_x0: torch.Tensor,
+    bins: int = 16,
+    alpha_min: float = 0.05,
+) -> dict[str, float]:
+    mask = alpha > alpha_min
+    valid_fraction = tensor_scalar(mask.float().mean())
+    if int(mask.sum().detach().cpu()) < 16:
+        return {
+            "xmap_valid_fraction": valid_fraction,
+            "xmap_occ": 0.0,
+            "xmap_entropy": 0.0,
+            "xmap_eff_bins": 0.0,
+            "xmap_variance_x": 0.0,
+            "xmap_variance_y": 0.0,
+            "xmap_variance_z": 0.0,
+            "xmap_local_smoothness": 0.0,
+        }
+
+    x = xmap[mask].detach()
+    lo = canonical_x0.detach().amin(dim=0)
+    hi = canonical_x0.detach().amax(dim=0)
+    xn = (x - lo) / (hi - lo).clamp_min(1e-8)
+    idx = (xn * int(bins)).long().clamp(0, int(bins) - 1)
+    flat = idx[:, 0] * int(bins) * int(bins) + idx[:, 1] * int(bins) + idx[:, 2]
+    counts = torch.bincount(flat.detach().cpu(), minlength=int(bins) ** 3).float()
+    probs = counts / counts.sum().clamp_min(1e-8)
+    nonzero = probs > 0
+    entropy = -(probs[nonzero] * probs[nonzero].log()).sum()
+    var = x.var(dim=0, unbiased=False).detach().cpu()
+
+    alpha_pair_x = (alpha[..., 1:] > alpha_min) & (alpha[..., :-1] > alpha_min)
+    alpha_pair_y = (alpha[:, 1:, :] > alpha_min) & (alpha[:, :-1, :] > alpha_min)
+    dx = (xmap[..., 1:, :] - xmap[..., :-1, :]).norm(dim=-1)
+    dy = (xmap[:, 1:, :, :] - xmap[:, :-1, :, :]).norm(dim=-1)
+    smooth_terms = []
+    if bool(alpha_pair_x.any().detach().cpu()):
+        smooth_terms.append(dx[alpha_pair_x].mean())
+    if bool(alpha_pair_y.any().detach().cpu()):
+        smooth_terms.append(dy[alpha_pair_y].mean())
+    smoothness = torch.stack(smooth_terms).mean() if smooth_terms else xmap.new_zeros(())
+
+    return {
+        "xmap_valid_fraction": valid_fraction,
+        "xmap_occ": float((counts > 0).float().mean()),
+        "xmap_entropy": float(entropy),
+        "xmap_eff_bins": float(entropy.exp()),
+        "xmap_variance_x": float(var[0]),
+        "xmap_variance_y": float(var[1]),
+        "xmap_variance_z": float(var[2]),
+        "xmap_local_smoothness": tensor_scalar(smoothness),
+    }
+
+
+@torch.no_grad()
+def flow_health_metrics(flow: torch.Tensor, alpha: torch.Tensor, alpha_min: float = 0.05) -> dict[str, float]:
+    alpha_for_flow = alpha[:-1] if alpha.shape[0] == flow.shape[0] + 1 else alpha
+    valid = alpha_for_flow > alpha_min
+    magnitude = flow.norm(dim=-1)
+    if not bool(valid.any().detach().cpu()):
+        return {
+            "flow_valid_fraction": 0.0,
+            "flow_magnitude_mean": 0.0,
+            "flow_magnitude_p50": 0.0,
+            "flow_magnitude_p95": 0.0,
+            "flow_magnitude_max": 0.0,
+        }
+    metrics = {"flow_valid_fraction": tensor_scalar(valid.float().mean())}
+    metrics.update(stats_for_tensor("flow_magnitude", magnitude[valid]))
+    return metrics
 
 
 def hwc_video_to_chw(video: torch.Tensor) -> torch.Tensor:
@@ -813,6 +1031,22 @@ def wandb_final_payload(
         ),
         "GT_Video": make_wandb_video(target_chw, fps),
     }
+    logged_keys = {
+        "eval_l1",
+        "eval_mse",
+        "eval_psnr",
+        "alpha_mean",
+        "alpha_coverage_005",
+        "alpha_coverage_050",
+        "alpha_max",
+        "model_alpha_mean",
+        "model_radius_mean",
+        "model_radius_max",
+        "model_motion_smooth",
+    }
+    for key, value in metrics.items():
+        if key not in logged_keys and isinstance(value, (int, float)):
+            payload[f"Diag/{key}"] = value
     payload.update(build_validation_video_payload(rendered_chw, target_chw, fps))
     return payload
 
@@ -917,6 +1151,7 @@ def gauge_config(config: dict[str, Any]) -> dict[str, Any]:
         config,
         sections=("data", "model", "camera", "render", "train", "losses", "logging"),
     )
+    cfg.setdefault("diagnostics", {})
     apply_defaults(cfg["data"], DATA_DEFAULTS)
     apply_defaults(cfg["model"], MODEL_DEFAULTS)
     apply_defaults(cfg["camera"], CAMERA_DEFAULTS)
@@ -924,6 +1159,7 @@ def gauge_config(config: dict[str, Any]) -> dict[str, Any]:
     apply_defaults(cfg["train"], TRAIN_DEFAULTS)
     apply_defaults(cfg["losses"], LOSS_DEFAULTS)
     apply_defaults(cfg["logging"], LOGGING_DEFAULTS)
+    apply_defaults(cfg["diagnostics"], DIAGNOSTIC_DEFAULTS)
     return cfg
 
 
@@ -962,6 +1198,7 @@ def main() -> None:
     train_cfg = cfg["train"]
     loss_cfg = cfg["losses"]
     logging_cfg = cfg["logging"]
+    diagnostics_cfg = cfg["diagnostics"]
 
     torch.manual_seed(int(train_cfg["seed"]))
 
@@ -1052,12 +1289,40 @@ def main() -> None:
             log_every=int(logging_cfg["log_every"]),
         )
 
-        rendered = render_sequence(model, K=K, w2c=w2c, cfg=render_cfg)
+        rendered = render_sequence(
+            model,
+            K=K,
+            w2c=w2c,
+            cfg=render_cfg,
+            include_flow=bool(diagnostics_cfg["flow_stats"]),
+        )
         metrics = {
             **video_metrics(rendered["rgb"], video),
             **alpha_metrics(rendered["alpha"]),
             **model_metrics(model),
         }
+        if bool(diagnostics_cfg["projection_stats"]):
+            metrics.update(projection_health_metrics(model, K=K, w2c=w2c, cfg=render_cfg))
+        if bool(diagnostics_cfg["motion_stats"]):
+            metrics.update(motion_health_metrics(model))
+        if bool(diagnostics_cfg["xmap_metrics"]):
+            metrics.update(
+                xmap_health_metrics(
+                    rendered["xmap"],
+                    rendered["alpha"],
+                    canonical_x0=model.x0,
+                    bins=int(diagnostics_cfg["xmap_bins"]),
+                    alpha_min=float(diagnostics_cfg["xmap_alpha_min"]),
+                )
+            )
+        if bool(diagnostics_cfg["flow_stats"]) and "flow" in rendered:
+            metrics.update(
+                flow_health_metrics(
+                    rendered["flow"],
+                    rendered["alpha"],
+                    alpha_min=float(diagnostics_cfg["xmap_alpha_min"]),
+                )
+            )
         print({"final": metrics})
 
         if wandb_enabled:

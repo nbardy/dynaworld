@@ -137,6 +137,55 @@ scalars: Loss, Loss/RGBL1, Eval/L1, Eval/MSE, Eval/PSNR
 health: Eval/AlphaCoverage005, Eval/AlphaCoverage050, Model/RadiusMeanFinal
 ```
 
+Diagnostics are enabled by default in the harness and saved to `metrics.json`:
+
+```text
+projection radius p05/p50/p95
+coverage budget
+radius clamp fractions
+motion basis / coeff / displacement stats
+xmap occupancy / entropy / local smoothness
+optional flow magnitude stats
+```
+
+## Cheat Probes
+
+Run deterministic post-training probes against a saved checkpoint:
+
+```bash
+uv run python research_experiments/gauge_fields/cheat_probe_material_gauge.py \
+  --checkpoint outputs/gauge_fields/material_surfel_motion_128_16f_2048el_100step/checkpoint.pt \
+  --output-dir outputs/gauge_fields/material_surfel_motion_128_16f_2048el_100step/probes \
+  --device mps \
+  --probe all
+```
+
+Current probes:
+
+```text
+depth_slide
+radius_inflate
+opacity_radius_trade
+basis_scale_gauge
+motion_phase_shift
+```
+
+Each probe writes `probe_summary.json`, per-probe metrics, and preview media.
+
+## Sweep Configs
+
+Generate the first capacity/radius/alpha sweep:
+
+```bash
+uv run python research_experiments/gauge_fields/make_sweep_configs.py \
+  --base-config src/train_configs/local_mac_gauge_fields_material_surfel_motion_128_16f_2048el.jsonc \
+  --output-dir src/train_configs/generated_gauge_fields_sweeps \
+  --elements 1024,2048,4096 \
+  --radii 0.05,0.07,0.09 \
+  --alpha-logits=-1.2,0.0 \
+  --steps 150
+```
+
 ## Current Limits
 
 This is still a pure Torch projected-disk renderer. It uses chunked pixels, but
