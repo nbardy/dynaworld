@@ -474,7 +474,7 @@ class MaterialSurfelField(nn.Module):
         self.register_buffer(
             "support_knn_idx",
             build_knn_index(init_x0, self.support_knn_k),
-            persistent=False,
+            persistent=True,
         )
 
     def positions(self, t: int):

@@ -45,6 +45,9 @@ SUPPORT_STATE_KEYS = {
     "metric_log_diag",
     "metric_offdiag",
 }
+OPTIONAL_STATE_KEYS = {
+    "support_knn_idx",
+}
 
 
 def load_checkpoint(path: Path, device: torch.device) -> dict[str, Any]:
@@ -80,7 +83,9 @@ def build_model_from_state(
     result = model.load_state_dict({key: value.detach().to(device) for key, value in state.items()}, strict=False)
     missing = set(result.missing_keys)
     unexpected = set(result.unexpected_keys)
-    allowed_missing = SUPPORT_STATE_KEYS if support_mode == "screen_disk" else set()
+    allowed_missing = set(OPTIONAL_STATE_KEYS)
+    if support_mode == "screen_disk":
+        allowed_missing.update(SUPPORT_STATE_KEYS)
     if unexpected:
         raise RuntimeError(f"Unexpected checkpoint keys for support_mode={support_mode}: {sorted(unexpected)}")
     unsupported_missing = missing - allowed_missing

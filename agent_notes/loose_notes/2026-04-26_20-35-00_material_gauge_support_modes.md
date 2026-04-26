@@ -213,3 +213,22 @@ Do not judge only source-view PSNR.
 Judge omitted-frame behavior, view-stress renders, X-map consistency, support
 anisotropy, and cheat-probe deltas.
 ```
+
+## Follow-Up Reproducibility Fix
+
+The first 250-step anisotropic runs exposed a checkpoint reproducibility bug:
+`support_knn_idx` was registered as a non-persistent buffer. During training the
+transport Jacobian used the KNN graph from the initialization points, but after
+checkpoint reload the model rebuilt KNN from the trained `x0`. That changed
+anisotropic support and made probe renders fail to reproduce the training final
+metrics.
+
+Fix:
+
+```text
+support_knn_idx is now persistent in the model state_dict.
+cheat_probe_material_gauge.py allows it to be missing only for older checkpoints.
+```
+
+Any support-mode probe comparison should use checkpoints produced after this
+fix.
