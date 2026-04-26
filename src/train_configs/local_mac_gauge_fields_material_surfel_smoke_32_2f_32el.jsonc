@@ -1,0 +1,68 @@
+{
+  // Tiny plumbing check for the material-coordinate gauge-field toy renderer.
+  // This is intentionally much smaller than the FasterGS baselines.
+  "arch": "gauge_fields_material_surfel",
+  "data": {
+    "sequence_dir": "test_data",
+    "frames_dir": null,
+    "video_path": "test_data/test_video_small_128_4fps.mp4",
+    "frame_source": "explicit_video",
+    "max_frames": 2,
+    "frame_indices": null
+  },
+  "model": {
+    "num_elements": 32,
+    "num_basis": 2,
+    "init_basis_std": 0.001,
+    "init_coeff_std": 0.0,
+    "init_depth": 3.0,
+    "init_radius": 0.05,
+    "init_alpha_logit": -1.2
+  },
+  "camera": {
+    "lens_model": "pinhole",
+    "base_fov_degrees": 60.0
+  },
+  "render": {
+    "render_size": 32,
+    "background": [1.0, 1.0, 1.0],
+    "near_plane": 0.001,
+    "far_plane": 10000.0,
+    "min_radius_px": 0.75,
+    "max_radius_px": 24.0,
+    "max_alpha_per_element": 0.95,
+    "pixel_chunk": 256
+  },
+  "train": {
+    "steps": 1,
+    "lr": 0.002,
+    "device": "auto",
+    "seed": 0,
+    "frames_per_step": 1,
+    "train_frame_count": 2
+  },
+  "losses": {
+    "rgb_weight": 1.0,
+    "query_weight": 0.25,
+    "flow_weight": 0.0,
+    "depth_weight": 0.0,
+    "arap_weight": 0.05,
+    "smooth_weight": 0.02,
+    "mass_weight": 0.001,
+    "radius_weight": 0.001
+  },
+  "logging": {
+    "log_every": 1,
+    "log_to_wandb": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "gauge-fields-material-surfel-smoke-32-2f-32el",
+    "wandb_tags": [
+      "gauge-fields",
+      "material-surfel",
+      "smoke",
+      "32px"
+    ],
+    "wandb_mode": "online",
+    "output_dir": "/tmp/gauge_fields_config_smoke"
+  }
+}

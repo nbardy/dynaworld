@@ -1,0 +1,70 @@
+{
+  // First quality gate: can the toy material-surfel renderer overfit one frame
+  // densely enough? If this fails, do not debug motion yet.
+  "arch": "gauge_fields_material_surfel",
+  "data": {
+    "sequence_dir": "test_data",
+    "frames_dir": null,
+    "video_path": "test_data/test_video_small_128_4fps.mp4",
+    "frame_source": "explicit_video",
+    "max_frames": 2,
+    "frame_indices": [0]
+  },
+  "model": {
+    "num_elements": 2048,
+    "num_basis": 0,
+    "init_basis_std": 0.0,
+    "init_coeff_std": 0.0,
+    "init_depth": 3.0,
+    "init_radius": 0.07,
+    "init_alpha_logit": 0.0
+  },
+  "camera": {
+    "lens_model": "pinhole",
+    "base_fov_degrees": 60.0
+  },
+  "render": {
+    "render_size": 128,
+    "background": [1.0, 1.0, 1.0],
+    "near_plane": 0.001,
+    "far_plane": 10000.0,
+    "min_radius_px": 0.75,
+    "max_radius_px": 24.0,
+    "max_alpha_per_element": 0.95,
+    "pixel_chunk": 2048
+  },
+  "train": {
+    "steps": 150,
+    "lr": 0.003,
+    "device": "auto",
+    "seed": 0,
+    "frames_per_step": 1,
+    "train_frame_count": 1
+  },
+  "losses": {
+    "rgb_weight": 1.0,
+    "query_weight": 0.0,
+    "flow_weight": 0.0,
+    "depth_weight": 0.0,
+    "arap_weight": 0.0,
+    "smooth_weight": 0.0,
+    "mass_weight": 0.0,
+    "radius_weight": 0.0001
+  },
+  "logging": {
+    "log_every": 25,
+    "log_to_wandb": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "gauge-fields-material-surfel-static-128-1f-2048el",
+    "wandb_tags": [
+      "gauge-fields",
+      "material-surfel",
+      "static-overfit",
+      "128px",
+      "1f",
+      "2048el"
+    ],
+    "wandb_mode": "online",
+    "output_dir": "outputs/gauge_fields/material_surfel_static_128_1f_2048el"
+  }
+}
