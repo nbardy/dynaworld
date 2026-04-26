@@ -168,9 +168,19 @@ radius_inflate
 opacity_radius_trade
 basis_scale_gauge
 motion_phase_shift
+opacity_split_clone
+dormant_insert
 ```
 
 Each probe writes `probe_summary.json`, per-probe metrics, and preview media.
+The preview columns are:
+
+```text
+target | base_render | probe_render | abs_probe_minus_base | probe_alpha
+```
+
+Each probe also writes `xmap_depth_alpha.png`; with `--include-flow`, it writes
+`flow.png`.
 
 ## Sweep Configs
 

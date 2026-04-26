@@ -38,7 +38,7 @@ from train import (  # noqa: E402
 )
 
 
-ProbeFn = Callable[[MaterialSurfelField, argparse.Namespace], None]
+ProbeFn = Callable[[MaterialSurfelField, argparse.Namespace], MaterialSurfelField]
 
 
 def load_checkpoint(path: Path, device: torch.device) -> dict[str, Any]:
@@ -66,6 +66,26 @@ def build_model_from_state(state: dict[str, torch.Tensor], device: torch.device)
 def clone_model(model: MaterialSurfelField) -> MaterialSurfelField:
     state = {key: value.detach().clone() for key, value in model.state_dict().items()}
     return build_model_from_state(state, model.x0.device)
+
+
+def append_elements(
+    model: MaterialSurfelField,
+    x0_new: torch.Tensor,
+    color_logits_new: torch.Tensor,
+    raw_alpha_new: torch.Tensor,
+    log_radius_new: torch.Tensor,
+    basis_new: torch.Tensor,
+) -> MaterialSurfelField:
+    state = model.state_dict()
+    expanded_state = {
+        "x0": torch.cat([state["x0"], x0_new], dim=0),
+        "color_logits": torch.cat([state["color_logits"], color_logits_new], dim=0),
+        "raw_alpha": torch.cat([state["raw_alpha"], raw_alpha_new], dim=0),
+        "log_radius": torch.cat([state["log_radius"], log_radius_new], dim=0),
+        "nr_basis": torch.cat([state["nr_basis"], basis_new], dim=0),
+        "nr_coeff": state["nr_coeff"].clone(),
+    }
+    return build_model_from_state(expanded_state, model.x0.device)
 
 
 def load_target_video(cfg: dict[str, Any], device: torch.device) -> torch.Tensor:
@@ -115,43 +135,82 @@ def choose_indices(model: MaterialSurfelField, sample_fraction: float, seed: int
 
 
 @torch.no_grad()
-def probe_depth_slide(model: MaterialSurfelField, args: argparse.Namespace) -> None:
+def probe_depth_slide(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
     idx = choose_indices(model, args.sample_fraction, args.seed)
     direction = model.x0[idx] / model.x0[idx].norm(dim=-1, keepdim=True).clamp_min(1e-6)
     model.x0[idx] += float(args.depth_slide_eps) * direction
+    return model
 
 
 @torch.no_grad()
-def probe_radius_inflate(model: MaterialSurfelField, args: argparse.Namespace) -> None:
+def probe_radius_inflate(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
     idx = choose_indices(model, args.sample_fraction, args.seed)
     model.log_radius[idx] += float(args.radius_log_scale)
+    return model
 
 
 @torch.no_grad()
-def probe_opacity_radius_trade(model: MaterialSurfelField, args: argparse.Namespace) -> None:
+def probe_opacity_radius_trade(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
     idx = choose_indices(model, args.sample_fraction, args.seed)
     scale = float(args.opacity_radius_scale)
     alpha = torch.sigmoid(model.raw_alpha[idx])
     alpha_new = (alpha / (scale * scale)).clamp(1e-5, 1.0 - 1e-5)
     model.raw_alpha[idx] = torch.logit(alpha_new)
     model.log_radius[idx] += math.log(scale)
+    return model
 
 
 @torch.no_grad()
-def probe_basis_scale_gauge(model: MaterialSurfelField, args: argparse.Namespace) -> None:
+def probe_basis_scale_gauge(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
     if model.L == 0:
-        return
+        return model
     basis = min(max(0, int(args.basis_index)), model.L - 1)
     scale = float(args.basis_scale_factor)
     model.nr_coeff[:, basis] *= scale
     model.nr_basis[:, basis, :] /= scale
+    return model
 
 
 @torch.no_grad()
-def probe_motion_phase_shift(model: MaterialSurfelField, args: argparse.Namespace) -> None:
+def probe_motion_phase_shift(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
     if model.L == 0 or model.T <= 1:
-        return
+        return model
     model.nr_coeff.copy_(torch.roll(model.nr_coeff, shifts=int(args.time_shift), dims=0))
+    return model
+
+
+@torch.no_grad()
+def probe_opacity_split_clone(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
+    idx = choose_indices(model, args.sample_fraction, args.seed)
+    alpha_parent = torch.sigmoid(model.raw_alpha[idx])
+    alpha_child = (1.0 - torch.sqrt((1.0 - alpha_parent).clamp_min(1e-6))).clamp(1e-5, 1.0 - 1e-5)
+    child_raw_alpha = torch.logit(alpha_child)
+
+    direction = model.x0[idx] / model.x0[idx].norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    offset = float(args.split_offset_eps) * direction
+    child_plus_x0 = model.x0[idx] + offset
+    child_minus_x0 = model.x0[idx] - offset
+    x0_new = torch.cat([child_plus_x0, child_minus_x0], dim=0)
+    color_new = torch.cat([model.color_logits[idx], model.color_logits[idx]], dim=0)
+    raw_alpha_new = torch.cat([child_raw_alpha, child_raw_alpha], dim=0)
+    log_radius_new = torch.cat([model.log_radius[idx], model.log_radius[idx]], dim=0)
+    basis_new = torch.cat([model.nr_basis[idx], model.nr_basis[idx]], dim=0)
+
+    # The parent is zeroed so the two children replace its opacity footprint.
+    model.raw_alpha[idx] = torch.logit(torch.full_like(alpha_parent, 1e-5))
+    return append_elements(model, x0_new, color_new, raw_alpha_new, log_radius_new, basis_new)
+
+
+@torch.no_grad()
+def probe_dormant_insert(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
+    idx = choose_indices(model, args.dormant_fraction, args.seed + 17)
+    x0 = model.x0[idx].clone()
+    x0[:, 2] += float(args.dormant_depth_offset)
+    color = model.color_logits[idx].clone()
+    raw_alpha = torch.full_like(model.raw_alpha[idx], float(args.dormant_alpha_logit))
+    log_radius = model.log_radius[idx].clone()
+    basis = model.nr_basis[idx].clone()
+    return append_elements(model, x0, color, raw_alpha, log_radius, basis)
 
 
 PROBES: dict[str, ProbeFn] = {
@@ -160,6 +219,8 @@ PROBES: dict[str, ProbeFn] = {
     "opacity_radius_trade": probe_opacity_radius_trade,
     "basis_scale_gauge": probe_basis_scale_gauge,
     "motion_phase_shift": probe_motion_phase_shift,
+    "opacity_split_clone": probe_opacity_split_clone,
+    "dormant_insert": probe_dormant_insert,
 }
 
 
@@ -251,6 +312,88 @@ def save_rgb_mp4(path: Path, video: torch.Tensor, fps: float = 4.0) -> None:
     writer.release()
 
 
+def normalize_to_rgb(values: torch.Tensor, valid: torch.Tensor | None = None) -> torch.Tensor:
+    data = values.detach()
+    if valid is None:
+        valid = torch.isfinite(data).all(dim=-1) if data.ndim >= 1 and data.shape[-1] == 3 else torch.isfinite(data)
+    if data.shape[-1] == 3:
+        flat = data[valid]
+        if flat.numel() == 0:
+            return torch.zeros_like(data)
+        lo = flat.amin(dim=0)
+        hi = flat.amax(dim=0)
+        return ((data - lo) / (hi - lo).clamp_min(1e-6)).clamp(0, 1)
+    flat = data[valid]
+    if flat.numel() == 0:
+        return torch.zeros(*data.shape, 3, device=data.device, dtype=data.dtype)
+    lo = flat.amin()
+    hi = flat.amax()
+    norm = ((data - lo) / (hi - lo).clamp_min(1e-6)).clamp(0, 1)
+    return norm[..., None].expand(*data.shape, 3)
+
+
+def flow_to_rgb(flow: torch.Tensor) -> torch.Tensor:
+    magnitude = flow.norm(dim=-1)
+    angle = torch.atan2(flow[..., 1], flow[..., 0])
+    hue = (angle + math.pi) / (2.0 * math.pi)
+    sat = torch.ones_like(hue)
+    val = (magnitude / torch.quantile(magnitude.reshape(-1).detach().cpu(), 0.95).to(flow.device).clamp_min(1e-6)).clamp(0, 1)
+
+    h6 = hue * 6.0
+    i = torch.floor(h6).long() % 6
+    f = h6 - torch.floor(h6)
+    p = val * (1.0 - sat)
+    q = val * (1.0 - f * sat)
+    t = val * (1.0 - (1.0 - f) * sat)
+
+    rgb = torch.zeros(*flow.shape[:-1], 3, device=flow.device, dtype=flow.dtype)
+    cases = [
+        (0, torch.stack([val, t, p], dim=-1)),
+        (1, torch.stack([q, val, p], dim=-1)),
+        (2, torch.stack([p, val, t], dim=-1)),
+        (3, torch.stack([p, q, val], dim=-1)),
+        (4, torch.stack([t, p, val], dim=-1)),
+        (5, torch.stack([val, p, q], dim=-1)),
+    ]
+    for case, color in cases:
+        rgb = torch.where((i == case)[..., None], color, rgb)
+    return rgb.clamp(0, 1)
+
+
+def save_diagnostic_strips(
+    output_dir: Path,
+    rendered: dict[str, torch.Tensor],
+    alpha_min: float,
+    max_frames: int = 4,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    T = rendered["rgb"].shape[0]
+    count = min(max_frames, T)
+    indices = torch.linspace(0, T - 1, count).round().long().tolist()
+
+    xmap_rows = []
+    for index in indices:
+        alpha = rendered["alpha"][index]
+        xmap_rgb = normalize_to_rgb(rendered["xmap"][index], valid=alpha > alpha_min)
+        alpha_rgb = alpha[..., None].expand_as(xmap_rgb)
+        depth_rgb = normalize_to_rgb(rendered["depth"][index], valid=alpha > alpha_min)
+        xmap_rows.append(torch.cat([xmap_rgb, depth_rgb, alpha_rgb], dim=1))
+    tensor_to_uint8_image(torch.cat(xmap_rows, dim=0)).save(output_dir / "xmap_depth_alpha.png")
+    (output_dir / "xmap_depth_alpha_columns.txt").write_text("columns: xmap_rgb | depth | alpha\n")
+
+    if "flow" in rendered:
+        flow_rows = []
+        flow_T = rendered["flow"].shape[0]
+        flow_indices = [min(index, flow_T - 1) for index in indices if flow_T > 0]
+        for index in flow_indices:
+            flow_rgb = flow_to_rgb(rendered["flow"][index])
+            mag_rgb = normalize_to_rgb(rendered["flow"][index].norm(dim=-1))
+            flow_rows.append(torch.cat([flow_rgb, mag_rgb], dim=1))
+        if flow_rows:
+            tensor_to_uint8_image(torch.cat(flow_rows, dim=0)).save(output_dir / "flow.png")
+            (output_dir / "flow_columns.txt").write_text("columns: flow_hsv | flow_magnitude\n")
+
+
 def run_probe(
     probe_name: str,
     base_model: MaterialSurfelField,
@@ -263,8 +406,7 @@ def run_probe(
     args: argparse.Namespace,
     output_dir: Path,
 ) -> dict[str, Any]:
-    model = clone_model(base_model)
-    PROBES[probe_name](model, args)
+    model = PROBES[probe_name](clone_model(base_model), args)
     rendered = render_sequence(model, K=K, w2c=w2c, cfg=render_cfg, include_flow=args.include_flow)
     metrics = collect_metrics(
         model,
@@ -280,6 +422,7 @@ def run_probe(
 
     probe_dir = output_dir / probe_name
     save_probe_strip(probe_dir / "preview.png", target, base_rendered["rgb"], rendered["rgb"], rendered["alpha"])
+    save_diagnostic_strips(probe_dir, rendered, alpha_min=args.xmap_alpha_min)
     if not args.no_video:
         save_rgb_mp4(probe_dir / "base_render.mp4", base_rendered["rgb"])
         save_rgb_mp4(probe_dir / "probe_render.mp4", rendered["rgb"])
@@ -303,6 +446,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--basis-scale-factor", type=float, default=2.0)
     parser.add_argument("--basis-index", type=int, default=0)
     parser.add_argument("--time-shift", type=int, default=1)
+    parser.add_argument("--split-offset-eps", type=float, default=0.01)
+    parser.add_argument("--dormant-fraction", type=float, default=0.05)
+    parser.add_argument("--dormant-depth-offset", type=float, default=0.25)
+    parser.add_argument("--dormant-alpha-logit", type=float, default=-4.0)
     parser.add_argument("--xmap-bins", type=int, default=16)
     parser.add_argument("--xmap-alpha-min", type=float, default=0.05)
     parser.add_argument("--include-flow", action="store_true")
