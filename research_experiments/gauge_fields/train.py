@@ -19,6 +19,7 @@ if str(TRAIN_SRC) not in sys.path:
     sys.path.insert(0, str(TRAIN_SRC))
 
 from config_utils import apply_defaults, load_config_file, path_or_none, resolved_config, serialize_config_value
+from multicam_val_data import load_multicam_val_manifest, load_multicam_val_sample
 from sequence_data import load_uncalibrated_sequence, select_window_indices
 from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 
@@ -36,6 +37,10 @@ DATA_DEFAULTS = {
     "frame_source": "explicit_video",
     "max_frames": 0,
     "frame_indices": None,
+    "multicam_manifest": "data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/manifest.jsonl",
+    "multicam_split": "val",
+    "multicam_sample_id": None,
+    "multicam_sample_index": 0,
 }
 
 MODEL_DEFAULTS = {
@@ -57,6 +62,7 @@ MODEL_DEFAULTS = {
 CAMERA_DEFAULTS = {
     "lens_model": "pinhole",
     "base_fov_degrees": 60.0,
+    "multicam_pose_source": "auto",
 }
 
 RENDER_DEFAULTS = {
@@ -974,6 +980,20 @@ def resolve_device(name: str) -> torch.device:
     return torch.device("cpu")
 
 
+@dataclass
+class GaugeVideoBundle:
+    video: torch.Tensor
+    K: torch.Tensor
+    w2c: torch.Tensor
+    fps: float = 4.0
+    source_path: str | None = None
+    metadata: dict[str, Any] | None = None
+    heldout_video: torch.Tensor | None = None
+    heldout_K: torch.Tensor | None = None
+    heldout_w2c: torch.Tensor | None = None
+    heldout_pose_source: str | None = None
+
+
 def make_fixed_pinhole_camera(
     num_frames: int,
     H: int,
@@ -994,6 +1014,138 @@ def make_fixed_pinhole_camera(
     )
     w2c = torch.eye(4, dtype=torch.float32, device=device).unsqueeze(0).repeat(num_frames, 1, 1)
     return K, w2c
+
+
+def make_scaled_intrinsics(
+    *,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    source_width: float,
+    source_height: float,
+    target_width: int,
+    target_height: int,
+    device: torch.device,
+) -> torch.Tensor:
+    sx = float(target_width) / float(source_width)
+    sy = float(target_height) / float(source_height)
+    return torch.tensor(
+        [
+            [float(fx) * sx, 0.0, float(cx) * sx],
+            [0.0, float(fy) * sy, float(cy) * sy],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+
+
+def rodrigues_matrix(axis_angle: list[float] | tuple[float, ...], device: torch.device) -> torch.Tensor:
+    r = torch.tensor(axis_angle, dtype=torch.float32, device=device)
+    theta = torch.linalg.norm(r).clamp_min(1e-8)
+    rx, ry, rz = r
+    skew = torch.stack(
+        [
+            torch.stack([r.new_zeros(()), -rz, ry]),
+            torch.stack([rz, r.new_zeros(()), -rx]),
+            torch.stack([-ry, rx, r.new_zeros(())]),
+        ]
+    )
+    eye = torch.eye(3, dtype=torch.float32, device=device)
+    return eye + (torch.sin(theta) / theta) * skew + ((1.0 - torch.cos(theta)) / (theta * theta)) * (skew @ skew)
+
+
+def deepview_camera_from_models(
+    record: dict[str, Any],
+    camera_name: str,
+    *,
+    H: int,
+    W: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    models_path = Path(record["models_path"])
+    models = json.loads(models_path.read_text(encoding="utf-8"))
+    by_name = {str(model["name"]): model for model in models}
+    if camera_name not in by_name:
+        raise KeyError(f"DeepView camera {camera_name!r} not found in {models_path}.")
+    model = by_name[camera_name]
+
+    focal = float(model["focal_length"])
+    pixel_aspect = float(model.get("pixel_aspect_ratio", 1.0))
+    principal = model["principal_point"]
+    K = make_scaled_intrinsics(
+        fx=focal,
+        fy=focal * pixel_aspect,
+        cx=float(principal[0]),
+        cy=float(principal[1]),
+        source_width=float(model["width"]),
+        source_height=float(model["height"]),
+        target_width=W,
+        target_height=H,
+        device=device,
+    )
+
+    # DeepView stores a Rodrigues world-to-camera rotation for an OpenGL-style
+    # camera. Convert it to the gauge renderer's camera frame: +x right,
+    # +y down, +z forward.
+    w2c_gl_rot = rodrigues_matrix(model["orientation"], device=device)
+    c2w_gl_rot = w2c_gl_rot.T
+    gl_to_plus_z = torch.diag(torch.tensor([1.0, -1.0, -1.0], dtype=torch.float32, device=device))
+    c2w = torch.eye(4, dtype=torch.float32, device=device)
+    c2w[:3, :3] = c2w_gl_rot @ gl_to_plus_z
+    c2w[:3, 3] = torch.tensor(model["position"], dtype=torch.float32, device=device)
+    return K, c2w
+
+
+def make_multicam_pair_cameras(
+    record: dict[str, Any],
+    *,
+    T: int,
+    H: int,
+    W: int,
+    fov_degrees: float,
+    pose_source: str,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    if pose_source not in {"auto", "deepview", "source_proxy"}:
+        raise ValueError("camera.multicam_pose_source must be one of: auto, deepview, source_proxy")
+
+    if pose_source in {"auto", "deepview"} and record.get("dataset") == "deepview_video" and record.get("models_path"):
+        source_K, source_c2w = deepview_camera_from_models(
+            record,
+            str(record["source_camera"]),
+            H=H,
+            W=W,
+            device=device,
+        )
+        target_K, target_c2w = deepview_camera_from_models(
+            record,
+            str(record["target_camera"]),
+            H=H,
+            W=W,
+            device=device,
+        )
+        source_w2c = torch.eye(4, dtype=torch.float32, device=device).unsqueeze(0).repeat(T, 1, 1)
+        target_w2c = torch.linalg.inv(target_c2w) @ source_c2w
+        target_w2c = target_w2c.unsqueeze(0).repeat(T, 1, 1)
+        return source_K, source_w2c, target_K, target_w2c, "deepview_models_relative_pinhole"
+
+    if pose_source == "deepview":
+        raise ValueError(
+            f"Requested DeepView camera calibration for non-DeepView record {record.get('sample_id')!r}."
+        )
+
+    source_K, source_w2c = make_fixed_pinhole_camera(
+        num_frames=T,
+        H=H,
+        W=W,
+        fov_degrees=fov_degrees,
+        device=device,
+    )
+    target_K = source_K.clone()
+    target_w2c = source_w2c.clone()
+    return source_K, source_w2c, target_K, target_w2c, "source_camera_proxy_uncalibrated"
 
 
 def load_baseline_video(
@@ -1017,6 +1169,22 @@ def load_baseline_video(
     return sequence.frames.permute(0, 2, 3, 1).contiguous()
 
 
+def select_multicam_record(data_cfg: dict[str, Any]) -> dict[str, Any]:
+    manifest_path = resolve_dynaworld_path(data_cfg["multicam_manifest"])
+    records = load_multicam_val_manifest(manifest_path, split=data_cfg["multicam_split"])
+    sample_id = data_cfg.get("multicam_sample_id")
+    if sample_id:
+        for record in records:
+            if str(record.get("sample_id")) == str(sample_id):
+                return record
+        raise ValueError(f"multicam_sample_id={sample_id!r} was not found in {manifest_path}.")
+
+    index = int(data_cfg.get("multicam_sample_index", 0))
+    if index < 0 or index >= len(records):
+        raise IndexError(f"multicam_sample_index={index} out of range for {len(records)} records.")
+    return records[index]
+
+
 def select_configured_frames(video: torch.Tensor, frame_indices: Any) -> torch.Tensor:
     if frame_indices is None:
         return video
@@ -1026,6 +1194,88 @@ def select_configured_frames(video: torch.Tensor, frame_indices: Any) -> torch.T
     if bool((indices < 0).any()) or bool((indices >= video.shape[0]).any()):
         raise IndexError(f"data.frame_indices {frame_indices!r} out of range for {video.shape[0]} loaded frames.")
     return video[indices].contiguous()
+
+
+def load_gauge_video_bundle(
+    *,
+    data_cfg: dict[str, Any],
+    camera_cfg: dict[str, Any],
+    render_size: int,
+    device: torch.device,
+) -> GaugeVideoBundle:
+    frame_source = str(data_cfg["frame_source"])
+    if frame_source == "multicam_val":
+        record = select_multicam_record(data_cfg)
+        sample = load_multicam_val_sample(record, target_size=render_size, device=device)
+        video = sample.source_frames.permute(0, 2, 3, 1).contiguous()
+        heldout_video = sample.target_frames.permute(0, 2, 3, 1).contiguous()
+        max_frames = int(data_cfg["max_frames"])
+        if max_frames > 0:
+            video = video[:max_frames].contiguous()
+            heldout_video = heldout_video[:max_frames].contiguous()
+        video = select_configured_frames(video, data_cfg["frame_indices"])
+        heldout_video = select_configured_frames(heldout_video, data_cfg["frame_indices"])
+        if video.shape != heldout_video.shape:
+            raise ValueError(
+                f"Source/heldout frame shape mismatch for {record.get('sample_id')}: "
+                f"{tuple(video.shape)} vs {tuple(heldout_video.shape)}"
+            )
+        T, H, W, _ = video.shape
+        K, w2c, heldout_K, heldout_w2c, pose_note = make_multicam_pair_cameras(
+            record,
+            T=T,
+            H=H,
+            W=W,
+            fov_degrees=float(camera_cfg["base_fov_degrees"]),
+            pose_source=str(camera_cfg["multicam_pose_source"]),
+            device=device,
+        )
+        return GaugeVideoBundle(
+            video=video,
+            K=K,
+            w2c=w2c,
+            fps=float(record.get("fps", 4.0)),
+            source_path=str(record.get("source_video_path")),
+            metadata=record,
+            heldout_video=heldout_video,
+            heldout_K=heldout_K,
+            heldout_w2c=heldout_w2c,
+            heldout_pose_source=pose_note,
+        )
+
+    sequence_dir = resolve_dynaworld_path(data_cfg["sequence_dir"])
+    frames_dir = path_or_none(data_cfg["frames_dir"])
+    if frames_dir is not None:
+        frames_dir = resolve_dynaworld_path(frames_dir)
+    video_path = path_or_none(data_cfg["video_path"])
+    if video_path is not None:
+        video_path = resolve_dynaworld_path(video_path)
+    video = load_baseline_video(
+        sequence_dir=sequence_dir,
+        frames_dir=frames_dir,
+        video_path=video_path,
+        frame_source=frame_source,
+        render_size=render_size,
+        max_frames=int(data_cfg["max_frames"]),
+        device=device,
+    )
+    video = select_configured_frames(video, data_cfg["frame_indices"])
+    T, H, W, _ = video.shape
+    K, w2c = make_fixed_pinhole_camera(
+        num_frames=T,
+        H=H,
+        W=W,
+        fov_degrees=float(camera_cfg["base_fov_degrees"]),
+        device=device,
+    )
+    return GaugeVideoBundle(
+        video=video,
+        K=K,
+        w2c=w2c,
+        fps=4.0,
+        source_path=str(video_path) if video_path is not None else None,
+        metadata=None,
+    )
 
 
 def initialize_material_points_from_first_frame(
@@ -1108,6 +1358,10 @@ def video_metrics(rendered: torch.Tensor, target: torch.Tensor) -> dict[str, flo
         "eval_mse": float(mse.detach().cpu()),
         "eval_psnr": float(psnr.detach().cpu()),
     }
+
+
+def prefix_metrics(prefix: str, metrics: dict[str, float]) -> dict[str, float]:
+    return {f"{prefix}_{key}": value for key, value in metrics.items()}
 
 
 def alpha_metrics(alpha: torch.Tensor) -> dict[str, float]:
@@ -1538,33 +1792,21 @@ def main() -> None:
     torch.manual_seed(int(train_cfg["seed"]))
 
     device = resolve_device(str(train_cfg["device"]))
-    sequence_dir = resolve_dynaworld_path(data_cfg["sequence_dir"])
-    frames_dir = path_or_none(data_cfg["frames_dir"])
-    if frames_dir is not None:
-        frames_dir = resolve_dynaworld_path(frames_dir)
-    video_path = path_or_none(data_cfg["video_path"])
-    if video_path is not None:
-        video_path = resolve_dynaworld_path(video_path)
     output_dir = resolve_dynaworld_path(logging_cfg["output_dir"])
 
-    video = load_baseline_video(
-        sequence_dir=sequence_dir,
-        frames_dir=frames_dir,
-        video_path=video_path,
-        frame_source=str(data_cfg["frame_source"]),
+    bundle = load_gauge_video_bundle(
+        data_cfg=data_cfg,
+        camera_cfg=camera_cfg,
         render_size=int(render_cfg_values["render_size"]),
-        max_frames=int(data_cfg["max_frames"]),
         device=device,
     )
-    video = select_configured_frames(video, data_cfg["frame_indices"])
+    video = bundle.video
+    K = bundle.K
+    w2c = bundle.w2c
+    heldout_video = bundle.heldout_video
+    heldout_K = bundle.heldout_K
+    heldout_w2c = bundle.heldout_w2c
     T, H, W, _ = video.shape
-    K, w2c = make_fixed_pinhole_camera(
-        num_frames=T,
-        H=H,
-        W=W,
-        fov_degrees=float(camera_cfg["base_fov_degrees"]),
-        device=device,
-    )
     init_x0, init_color = initialize_material_points_from_first_frame(
         video=video,
         K=K,
@@ -1597,12 +1839,21 @@ def main() -> None:
 
     print(
         "Gauge-field overfit "
-        f"config={config_path} video={video_path} frames={T}/{data_cfg['max_frames'] or 'all'} size={H}x{W} "
+        f"config={config_path} video={bundle.source_path} frames={T}/{data_cfg['max_frames'] or 'all'} size={H}x{W} "
         f"elements={model_cfg['num_elements']} basis={model_cfg['num_basis']} "
         f"support_mode={model_cfg['support_mode']} opacity_transfer={render_cfg.opacity_transfer} "
         f"train_frame_count={train_cfg['train_frame_count']} frames_per_step={train_cfg['frames_per_step']} "
         f"steps={train_cfg['steps']} device={device}"
     )
+    if heldout_video is not None:
+        print(
+            "Held-out camera eval "
+            f"sample={bundle.metadata.get('sample_id') if bundle.metadata else None} "
+            f"dataset={bundle.metadata.get('dataset') if bundle.metadata else None} "
+            f"source={bundle.metadata.get('source_camera') if bundle.metadata else None} "
+            f"target={bundle.metadata.get('target_camera') if bundle.metadata else None} "
+            f"pose_source={bundle.heldout_pose_source}"
+        )
 
     wandb_enabled = init_wandb_if_enabled(logging_cfg, cfg)
     try:
@@ -1658,6 +1909,48 @@ def main() -> None:
                     alpha_min=float(diagnostics_cfg["xmap_alpha_min"]),
                 )
             )
+        heldout_rendered = None
+        if heldout_video is not None:
+            if heldout_K is None or heldout_w2c is None:
+                raise RuntimeError("heldout_video is present but heldout camera tensors are missing.")
+            heldout_rendered = render_sequence(
+                model,
+                K=heldout_K,
+                w2c=heldout_w2c,
+                cfg=render_cfg,
+                include_flow=False,
+            )
+            heldout_metrics = prefix_metrics(
+                "heldout",
+                {
+                    **video_metrics(heldout_rendered["rgb"], heldout_video),
+                    **alpha_metrics(heldout_rendered["alpha"]),
+                },
+            )
+            heldout_metrics["heldout_pose_is_calibrated"] = float(
+                bundle.heldout_pose_source == "deepview_models_relative_pinhole"
+            )
+            if bool(diagnostics_cfg["projection_stats"]):
+                heldout_metrics.update(
+                    prefix_metrics(
+                        "heldout",
+                        projection_health_metrics(model, K=heldout_K, w2c=heldout_w2c, cfg=render_cfg),
+                    )
+                )
+            if bool(diagnostics_cfg["xmap_metrics"]):
+                heldout_metrics.update(
+                    prefix_metrics(
+                        "heldout",
+                        xmap_health_metrics(
+                            heldout_rendered["xmap"],
+                            heldout_rendered["alpha"],
+                            canonical_x0=model.x0,
+                            bins=int(diagnostics_cfg["xmap_bins"]),
+                            alpha_min=float(diagnostics_cfg["xmap_alpha_min"]),
+                        ),
+                    )
+                )
+            metrics.update(heldout_metrics)
         if bool(diagnostics_cfg["flow_stats"]) and "flow" in rendered:
             metrics.update(
                 flow_health_metrics(
@@ -1692,6 +1985,9 @@ def main() -> None:
             "model": model.state_dict(),
             "K": K.detach().cpu(),
             "w2c": w2c.detach().cpu(),
+            "heldout_K": heldout_K.detach().cpu() if heldout_K is not None else None,
+            "heldout_w2c": heldout_w2c.detach().cpu() if heldout_w2c is not None else None,
+            "heldout_pose_source": bundle.heldout_pose_source,
             "render_config": render_cfg.__dict__,
             "config": serialize_config_value(cfg),
             "metrics": metrics,
@@ -1710,6 +2006,19 @@ def main() -> None:
         rendered=rendered["rgb"],
         fps=4.0,
     )
+    if heldout_video is not None and heldout_rendered is not None:
+        save_preview_strip(
+            output_dir / "heldout_preview.png",
+            target=heldout_video,
+            rendered=heldout_rendered["rgb"],
+            alpha=heldout_rendered["alpha"],
+        )
+        save_side_by_side_mp4(
+            output_dir / "heldout_side_by_side.mp4",
+            target=heldout_video,
+            rendered=heldout_rendered["rgb"],
+            fps=bundle.fps,
+        )
     print(f"Wrote gauge-field outputs to {output_dir}")
 
 

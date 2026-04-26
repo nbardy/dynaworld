@@ -21,14 +21,21 @@ SUMMARY_COLUMNS = [
     "alpha_logit",
     "eval_psnr",
     "eval_l1",
+    "heldout_eval_psnr",
+    "heldout_eval_l1",
+    "heldout_pose_is_calibrated",
     "alpha_coverage_050",
     "alpha_coverage_090",
+    "heldout_alpha_coverage_050",
+    "heldout_alpha_coverage_090",
     "projection_coverage_budget",
     "projection_radius_px_p50",
     "projection_radius_px_p95",
     "projection_anisotropy_p95",
+    "heldout_projection_coverage_budget",
     "motion_delta_mean",
     "xmap_occ",
+    "heldout_xmap_occ",
 ]
 
 
@@ -88,9 +95,9 @@ def read_run(run_dir: Path) -> dict[str, Any]:
         "wandb_run_name": nested_get(config, "logging.wandb_run_name"),
         "wandb_tags": ",".join(nested_get(config, "logging.wandb_tags", []) or []),
         "output_dir": nested_get(config, "logging.output_dir"),
-        "elements": nested_get(config, "model.num_elements"),
+        "elements": nested_get(config, "model.num_elements", nested_get(config, "model.num_splats")),
         "basis": nested_get(config, "model.num_basis"),
-        "radius": nested_get(config, "model.init_radius"),
+        "radius": nested_get(config, "model.init_radius", nested_get(config, "model.init_scale")),
         "alpha_logit": nested_get(config, "model.init_alpha_logit"),
         "last_rgb_l1": last_log.get("rgb_l1"),
     }

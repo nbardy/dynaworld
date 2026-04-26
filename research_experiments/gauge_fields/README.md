@@ -46,6 +46,32 @@ uv run python research_experiments/gauge_fields/train.py \
   src/train_configs/local_mac_gauge_fields_rank_adaptive_metric_motion_128_16f_2048el.jsonc
 ```
 
+There is also a first held-out-camera benchmark lane using the generated
+multi-camera validation manifest. It trains only on the DeepView source camera
+`camera_0001` and evaluates `heldout_*` metrics against `camera_0015` using the
+relative pose from DeepView `models.json`:
+
+```bash
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_multicam_deepview_screen_disk_128_16f_2048el.jsonc
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_multicam_deepview_oriented_slab_128_16f_2048el.jsonc
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_128_16f_2048el.jsonc
+```
+
+This is a better representation gate than source-view PSNR, but still not the
+final word: the DeepView images are fisheye and the toy gauge-field renderer
+uses a pinhole projection approximation for this lane.
+
+The matched direct 3DGS control uses the same source/held-out bundle and trains
+a per-frame free Gaussian splat bank with no video encoder:
+
+```bash
+uv run python research_experiments/gauge_fields/train_splat_baseline.py \
+  src/train_configs/local_mac_splat_baseline_multicam_deepview_free_dynamic_3dgs_128_16f_2048splats.jsonc
+```
+
 The fast plumbing smokes are:
 
 ```bash

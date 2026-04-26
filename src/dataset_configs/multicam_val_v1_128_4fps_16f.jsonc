@@ -1,0 +1,63 @@
+{
+  // Tiny synchronized multi-camera validation set.
+  // This is not the default training smoke dataset; it is for held-out-camera
+  // validation where source and target frames share the same time window.
+  "dataset_name": "multicam_val_v1_128_4fps_16f",
+  "root_dir": "data/multicam_val",
+  "clip_frames": 16,
+  "fps": 4.0,
+  "target_size": 128,
+  "preview_size": 256,
+  "preview_fps": 30.0,
+  "materialize_metric_frames": false,
+  "overwrite": false,
+
+  "aist": {
+    "enabled": true,
+    "csv_url": "https://aistdancedb.ongaaccel.jp/data/video_refined/10M/refined_10M_sBM_all.csv",
+    "raw_dir": "data/external/aist_dance_db/raw/refined_10M_sBM",
+    "start_seconds": 2.0,
+    "sequences": [
+      {
+        "genre": "gBR",
+        "situation": "sBM",
+        "dancer": "d04",
+        "music": "mBR0",
+        "choreography": "ch01",
+        "source_camera": "c01",
+        "target_cameras": ["c05", "c09"]
+      }
+    ]
+  },
+
+  "neural_3d_video": {
+    "enabled": true,
+    "scene": "coffee_martini",
+    "scene_dir": "data/external/neural_3d_video/extracted/coffee_martini/coffee_martini",
+    "start_seconds": 2.0,
+    "source_camera": "cam00",
+    "target_cameras": ["cam10", "cam20"]
+  },
+
+  "vivo": {
+    "enabled": true,
+    "scene": "athlete_rows",
+    "manifest_path": "data/external/vivo/metadata/rgb_mp4_manifest.jsonl",
+    "overlap_margin_seconds": 1.0,
+    "source_camera": "000404613112",
+    "target_cameras": ["000497113112", "000516213112"]
+  },
+
+  "deepview_video": {
+    "enabled": true,
+    "inventory_path": "data/external/deepview_video/metadata/scene_inventory.json",
+    "start_seconds": 0.5,
+    "scenes": [
+      {
+        "scene": "03_Dog",
+        "source_camera": "camera_0001",
+        "target_cameras": ["camera_0015", "camera_0040"]
+      }
+    ]
+  }
+}
