@@ -14,10 +14,16 @@
   "model": {
     "num_elements": 512,
     "num_basis": 8,
+    "support_mode": "screen_disk",
+    "support_knn_k": 8,
+    "support_jacobian_lambda": 0.0001,
     "init_basis_std": 0.001,
     "init_coeff_std": 0.0,
     "init_depth": 3.0,
     "init_radius": 0.05,
+    "init_thickness": 0.005,
+    "slab_rotation_init_std": 0.0,
+    "metric_offdiag_scale": 0.01,
     "init_alpha_logit": -1.2
   },
   "camera": {
@@ -32,6 +38,7 @@
     "min_radius_px": 0.75,
     "max_radius_px": 24.0,
     "max_alpha_per_element": 0.95,
+    "opacity_transfer": "linear",
     "pixel_chunk": 2048
   },
   "train": {
@@ -60,6 +67,8 @@
     "wandb_tags": [
       "gauge-fields",
       "material-surfel",
+      "screen_disk",
+      "support-mode",
       "128px",
       "16f",
       "250step"

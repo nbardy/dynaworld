@@ -1,20 +1,18 @@
 {
-  // Long material-coordinate gauge-field overfit.
-  // Matches the longest recent 128px local overfit budget at 1000 steps while
-  // keeping the same full-video load and 16-frame window convention.
+  // Tiny plumbing check for the transported rank-adaptive metric support mode.
   "arch": "gauge_fields_material_surfel",
   "data": {
     "sequence_dir": "test_data",
     "frames_dir": null,
     "video_path": "test_data/test_video_small_128_4fps.mp4",
     "frame_source": "explicit_video",
-    "max_frames": 0,
+    "max_frames": 2,
     "frame_indices": null
   },
   "model": {
-    "num_elements": 512,
-    "num_basis": 8,
-    "support_mode": "screen_disk",
+    "num_elements": 32,
+    "num_basis": 2,
+    "support_mode": "rank_adaptive_metric",
     "support_knn_k": 8,
     "support_jacobian_lambda": 0.0001,
     "init_basis_std": 0.001,
@@ -31,7 +29,7 @@
     "base_fov_degrees": 60.0
   },
   "render": {
-    "render_size": 128,
+    "render_size": 32,
     "background": [1.0, 1.0, 1.0],
     "near_plane": 0.001,
     "far_plane": 10000.0,
@@ -39,15 +37,15 @@
     "max_radius_px": 24.0,
     "max_alpha_per_element": 0.95,
     "opacity_transfer": "linear",
-    "pixel_chunk": 2048
+    "pixel_chunk": 256
   },
   "train": {
-    "steps": 1000,
+    "steps": 1,
     "lr": 0.002,
     "device": "auto",
     "seed": 0,
     "frames_per_step": 1,
-    "train_frame_count": 16
+    "train_frame_count": 2
   },
   "losses": {
     "rgb_weight": 1.0,
@@ -60,20 +58,12 @@
     "radius_weight": 0.001
   },
   "logging": {
-    "log_every": 25,
+    "log_every": 1,
     "log_to_wandb": true,
     "wandb_project": "dynaworld",
-    "wandb_run_name": "gauge-fields-material-surfel-128-16f-512el-long",
-    "wandb_tags": [
-      "gauge-fields",
-      "material-surfel",
-      "screen_disk",
-      "support-mode",
-      "128px",
-      "16f",
-      "1000step"
-    ],
+    "wandb_run_name": "gauge-fields-rank-adaptive-metric-smoke-32-2f-32el",
+    "wandb_tags": ["gauge-fields", "rank-adaptive-metric", "smoke", "32px"],
     "wandb_mode": "online",
-    "output_dir": "outputs/gauge_fields/material_surfel_128_16f_512el_long"
+    "output_dir": "/tmp/gauge_fields_rank_adaptive_metric_smoke"
   }
 }

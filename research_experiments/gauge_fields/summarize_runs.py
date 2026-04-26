@@ -13,6 +13,8 @@ DYNAWORLD_ROOT = Path(__file__).resolve().parents[2]
 SUMMARY_COLUMNS = [
     "run",
     "steps",
+    "support_mode",
+    "wandb_run_name",
     "elements",
     "basis",
     "radius",
@@ -24,6 +26,7 @@ SUMMARY_COLUMNS = [
     "projection_coverage_budget",
     "projection_radius_px_p50",
     "projection_radius_px_p95",
+    "projection_anisotropy_p95",
     "motion_delta_mean",
     "xmap_occ",
 ]
@@ -81,6 +84,10 @@ def read_run(run_dir: Path) -> dict[str, Any]:
     row = {
         "run": str(run_dir.relative_to(DYNAWORLD_ROOT)) if run_dir.is_relative_to(DYNAWORLD_ROOT) else str(run_dir),
         "steps": nested_get(config, "train.steps", last_log.get("step")),
+        "support_mode": nested_get(config, "model.support_mode", "screen_disk"),
+        "wandb_run_name": nested_get(config, "logging.wandb_run_name"),
+        "wandb_tags": ",".join(nested_get(config, "logging.wandb_tags", []) or []),
+        "output_dir": nested_get(config, "logging.output_dir"),
         "elements": nested_get(config, "model.num_elements"),
         "basis": nested_get(config, "model.num_basis"),
         "radius": nested_get(config, "model.init_radius"),

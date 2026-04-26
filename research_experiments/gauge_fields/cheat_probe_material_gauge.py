@@ -39,13 +39,27 @@ from train import (  # noqa: E402
 
 
 ProbeFn = Callable[[MaterialSurfelField, argparse.Namespace], MaterialSurfelField]
+SUPPORT_STATE_KEYS = {
+    "slab_log_scales",
+    "slab_raw_rot",
+    "metric_log_diag",
+    "metric_offdiag",
+}
 
 
 def load_checkpoint(path: Path, device: torch.device) -> dict[str, Any]:
     return torch.load(path, map_location=device)
 
 
-def build_model_from_state(state: dict[str, torch.Tensor], device: torch.device) -> MaterialSurfelField:
+def build_model_from_state(
+    state: dict[str, torch.Tensor],
+    device: torch.device,
+    support_mode: str = "screen_disk",
+    support_knn_k: int = 8,
+    support_jacobian_lambda: float = 1e-4,
+    slab_rotation_init_std: float = 0.0,
+    metric_offdiag_scale: float = 0.01,
+) -> MaterialSurfelField:
     x0 = state["x0"].detach().to(device)
     coeff = state["nr_coeff"].detach().to(device)
     num_frames = int(coeff.shape[0])
@@ -54,18 +68,53 @@ def build_model_from_state(state: dict[str, torch.Tensor], device: torch.device)
         init_x0=x0,
         num_frames=num_frames,
         num_basis=num_basis,
+        support_mode=support_mode,
+        support_knn_k=support_knn_k,
+        support_jacobian_lambda=support_jacobian_lambda,
+        slab_rotation_init_std=slab_rotation_init_std,
+        metric_offdiag_scale=metric_offdiag_scale,
         init_radius=0.01,
         init_color=None,
         init_alpha_logit=0.0,
     ).to(device)
-    model.load_state_dict({key: value.detach().to(device) for key, value in state.items()})
+    result = model.load_state_dict({key: value.detach().to(device) for key, value in state.items()}, strict=False)
+    missing = set(result.missing_keys)
+    unexpected = set(result.unexpected_keys)
+    allowed_missing = SUPPORT_STATE_KEYS if support_mode == "screen_disk" else set()
+    if unexpected:
+        raise RuntimeError(f"Unexpected checkpoint keys for support_mode={support_mode}: {sorted(unexpected)}")
+    unsupported_missing = missing - allowed_missing
+    if unsupported_missing:
+        raise RuntimeError(
+            f"Missing checkpoint keys for support_mode={support_mode}: {sorted(unsupported_missing)}"
+        )
     model.eval()
     return model
 
 
+@torch.no_grad()
+def scale_support_radius(model: MaterialSurfelField, idx: torch.Tensor, scale: float) -> None:
+    scale = float(scale)
+    log_scale = math.log(scale)
+    model.log_radius[idx] += log_scale
+    # Slab radius probes scale only the in-plane axes so a thin initialized slab
+    # remains thin unless training itself chooses otherwise.
+    model.slab_log_scales[idx, :2] += log_scale
+    model.metric_log_diag[idx] += log_scale
+    model.metric_offdiag[idx] *= scale
+
+
 def clone_model(model: MaterialSurfelField) -> MaterialSurfelField:
     state = {key: value.detach().clone() for key, value in model.state_dict().items()}
-    return build_model_from_state(state, model.x0.device)
+    return build_model_from_state(
+        state,
+        model.x0.device,
+        support_mode=model.support_mode,
+        support_knn_k=model.support_knn_k,
+        support_jacobian_lambda=model.support_jacobian_lambda,
+        slab_rotation_init_std=0.0,
+        metric_offdiag_scale=model.metric_offdiag_scale,
+    )
 
 
 def append_elements(
@@ -75,6 +124,10 @@ def append_elements(
     raw_alpha_new: torch.Tensor,
     log_radius_new: torch.Tensor,
     basis_new: torch.Tensor,
+    slab_log_scales_new: torch.Tensor | None = None,
+    metric_log_diag_new: torch.Tensor | None = None,
+    metric_offdiag_new: torch.Tensor | None = None,
+    slab_raw_rot_new: torch.Tensor | None = None,
 ) -> MaterialSurfelField:
     state = model.state_dict()
     expanded_state = {
@@ -85,7 +138,43 @@ def append_elements(
         "nr_basis": torch.cat([state["nr_basis"], basis_new], dim=0),
         "nr_coeff": state["nr_coeff"].clone(),
     }
-    return build_model_from_state(expanded_state, model.x0.device)
+    if "slab_log_scales" in state:
+        if slab_log_scales_new is None:
+            slab_log_scales_new = state["slab_log_scales"].mean(dim=0, keepdim=True).expand(x0_new.shape[0], -1)
+        expanded_state["slab_log_scales"] = torch.cat(
+            [state["slab_log_scales"], slab_log_scales_new],
+            dim=0,
+        )
+    if "slab_raw_rot" in state:
+        if slab_raw_rot_new is None:
+            slab_raw_rot_new = torch.zeros(x0_new.shape[0], 3, device=x0_new.device, dtype=x0_new.dtype)
+        expanded_state["slab_raw_rot"] = torch.cat(
+            [state["slab_raw_rot"], slab_raw_rot_new],
+            dim=0,
+        )
+    if "metric_log_diag" in state:
+        if metric_log_diag_new is None:
+            metric_log_diag_new = state["metric_log_diag"].mean(dim=0, keepdim=True).expand(x0_new.shape[0], -1)
+        expanded_state["metric_log_diag"] = torch.cat(
+            [state["metric_log_diag"], metric_log_diag_new],
+            dim=0,
+        )
+    if "metric_offdiag" in state:
+        if metric_offdiag_new is None:
+            metric_offdiag_new = state["metric_offdiag"].mean(dim=0, keepdim=True).expand(x0_new.shape[0], -1)
+        expanded_state["metric_offdiag"] = torch.cat(
+            [state["metric_offdiag"], metric_offdiag_new],
+            dim=0,
+        )
+    return build_model_from_state(
+        expanded_state,
+        model.x0.device,
+        support_mode=model.support_mode,
+        support_knn_k=model.support_knn_k,
+        support_jacobian_lambda=model.support_jacobian_lambda,
+        slab_rotation_init_std=0.0,
+        metric_offdiag_scale=model.metric_offdiag_scale,
+    )
 
 
 def load_target_video(cfg: dict[str, Any], device: torch.device) -> torch.Tensor:
@@ -122,6 +211,7 @@ def render_config_from_checkpoint(checkpoint: dict[str, Any], cfg: dict[str, Any
         min_radius_px=float(render_cfg["min_radius_px"]),
         max_radius_px=float(render_cfg["max_radius_px"]),
         max_alpha_per_element=float(render_cfg["max_alpha_per_element"]),
+        opacity_transfer=str(render_cfg.get("opacity_transfer", "linear")),
         pixel_chunk=int(render_cfg["pixel_chunk"]),
     )
 
@@ -145,7 +235,7 @@ def probe_depth_slide(model: MaterialSurfelField, args: argparse.Namespace) -> M
 @torch.no_grad()
 def probe_radius_inflate(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
     idx = choose_indices(model, args.sample_fraction, args.seed)
-    model.log_radius[idx] += float(args.radius_log_scale)
+    scale_support_radius(model, idx, math.exp(float(args.radius_log_scale)))
     return model
 
 
@@ -156,7 +246,7 @@ def probe_opacity_radius_trade(model: MaterialSurfelField, args: argparse.Namesp
     alpha = torch.sigmoid(model.raw_alpha[idx])
     alpha_new = (alpha / (scale * scale)).clamp(1e-5, 1.0 - 1e-5)
     model.raw_alpha[idx] = torch.logit(alpha_new)
-    model.log_radius[idx] += math.log(scale)
+    scale_support_radius(model, idx, scale)
     return model
 
 
@@ -195,10 +285,25 @@ def probe_opacity_split_clone(model: MaterialSurfelField, args: argparse.Namespa
     raw_alpha_new = torch.cat([child_raw_alpha, child_raw_alpha], dim=0)
     log_radius_new = torch.cat([model.log_radius[idx], model.log_radius[idx]], dim=0)
     basis_new = torch.cat([model.nr_basis[idx], model.nr_basis[idx]], dim=0)
+    slab_log_scales_new = torch.cat([model.slab_log_scales[idx], model.slab_log_scales[idx]], dim=0)
+    slab_raw_rot_new = torch.cat([model.slab_raw_rot[idx], model.slab_raw_rot[idx]], dim=0)
+    metric_log_diag_new = torch.cat([model.metric_log_diag[idx], model.metric_log_diag[idx]], dim=0)
+    metric_offdiag_new = torch.cat([model.metric_offdiag[idx], model.metric_offdiag[idx]], dim=0)
 
     # The parent is zeroed so the two children replace its opacity footprint.
     model.raw_alpha[idx] = torch.logit(torch.full_like(alpha_parent, 1e-5))
-    return append_elements(model, x0_new, color_new, raw_alpha_new, log_radius_new, basis_new)
+    return append_elements(
+        model,
+        x0_new,
+        color_new,
+        raw_alpha_new,
+        log_radius_new,
+        basis_new,
+        slab_log_scales_new,
+        metric_log_diag_new,
+        metric_offdiag_new,
+        slab_raw_rot_new,
+    )
 
 
 @torch.no_grad()
@@ -210,7 +315,18 @@ def probe_dormant_insert(model: MaterialSurfelField, args: argparse.Namespace) -
     raw_alpha = torch.full_like(model.raw_alpha[idx], float(args.dormant_alpha_logit))
     log_radius = model.log_radius[idx].clone()
     basis = model.nr_basis[idx].clone()
-    return append_elements(model, x0, color, raw_alpha, log_radius, basis)
+    return append_elements(
+        model,
+        x0,
+        color,
+        raw_alpha,
+        log_radius,
+        basis,
+        model.slab_log_scales[idx].clone(),
+        model.metric_log_diag[idx].clone(),
+        model.metric_offdiag[idx].clone(),
+        model.slab_raw_rot[idx].clone(),
+    )
 
 
 PROBES: dict[str, ProbeFn] = {
@@ -469,7 +585,15 @@ def main() -> None:
     K = checkpoint["K"].to(device)
     w2c = checkpoint["w2c"].to(device)
     render_cfg = render_config_from_checkpoint(checkpoint, cfg)
-    base_model = build_model_from_state(checkpoint["model"], device)
+    base_model = build_model_from_state(
+        checkpoint["model"],
+        device,
+        support_mode=str(cfg["model"].get("support_mode", "screen_disk")),
+        support_knn_k=int(cfg["model"].get("support_knn_k", 8)),
+        support_jacobian_lambda=float(cfg["model"].get("support_jacobian_lambda", 1e-4)),
+        slab_rotation_init_std=float(cfg["model"].get("slab_rotation_init_std", 0.0)),
+        metric_offdiag_scale=float(cfg["model"].get("metric_offdiag_scale", 0.01)),
+    )
 
     base_rendered = render_sequence(base_model, K=K, w2c=w2c, cfg=render_cfg, include_flow=args.include_flow)
     base_metrics = collect_metrics(

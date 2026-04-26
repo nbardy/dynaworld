@@ -12,6 +12,51 @@ test_data/test_video_small_128_4fps.mp4
 The goal is not to beat FasterGS yet. The first goal is to test whether a
 persistent material field can overfit the same clip at all.
 
+## Support Modes
+
+The harness now compares three support laws inside the same persistent material
+field:
+
+```text
+screen_disk             current baseline: projected circular disk radius
+oriented_slab           thin-initialized oriented 3D slab metric
+rank_adaptive_metric    transported learned full-rank 3D PSD metric
+```
+
+All three keep persistent element identity, color, opacity, low-rank time
+transport, RGB/alpha/depth/X-map outputs, and the same train loop. The support
+mode changes only how each transported element becomes a projected pixel kernel.
+`oriented_slab` is initialized thin but not yet hard-constrained to stay a
+surface; `rank_adaptive_metric` exposes a full-rank metric and does not yet add
+an eigenvalue/rank sparsity penalty.
+
+The side-by-side 16-frame configs are:
+
+```bash
+# Baseline projected disks.
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_material_surfel_motion_128_16f_2048el.jsonc
+
+# Thin-initialized transported slabs.
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_oriented_slab_motion_128_16f_2048el.jsonc
+
+# Full-rank transported metric candidate.
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_rank_adaptive_metric_motion_128_16f_2048el.jsonc
+```
+
+The fast plumbing smokes are:
+
+```bash
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_material_surfel_smoke_32_2f_32el.jsonc
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_oriented_slab_smoke_32_2f_32el.jsonc
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_rank_adaptive_metric_smoke_32_2f_32el.jsonc
+```
+
 ## Current Baseline
 
 The current stable baseline candidate is the 2048-element, 16-frame,
@@ -193,6 +238,7 @@ uv run python research_experiments/gauge_fields/make_sweep_configs.py \
   --elements 1024,2048,4096 \
   --radii 0.05,0.07,0.09 \
   --alpha-logits=-1.2,0.0 \
+  --support-modes screen_disk,oriented_slab,rank_adaptive_metric \
   --steps 150
 ```
 
@@ -200,7 +246,7 @@ Summarize completed sweep outputs:
 
 ```bash
 uv run python research_experiments/gauge_fields/summarize_runs.py \
-  'outputs/gauge_fields/sweeps/gauge_fields_material_surfel_motion_128_16f_*' \
+  'outputs/gauge_fields/sweeps/gauge_fields_*_motion_128_16f_*' \
   --out-md outputs/gauge_fields/sweeps/summary.md \
   --out-json outputs/gauge_fields/sweeps/summary.json
 ```
@@ -221,9 +267,9 @@ in the table.
 
 ## Current Limits
 
-This is still a pure Torch projected-disk renderer. It uses chunked pixels, but
-it is still `elements x pixels` work. Keep element count and frame count small
-until the representation proves it can learn.
+This is still a pure Torch projected-kernel renderer. It uses chunked pixels,
+but it is still `elements x pixels` work. Keep element count and frame count
+small until the representation proves it can learn.
 
 The harness reuses Dynaworld's existing JSONC config loader, sequence loader,
 and W&B media helpers. It does not reuse the full video-token trainer because

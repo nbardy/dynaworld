@@ -24,6 +24,10 @@ from train_logging import build_validation_video_payload, make_preview_image, ma
 
 
 DEFAULT_CONFIG_PATH = "src/train_configs/local_mac_gauge_fields_material_surfel_128_16f_512el.jsonc"
+SUPPORT_MODES = {"screen_disk", "oriented_slab", "rank_adaptive_metric"}
+OPACITY_TRANSFERS = {"linear", "optical_thickness"}
+SUPPORT_LOG_SCALE_MIN = -12.0
+SUPPORT_LOG_SCALE_MAX = 4.0
 
 DATA_DEFAULTS = {
     "sequence_dir": "test_data",
@@ -37,11 +41,17 @@ DATA_DEFAULTS = {
 MODEL_DEFAULTS = {
     "num_elements": 512,
     "num_basis": 8,
+    "support_mode": "screen_disk",
+    "support_knn_k": 8,
+    "support_jacobian_lambda": 1e-4,
     "init_basis_std": 0.001,
     "init_coeff_std": 0.0,
     "init_depth": 3.0,
     "init_radius": 0.05,
+    "init_thickness": 0.005,
     "init_alpha_logit": -1.2,
+    "slab_rotation_init_std": 0.0,
+    "metric_offdiag_scale": 0.01,
 }
 
 CAMERA_DEFAULTS = {
@@ -57,6 +67,7 @@ RENDER_DEFAULTS = {
     "min_radius_px": 0.75,
     "max_radius_px": 24.0,
     "max_alpha_per_element": 0.95,
+    "opacity_transfer": "linear",
     "pixel_chunk": 2048,
 }
 
@@ -114,6 +125,7 @@ class RenderConfig:
     min_radius_px: float = 0.75
     max_radius_px: float = 24.0
     max_alpha_per_element: float = 0.95
+    opacity_transfer: str = "linear"
     pixel_chunk: int = 4096
 
 
@@ -157,6 +169,50 @@ def project_points(
     return uv, x_cam[:, 2], valid
 
 
+def project_points_with_jacobian(
+    x_world: torch.Tensor,
+    K: torch.Tensor,
+    w2c: torch.Tensor,
+    near: float = 1e-3,
+    far: float = 1e4,
+):
+    """
+    Returns projection plus d(pixel)/d(world_xyz) for world-space support kernels.
+    The camera convention matches project_points: camera looks along +Z.
+    """
+    N = x_world.shape[0]
+    ones = torch.ones(N, 1, device=x_world.device, dtype=x_world.dtype)
+    xh = torch.cat([x_world, ones], dim=-1)
+    x_cam = (xh @ w2c.T)[..., :3]
+    z = x_cam[:, 2]
+    z_safe = z.clamp_min(float(near))
+
+    x_norm = x_cam / z_safe[:, None]
+    uvh = x_norm @ K.T
+    uv = uvh[:, :2]
+
+    fx = K[0, 0]
+    fy = K[1, 1]
+    j_cam = torch.zeros(N, 2, 3, device=x_world.device, dtype=x_world.dtype)
+    j_cam[:, 0, 0] = fx / z_safe
+    j_cam[:, 0, 2] = -fx * x_cam[:, 0] / (z_safe * z_safe)
+    j_cam[:, 1, 1] = fy / z_safe
+    j_cam[:, 1, 2] = -fy * x_cam[:, 1] / (z_safe * z_safe)
+    j_world = j_cam @ w2c[:3, :3]
+
+    valid = (z > near) & (z < far)
+    return uv, z, valid, x_cam, j_world
+
+
+def build_knn_index(x0: torch.Tensor, k: int = 8) -> torch.Tensor:
+    if x0.shape[0] <= 1 or k <= 0:
+        return torch.empty(x0.shape[0], 0, device=x0.device, dtype=torch.long)
+    kk = min(int(k), x0.shape[0] - 1)
+    with torch.no_grad():
+        d = torch.cdist(x0.detach(), x0.detach())
+        return d.topk(k=kk + 1, largest=False).indices[:, 1:]
+
+
 def build_knn_edges(x0: torch.Tensor, k: int = 8):
     """
     Builds canonical neighborhood edges once.
@@ -172,6 +228,127 @@ def build_knn_edges(x0: torch.Tensor, k: int = 8):
         edges = torch.stack([src.reshape(-1), idx.reshape(-1)], dim=-1)
         rest = (x0[edges[:, 0]] - x0[edges[:, 1]]).norm(dim=-1)
     return edges, rest
+
+
+def validate_support_mode(value: str) -> str:
+    mode = str(value)
+    if mode not in SUPPORT_MODES:
+        raise ValueError(f"model.support_mode must be one of {sorted(SUPPORT_MODES)}, got {value!r}.")
+    return mode
+
+
+def validate_opacity_transfer(value: str) -> str:
+    transfer = str(value)
+    if transfer not in OPACITY_TRANSFERS:
+        raise ValueError(
+            f"render.opacity_transfer must be one of {sorted(OPACITY_TRANSFERS)}, got {value!r}."
+        )
+    return transfer
+
+
+def estimate_local_deformation_jacobian(
+    x0: torch.Tensor,
+    xt: torch.Tensor,
+    knn_idx: torch.Tensor,
+    lam: float,
+) -> torch.Tensor:
+    """
+    Estimate D Phi_t at each material element from fixed canonical neighbors.
+
+    This uses an identity-plus-displacement fit instead of the raw Q P^T
+    expression. That preserves the unconstrained normal direction when the
+    initialized points are nearly planar.
+    """
+    N = x0.shape[0]
+    eye = torch.eye(3, device=x0.device, dtype=x0.dtype).expand(N, 3, 3)
+    if knn_idx.numel() == 0:
+        return eye
+
+    p = x0[knn_idx] - x0[:, None, :]      # [N,K,3]
+    q = xt[knn_idx] - xt[:, None, :]      # [N,K,3]
+    d = q - p
+
+    p_m = p.transpose(-1, -2)             # [N,3,K]
+    d_m = d.transpose(-1, -2)             # [N,3,K]
+    gram = p_m @ p_m.transpose(-1, -2)
+    gram = gram + float(lam) * torch.eye(3, device=x0.device, dtype=x0.dtype)
+    update = d_m @ p_m.transpose(-1, -2) @ torch.linalg.inv(gram)
+    return eye + update
+
+
+def bound_projected_covariance(cov2: torch.Tensor, cfg: RenderConfig) -> torch.Tensor:
+    max_var = float(cfg.max_radius_px) ** 2
+    min_var = float(cfg.min_radius_px) ** 2
+    cov2 = torch.nan_to_num(cov2, nan=0.0, posinf=max_var, neginf=0.0)
+    cov2 = 0.5 * (cov2 + cov2.transpose(-1, -2))
+    a = cov2[:, 0, 0]
+    b = cov2[:, 0, 1]
+    c = cov2[:, 1, 1]
+    trace = a + c
+    disc = torch.sqrt(((a - c) * (a - c) + 4.0 * b * b).clamp_min(0.0))
+    lambda_min = (0.5 * (trace - disc)).clamp(min=min_var, max=max_var)
+    lambda_max = (0.5 * (trace + disc)).clamp(min=min_var, max=max_var)
+
+    v_raw = torch.stack([b, lambda_max - a], dim=-1)
+    fallback_x = torch.tensor([1.0, 0.0], device=cov2.device, dtype=cov2.dtype).expand_as(v_raw)
+    fallback_y = torch.tensor([0.0, 1.0], device=cov2.device, dtype=cov2.dtype).expand_as(v_raw)
+    near_diagonal = b.abs() < 1e-8
+    fallback = torch.where((a >= c)[:, None], fallback_x, fallback_y)
+    v_raw = torch.where(near_diagonal[:, None], fallback, v_raw)
+    v = v_raw / v_raw.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+
+    vv = v[:, :, None] @ v[:, None, :]
+    eye2 = torch.eye(2, device=cov2.device, dtype=cov2.dtype).expand(cov2.shape[0], 2, 2)
+    out = lambda_max[:, None, None] * vv + lambda_min[:, None, None] * (eye2 - vv)
+    return torch.nan_to_num(out, nan=min_var, posinf=max_var, neginf=min_var)
+
+
+def covariance_equivalent_radius_and_anisotropy(cov2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    cov2 = torch.nan_to_num(cov2, nan=0.0, posinf=1.0e6, neginf=0.0)
+    a = cov2[:, 0, 0]
+    b = cov2[:, 0, 1]
+    c = cov2[:, 1, 1]
+    trace = a + c
+    disc = torch.sqrt(((a - c) * (a - c) + 4.0 * b * b).clamp_min(0.0))
+    lambda_min = (0.5 * (trace - disc)).clamp_min(1e-8)
+    lambda_max = (0.5 * (trace + disc)).clamp_min(1e-8)
+    radius_eq = torch.sqrt(torch.sqrt((lambda_min * lambda_max).clamp_min(1e-16)))
+    anisotropy = torch.sqrt(lambda_max / lambda_min)
+    return radius_eq, anisotropy
+
+
+def exp_bounded_log_scale(log_scale: torch.Tensor) -> torch.Tensor:
+    return torch.exp(log_scale.clamp(SUPPORT_LOG_SCALE_MIN, SUPPORT_LOG_SCALE_MAX)).clamp_min(1e-6)
+
+
+def axis_angle_to_matrix(axis_angle: torch.Tensor) -> torch.Tensor:
+    theta_sq = (axis_angle * axis_angle).sum(dim=-1, keepdim=True)
+    theta = torch.sqrt(theta_sq.clamp_min(1e-12))
+    theta_safe = theta.clamp_min(1e-6)
+    theta_sq_safe = theta_sq.clamp_min(1e-12)
+    small = theta_sq < 1e-8
+    sin_over_theta = torch.where(
+        small,
+        1.0 - theta_sq / 6.0,
+        torch.sin(theta) / theta_safe,
+    )
+    one_minus_cos_over_theta_sq = torch.where(
+        small,
+        0.5 - theta_sq / 24.0,
+        (1.0 - torch.cos(theta)) / theta_sq_safe,
+    )
+
+    wx, wy, wz = axis_angle.unbind(dim=-1)
+    K = torch.zeros(*axis_angle.shape[:-1], 3, 3, device=axis_angle.device, dtype=axis_angle.dtype)
+    K[..., 0, 1] = -wz
+    K[..., 0, 2] = wy
+    K[..., 1, 0] = wz
+    K[..., 1, 2] = -wx
+    K[..., 2, 0] = -wy
+    K[..., 2, 1] = wx
+
+    eye = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).expand_as(K)
+    return eye + sin_over_theta[..., None] * K + one_minus_cos_over_theta_sq[..., None] * (K @ K)
 
 
 def robust_l1(x, eps=1e-3):
@@ -239,17 +416,27 @@ class MaterialSurfelField(nn.Module):
         init_x0: torch.Tensor,   # [N,3]
         num_frames: int,
         num_basis: int = 8,
+        support_mode: str = "screen_disk",
+        support_knn_k: int = 8,
+        support_jacobian_lambda: float = 1e-4,
         init_radius: float = 0.015,
+        init_thickness: float = 0.005,
         init_color: Optional[torch.Tensor] = None,
         init_alpha_logit: float = -2.0,
         init_basis_std: float = 0.001,
         init_coeff_std: float = 0.0,
+        slab_rotation_init_std: float = 0.0,
+        metric_offdiag_scale: float = 0.01,
     ):
         super().__init__()
         N = init_x0.shape[0]
         self.N = N
         self.T = num_frames
         self.L = num_basis
+        self.support_mode = validate_support_mode(support_mode)
+        self.support_knn_k = max(0, min(int(support_knn_k), max(0, N - 1)))
+        self.support_jacobian_lambda = float(support_jacobian_lambda)
+        self.metric_offdiag_scale = float(metric_offdiag_scale)
 
         self.x0 = nn.Parameter(init_x0.clone())                     # [N,3]
         if init_color is None:
@@ -262,6 +449,19 @@ class MaterialSurfelField(nn.Module):
         self.log_radius = nn.Parameter(
             torch.full((N, 1), math.log(init_radius), device=init_x0.device, dtype=init_x0.dtype)
         )
+        slab_scales = torch.tensor(
+            [init_radius, init_radius, init_thickness],
+            device=init_x0.device,
+            dtype=init_x0.dtype,
+        ).clamp_min(1e-6)
+        self.slab_log_scales = nn.Parameter(torch.log(slab_scales).expand(N, 3).clone())
+        self.slab_raw_rot = nn.Parameter(
+            float(slab_rotation_init_std) * torch.randn(N, 3, device=init_x0.device, dtype=init_x0.dtype)
+        )
+        self.metric_log_diag = nn.Parameter(
+            torch.full((N, 3), math.log(init_radius), device=init_x0.device, dtype=init_x0.dtype)
+        )
+        self.metric_offdiag = nn.Parameter(torch.zeros(N, 3, device=init_x0.device, dtype=init_x0.dtype))
 
         # Low-rank material deformation:
         # x_i(t) = x_i^0 + sum_l coeff[t,l] * basis[i,l,:]
@@ -270,6 +470,11 @@ class MaterialSurfelField(nn.Module):
         )
         self.nr_coeff = nn.Parameter(
             float(init_coeff_std) * torch.randn(num_frames, num_basis, device=init_x0.device, dtype=init_x0.dtype)
+        )
+        self.register_buffer(
+            "support_knn_idx",
+            build_knn_index(init_x0, self.support_knn_k),
+            persistent=False,
         )
 
     def positions(self, t: int):
@@ -285,7 +490,44 @@ class MaterialSurfelField(nn.Module):
         return torch.sigmoid(self.raw_alpha)
 
     def radius(self):
-        return torch.exp(self.log_radius).clamp_min(1e-6)
+        return exp_bounded_log_scale(self.log_radius)
+
+    def slab_scales(self):
+        return exp_bounded_log_scale(self.slab_log_scales)
+
+    def slab_rotation(self):
+        return axis_angle_to_matrix(self.slab_raw_rot)
+
+    def metric_covariance(self):
+        diag = exp_bounded_log_scale(self.metric_log_diag)
+        offdiag = self.metric_offdiag * self.metric_offdiag_scale
+        L = torch.zeros(self.N, 3, 3, device=self.x0.device, dtype=self.x0.dtype)
+        L[:, 0, 0] = diag[:, 0]
+        L[:, 1, 0] = offdiag[:, 0]
+        L[:, 1, 1] = diag[:, 1]
+        L[:, 2, 0] = offdiag[:, 1]
+        L[:, 2, 1] = offdiag[:, 2]
+        L[:, 2, 2] = diag[:, 2]
+        return L @ L.transpose(-1, -2)
+
+    def world_support_covariance(self, x_t: torch.Tensor) -> torch.Tensor:
+        if self.support_mode == "oriented_slab":
+            R = self.slab_rotation()
+            local_cov = torch.diag_embed(self.slab_scales().square())
+            base_cov = R @ local_cov @ R.transpose(-1, -2)
+        elif self.support_mode == "rank_adaptive_metric":
+            base_cov = self.metric_covariance()
+        else:
+            raise ValueError("screen_disk does not use a world-space support covariance.")
+
+        J = estimate_local_deformation_jacobian(
+            self.x0,
+            x_t,
+            self.support_knn_idx,
+            self.support_jacobian_lambda,
+        )
+        eye3 = torch.eye(3, device=self.x0.device, dtype=self.x0.dtype).expand(self.N, 3, 3)
+        return J @ base_cov @ J.transpose(-1, -2) + 1e-10 * eye3
 
     def motion_smoothness_loss(self):
         if self.L == 0:
@@ -307,12 +549,41 @@ class MaterialSurfelField(nn.Module):
 
     def radius_loss(self):
         # prevents huge image-space blobs
-        return (self.radius() ** 2).mean()
+        if self.support_mode == "screen_disk":
+            return (self.radius() ** 2).mean()
+        if self.support_mode == "oriented_slab":
+            return (self.slab_scales() ** 2).mean()
+        trace = self.metric_covariance().diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+        return trace.mean() / 3.0
 
 
 # ----------------------------
 # Differentiable soft renderer
 # ----------------------------
+
+def projected_support(
+    model: MaterialSurfelField,
+    x_t: torch.Tensor,
+    K: torch.Tensor,
+    w2c: torch.Tensor,
+    cfg: RenderConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    uv, z, valid, _x_cam, j_world = project_points_with_jacobian(x_t, K, w2c, cfg.near, cfg.far)
+
+    if model.support_mode == "screen_disk":
+        fx = K[0, 0].abs().clamp_min(1e-6)
+        radius_px = model.radius()[:, 0] * fx / z.abs().clamp_min(cfg.near)
+        radius_px = radius_px.clamp(cfg.min_radius_px, cfg.max_radius_px)
+        cov2 = torch.zeros(model.N, 2, 2, device=x_t.device, dtype=x_t.dtype)
+        cov2[:, 0, 0] = radius_px.square()
+        cov2[:, 1, 1] = radius_px.square()
+        return uv, z, valid, cov2
+
+    sigma3 = model.world_support_covariance(x_t)
+    cov2 = j_world @ sigma3 @ j_world.transpose(-1, -2)
+    cov2 = bound_projected_covariance(cov2, cfg)
+    return uv, z, valid, cov2
+
 
 def render_material_field(
     model: MaterialSurfelField,
@@ -325,7 +596,7 @@ def render_material_field(
     t_next: Optional[int] = None,
 ) -> Dict[str, torch.Tensor]:
     """
-    Pure Torch soft projected-disk renderer.
+    Pure Torch soft projected-kernel renderer.
 
     For production, replace with a faster renderer.
     For research, this is enough to test whether the representation trains.
@@ -342,15 +613,9 @@ def render_material_field(
     P = H * W
 
     x_t = model.positions(t)                         # [N,3]
-    uv, z, valid = project_points(x_t, K, w2c, cfg.near, cfg.far)
+    uv, z, valid, cov2 = projected_support(model, x_t, K, w2c, cfg)
 
     grid = make_pixel_grid(H, W, device=device)      # [P,2]
-
-    # Convert persistent world radius into approximate pixel radius.
-    # This is a rendering footprint, not a free 3D covariance.
-    fx = K[0, 0].abs().clamp_min(1e-6)
-    radius_px = model.radius()[:, 0] * fx / z.abs().clamp_min(cfg.near)
-    radius_px = radius_px.clamp(cfg.min_radius_px, cfg.max_radius_px)
 
     alpha_i = model.alpha()[:, 0]                    # [N]
 
@@ -361,11 +626,19 @@ def render_material_field(
 
     uv_s = uv[order]                                 # [N,2]
     z_s = z[order].clamp_min(cfg.near)               # [N]
-    radius_s = radius_px[order]                      # [N]
+    cov2_s = cov2[order]                             # [N,2,2]
     alpha_s = alpha_i[order]                         # [N]
     valid_s = valid[order]                           # [N]
     color_s = model.colors()[order]                  # [N,3]
     x0_s = model.x0[order]                           # [N,3]
+
+    cov_a = cov2_s[:, 0, 0]
+    cov_b = cov2_s[:, 0, 1]
+    cov_c = cov2_s[:, 1, 1]
+    det = (cov_a * cov_c - cov_b * cov_b).clamp_min(1e-8)
+    inv00 = cov_c / det
+    inv01 = -cov_b / det
+    inv11 = cov_a / det
 
     flow_s = None
     if K_next is not None and w2c_next is not None and t_next is not None:
@@ -387,10 +660,15 @@ def render_material_field(
         pix = grid[start:end]                         # [C,2]
 
         diff = pix[None, :, :] - uv_s[:, None, :]     # [N,C,2]
-        dist2 = (diff ** 2).sum(dim=-1)
-        kernel = torch.exp(-0.5 * dist2 / (radius_s[:, None] ** 2 + 1e-8))
+        dx = diff[..., 0]
+        dy = diff[..., 1]
+        maha = inv00[:, None] * dx * dx + 2.0 * inv01[:, None] * dx * dy + inv11[:, None] * dy * dy
+        kernel = torch.exp(-0.5 * maha.clamp_min(0.0))
 
-        a_s = alpha_s[:, None] * kernel
+        if cfg.opacity_transfer == "optical_thickness":
+            a_s = 1.0 - torch.exp(-alpha_s[:, None].clamp_min(0.0) * kernel)
+        else:
+            a_s = alpha_s[:, None] * kernel
         a_s = a_s.clamp(0.0, cfg.max_alpha_per_element)
         a_s = a_s * valid_s[:, None].float()
 
@@ -529,10 +807,16 @@ def train_material_surfel_field(
     batch_size: int = 1,
     train_frame_count: int = 0,
     num_basis: int = 8,
+    support_mode: str = "screen_disk",
+    support_knn_k: int = 8,
+    support_jacobian_lambda: float = 1e-4,
     init_radius: float = 0.04,
+    init_thickness: float = 0.005,
     init_alpha_logit: float = -1.2,
     init_basis_std: float = 0.001,
     init_coeff_std: float = 0.0,
+    slab_rotation_init_std: float = 0.0,
+    metric_offdiag_scale: float = 0.01,
     lr: float = 2e-3,
     weights: TrainWeights = TrainWeights(),
     query_every: int = 4,
@@ -557,11 +841,17 @@ def train_material_surfel_field(
         init_x0=init_x0,
         num_frames=T,
         num_basis=num_basis,
+        support_mode=support_mode,
+        support_knn_k=support_knn_k,
+        support_jacobian_lambda=support_jacobian_lambda,
         init_color=init_color,
         init_radius=init_radius,
+        init_thickness=init_thickness,
         init_alpha_logit=init_alpha_logit,
         init_basis_std=init_basis_std,
         init_coeff_std=init_coeff_std,
+        slab_rotation_init_std=slab_rotation_init_std,
+        metric_offdiag_scale=metric_offdiag_scale,
     ).to(device)
 
     edges, rest_lengths = build_knn_edges(init_x0.detach(), k=8)
@@ -654,6 +944,7 @@ def train_material_surfel_field(
                 "mass": float(model.mass_loss().detach()),
                 "motion_smooth": float(model.motion_smoothness_loss().detach()),
                 "radius": float(model.radius().mean().detach()),
+                "support_radius_loss": float(model.radius_loss().detach()),
             }
             logs.append(log)
             print(log)
@@ -831,12 +1122,37 @@ def alpha_metrics(alpha: torch.Tensor) -> dict[str, float]:
 
 
 def model_metrics(model: MaterialSurfelField) -> dict[str, float]:
-    return {
+    metrics = {
         "model_alpha_mean": float(model.alpha().mean().detach().cpu()),
         "model_radius_mean": float(model.radius().mean().detach().cpu()),
         "model_radius_max": float(model.radius().max().detach().cpu()),
+        "model_support_radius_loss": float(model.radius_loss().detach().cpu()),
         "model_motion_smooth": float(model.motion_smoothness_loss().detach().cpu()),
     }
+    if model.support_mode == "oriented_slab":
+        scales = model.slab_scales().detach()
+        metrics.update(
+            {
+                "model_slab_r1_mean": float(scales[:, 0].mean().cpu()),
+                "model_slab_r2_mean": float(scales[:, 1].mean().cpu()),
+                "model_slab_thickness_mean": float(scales[:, 2].mean().cpu()),
+                "model_slab_thickness_ratio_mean": float(
+                    (scales[:, 2] / scales[:, :2].mean(dim=-1).clamp_min(1e-8)).mean().cpu()
+                ),
+            }
+        )
+    if model.support_mode == "rank_adaptive_metric":
+        cov = model.metric_covariance().detach()
+        diag = cov.diagonal(dim1=-2, dim2=-1)
+        metrics.update(
+            {
+                "model_metric_trace_mean": float(diag.sum(dim=-1).mean().cpu()),
+                "model_metric_diag_x_mean": float(diag[:, 0].mean().cpu()),
+                "model_metric_diag_y_mean": float(diag[:, 1].mean().cpu()),
+                "model_metric_diag_z_mean": float(diag[:, 2].mean().cpu()),
+            }
+        )
+    return metrics
 
 
 @torch.no_grad()
@@ -852,22 +1168,22 @@ def projection_health_metrics(
     for t in frames:
         K_t = K[t] if K.ndim == 3 else K
         x = model.positions(int(t))
-        _, z, valid = project_points(x, K_t, w2c[int(t)], cfg.near, cfg.far)
-        fx = K_t[0, 0].abs().clamp_min(1e-6)
-        radius_raw = model.radius()[:, 0] * fx / z.abs().clamp_min(cfg.near)
-        radius_clamped = radius_raw.clamp(cfg.min_radius_px, cfg.max_radius_px)
-        valid_radius = radius_clamped[valid]
+        _, z, valid, cov2 = projected_support(model, x, K_t, w2c[int(t)], cfg)
+        radius_eq, anisotropy = covariance_equivalent_radius_and_anisotropy(cov2)
+        valid_radius = radius_eq[valid]
+        valid_anisotropy = anisotropy[valid]
         if valid_radius.numel() == 0:
             coverage_budget = 0.0
         else:
             coverage_budget = tensor_scalar(math.pi * valid_radius.square().sum() / float(cfg.H * cfg.W))
         row = {
             "projection_valid_fraction": tensor_scalar(valid.float().mean()),
-            "projection_radius_min_clamp_fraction": tensor_scalar((radius_raw <= cfg.min_radius_px).float().mean()),
-            "projection_radius_max_clamp_fraction": tensor_scalar((radius_raw >= cfg.max_radius_px).float().mean()),
+            "projection_radius_min_clamp_fraction": tensor_scalar((radius_eq <= cfg.min_radius_px).float().mean()),
+            "projection_radius_max_clamp_fraction": tensor_scalar((radius_eq >= cfg.max_radius_px).float().mean()),
             "projection_coverage_budget": coverage_budget,
         }
         row.update(stats_for_tensor("projection_radius_px", valid_radius))
+        row.update(stats_for_tensor("projection_anisotropy", valid_anisotropy))
         row.update(stats_for_tensor("projection_depth", z[valid]))
         rows.append(row)
     return mean_metric_rows(rows)
@@ -999,6 +1315,7 @@ def wandb_log_training_logs(logs: list[dict[str, float]]) -> None:
                 "Model/Mass": log["mass"],
                 "Model/MotionSmooth": log["motion_smooth"],
                 "Model/RadiusMean": log["radius"],
+                "Model/SupportRadiusLoss": log["support_radius_loss"],
             },
             step=step,
         )
@@ -1160,6 +1477,13 @@ def gauge_config(config: dict[str, Any]) -> dict[str, Any]:
     apply_defaults(cfg["losses"], LOSS_DEFAULTS)
     apply_defaults(cfg["logging"], LOGGING_DEFAULTS)
     apply_defaults(cfg["diagnostics"], DIAGNOSTIC_DEFAULTS)
+    cfg["model"]["support_mode"] = validate_support_mode(cfg["model"]["support_mode"])
+    cfg["model"]["support_knn_k"] = int(cfg["model"]["support_knn_k"])
+    cfg["model"]["support_jacobian_lambda"] = float(cfg["model"]["support_jacobian_lambda"])
+    cfg["model"]["init_thickness"] = float(cfg["model"]["init_thickness"])
+    cfg["model"]["slab_rotation_init_std"] = float(cfg["model"]["slab_rotation_init_std"])
+    cfg["model"]["metric_offdiag_scale"] = float(cfg["model"]["metric_offdiag_scale"])
+    cfg["render"]["opacity_transfer"] = validate_opacity_transfer(cfg["render"]["opacity_transfer"])
     return cfg
 
 
@@ -1170,6 +1494,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("config", nargs="?", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--device", default=None, help="Override train.device from the config.")
     parser.add_argument("--steps", type=int, default=None, help="Override train.steps from the config.")
+    parser.add_argument("--support-mode", default=None, choices=sorted(SUPPORT_MODES), help="Override model.support_mode.")
+    parser.add_argument(
+        "--opacity-transfer",
+        default=None,
+        choices=sorted(OPACITY_TRANSFERS),
+        help="Override render.opacity_transfer.",
+    )
     parser.add_argument("--output-dir", default=None, help="Override logging.output_dir from the config.")
     parser.add_argument("--wandb-mode", default=None, help="Override logging.wandb_mode from the config.")
     parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging for local probes.")
@@ -1184,6 +1515,10 @@ def main() -> None:
         cfg["train"]["device"] = args.device
     if args.steps is not None:
         cfg["train"]["steps"] = args.steps
+    if args.support_mode is not None:
+        cfg["model"]["support_mode"] = validate_support_mode(args.support_mode)
+    if args.opacity_transfer is not None:
+        cfg["render"]["opacity_transfer"] = validate_opacity_transfer(args.opacity_transfer)
     if args.output_dir is not None:
         cfg["logging"]["output_dir"] = args.output_dir
     if args.wandb_mode is not None:
@@ -1246,6 +1581,7 @@ def main() -> None:
         min_radius_px=float(render_cfg_values["min_radius_px"]),
         max_radius_px=float(render_cfg_values["max_radius_px"]),
         max_alpha_per_element=float(render_cfg_values["max_alpha_per_element"]),
+        opacity_transfer=str(render_cfg_values["opacity_transfer"]),
         pixel_chunk=int(render_cfg_values["pixel_chunk"]),
     )
     weights = TrainWeights(
@@ -1263,6 +1599,7 @@ def main() -> None:
         "Gauge-field overfit "
         f"config={config_path} video={video_path} frames={T}/{data_cfg['max_frames'] or 'all'} size={H}x{W} "
         f"elements={model_cfg['num_elements']} basis={model_cfg['num_basis']} "
+        f"support_mode={model_cfg['support_mode']} opacity_transfer={render_cfg.opacity_transfer} "
         f"train_frame_count={train_cfg['train_frame_count']} frames_per_step={train_cfg['frames_per_step']} "
         f"steps={train_cfg['steps']} device={device}"
     )
@@ -1279,10 +1616,16 @@ def main() -> None:
             batch_size=int(train_cfg["frames_per_step"]),
             train_frame_count=int(train_cfg["train_frame_count"]),
             num_basis=int(model_cfg["num_basis"]),
+            support_mode=str(model_cfg["support_mode"]),
+            support_knn_k=int(model_cfg["support_knn_k"]),
+            support_jacobian_lambda=float(model_cfg["support_jacobian_lambda"]),
             init_radius=float(model_cfg["init_radius"]),
+            init_thickness=float(model_cfg["init_thickness"]),
             init_alpha_logit=float(model_cfg["init_alpha_logit"]),
             init_basis_std=float(model_cfg["init_basis_std"]),
             init_coeff_std=float(model_cfg["init_coeff_std"]),
+            slab_rotation_init_std=float(model_cfg["slab_rotation_init_std"]),
+            metric_offdiag_scale=float(model_cfg["metric_offdiag_scale"]),
             lr=float(train_cfg["lr"]),
             weights=weights,
             render_cfg=render_cfg,
