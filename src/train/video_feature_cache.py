@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -121,6 +122,15 @@ def _dtype_from_name(name: str | None) -> torch.dtype:
     if normalized in {"bfloat16", "bf16"}:
         return torch.bfloat16
     raise ValueError(f"Unknown feature dtype {name!r}. Expected float32, float16, or bfloat16.")
+
+
+def _clear_accelerator_cache(device: torch.device | str) -> None:
+    gc.collect()
+    resolved = torch.device(device)
+    if resolved.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif resolved.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+        torch.mps.empty_cache()
 
 
 def _move_payload(value: Any, device: torch.device | str) -> Any:
@@ -261,6 +271,10 @@ class LTXVideoFeatureExtractor:
         self.pipeline.eval() if hasattr(self.pipeline, "eval") else None
         return self.pipeline
 
+    def release(self) -> None:
+        self.pipeline = None
+        self.pipeline_cls = None
+
     @staticmethod
     def _module_root(pipeline):
         if hasattr(pipeline, "transformer"):
@@ -387,6 +401,9 @@ class WanVACEVideoFeatureExtractor:
         if hasattr(self.pipeline, "set_progress_bar_config"):
             self.pipeline.set_progress_bar_config(disable=True)
         return self.pipeline
+
+    def release(self) -> None:
+        self.pipeline = None
 
     def _module_root(self, pipeline):
         root_name = str(self.feature_cfg.get("module_root") or "transformer")
@@ -562,6 +579,10 @@ class HuggingFaceVJEPAFeatureExtractor:
         tokens = _as_feature_tokens(features, feature_dim=self.feature_dim)
         return {self.layer_name: tokens.detach().cpu()}
 
+    def release(self) -> None:
+        self.processor = None
+        self.encoder = None
+
 
 class TorchHubVJEPAFeatureExtractor:
     """Frozen torchhub V-JEPA 2.x feature extractor for the shared disk cache."""
@@ -596,6 +617,9 @@ class TorchHubVJEPAFeatureExtractor:
         tokens = _as_feature_tokens(features, feature_dim=self.encoder_wrapper.feature_dim)
         return {self.layer_name: tokens.detach().cpu()}
 
+    def release(self) -> None:
+        self.encoder_wrapper = None
+
 
 def build_feature_extractor(feature_cfg: Mapping[str, Any], device: torch.device | str):
     extractor = str(feature_cfg.get("extractor", "ltx")).lower()
@@ -624,8 +648,19 @@ class VideoFeatureCache:
         self.force_rebake = bool(self.feature_cfg.get("force_rebake", False))
         self.keep_in_memory = bool(self.feature_cfg.get("keep_in_memory", True))
         self.save_dtype = _dtype_from_name(self.feature_cfg.get("save_dtype", "float16"))
-        self.extractor = build_feature_extractor(self.feature_cfg, device=self.device)
+        self.extractor = None
+        self._extractor_released = False
         self._memory: dict[str, Any] = {}
+
+    def _get_extractor(self):
+        if self.extractor is None:
+            if self._extractor_released:
+                raise RuntimeError(
+                    "Feature cache miss requires an extractor, but the feature extractor has already been released. "
+                    "Run prebake again or disable features.release_extractor_after_prebake."
+                )
+            self.extractor = build_feature_extractor(self.feature_cfg, device=self.device)
+        return self.extractor
 
     def cache_key(self, sequence_data: SequenceData) -> str:
         return sample_cache_key(sequence_data, self.feature_cfg)
@@ -664,7 +699,7 @@ class VideoFeatureCache:
             features = self._load_cached(path, key)
         else:
             print(f"[features] cache miss; baking {path}")
-            features = self.extractor(sequence_data)
+            features = self._get_extractor()(sequence_data)
             self._save_cached(path, key, sequence_data, features)
 
         moved = _move_payload(features, self.device)
@@ -685,3 +720,11 @@ class VideoFeatureCache:
         features = self.load_or_bake(sequence_data)
         cpu_features = {name: value.detach().cpu() for name, value in features.items()}
         return infer_feature_channels(cpu_features)
+
+    def release_extractor(self) -> None:
+        extractor = self.extractor
+        if extractor is not None and hasattr(extractor, "release"):
+            extractor.release()
+        self.extractor = None
+        self._extractor_released = True
+        _clear_accelerator_cache(self.device)

@@ -10,6 +10,10 @@ def inverse_sigmoid(value: float) -> float:
     return math.log(value / (1.0 - value))
 
 
+def inverse_sigmoid_values(values: torch.Tensor) -> torch.Tensor:
+    return torch.logit(values.clamp(1.0e-6, 1.0 - 1.0e-6))
+
+
 def inverse_tanh_values(values: torch.Tensor) -> torch.Tensor:
     return torch.atanh(values.clamp(-1.0 + 1.0e-6, 1.0 - 1.0e-6))
 
@@ -97,6 +101,9 @@ class GaussianParameterHeads(nn.Module):
         head_output_init_std=None,
         position_init_extent_coverage=0.0,
         rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
     ):
         super().__init__()
         if z_max <= z_min:
@@ -115,6 +122,17 @@ class GaussianParameterHeads(nn.Module):
             raise ValueError(f"opacity_init must be in (0, 1), got {opacity_init}.")
         if rotation_init not in {"random", "identity"}:
             raise ValueError(f"rotation_init must be 'random' or 'identity', got {rotation_init!r}.")
+        if rgb_init is not None:
+            rgb_init = str(rgb_init).lower()
+        if rgb_init in {"none", "default"}:
+            rgb_init = None
+        if rgb_init not in {None, "uniform"}:
+            raise ValueError(f"rgb_init must be None, 'default', or 'uniform', got {rgb_init!r}.")
+        if not (0.0 <= float(rgb_init_min) < float(rgb_init_max) <= 1.0):
+            raise ValueError(
+                f"Expected 0 <= rgb_init_min < rgb_init_max <= 1, got "
+                f"{rgb_init_min} and {rgb_init_max}."
+            )
 
         self.gaussians_per_token = gaussians_per_token
         self.xy_extent = float(xy_extent)
@@ -136,6 +154,9 @@ class GaussianParameterHeads(nn.Module):
             opacity_init=opacity_init,
             position_init_extent_coverage=float(position_init_extent_coverage),
             rotation_init=rotation_init,
+            rgb_init=rgb_init,
+            rgb_init_min=float(rgb_init_min),
+            rgb_init_max=float(rgb_init_max),
         )
 
     def _init_output_biases(
@@ -144,6 +165,9 @@ class GaussianParameterHeads(nn.Module):
         opacity_init: float | None,
         position_init_extent_coverage: float,
         rotation_init: str,
+        rgb_init: str | None,
+        rgb_init_min: float,
+        rgb_init_max: float,
     ) -> None:
         if position_init_extent_coverage > 0:
             coverage = float(position_init_extent_coverage)
@@ -163,6 +187,11 @@ class GaussianParameterHeads(nn.Module):
                 rot_bias[:, 0] = 1.0
         if opacity_init is not None:
             nn.init.constant_(self.opacity_head[-1].bias, inverse_sigmoid(float(opacity_init)))
+        if rgb_init == "uniform":
+            with torch.no_grad():
+                rgb_bias = self.rgb_head[-1].bias.view(self.gaussians_per_token, 3)
+                rgb_target = torch.empty_like(rgb_bias).uniform_(rgb_init_min, rgb_init_max)
+                rgb_bias.copy_(inverse_sigmoid_values(rgb_target))
 
     def _reshape(self, values, channels):
         batch_size, token_count, _ = values.shape
@@ -204,6 +233,9 @@ class TokenGSBackbone(nn.Module):
         head_output_init_std=None,
         position_init_extent_coverage=0.0,
         rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
     ):
         super().__init__()
         self.num_tokens = num_tokens
@@ -228,6 +260,9 @@ class TokenGSBackbone(nn.Module):
             head_output_init_std=head_output_init_std,
             position_init_extent_coverage=position_init_extent_coverage,
             rotation_init=rotation_init,
+            rgb_init=rgb_init,
+            rgb_init_min=rgb_init_min,
+            rgb_init_max=rgb_init_max,
         )
 
     def encode_grounded_features(self, image, plucker_grid):

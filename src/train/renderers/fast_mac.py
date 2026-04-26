@@ -21,6 +21,7 @@ class FastMacRendererConfig:
     transmittance_threshold: float = 1.0e-4
     background: tuple[float, float, float] = (1.0, 1.0, 1.0)
     enable_overflow_fallback: bool = True
+    inputs_sorted_by_depth: bool = False
     batch_strategy: str = "flatten"
     batch_launch_limit_tiles: int = 262144
     batch_launch_limit_gaussians: int = 262144
@@ -44,6 +45,7 @@ class FastMacRendererConfig:
             transmittance_threshold=float(values.get("transmittance_threshold", cls.transmittance_threshold)),
             background=tuple(float(value) for value in background),
             enable_overflow_fallback=bool(values.get("enable_overflow_fallback", cls.enable_overflow_fallback)),
+            inputs_sorted_by_depth=bool(values.get("inputs_sorted_by_depth", cls.inputs_sorted_by_depth)),
             batch_strategy=str(values.get("batch_strategy", cls.batch_strategy)),
             batch_launch_limit_tiles=int(values.get("batch_launch_limit_tiles", cls.batch_launch_limit_tiles)),
             batch_launch_limit_gaussians=int(
@@ -72,6 +74,7 @@ def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
         transmittance_threshold=config.transmittance_threshold,
         background=config.background,
         enable_overflow_fallback=config.enable_overflow_fallback,
+        inputs_sorted_by_depth=config.inputs_sorted_by_depth,
         batch_strategy=config.batch_strategy,
         batch_launch_limit_tiles=config.batch_launch_limit_tiles,
         batch_launch_limit_gaussians=config.batch_launch_limit_gaussians,

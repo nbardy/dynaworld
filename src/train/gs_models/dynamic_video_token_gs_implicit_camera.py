@@ -9,7 +9,14 @@ import torch.nn.functional as F
 from camera import build_plucker_ray_grid, build_plucker_ray_grid_batch
 from runtime_types import CameraState, GaussianSequence
 
-from .blocks import GaussianParameterHeads, build_mlp, flatten_hw_features
+from .blocks import (
+    GaussianParameterHeads,
+    build_mlp,
+    flatten_hw_features,
+    inverse_sigmoid,
+    inverse_sigmoid_values,
+    inverse_tanh_values,
+)
 from .implicit_camera import (
     PathCameraHead,
     TimeConditionedOpticalAxisCameraHead,
@@ -869,6 +876,9 @@ class DynamicResidualGaussianBankHead(nn.Module):
         head_output_init_std=None,
         position_init_extent_coverage=0.0,
         rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
         motion_extent=0.25,
         rotation_degrees=10.0,
         alpha_logit_extent=2.0,
@@ -903,6 +913,9 @@ class DynamicResidualGaussianBankHead(nn.Module):
             head_output_init_std=head_output_init_std,
             position_init_extent_coverage=position_init_extent_coverage,
             rotation_init=rotation_init,
+            rgb_init=rgb_init,
+            rgb_init_min=rgb_init_min,
+            rgb_init_max=rgb_init_max,
         )
         mlp_kwargs = {
             "hidden_dim": head_hidden_dim,
@@ -951,6 +964,667 @@ class DynamicResidualGaussianBankHead(nn.Module):
         )
 
 
+def _init_free_gaussian_raw_params(
+    *,
+    gaussian_count: int,
+    xy_extent: float,
+    z_min: float,
+    z_max: float,
+    scale_init_log_jitter: float,
+    opacity_init: float | None,
+    position_init_extent_coverage: float,
+    rotation_init: str,
+    rgb_init: str | None,
+    rgb_init_min: float,
+    rgb_init_max: float,
+) -> dict[str, torch.Tensor]:
+    if position_init_extent_coverage > 0:
+        coverage = float(position_init_extent_coverage)
+        z_margin = 0.5 * (1.0 - coverage)
+        raw_xy = inverse_tanh_values(torch.empty(gaussian_count, 2).uniform_(-coverage, coverage))
+        raw_z = torch.logit(torch.empty(gaussian_count, 1).uniform_(z_margin, 1.0 - z_margin), eps=1.0e-6)
+        raw_xyz = torch.cat([raw_xy, raw_z], dim=-1)
+    else:
+        raw_xyz = torch.zeros(gaussian_count, 3)
+
+    raw_scales = torch.zeros(gaussian_count, 3)
+    if scale_init_log_jitter > 0:
+        raw_scales.uniform_(-float(scale_init_log_jitter), float(scale_init_log_jitter))
+
+    raw_quats = torch.randn(gaussian_count, 4)
+    if rotation_init == "identity":
+        raw_quats.zero_()
+        raw_quats[:, 0] = 1.0
+
+    raw_opacities = torch.zeros(gaussian_count, 1)
+    if opacity_init is not None:
+        raw_opacities.fill_(inverse_sigmoid(float(opacity_init)))
+
+    raw_rgbs = torch.zeros(gaussian_count, 3)
+    if rgb_init == "uniform":
+        rgb_target = torch.empty_like(raw_rgbs).uniform_(float(rgb_init_min), float(rgb_init_max))
+        raw_rgbs.copy_(inverse_sigmoid_values(rgb_target))
+
+    return {
+        "xyz": raw_xyz,
+        "scales": raw_scales,
+        "quats": raw_quats,
+        "opacities": raw_opacities,
+        "rgbs": raw_rgbs,
+    }
+
+
+class FreeGaussianBankImplicitCamera(nn.Module):
+    """Direct learnable Gaussian bank with no video encoder and no token decoder."""
+
+    def __init__(
+        self,
+        clip_length=4,
+        image_size=384,
+        num_tokens=8,
+        feat_dim=128,
+        gaussians_per_token=64,
+        scene_extent=1.0,
+        xy_extent=None,
+        z_min=None,
+        z_max=None,
+        scale_init=0.05,
+        scale_init_log_jitter=0.0,
+        opacity_init=None,
+        query_token_init_std=0.02,
+        position_init_extent_coverage=0.0,
+        rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
+        free_frame_count=None,
+        free_time_interpolation="nearest",
+        base_fov_degrees=60.0,
+        base_radius=3.0,
+        max_fov_delta_degrees=15.0,
+        max_radius_scale=1.5,
+        camera_global_head="legacy_orbit",
+        lens_model="pinhole",
+        max_aspect_log_delta=0.0,
+        max_principal_point_delta=0.0,
+        distortion_max_abs=0.0,
+        base_distortion=None,
+        max_rotation_degrees=5.0,
+        max_translation_ratio=0.2,
+        **_unused,
+    ):
+        super().__init__()
+        self.clip_length = int(clip_length)
+        self.image_size = int(image_size)
+        self.num_tokens = int(num_tokens)
+        self.gaussians_per_token = int(gaussians_per_token)
+        self.gaussian_count = self.num_tokens * self.gaussians_per_token
+        self.free_frame_count = 1 if free_frame_count is None else int(free_frame_count)
+        if self.free_frame_count < 1:
+            raise ValueError(f"free_frame_count must be >= 1, got {self.free_frame_count}.")
+        self.free_time_interpolation = str(free_time_interpolation).lower()
+        if self.free_time_interpolation != "nearest":
+            raise ValueError("FreeGaussianBankImplicitCamera currently supports only nearest time lookup.")
+        self.scale_init = float(scale_init)
+        if xy_extent is None:
+            xy_extent = scene_extent
+        if z_min is None:
+            z_min = -scene_extent
+        if z_max is None:
+            z_max = scene_extent
+        self.xy_extent = float(xy_extent)
+        self.z_min = float(z_min)
+        self.z_extent = float(z_max) - float(z_min)
+
+        raw = _init_free_gaussian_raw_params(
+            gaussian_count=self.free_frame_count * self.gaussian_count,
+            xy_extent=self.xy_extent,
+            z_min=self.z_min,
+            z_max=float(z_max),
+            scale_init_log_jitter=float(scale_init_log_jitter),
+            opacity_init=opacity_init,
+            position_init_extent_coverage=float(position_init_extent_coverage),
+            rotation_init=rotation_init,
+            rgb_init=None if rgb_init is None else str(rgb_init).lower(),
+            rgb_init_min=float(rgb_init_min),
+            rgb_init_max=float(rgb_init_max),
+        )
+        self.raw_xyz = nn.Parameter(raw["xyz"].reshape(self.free_frame_count, self.gaussian_count, 3))
+        self.raw_scales = nn.Parameter(raw["scales"].reshape(self.free_frame_count, self.gaussian_count, 3))
+        self.raw_quats = nn.Parameter(raw["quats"].reshape(self.free_frame_count, self.gaussian_count, 4))
+        self.raw_opacities = nn.Parameter(raw["opacities"].reshape(self.free_frame_count, self.gaussian_count, 1))
+        self.raw_rgbs = nn.Parameter(raw["rgbs"].reshape(self.free_frame_count, self.gaussian_count, 3))
+
+        self.global_camera_token = nn.Parameter(torch.randn(feat_dim) * float(query_token_init_std))
+        self.path_camera_token = nn.Parameter(torch.randn(feat_dim) * float(query_token_init_std))
+        self.path_time_proj = build_time_projector(1, feat_dim)
+        self.global_camera_head = build_global_camera_head(
+            camera_global_head,
+            feat_dim=feat_dim,
+            lens_model=lens_model,
+            base_fov_degrees=base_fov_degrees,
+            base_radius=base_radius,
+            max_fov_delta_degrees=max_fov_delta_degrees,
+            max_radius_scale=max_radius_scale,
+            max_aspect_log_delta=max_aspect_log_delta,
+            max_principal_point_delta=max_principal_point_delta,
+            distortion_max_abs=distortion_max_abs,
+            base_distortion=base_distortion,
+        )
+        self.path_camera_head = PathCameraHead(
+            feat_dim=feat_dim,
+            max_rotation_degrees=max_rotation_degrees,
+            max_translation_ratio=max_translation_ratio,
+        )
+
+    def _gaussians_from_raw(self, raw_xyz, raw_scales, raw_quats, raw_opacities, raw_rgbs):
+        xyz = torch.cat(
+            [
+                torch.tanh(raw_xyz[..., :2]) * self.xy_extent,
+                torch.sigmoid(raw_xyz[..., 2:]) * self.z_extent + self.z_min,
+            ],
+            dim=-1,
+        )
+        return (
+            xyz,
+            torch.exp(raw_scales) * self.scale_init,
+            F.normalize(raw_quats, p=2, dim=-1),
+            torch.sigmoid(raw_opacities),
+            torch.sigmoid(raw_rgbs),
+        )
+
+    def _gaussians_at_times(self, decode_times):
+        frame_positions = decode_times.reshape(-1).to(device=self.raw_xyz.device, dtype=self.raw_xyz.dtype)
+        frame_positions = frame_positions.clamp(0.0, 1.0) * float(self.free_frame_count - 1)
+        frame_indices = frame_positions.round().to(dtype=torch.long).clamp(0, self.free_frame_count - 1)
+        return self._gaussians_from_raw(
+            self.raw_xyz.index_select(0, frame_indices),
+            self.raw_scales.index_select(0, frame_indices),
+            self.raw_quats.index_select(0, frame_indices),
+            self.raw_opacities.index_select(0, frame_indices),
+            self.raw_rgbs.index_select(0, frame_indices),
+        )
+
+    def _camera_for_time(self, decode_time):
+        decode_time = decode_time.reshape(1, 1).to(device=self.raw_xyz.device, dtype=self.raw_xyz.dtype)
+        global_camera_token = self.global_camera_token
+        path_token = self.path_camera_token + self.path_time_proj(decode_time).squeeze(0)
+        base_camera, base_state = self.global_camera_head(global_camera_token, image_size=self.image_size)
+        rotation_delta, translation_delta, path_residuals = self.path_camera_head(
+            path_token.unsqueeze(0),
+            base_radius=base_state["radius"],
+        )
+        camera = compose_camera_with_se3_delta(base_camera, rotation_delta, translation_delta)[0]
+        return camera, CameraState(
+            fov_degrees=base_state["fov_degrees"],
+            radius=base_state["radius"],
+            global_residuals=base_state["global_residuals"],
+            rotation_delta=rotation_delta,
+            translation_delta=translation_delta,
+            path_residuals=path_residuals,
+        )
+
+    @staticmethod
+    def _merge_frames(gaussian_frames, decoded_cameras):
+        xyz, scales, quats, opacities, rgbs = gaussian_frames
+        camera_states = [item[1] for item in decoded_cameras]
+        camera_state = CameraState(
+            fov_degrees=torch.stack([state.fov_degrees for state in camera_states]).mean(),
+            radius=torch.stack([state.radius for state in camera_states]).mean(),
+            global_residuals=torch.stack([state.global_residuals for state in camera_states]).mean(dim=0),
+            rotation_delta=torch.cat([state.rotation_delta for state in camera_states], dim=0),
+            translation_delta=torch.cat([state.translation_delta for state in camera_states], dim=0),
+            path_residuals=torch.cat([state.path_residuals for state in camera_states], dim=0),
+        )
+        return GaussianSequence(
+            xyz=xyz.contiguous(),
+            scales=scales.contiguous(),
+            quats=quats.contiguous(),
+            opacities=opacities.contiguous(),
+            rgbs=rgbs.contiguous(),
+            cameras=tuple(item[0] for item in decoded_cameras),
+            camera_state=camera_state,
+        )
+
+    def forward(self, video, decode_times, input_times=None):
+        del video, input_times
+        if decode_times.ndim != 2:
+            raise ValueError(f"Expected decode_times of shape (B, T), got {tuple(decode_times.shape)}")
+        if decode_times.shape[0] != 1:
+            raise ValueError("FreeGaussianBankImplicitCamera currently expects clip batch size 1.")
+        gaussian_frames = self._gaussians_at_times(decode_times)
+        decoded_cameras = [self._camera_for_time(decode_times[:, index]) for index in range(decode_times.shape[1])]
+        return self._merge_frames(gaussian_frames, decoded_cameras)
+
+
+class LinearTimeFreeGaussianBankImplicitCamera(FreeGaussianBankImplicitCamera):
+    """Shared free Gaussian bank with linear xyz velocity and opacity slope."""
+
+    def __init__(
+        self,
+        *args,
+        free_velocity_extent=1.0,
+        free_velocity_init_std=0.0,
+        free_opacity_slope_init_std=0.0,
+        free_time_center=0.5,
+        **kwargs,
+    ):
+        kwargs.pop("free_frame_count", None)
+        kwargs.pop("free_time_interpolation", None)
+        super().__init__(*args, free_frame_count=1, free_time_interpolation="nearest", **kwargs)
+        if free_velocity_extent < 0:
+            raise ValueError(f"free_velocity_extent must be non-negative, got {free_velocity_extent}.")
+        if free_velocity_init_std < 0:
+            raise ValueError(f"free_velocity_init_std must be non-negative, got {free_velocity_init_std}.")
+        if free_opacity_slope_init_std < 0:
+            raise ValueError(
+                f"free_opacity_slope_init_std must be non-negative, got {free_opacity_slope_init_std}."
+            )
+        self.free_velocity_extent = float(free_velocity_extent)
+        self.free_time_center = float(free_time_center)
+        velocity = torch.zeros(self.gaussian_count, 3)
+        if free_velocity_init_std > 0:
+            velocity.normal_(mean=0.0, std=float(free_velocity_init_std))
+        opacity_slope = torch.zeros(self.gaussian_count, 1)
+        if free_opacity_slope_init_std > 0:
+            opacity_slope.normal_(mean=0.0, std=float(free_opacity_slope_init_std))
+        self.raw_velocity = nn.Parameter(velocity)
+        self.raw_opacity_slope = nn.Parameter(opacity_slope)
+
+    def _gaussians_at_times(self, decode_times):
+        times = decode_times.reshape(-1).to(device=self.raw_xyz.device, dtype=self.raw_xyz.dtype)
+        centered_time = (times - self.free_time_center).reshape(-1, 1, 1)
+
+        base_xyz, base_scales, base_quats, base_opacities, base_rgbs = self._gaussians_from_raw(
+            self.raw_xyz.squeeze(0),
+            self.raw_scales.squeeze(0),
+            self.raw_quats.squeeze(0),
+            self.raw_opacities.squeeze(0),
+            self.raw_rgbs.squeeze(0),
+        )
+        del base_opacities
+
+        velocity = torch.cat(
+            [
+                torch.tanh(self.raw_velocity[..., :2]) * self.free_velocity_extent,
+                torch.tanh(self.raw_velocity[..., 2:]) * self.free_velocity_extent,
+            ],
+            dim=-1,
+        )
+        raw_opacity = self.raw_opacities.squeeze(0) + centered_time * self.raw_opacity_slope.unsqueeze(0)
+
+        frame_count = times.shape[0]
+        return (
+            base_xyz.unsqueeze(0) + centered_time * velocity.unsqueeze(0),
+            base_scales.unsqueeze(0).expand(frame_count, -1, -1),
+            base_quats.unsqueeze(0).expand(frame_count, -1, -1),
+            torch.sigmoid(raw_opacity),
+            base_rgbs.unsqueeze(0).expand(frame_count, -1, -1),
+        )
+
+
+class ResidualFreeGaussianParameterHeads(nn.Module):
+    """Per-token free Gaussian base bank plus bounded residuals from token features."""
+
+    def __init__(
+        self,
+        *,
+        feat_dim: int,
+        num_tokens: int,
+        gaussians_per_token: int,
+        xy_extent=1.5,
+        z_min=0.5,
+        z_max=2.5,
+        scale_init=0.05,
+        scale_init_log_jitter=0.0,
+        opacity_init=None,
+        head_hidden_dim=64,
+        head_hidden_layers=1,
+        residual_output_init_std=1.0e-3,
+        position_init_extent_coverage=0.0,
+        rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
+        residual_xyz_raw_scale=0.5,
+        residual_scale_log_scale=0.5,
+        residual_rot_raw_scale=0.5,
+        residual_opacity_logit_scale=1.0,
+        residual_rgb_logit_scale=1.0,
+        residual_head_input_norm="rmsnorm",
+    ):
+        super().__init__()
+        self.num_tokens = int(num_tokens)
+        self.gaussians_per_token = int(gaussians_per_token)
+        self.xy_extent = float(xy_extent)
+        self.z_min = float(z_min)
+        self.z_extent = float(z_max) - float(z_min)
+        self.scale_init = float(scale_init)
+        self.residual_xyz_raw_scale = float(residual_xyz_raw_scale)
+        self.residual_scale_log_scale = float(residual_scale_log_scale)
+        self.residual_rot_raw_scale = float(residual_rot_raw_scale)
+        self.residual_opacity_logit_scale = float(residual_opacity_logit_scale)
+        self.residual_rgb_logit_scale = float(residual_rgb_logit_scale)
+        if self.num_tokens < 1:
+            raise ValueError(f"num_tokens must be positive, got {num_tokens}.")
+        if self.gaussians_per_token < 1:
+            raise ValueError(f"gaussians_per_token must be positive, got {gaussians_per_token}.")
+        if self.z_extent <= 0:
+            raise ValueError(f"z_max must be greater than z_min, got z_min={z_min}, z_max={z_max}.")
+        if self.scale_init <= 0:
+            raise ValueError(f"scale_init must be positive, got {scale_init}.")
+
+        raw = _init_free_gaussian_raw_params(
+            gaussian_count=self.num_tokens * self.gaussians_per_token,
+            xy_extent=self.xy_extent,
+            z_min=self.z_min,
+            z_max=float(z_max),
+            scale_init_log_jitter=float(scale_init_log_jitter),
+            opacity_init=opacity_init,
+            position_init_extent_coverage=float(position_init_extent_coverage),
+            rotation_init=rotation_init,
+            rgb_init=None if rgb_init is None else str(rgb_init).lower(),
+            rgb_init_min=float(rgb_init_min),
+            rgb_init_max=float(rgb_init_max),
+        )
+        shape3 = (self.num_tokens, self.gaussians_per_token, 3)
+        self.base_raw_xyz = nn.Parameter(raw["xyz"].reshape(shape3))
+        self.base_raw_scales = nn.Parameter(raw["scales"].reshape(shape3))
+        self.base_raw_quats = nn.Parameter(raw["quats"].reshape(self.num_tokens, self.gaussians_per_token, 4))
+        self.base_raw_opacities = nn.Parameter(raw["opacities"].reshape(self.num_tokens, self.gaussians_per_token, 1))
+        self.base_raw_rgbs = nn.Parameter(raw["rgbs"].reshape(shape3))
+
+        norm_name = str(residual_head_input_norm).lower()
+        if norm_name in {"none", "false", "off"}:
+            self.input_norm = nn.Identity()
+        elif norm_name in {"rms", "rmsnorm"}:
+            self.input_norm = RMSNorm(feat_dim)
+        elif norm_name in {"layer", "layernorm"}:
+            self.input_norm = nn.LayerNorm(feat_dim)
+        else:
+            raise ValueError(
+                f"Unknown residual_head_input_norm={residual_head_input_norm!r}. "
+                "Expected one of: none, rmsnorm, layernorm."
+            )
+
+        mlp_kwargs = {
+            "hidden_dim": head_hidden_dim,
+            "hidden_layers": head_hidden_layers,
+            "output_init_std": residual_output_init_std,
+        }
+        self.xyz_residual_head = build_mlp(feat_dim, gaussians_per_token * 3, **mlp_kwargs)
+        self.scale_residual_head = build_mlp(feat_dim, gaussians_per_token * 3, **mlp_kwargs)
+        self.rot_residual_head = build_mlp(feat_dim, gaussians_per_token * 4, **mlp_kwargs)
+        self.opacity_residual_head = build_mlp(feat_dim, gaussians_per_token, **mlp_kwargs)
+        self.rgb_residual_head = build_mlp(feat_dim, gaussians_per_token * 3, **mlp_kwargs)
+
+    def _reshape(self, values, channels):
+        return values.reshape(values.shape[0], self.num_tokens, self.gaussians_per_token, channels)
+
+    def _bounded_residual(self, values, channels, scale):
+        return torch.tanh(self._reshape(values, channels)) * float(scale)
+
+    def forward(self, tokens):
+        if tokens.ndim != 3:
+            raise ValueError(f"Expected tokens with shape [B,T,C], got {tuple(tokens.shape)}.")
+        if tokens.shape[1] != self.num_tokens:
+            raise ValueError(f"Expected {self.num_tokens} tokens, got {tokens.shape[1]}.")
+        head_tokens = self.input_norm(tokens)
+        raw_xyz = self.base_raw_xyz.unsqueeze(0) + self._bounded_residual(
+            self.xyz_residual_head(head_tokens),
+            3,
+            self.residual_xyz_raw_scale,
+        )
+        raw_scales = self.base_raw_scales.unsqueeze(0) + self._bounded_residual(
+            self.scale_residual_head(head_tokens),
+            3,
+            self.residual_scale_log_scale,
+        )
+        raw_quats = self.base_raw_quats.unsqueeze(0) + self._bounded_residual(
+            self.rot_residual_head(head_tokens),
+            4,
+            self.residual_rot_raw_scale,
+        )
+        raw_opacities = self.base_raw_opacities.unsqueeze(0) + self._bounded_residual(
+            self.opacity_residual_head(head_tokens),
+            1,
+            self.residual_opacity_logit_scale,
+        )
+        raw_rgbs = self.base_raw_rgbs.unsqueeze(0) + self._bounded_residual(
+            self.rgb_residual_head(head_tokens),
+            3,
+            self.residual_rgb_logit_scale,
+        )
+
+        xyz = torch.cat(
+            [
+                torch.tanh(raw_xyz[..., :2]) * self.xy_extent,
+                torch.sigmoid(raw_xyz[..., 2:]) * self.z_extent + self.z_min,
+            ],
+            dim=-1,
+        )
+        batch_size = tokens.shape[0]
+        return (
+            xyz.reshape(batch_size, self.num_tokens * self.gaussians_per_token, 3),
+            (torch.exp(raw_scales) * self.scale_init).reshape(batch_size, self.num_tokens * self.gaussians_per_token, 3),
+            F.normalize(raw_quats, p=2, dim=-1).reshape(batch_size, self.num_tokens * self.gaussians_per_token, 4),
+            torch.sigmoid(raw_opacities).reshape(batch_size, self.num_tokens * self.gaussians_per_token, 1),
+            torch.sigmoid(raw_rgbs).reshape(batch_size, self.num_tokens * self.gaussians_per_token, 3),
+        )
+
+
+class UnconditionedTokenGSImplicitCamera(nn.Module):
+    """Learned tokens decoded to splats with no video or external feature memory."""
+
+    def __init__(
+        self,
+        clip_length=4,
+        image_size=384,
+        num_tokens=8,
+        feat_dim=128,
+        gaussians_per_token=64,
+        scene_extent=1.0,
+        xy_extent=None,
+        z_min=None,
+        z_max=None,
+        scale_init=0.05,
+        scale_init_log_jitter=0.0,
+        opacity_init=None,
+        query_token_init_std=0.02,
+        head_hidden_dim=64,
+        head_hidden_layers=1,
+        head_output_init_std=None,
+        position_init_extent_coverage=0.0,
+        rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
+        base_fov_degrees=60.0,
+        base_radius=3.0,
+        max_fov_delta_degrees=15.0,
+        max_radius_scale=1.5,
+        camera_global_head="legacy_orbit",
+        lens_model="pinhole",
+        max_aspect_log_delta=0.0,
+        max_principal_point_delta=0.0,
+        distortion_max_abs=0.0,
+        base_distortion=None,
+        max_rotation_degrees=5.0,
+        max_translation_ratio=0.2,
+        **_unused,
+    ):
+        super().__init__()
+        self.clip_length = int(clip_length)
+        self.image_size = int(image_size)
+        self.num_tokens = int(num_tokens)
+        self.total_tokens = self.num_tokens + 2
+        if xy_extent is None:
+            xy_extent = scene_extent
+        if z_min is None:
+            z_min = -scene_extent
+        if z_max is None:
+            z_max = scene_extent
+        self.query_tokens = LearnedQueryTokenBank(
+            total_tokens=self.total_tokens,
+            dim=feat_dim,
+            init_std=query_token_init_std,
+        )
+        self.time_proj = build_time_projector(1, feat_dim)
+        self.head_time_proj = build_time_projector(1, feat_dim)
+        self.gaussian_heads = GaussianParameterHeads(
+            feat_dim=feat_dim,
+            gaussians_per_token=gaussians_per_token,
+            xy_extent=xy_extent,
+            z_min=z_min,
+            z_max=z_max,
+            scale_init=scale_init,
+            scale_init_log_jitter=scale_init_log_jitter,
+            opacity_init=opacity_init,
+            head_hidden_dim=head_hidden_dim,
+            head_hidden_layers=head_hidden_layers,
+            head_output_init_std=head_output_init_std,
+            position_init_extent_coverage=position_init_extent_coverage,
+            rotation_init=rotation_init,
+            rgb_init=rgb_init,
+            rgb_init_min=rgb_init_min,
+            rgb_init_max=rgb_init_max,
+        )
+        self.global_camera_head = build_global_camera_head(
+            camera_global_head,
+            feat_dim=feat_dim,
+            lens_model=lens_model,
+            base_fov_degrees=base_fov_degrees,
+            base_radius=base_radius,
+            max_fov_delta_degrees=max_fov_delta_degrees,
+            max_radius_scale=max_radius_scale,
+            max_aspect_log_delta=max_aspect_log_delta,
+            max_principal_point_delta=max_principal_point_delta,
+            distortion_max_abs=distortion_max_abs,
+            base_distortion=base_distortion,
+        )
+        self.path_camera_head = PathCameraHead(
+            feat_dim=feat_dim,
+            max_rotation_degrees=max_rotation_degrees,
+            max_translation_ratio=max_translation_ratio,
+        )
+
+    def refine_queries(self, batch_size, decode_time=None):
+        queries = self.query_tokens(batch_size)
+        if decode_time is not None:
+            decode_time = decode_time.reshape(batch_size, 1).to(device=queries.device, dtype=queries.dtype)
+            query_offsets = torch.zeros_like(queries)
+            query_offsets[:, 1:, :] = self.time_proj(decode_time).unsqueeze(1)
+            queries = queries + query_offsets
+        return queries
+
+    def _decode_single_time(self, decode_time, fixed_global_camera_token):
+        refined_queries = self.refine_queries(1, decode_time=decode_time)
+        path_token = refined_queries[:, 1, :]
+        gs_tokens = refined_queries[:, 2:, :]
+        head_time_offset = self.head_time_proj(
+            decode_time.reshape(1, 1).to(device=gs_tokens.device, dtype=gs_tokens.dtype)
+        )
+        path_token = path_token + head_time_offset
+        gs_tokens = gs_tokens + head_time_offset.unsqueeze(1)
+        xyz, scales, quats, opacities, rgbs = self.gaussian_heads(gs_tokens)
+        base_camera, base_state = self.global_camera_head(fixed_global_camera_token.squeeze(0), image_size=self.image_size)
+        rotation_delta, translation_delta, path_residuals = self.path_camera_head(
+            path_token,
+            base_radius=base_state["radius"],
+        )
+        camera = compose_camera_with_se3_delta(base_camera, rotation_delta, translation_delta)[0]
+        return (
+            xyz.squeeze(0),
+            scales.squeeze(0),
+            quats.squeeze(0),
+            opacities.squeeze(0),
+            rgbs.squeeze(0),
+            camera,
+            CameraState(
+                fov_degrees=base_state["fov_degrees"],
+                radius=base_state["radius"],
+                global_residuals=base_state["global_residuals"],
+                rotation_delta=rotation_delta,
+                translation_delta=translation_delta,
+                path_residuals=path_residuals,
+            ),
+        )
+
+    def forward(self, video, decode_times, input_times=None):
+        del video, input_times
+        if decode_times.ndim != 2:
+            raise ValueError(f"Expected decode_times of shape (B, T), got {tuple(decode_times.shape)}")
+        if decode_times.shape[0] != 1:
+            raise ValueError("UnconditionedTokenGSImplicitCamera currently expects clip batch size 1.")
+        fixed_queries = self.refine_queries(1, decode_time=None)
+        fixed_global_camera_token = fixed_queries[:, 0, :]
+        decoded = [
+            self._decode_single_time(decode_times[:, index], fixed_global_camera_token)
+            for index in range(decode_times.shape[1])
+        ]
+        return DynamicVideoTokenGSImplicitCamera._merge_decoded_frames(decoded)
+
+
+class UnconditionedResidualFreeBankImplicitCamera(UnconditionedTokenGSImplicitCamera):
+    """Unconditioned token residuals on top of a per-token free Gaussian base bank."""
+
+    def __init__(
+        self,
+        *args,
+        residual_output_init_std=1.0e-3,
+        residual_xyz_raw_scale=0.5,
+        residual_scale_log_scale=0.5,
+        residual_rot_raw_scale=0.5,
+        residual_opacity_logit_scale=1.0,
+        residual_rgb_logit_scale=1.0,
+        residual_head_input_norm="rmsnorm",
+        **kwargs,
+    ):
+        num_tokens = int(kwargs.get("num_tokens", 8))
+        feat_dim = int(kwargs.get("feat_dim", 128))
+        gaussians_per_token = int(kwargs.get("gaussians_per_token", 64))
+        scene_extent = float(kwargs.get("scene_extent", 1.0))
+        xy_extent = kwargs.get("xy_extent", scene_extent)
+        z_min = kwargs.get("z_min", -scene_extent)
+        z_max = kwargs.get("z_max", scene_extent)
+        scale_init = kwargs.get("scale_init", 0.05)
+        scale_init_log_jitter = kwargs.get("scale_init_log_jitter", 0.0)
+        opacity_init = kwargs.get("opacity_init")
+        head_hidden_dim = kwargs.get("head_hidden_dim", 64)
+        head_hidden_layers = kwargs.get("head_hidden_layers", 1)
+        position_init_extent_coverage = kwargs.get("position_init_extent_coverage", 0.0)
+        rotation_init = kwargs.get("rotation_init", "random")
+        rgb_init = kwargs.get("rgb_init")
+        rgb_init_min = kwargs.get("rgb_init_min", 0.01)
+        rgb_init_max = kwargs.get("rgb_init_max", 0.99)
+        super().__init__(*args, **kwargs)
+        self.gaussian_heads = ResidualFreeGaussianParameterHeads(
+            feat_dim=feat_dim,
+            num_tokens=num_tokens,
+            gaussians_per_token=gaussians_per_token,
+            xy_extent=xy_extent,
+            z_min=z_min,
+            z_max=z_max,
+            scale_init=scale_init,
+            scale_init_log_jitter=scale_init_log_jitter,
+            opacity_init=opacity_init,
+            head_hidden_dim=head_hidden_dim,
+            head_hidden_layers=head_hidden_layers,
+            residual_output_init_std=residual_output_init_std,
+            position_init_extent_coverage=position_init_extent_coverage,
+            rotation_init=rotation_init,
+            rgb_init=rgb_init,
+            rgb_init_min=rgb_init_min,
+            rgb_init_max=rgb_init_max,
+            residual_xyz_raw_scale=residual_xyz_raw_scale,
+            residual_scale_log_scale=residual_scale_log_scale,
+            residual_rot_raw_scale=residual_rot_raw_scale,
+            residual_opacity_logit_scale=residual_opacity_logit_scale,
+            residual_rgb_logit_scale=residual_rgb_logit_scale,
+            residual_head_input_norm=residual_head_input_norm,
+        )
+
+
 class DynamicVideoTokenGSImplicitCamera(nn.Module):
     def __init__(
         self,
@@ -975,6 +1649,9 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         head_output_init_std=None,
         position_init_extent_coverage=0.0,
         rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
         video_encoder_backend="local",
         tubelet_size=(4, 16, 16),
         encoder_self_attn_layers=1,
@@ -1090,6 +1767,9 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
             "head_output_init_std": head_output_init_std,
             "position_init_extent_coverage": position_init_extent_coverage,
             "rotation_init": rotation_init,
+            "rgb_init": rgb_init,
+            "rgb_init_min": rgb_init_min,
+            "rgb_init_max": rgb_init_max,
         }
         if self.use_static_dynamic_split:
             if dynamic_motion_extent is None:
@@ -1324,6 +2004,261 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
                 self.refine_queries(video_tokens, decode_times[:, index]),
                 decode_times[:, index],
                 global_camera_token=fixed_global_camera_token,
+            )
+            for index in range(decode_times.shape[1])
+        ]
+        return self._merge_decoded_frames(decoded)
+
+
+class ResidualFreeBankVideoTokenGSImplicitCamera(DynamicVideoTokenGSImplicitCamera):
+    """Video-conditioned residual decoder on top of per-token free Gaussian base parameters."""
+
+    def __init__(
+        self,
+        *args,
+        residual_output_init_std=1.0e-3,
+        residual_xyz_raw_scale=0.5,
+        residual_scale_log_scale=0.5,
+        residual_rot_raw_scale=0.5,
+        residual_opacity_logit_scale=1.0,
+        residual_rgb_logit_scale=1.0,
+        residual_head_input_norm="rmsnorm",
+        **kwargs,
+    ):
+        num_tokens = int(kwargs.get("num_tokens", 8))
+        feat_dim = int(kwargs.get("feat_dim", 128))
+        gaussians_per_token = int(kwargs.get("gaussians_per_token", 64))
+        scene_extent = float(kwargs.get("scene_extent", 1.0))
+        xy_extent = kwargs.get("xy_extent", scene_extent)
+        z_min = kwargs.get("z_min", -scene_extent)
+        z_max = kwargs.get("z_max", scene_extent)
+        scale_init = kwargs.get("scale_init", 0.05)
+        scale_init_log_jitter = kwargs.get("scale_init_log_jitter", 0.0)
+        opacity_init = kwargs.get("opacity_init")
+        head_hidden_dim = kwargs.get("head_hidden_dim", 64)
+        head_hidden_layers = kwargs.get("head_hidden_layers", 1)
+        position_init_extent_coverage = kwargs.get("position_init_extent_coverage", 0.0)
+        rotation_init = kwargs.get("rotation_init", "random")
+        rgb_init = kwargs.get("rgb_init")
+        rgb_init_min = kwargs.get("rgb_init_min", 0.01)
+        rgb_init_max = kwargs.get("rgb_init_max", 0.99)
+        super().__init__(*args, **kwargs)
+        if self.use_static_dynamic_split:
+            raise ValueError("Residual free-bank heads are not wired for static/dynamic split yet.")
+        self.gaussian_heads = ResidualFreeGaussianParameterHeads(
+            feat_dim=feat_dim,
+            num_tokens=num_tokens,
+            gaussians_per_token=gaussians_per_token,
+            xy_extent=xy_extent,
+            z_min=z_min,
+            z_max=z_max,
+            scale_init=scale_init,
+            scale_init_log_jitter=scale_init_log_jitter,
+            opacity_init=opacity_init,
+            head_hidden_dim=head_hidden_dim,
+            head_hidden_layers=head_hidden_layers,
+            residual_output_init_std=residual_output_init_std,
+            position_init_extent_coverage=position_init_extent_coverage,
+            rotation_init=rotation_init,
+            rgb_init=rgb_init,
+            rgb_init_min=rgb_init_min,
+            rgb_init_max=rgb_init_max,
+            residual_xyz_raw_scale=residual_xyz_raw_scale,
+            residual_scale_log_scale=residual_scale_log_scale,
+            residual_rot_raw_scale=residual_rot_raw_scale,
+            residual_opacity_logit_scale=residual_opacity_logit_scale,
+            residual_rgb_logit_scale=residual_rgb_logit_scale,
+            residual_head_input_norm=residual_head_input_norm,
+        )
+
+
+class DynamicVideoTokenGSKnownCamera(nn.Module):
+    """Video-token Gaussian decoder that renders with supplied cameras.
+
+    This is the no-implicit-camera control for DynamicVideoTokenGSImplicitCamera:
+    it keeps the same video encoder, query decoder, Gaussian heads, and temporal
+    conditioning, but removes the global/path camera tokens and camera heads.
+    """
+
+    def __init__(
+        self,
+        clip_length=4,
+        image_size=384,
+        num_tokens=8,
+        feat_dim=128,
+        bottleneck_dim=256,
+        num_heads=8,
+        mlp_ratio=4.0,
+        gaussians_per_token=64,
+        scene_extent=1.0,
+        xy_extent=None,
+        z_min=None,
+        z_max=None,
+        scale_init=0.05,
+        scale_init_log_jitter=0.0,
+        opacity_init=None,
+        query_token_init_std=0.02,
+        head_hidden_dim=64,
+        head_hidden_layers=1,
+        head_output_init_std=None,
+        position_init_extent_coverage=0.0,
+        rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
+        video_encoder_backend="local",
+        tubelet_size=(4, 16, 16),
+        encoder_self_attn_layers=1,
+        bottleneck_self_attn_layers=4,
+        vjepa_model_id=None,
+        vjepa_feature_dim=None,
+        vjepa_freeze=True,
+        vjepa_attn_implementation="sdpa",
+        vjepa_dtype="auto",
+        vjepa_pretrained=True,
+        vjepa_crop_size=None,
+        vjepa_checkpoint_url=None,
+        video_feature_layers=None,
+        video_feature_channels=None,
+        cross_attn_layers=1,
+        **_unused_camera_kwargs,
+    ):
+        super().__init__()
+        self.clip_length = clip_length
+        self.image_size = image_size
+        self.num_tokens = int(num_tokens)
+        self.total_tokens = self.num_tokens
+        self.feat_dim = feat_dim
+        self.gaussians_per_token = gaussians_per_token
+        self.video_encoder_backend = str(video_encoder_backend).lower()
+        self.video_encoder = build_video_encoder(
+            self.video_encoder_backend,
+            clip_length=clip_length,
+            image_size=image_size,
+            output_dim=feat_dim,
+            bottleneck_dim=bottleneck_dim,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            tubelet_size=tubelet_size,
+            encoder_self_attn_layers=encoder_self_attn_layers,
+            bottleneck_self_attn_layers=bottleneck_self_attn_layers,
+            vjepa_model_id=vjepa_model_id,
+            vjepa_feature_dim=vjepa_feature_dim,
+            vjepa_freeze=vjepa_freeze,
+            vjepa_attn_implementation=vjepa_attn_implementation,
+            vjepa_dtype=vjepa_dtype,
+            vjepa_pretrained=vjepa_pretrained,
+            vjepa_crop_size=vjepa_crop_size,
+            vjepa_checkpoint_url=vjepa_checkpoint_url,
+            video_feature_layers=video_feature_layers,
+            video_feature_channels=video_feature_channels,
+        )
+        self.query_tokens = LearnedQueryTokenBank(
+            total_tokens=self.total_tokens,
+            dim=feat_dim,
+            init_std=query_token_init_std,
+        )
+        self.query_decoder_blocks = nn.ModuleList(
+            [
+                QueryCrossAttentionBlock(dim=feat_dim, num_heads=num_heads, mlp_ratio=mlp_ratio)
+                for _ in range(cross_attn_layers)
+            ]
+        )
+        if xy_extent is None:
+            xy_extent = scene_extent
+        if z_min is None:
+            z_min = -scene_extent
+        if z_max is None:
+            z_max = scene_extent
+        self.gaussian_heads = GaussianParameterHeads(
+            feat_dim=feat_dim,
+            gaussians_per_token=gaussians_per_token,
+            xy_extent=xy_extent,
+            z_min=z_min,
+            z_max=z_max,
+            scale_init=scale_init,
+            scale_init_log_jitter=scale_init_log_jitter,
+            opacity_init=opacity_init,
+            head_hidden_dim=head_hidden_dim,
+            head_hidden_layers=head_hidden_layers,
+            head_output_init_std=head_output_init_std,
+            position_init_extent_coverage=position_init_extent_coverage,
+            rotation_init=rotation_init,
+            rgb_init=rgb_init,
+            rgb_init_min=rgb_init_min,
+            rgb_init_max=rgb_init_max,
+        )
+        self.time_proj = build_time_projector(1, feat_dim)
+        self.head_time_proj = build_time_projector(1, feat_dim)
+
+    def refine_queries(self, video_tokens, decode_time=None):
+        batch_size = video_tokens.shape[0]
+        queries = self.query_tokens(batch_size)
+        if decode_time is not None:
+            decode_time = decode_time.to(device=video_tokens.device, dtype=video_tokens.dtype).reshape(batch_size, 1)
+            queries = queries + self.time_proj(decode_time).unsqueeze(1)
+        for block in self.query_decoder_blocks:
+            queries = block(queries, video_tokens)
+        return queries
+
+    def _decode_single_time(self, refined_queries, camera, decode_time=None):
+        gs_tokens = refined_queries
+        if decode_time is not None:
+            decode_time = decode_time.to(device=refined_queries.device, dtype=refined_queries.dtype).reshape(
+                refined_queries.shape[0], 1
+            )
+            gs_tokens = gs_tokens + self.head_time_proj(decode_time).unsqueeze(1)
+
+        xyz, scales, quats, opacities, rgbs = self.gaussian_heads(gs_tokens)
+        return (
+            xyz.squeeze(0),
+            scales.squeeze(0),
+            quats.squeeze(0),
+            opacities.squeeze(0),
+            rgbs.squeeze(0),
+            camera,
+        )
+
+    @staticmethod
+    def _merge_decoded_frames(decoded):
+        return GaussianSequence(
+            xyz=torch.stack([item[0] for item in decoded], dim=0),
+            scales=torch.stack([item[1] for item in decoded], dim=0),
+            quats=torch.stack([item[2] for item in decoded], dim=0),
+            opacities=torch.stack([item[3] for item in decoded], dim=0),
+            rgbs=torch.stack([item[4] for item in decoded], dim=0),
+            cameras=tuple(item[5] for item in decoded),
+            camera_state=None,
+        )
+
+    def forward(self, video, decode_times, cameras, input_times=None):
+        if cameras is None:
+            raise ValueError("Known-camera video decode requires cameras.")
+        if decode_times.ndim != 2:
+            raise ValueError(f"Expected decode_times of shape (B, T), got {tuple(decode_times.shape)}")
+        if video.ndim != 5:
+            raise ValueError(f"Expected video of shape (B, T, C, H, W), got {tuple(video.shape)}")
+        if video.shape[0] != 1:
+            raise ValueError("DynamicVideoTokenGSKnownCamera currently expects clip batch size 1.")
+        if video.shape[1] != decode_times.shape[1]:
+            raise ValueError("decode_times must have one value per frame in the clip.")
+        if len(cameras) != decode_times.shape[1]:
+            raise ValueError(f"Expected {decode_times.shape[1]} cameras, got {len(cameras)}.")
+        if input_times is None:
+            input_times = decode_times
+        if input_times.ndim != 2:
+            raise ValueError(f"Expected input_times of shape (B, T), got {tuple(input_times.shape)}")
+        if video.shape[1] != input_times.shape[1]:
+            raise ValueError("input_times must have one value per input frame in the clip.")
+
+        video_tokens = self.video_encoder(video, frame_times=input_times)
+        if video_tokens.shape[0] != 1:
+            raise ValueError("DynamicVideoTokenGSKnownCamera currently expects feature batch size 1.")
+        decoded = [
+            self._decode_single_time(
+                self.refine_queries(video_tokens, decode_times[:, index]),
+                cameras[index],
+                decode_times[:, index],
             )
             for index in range(decode_times.shape[1])
         ]

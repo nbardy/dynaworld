@@ -23,6 +23,7 @@ FEATURE_OPTION_DEFAULTS = {
     "cache_version": 1,
     "force_rebake": False,
     "keep_in_memory": True,
+    "release_extractor_after_prebake": True,
     "save_dtype": "float16",
     "torch_dtype": "float32",
     "prompt": "",
@@ -117,6 +118,12 @@ class PrecomputedFeatureImplicitTrainer(VideoTokenImplicitTrainer):
             f"layers={self.model_cfg['video_feature_layers']}, "
             f"channels={self.model_cfg['video_feature_channels']}"
         )
+
+        if self.cfg["features"]["release_extractor_after_prebake"]:
+            if self.feature_cache.force_rebake:
+                print("[features] disabling force_rebake after successful prebake before releasing extractor")
+                self.feature_cache.force_rebake = False
+            self.feature_cache.release_extractor()
 
     def model_input_for_clip(
         self,

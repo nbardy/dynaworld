@@ -62,6 +62,9 @@ MODEL_OPTION_DEFAULTS = {
     "head_output_init_std": None,
     "position_init_extent_coverage": 0.0,
     "rotation_init": "random",
+    "rgb_init": None,
+    "rgb_init_min": 0.01,
+    "rgb_init_max": 0.99,
 }
 MODEL_CONSTRUCTOR_KEYS = (
     "xy_extent",
@@ -76,6 +79,9 @@ MODEL_CONSTRUCTOR_KEYS = (
     "head_output_init_std",
     "position_init_extent_coverage",
     "rotation_init",
+    "rgb_init",
+    "rgb_init_min",
+    "rgb_init_max",
 )
 GAUSSIAN_SUMMARY_KEYS = (
     "xy_extent",
@@ -87,6 +93,9 @@ GAUSSIAN_SUMMARY_KEYS = (
     "token_init_std",
     "head_output_init_std",
     "position_init_extent_coverage",
+    "rgb_init",
+    "rgb_init_min",
+    "rgb_init_max",
 )
 RENDER_SUMMARY_KEYS = (
     "renderer",

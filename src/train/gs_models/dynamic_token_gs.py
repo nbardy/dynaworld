@@ -24,6 +24,9 @@ class DynamicTokenGS(TokenGSBackbone):
         head_output_init_std=None,
         position_init_extent_coverage=0.0,
         rotation_init="random",
+        rgb_init=None,
+        rgb_init_min=0.01,
+        rgb_init_max=0.99,
     ):
         super().__init__(
             num_tokens=num_tokens,
@@ -41,6 +44,9 @@ class DynamicTokenGS(TokenGSBackbone):
             head_output_init_std=head_output_init_std,
             position_init_extent_coverage=position_init_extent_coverage,
             rotation_init=rotation_init,
+            rgb_init=rgb_init,
+            rgb_init_min=rgb_init_min,
+            rgb_init_max=rgb_init_max,
         )
         self.time_proj = nn.Sequential(
             nn.Linear(1, feat_dim),

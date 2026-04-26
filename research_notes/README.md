@@ -54,8 +54,10 @@ Layered, strategic → tactical:
 - **`training_contract_v1.md`** — operational contract for patched framing 3: `D_var` sampler, model signatures, baseline losses, diagnostics, escape hatches, support assumptions, deployment/export contract, and failure tripwires.
 - **`three_architectures_for_novel_view_synthesis.md`** — concrete architecture candidates (A/B/C), diagrams, head-to-head debate, pioneer pick. Cross-references the framings.
 - **`blur_dof_motion_paper_review.md`** — finite-aperture / depth-of-field and motion-blur paper review for NeRF and 3DGS, with the renderer-state contract for focus distance, aperture / CoC strength, exposure trajectory, and dynamic-object blur.
+- **`video_token_overfit_next_plan.md`** — current tiny dog-clip video-token overfit plan: RGB/init diagnostics, static/dynamic split evidence, V-JEPA feature baseline, missing foreground/motion metrics, and the next experiment queue.
 - **`blur_dof_motion_papers/paper_index.md`** — local 55-paper corpus index with downloaded PDFs, extracted text, priorities, tags, and search commands.
 - **`potential_directions_index.md`** — routing map for all research threads. Status labels (Now / Probe / Background / Speculative) per direction. Start here when scoping a new experiment.
+- **`synthetic_3d_render_data/`** — synthetic 3D rendering as a *complement* to the real `video <=> video` track, not a substitute. Pipelines we already own (Nova v1/v2/v3 Blender/Unity), tiered scene-source catalog, framework picks (BlenderProc over Kubric), human-motion datasets (BEDLAM etc.), and the four legitimate uses inside DynaWorld's contract (probes, camera-leakage tests, pretraining priors, Nova app features). Read its `README.md` for orientation.
 - **`../agent_notes/key_learnings.md`** — dense bank of surprising technical lessons. Tactical, not strategic.
 - **`../agent_notes/loose_notes/`** — raw session chronology. Go here when you need the why behind a decision, not just the outcome.
 
