@@ -10,11 +10,8 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from train import (
+from common import (
     DYNAWORLD_ROOT,
-    RenderConfig,
-    initialize_material_points_from_first_frame,
-    load_gauge_video_bundle,
     prefix_metrics,
     resolve_device,
     robust_l1,
@@ -26,6 +23,7 @@ from train import (
 )
 from camera import CameraSpec
 from config_utils import apply_defaults, load_config_file, resolved_config, serialize_config_value
+from data import initialize_material_points_from_first_frame, load_gauge_video_bundle
 from rendering import render_gaussian_frame
 from runtime_types import GaussianFrame
 
