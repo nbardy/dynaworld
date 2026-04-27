@@ -153,6 +153,37 @@ line-integral path trains and evaluates through the held-out-camera lane; it
 also says peak density starts under-covered and mass-normalized line incidence
 is the only exact candidate close enough to benchmark seriously.
 
+Run the full 80-step incidence matrix with wall-clock logging:
+
+```bash
+uv run python research_experiments/gauge_fields/run_deepview_incidence_matrix.py \
+  --steps 80 \
+  --device mps \
+  --no-wandb \
+  --output-root outputs/gauge_fields/multicam_deepview_incidence_matrix_80step
+
+uv run python research_experiments/gauge_fields/summarize_runs.py \
+  'outputs/gauge_fields/multicam_deepview_incidence_matrix_80step/*' \
+  --sort-by heldout_eval_psnr \
+  --out-md outputs/gauge_fields/multicam_deepview_incidence_matrix_80step/summary.md \
+  --out-json outputs/gauge_fields/multicam_deepview_incidence_matrix_80step/summary.json
+```
+
+Current 80-step held-out-camera result:
+
+| representation | incidence | eval_psnr | heldout_eval_psnr | wall_clock_min |
+| --- | --- | ---: | ---: | ---: |
+| `rank_adaptive_metric` | `ray_gaussian_line_peak` | 21.6338 | 11.5705 | 16.8116 |
+| `rank_adaptive_metric` | `ray_gaussian_line_mass` | 24.3293 | 9.9005 | 26.9624 |
+| `free_dynamic_3dgs` | n/a | 20.5017 | 9.7392 | 2.1135 |
+| `screen_disk` | `projected_conic` | 24.6535 | 9.6479 | 1.3610 |
+| `rank_adaptive_metric` | `projected_conic` | 24.2230 | 9.5814 | 3.1677 |
+
+Do not overclaim the `ray_gaussian_line_peak` row yet: it has weak source fit,
+very large held-out projection coverage, and lower X-map occupancy. The cleaner
+exact-incidence candidate is still `ray_gaussian_line_mass`; the implementation
+problem is runtime/culling.
+
 ## Current Baseline
 
 The current stable baseline candidate is the 2048-element, 16-frame,

@@ -20,6 +20,8 @@ SUMMARY_COLUMNS = [
     "basis",
     "radius",
     "alpha_logit",
+    "wall_clock_sec",
+    "wall_clock_min",
     "eval_psnr",
     "eval_l1",
     "heldout_eval_psnr",
@@ -76,6 +78,7 @@ def read_run(run_dir: Path) -> dict[str, Any]:
     metrics = load_json(run_dir / "metrics.json")
     config = load_json(run_dir / "config.json") if (run_dir / "config.json").exists() else {}
     logs = load_json(run_dir / "logs.json") if (run_dir / "logs.json").exists() else []
+    wall_clock = load_json(run_dir / "wall_clock.json") if (run_dir / "wall_clock.json").exists() else {}
     probes = {}
     probe_path = run_dir / "probes" / "probe_summary.json"
     if probe_path.exists():
@@ -94,6 +97,8 @@ def read_run(run_dir: Path) -> dict[str, Any]:
         "basis": nested_get(config, "model.num_basis"),
         "radius": nested_get(config, "model.init_radius", nested_get(config, "model.init_scale")),
         "alpha_logit": nested_get(config, "model.init_alpha_logit"),
+        "wall_clock_sec": wall_clock.get("elapsed_sec"),
+        "wall_clock_min": wall_clock.get("elapsed_min"),
         "last_rgb_l1": last_log.get("rgb_l1"),
     }
     row.update(metrics)
@@ -150,11 +155,11 @@ def main() -> None:
     print(table)
 
     if args.out_md:
-        out_md = resolve_path(args.out_md)
+        out_md = resolve_dynaworld_path(args.out_md)
         out_md.parent.mkdir(parents=True, exist_ok=True)
         out_md.write_text(table)
     if args.out_json:
-        out_json = resolve_path(args.out_json)
+        out_json = resolve_dynaworld_path(args.out_json)
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
 
