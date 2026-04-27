@@ -7,10 +7,12 @@ cd "$ROOT_DIR"
 
 CONFIG_250="src/train_configs/local_mac_ablate_time_static_dynamic_96_32_crossattn4_precomputed_vjepa2_1_vitb_384_rgb_uniform_strong_video_implicit_128_fast_mac_8192splats.jsonc"
 CONFIG_1000="src/train_configs/local_mac_ablate_time_static_dynamic_96_32_crossattn4_precomputed_vjepa2_1_vitb_384_rgb_uniform_strong_video_implicit_128_fast_mac_8192splats_1000step.jsonc"
+CONFIG_CAMERA_CLAMP_1000="src/train_configs/local_mac_ablate_time_static_dynamic_96_32_crossattn4_precomputed_vjepa2_1_vitb_384_rgb_uniform_strong_camera_clamp_video_implicit_128_fast_mac_8192splats_1000step.jsonc"
 LOCAL_CONFIG_250="src/train_configs/local_mac_ablate_time_static_dynamic_96_32_crossattn4_rgb_uniform_strong_video_implicit_128_fast_mac_8192splats.jsonc"
 LOCAL_CONFIG_1000="src/train_configs/local_mac_ablate_time_static_dynamic_96_32_crossattn4_rgb_uniform_strong_video_implicit_128_fast_mac_8192splats_1000step.jsonc"
 UNCONDITIONED_CONFIG_250="src/train_configs/local_mac_ablate_time_static_dynamic_96_32_unconditioned_strong_video_implicit_128_fast_mac_8192splats.jsonc"
 UNCONDITIONED_CONFIG_1000="src/train_configs/local_mac_ablate_time_static_dynamic_96_32_unconditioned_strong_video_implicit_128_fast_mac_8192splats_1000step.jsonc"
+UNCONDITIONED_CAMERA_CLAMP_CONFIG_1000="src/train_configs/local_mac_ablate_time_static_dynamic_96_32_unconditioned_strong_camera_clamp_video_implicit_128_fast_mac_8192splats_1000step.jsonc"
 
 run_video_token() {
   local config="$1"
@@ -42,6 +44,16 @@ case "$MODE" in
   unconditioned-1000|tokens-1000)
     run_video_token "$UNCONDITIONED_CONFIG_1000"
     ;;
+  unconditioned-camera-clamp|unconditioned-clamp|tokens-camera-clamp|tokens-clamp)
+    run_video_token "$UNCONDITIONED_CAMERA_CLAMP_CONFIG_1000"
+    ;;
+  vjepa-camera-clamp|vjepa-clamp)
+    run_precomputed "$CONFIG_CAMERA_CLAMP_1000"
+    ;;
+  camera-clamp|clamp-control)
+    run_video_token "$UNCONDITIONED_CAMERA_CLAMP_CONFIG_1000"
+    run_precomputed "$CONFIG_CAMERA_CLAMP_1000"
+    ;;
   matrix-250)
     run_video_token "$UNCONDITIONED_CONFIG_250"
     run_video_token "$LOCAL_CONFIG_250"
@@ -59,7 +71,7 @@ case "$MODE" in
     run_precomputed "$CONFIG_1000"
     ;;
   *)
-    echo "Usage: $0 [250|1000|local|local-1000|unconditioned|unconditioned-1000|matrix-250|matrix-1000|all]" >&2
+    echo "Usage: $0 [250|1000|local|local-1000|unconditioned|unconditioned-1000|camera-clamp|unconditioned-camera-clamp|vjepa-camera-clamp|matrix-250|matrix-1000|all]" >&2
     exit 1
     ;;
 esac
