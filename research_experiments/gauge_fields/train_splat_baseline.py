@@ -39,6 +39,9 @@ DATA_DEFAULTS = {
     "multicam_split": "val",
     "multicam_sample_id": None,
     "multicam_sample_index": 0,
+    "multicam_train_cameras": None,
+    "multicam_heldout_camera": None,
+    "multicam_anchor_camera": None,
 }
 
 MODEL_DEFAULTS = {
@@ -120,6 +123,22 @@ def camera_from_K_w2c(K: torch.Tensor, w2c: torch.Tensor) -> CameraSpec:
         camera_to_world=c2w,
         lens_model="pinhole",
     )
+
+
+def select_K_for_view_time(K: torch.Tensor, *, view: int, t: int, view_count: int) -> torch.Tensor:
+    if K.ndim == 4:
+        return K[view, t]
+    if K.ndim == 3:
+        if K.shape[0] == view_count:
+            return K[view]
+        return K[t]
+    return K
+
+
+def select_w2c_for_view_time(w2c: torch.Tensor, *, view: int, t: int) -> torch.Tensor:
+    if w2c.ndim == 4:
+        return w2c[view, t]
+    return w2c[t]
 
 
 def camera_list_from_K_w2c(K: torch.Tensor, w2c: torch.Tensor) -> list[CameraSpec]:
@@ -294,6 +313,10 @@ def main() -> None:
     )
     video = bundle.video
     T, H, W, _ = video.shape
+    train_video = bundle.train_videos if bundle.train_videos is not None else video.unsqueeze(0)
+    train_K = bundle.train_K if bundle.train_K is not None else bundle.K
+    train_w2c = bundle.train_w2c if bundle.train_w2c is not None else bundle.w2c
+    view_count = int(train_video.shape[0])
     init_xyz, init_rgb = initialize_material_points_from_first_frame(
         video=video,
         K=bundle.K,
@@ -340,25 +363,36 @@ def main() -> None:
         f"config={config_path} video={bundle.source_path} frames={T}/{cfg['data']['max_frames'] or 'all'} size={H}x{W} "
         f"splats={cfg['model']['num_splats']} mode={cfg['model']['splat_mode']} steps={steps} device={device}"
     )
+    if bundle.train_camera_names:
+        print(
+            "Train cameras "
+            f"anchor={bundle.metadata.get('anchor_camera') if bundle.metadata else None} "
+            f"views={','.join(bundle.train_camera_names)}"
+        )
     if bundle.heldout_video is not None:
         print(
             "Held-out camera eval "
             f"sample={bundle.metadata.get('sample_id') if bundle.metadata else None} "
             f"dataset={bundle.metadata.get('dataset') if bundle.metadata else None} "
             f"source={bundle.metadata.get('source_camera') if bundle.metadata else None} "
-            f"target={bundle.metadata.get('target_camera') if bundle.metadata else None} "
+            f"target={bundle.heldout_camera_name or (bundle.metadata.get('target_camera') if bundle.metadata else None)} "
             f"pose_source={bundle.heldout_pose_source}"
         )
 
     for step in range(steps):
         opt.zero_grad(set_to_none=True)
         frames = torch.randint(0, T, (batch_size,), device=device)
+        views = torch.randint(0, view_count, (batch_size,), device=device)
         total = video.new_zeros(())
         rgb_meter = 0.0
-        for t in frames.tolist():
+        for v, t in zip(views.tolist(), frames.tolist()):
+            camera = camera_from_K_w2c(
+                select_K_for_view_time(train_K, view=int(v), t=int(t), view_count=view_count),
+                select_w2c_for_view_time(train_w2c, view=int(v), t=int(t)),
+            )
             image = render_gaussian_frame(
                 model.frame(int(t)),
-                source_cameras[int(t)],
+                camera,
                 height=H,
                 width=W,
                 mode=render_cfg.renderer,
@@ -368,7 +402,7 @@ def main() -> None:
                 near_plane=render_cfg.near_plane,
                 camera_projection=render_cfg.camera_projection,
             ).permute(1, 2, 0)
-            rgb_l = robust_l1(image - video[int(t)])
+            rgb_l = robust_l1(image - train_video[int(v), int(t)])
             rgb_meter += float(rgb_l.detach())
             total = total + float(cfg["losses"]["rgb_weight"]) * rgb_l
         total = total / float(batch_size)
@@ -394,6 +428,8 @@ def main() -> None:
         **video_metrics(rendered["rgb"], video),
         **model.metrics(),
     }
+    if bundle.train_camera_names:
+        metrics["train_camera_count"] = float(len(bundle.train_camera_names))
     heldout_rendered = None
     if bundle.heldout_video is not None and heldout_cameras is not None:
         heldout_rendered = render_splat_sequence(model, heldout_cameras, render_cfg)
@@ -419,6 +455,10 @@ def main() -> None:
             "w2c": bundle.w2c.detach().cpu(),
             "heldout_K": bundle.heldout_K.detach().cpu() if bundle.heldout_K is not None else None,
             "heldout_w2c": bundle.heldout_w2c.detach().cpu() if bundle.heldout_w2c is not None else None,
+            "train_K": train_K.detach().cpu() if isinstance(train_K, torch.Tensor) else None,
+            "train_w2c": train_w2c.detach().cpu() if isinstance(train_w2c, torch.Tensor) else None,
+            "train_camera_names": bundle.train_camera_names,
+            "heldout_camera_name": bundle.heldout_camera_name,
             "heldout_pose_source": bundle.heldout_pose_source,
             "metrics": metrics,
         },

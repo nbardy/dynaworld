@@ -15,8 +15,19 @@ BASE_CONFIG = (
     "local_mac_gauge_fields_multicam_deepview_3cam_train2_test1_rank_adaptive_metric_128_16f_2048el.jsonc"
 )
 
+SPLAT_BASE_CONFIG = (
+    "src/train_configs/"
+    "local_mac_splat_baseline_multicam_deepview_3cam_train2_test1_free_dynamic_3dgs_128_16f_2048splats.jsonc"
+)
+
 
 RUNS = [
+    {
+        "name": "free_dynamic_3dgs",
+        "script": "research_experiments/gauge_fields/train_splat_baseline.py",
+        "config": SPLAT_BASE_CONFIG,
+        "extra_args": [],
+    },
     {
         "name": "screen_disk_projected_conic",
         "script": "research_experiments/gauge_fields/train.py",
