@@ -2,6 +2,7 @@
   // Longer-run version of the strongest tiny static/dynamic + V-JEPA baseline.
   // Uses the same feature cache key as the 250-step run, so it should load the
   // prebaked V-JEPA tensor from disk and train from cached features.
+  "export": true,
   "arch": "precomputed_feature_implicit_camera",
   "data": {
     "sequence_dir": "test_data",

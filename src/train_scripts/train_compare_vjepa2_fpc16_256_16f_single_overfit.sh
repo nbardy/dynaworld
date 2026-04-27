@@ -7,6 +7,8 @@ cd "$ROOT_DIR"
 
 LOCAL_CONFIG="src/train_configs/local_mac_compare_local_video_encoder_16f_implicit_camera_128_fast_mac_8192splats.jsonc"
 VJEPA_CONFIG="src/train_configs/local_mac_compare_vjepa2_vitl_fpc16_256_frozen_16f_implicit_camera_128_fast_mac_8192splats.jsonc"
+LOCAL_STRONG_CONFIG="src/train_configs/local_mac_compare_local_video_encoder_strong_init_16f_implicit_camera_128_fast_mac_8192splats.jsonc"
+VJEPA_STRONG_CONFIG="src/train_configs/local_mac_compare_vjepa2_vitl_fpc16_256_frozen_strong_init_16f_implicit_camera_128_fast_mac_8192splats.jsonc"
 KNOWN_CAMERA_CONFIG="src/train_configs/local_mac_compare_local_video_encoder_16f_known_camera_128_fast_mac_8192splats.jsonc"
 FREE_SPLATS_CONFIG="src/train_configs/local_mac_compare_free_splats_16f_implicit_camera_128_fast_mac_8192splats.jsonc"
 FREE_LINEAR_TIME_SPLATS_CONFIG="src/train_configs/local_mac_compare_free_linear_time_splats_16f_implicit_camera_128_fast_mac_8192splats.jsonc"
@@ -22,6 +24,18 @@ case "$MODE" in
     ;;
   vjepa)
     CONFIGS=("$VJEPA_CONFIG")
+    ;;
+  local-strong|strong-local)
+    CONFIGS=("$LOCAL_STRONG_CONFIG")
+    ;;
+  vjepa-strong|strong-vjepa)
+    CONFIGS=("$VJEPA_STRONG_CONFIG")
+    ;;
+  strong|strong-init|strong-both)
+    CONFIGS=("$LOCAL_STRONG_CONFIG" "$VJEPA_STRONG_CONFIG")
+    ;;
+  strong-matrix|matrix-strong)
+    CONFIGS=("$LOCAL_STRONG_CONFIG" "$VJEPA_STRONG_CONFIG" "$UNCONDITIONED_TOKENS_CONFIG")
     ;;
   known|known-camera|camera)
     CONFIGS=("$KNOWN_CAMERA_CONFIG")
@@ -82,7 +96,7 @@ case "$MODE" in
     )
     ;;
   *)
-    echo "Usage: $0 [local|vjepa|known|free|free-linear|tokens|residual-local|residual-vjepa|residual-tokens|residual|matrix|controls|both|all]" >&2
+    echo "Usage: $0 [local|vjepa|local-strong|vjepa-strong|strong|strong-matrix|known|free|free-linear|tokens|residual-local|residual-vjepa|residual-tokens|residual|matrix|controls|both|all]" >&2
     exit 1
     ;;
 esac

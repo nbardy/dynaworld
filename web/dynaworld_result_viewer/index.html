@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Dynaworld Browser Viewer</title>
+		<link rel="stylesheet" href="./styles.css" />
+	</head>
+	<body>
+		<div class="app-shell">
+			<aside class="sidebar">
+				<h1>Dynaworld Browser Viewer</h1>
+				<p class="lead">
+					Load an exported split-token bundle, bake dynamic splats in-browser,
+					and render the baked frame with WebGPU.
+				</p>
+				<label class="field">
+					<span>Bundle Directory</span>
+					<input id="bundleInput" type="file" webkitdirectory multiple />
+				</label>
+				<label class="field">
+					<span>Decode Time</span>
+					<input id="timeSlider" type="range" min="0" max="1" step="0.001" value="0" />
+					<strong id="timeValue">0.000</strong>
+				</label>
+				<label class="toggle">
+					<input id="autoplayToggle" type="checkbox" />
+					<span>Autoplay</span>
+				</label>
+				<div class="panel">
+					<h2>Status</h2>
+					<p id="status">Select an exported Dynaworld bundle directory.</p>
+				</div>
+				<div class="panel">
+					<h2>Bundle</h2>
+					<p id="details">No bundle loaded.</p>
+				</div>
+				<div class="panel">
+					<h2>Notes</h2>
+					<p id="notes">The current viewer consumes split static gaussians plus the decoded dynamic bank.</p>
+				</div>
+				<div class="panel">
+					<h2>Controls</h2>
+					<p>Drag to orbit. Scroll to zoom.</p>
+					<p>Serve this folder from localhost so WebGPU is available.</p>
+				</div>
+			</aside>
+			<main class="canvas-wrap">
+				<canvas id="renderCanvas"></canvas>
+			</main>
+		</div>
+		<script type="module" src="./app.js"></script>
+	</body>
+</html>

@@ -145,3 +145,52 @@ residual-vjepa
 ```
 
 If residual-local beats local visually and in SSIM/sharpness, the repeated-bias Gaussian head was a real bottleneck. If residual-tokens already matches residual-local, the single-video task is still too easy to solve from time alone and needs 256px or held-out/multi-clip eval before making conditioning claims.
+
+## Matrix Run Results: 2026-04-27
+
+Command:
+
+```bash
+./src/train_scripts/train_compare_vjepa2_fpc16_256_16f_single_overfit.sh matrix
+```
+
+All eight cells completed without process failures. This was still the 128px/16f/single-overfit contract, so it is a systems/architecture check and a weak conditioning-quality verdict.
+
+| Variant | Run | Eval/Loss | Eval/L1 | Eval/SSIM | Eval/PSNR | Runtime |
+|---|---|---:|---:|---:|---:|---:|
+| local video encoder | `leunxckm` | 0.1485 | 0.0975 | 0.2946 | 16.56 | 0:59 |
+| V-JEPA fpc16/256 | `vph578vo` | 0.1601 | 0.1088 | 0.2690 | 16.19 | 11:32 |
+| unconditioned tokens | `fja3e512` | 0.1289 | 0.0863 | 0.4009 | 17.41 | 1:12 |
+| free linear-time splats | `9pzjrm9a` | 0.2419 | 0.2224 | 0.3603 | 11.43 | 1:03 |
+| free splats | `0cwcdva7` | 0.2650 | 0.2888 | 0.6611 | 9.62 | 0:57 |
+| unconditioned residual free-bank | `a3d5yojf` | 0.1469 | 0.1018 | 0.3454 | 16.48 | 1:51 |
+| residual free-bank local | `2a0vmenl` | 0.1590 | 0.1125 | 0.3106 | 15.85 | 2:30 |
+| residual free-bank V-JEPA | `1shque5e` | 0.1497 | 0.1045 | 0.3397 | 16.38 | 15:00 |
+
+W&B links:
+
+- local: https://wandb.ai/nbardy/dynaworld/runs/leunxckm
+- V-JEPA: https://wandb.ai/nbardy/dynaworld/runs/vph578vo
+- unconditioned tokens: https://wandb.ai/nbardy/dynaworld/runs/fja3e512
+- free linear-time splats: https://wandb.ai/nbardy/dynaworld/runs/9pzjrm9a
+- free splats: https://wandb.ai/nbardy/dynaworld/runs/0cwcdva7
+- unconditioned residual free-bank: https://wandb.ai/nbardy/dynaworld/runs/a3d5yojf
+- residual local: https://wandb.ai/nbardy/dynaworld/runs/2a0vmenl
+- residual V-JEPA: https://wandb.ai/nbardy/dynaworld/runs/1shque5e
+
+Interpretation:
+
+- The winner by full-video reconstruction metrics is unconditioned tokens, not local conditioning and not V-JEPA. This reinforces that the current single-video 16f/128px task can be solved from learned time/query structure alone.
+- V-JEPA did not help this setup. It was slower and worse than local/unconditioned in this 250-step short run, so V-JEPA should not be judged again until the comparison is 256px source/load/render/loss and uses a harder held-out or multi-clip contract.
+- Free splats still show the metric/visual split: very high SSIM but bad L1/PSNR. This supports the user's visual observation that edge/shape quality and full-frame photometric loss are not aligned here.
+- Linear-time free splats improved PSNR/L1 over static free splats but did not close the gap to token decoder models. Time-parameterized free splats are not a drop-in replacement for the decoder in this contract.
+- Residual free-bank heads did not beat the simpler unconditioned token decoder. They may still be useful as a head-design ablation, but this matrix does not justify making them the default.
+- The residual-V-JEPA run slowed badly near the end on MPS, likely memory/attention pressure plus media/logging overhead. Its quality did not justify that cost here.
+
+Next implication:
+
+The next fair run should not be more 128px single-clip cells. Move the main comparison to 256px end-to-end with step-0 media, foreground/high-pass/motion metrics, and either held-out windows or scene-distinct clips. Keep unconditioned tokens as a required baseline in every future V-JEPA/local comparison.
+
+Static/dynamic caveat:
+
+This matrix did not include the known strongest static/dynamic recipe. See `agent_notes/best_tweaks.md`: the 96/32 static/dynamic split plus precomputed V-JEPA 2.1 ViT-B/384 tokens and 4 cross-attention layers reached `Eval/Loss 0.0881`, `SSIM 0.6109` at 250 steps, and the interrupted ~525-step run reached `Eval/Loss 0.0547`, `SSIM 0.7836`. That means the recent matrix only says "plain V-JEPA and residual-free-bank heads are weak here"; it does not falsify the static/dynamic + V-JEPA recipe.

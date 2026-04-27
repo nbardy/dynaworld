@@ -1,0 +1,125 @@
+:root {
+	--bg: #0a0f16;
+	--panel: rgba(16, 25, 38, 0.92);
+	--panel-border: rgba(150, 182, 214, 0.18);
+	--text: #edf4ff;
+	--muted: #a9bdd2;
+	--accent: #8bd3ff;
+	--accent-2: #f3c969;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+	background:
+		radial-gradient(circle at top left, rgba(70, 120, 170, 0.35), transparent 32%),
+		radial-gradient(circle at bottom right, rgba(218, 175, 91, 0.22), transparent 28%),
+		linear-gradient(160deg, #09111a, #0c1520 42%, #10141d);
+	color: var(--text);
+	font-family:
+		"Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+}
+
+body {
+	min-height: 100vh;
+}
+
+.app-shell {
+	display: grid;
+	grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+	height: 100vh;
+}
+
+.sidebar {
+	padding: 22px;
+	background: linear-gradient(180deg, rgba(8, 14, 20, 0.92), rgba(12, 17, 26, 0.88));
+	border-right: 1px solid var(--panel-border);
+	overflow: auto;
+}
+
+.sidebar h1,
+.panel h2 {
+	margin: 0 0 10px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.lead,
+.panel p {
+	margin: 0;
+	color: var(--muted);
+	line-height: 1.45;
+}
+
+.field,
+.toggle,
+.panel {
+	display: block;
+	margin-top: 18px;
+	padding: 14px 16px;
+	border: 1px solid var(--panel-border);
+	border-radius: 16px;
+	background: var(--panel);
+	backdrop-filter: blur(16px);
+}
+
+.field span,
+.toggle span {
+	display: block;
+	margin-bottom: 10px;
+	font-size: 0.9rem;
+	color: var(--muted);
+}
+
+.field input[type="range"] {
+	width: 100%;
+	margin: 6px 0 2px;
+}
+
+.field strong {
+	color: var(--accent-2);
+}
+
+.toggle {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.toggle input {
+	width: 18px;
+	height: 18px;
+}
+
+.canvas-wrap {
+	position: relative;
+	min-width: 0;
+}
+
+#renderCanvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+	cursor: grab;
+}
+
+#renderCanvas:active {
+	cursor: grabbing;
+}
+
+@media (max-width: 900px) {
+	.app-shell {
+		grid-template-columns: 1fr;
+		grid-template-rows: auto minmax(360px, 1fr);
+	}
+
+	.sidebar {
+		border-right: 0;
+		border-bottom: 1px solid var(--panel-border);
+	}
+}

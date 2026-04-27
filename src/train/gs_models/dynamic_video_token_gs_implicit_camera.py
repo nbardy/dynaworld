@@ -1439,6 +1439,7 @@ class UnconditionedTokenGSImplicitCamera(nn.Module):
         rgb_init=None,
         rgb_init_min=0.01,
         rgb_init_max=0.99,
+        video_encoder_backend="none",
         base_fov_degrees=60.0,
         base_radius=3.0,
         max_fov_delta_degrees=15.0,
@@ -1451,13 +1452,42 @@ class UnconditionedTokenGSImplicitCamera(nn.Module):
         base_distortion=None,
         max_rotation_degrees=5.0,
         max_translation_ratio=0.2,
+        static_tokens=None,
+        dynamic_tokens=None,
+        dynamic_time_basis_count=8,
+        dynamic_time_max_frequency=8.0,
+        dynamic_motion_extent=None,
+        dynamic_rotation_degrees=10.0,
+        dynamic_alpha_logit_extent=2.0,
+        dynamic_coeff_output_init_std=1.0e-4,
         **_unused,
     ):
         super().__init__()
         self.clip_length = int(clip_length)
         self.image_size = int(image_size)
         self.num_tokens = int(num_tokens)
+        self.static_tokens = None if static_tokens is None else int(static_tokens)
+        self.dynamic_tokens = None if dynamic_tokens is None else int(dynamic_tokens)
+        self.use_static_dynamic_split = self.static_tokens is not None or self.dynamic_tokens is not None
+        if self.use_static_dynamic_split:
+            if self.static_tokens is None or self.dynamic_tokens is None:
+                raise ValueError("static_tokens and dynamic_tokens must be provided together.")
+            if self.static_tokens < 1 or self.dynamic_tokens < 1:
+                raise ValueError(
+                    f"static_tokens and dynamic_tokens must be positive, "
+                    f"got {self.static_tokens} and {self.dynamic_tokens}."
+                )
+            if self.static_tokens + self.dynamic_tokens != self.num_tokens:
+                raise ValueError(
+                    f"static_tokens + dynamic_tokens must equal num_tokens={self.num_tokens}, "
+                    f"got {self.static_tokens} + {self.dynamic_tokens}."
+                )
         self.total_tokens = self.num_tokens + 2
+        self.feat_dim = int(feat_dim)
+        self.gaussians_per_token = int(gaussians_per_token)
+        self.dynamic_time_basis_count = int(dynamic_time_basis_count)
+        self.dynamic_time_max_frequency = float(dynamic_time_max_frequency)
+        self.video_encoder_backend = str(video_encoder_backend).lower()
         if xy_extent is None:
             xy_extent = scene_extent
         if z_min is None:
@@ -1471,24 +1501,38 @@ class UnconditionedTokenGSImplicitCamera(nn.Module):
         )
         self.time_proj = build_time_projector(1, feat_dim)
         self.head_time_proj = build_time_projector(1, feat_dim)
-        self.gaussian_heads = GaussianParameterHeads(
-            feat_dim=feat_dim,
-            gaussians_per_token=gaussians_per_token,
-            xy_extent=xy_extent,
-            z_min=z_min,
-            z_max=z_max,
-            scale_init=scale_init,
-            scale_init_log_jitter=scale_init_log_jitter,
-            opacity_init=opacity_init,
-            head_hidden_dim=head_hidden_dim,
-            head_hidden_layers=head_hidden_layers,
-            head_output_init_std=head_output_init_std,
-            position_init_extent_coverage=position_init_extent_coverage,
-            rotation_init=rotation_init,
-            rgb_init=rgb_init,
-            rgb_init_min=rgb_init_min,
-            rgb_init_max=rgb_init_max,
-        )
+        gaussian_head_kwargs = {
+            "feat_dim": feat_dim,
+            "gaussians_per_token": gaussians_per_token,
+            "xy_extent": xy_extent,
+            "z_min": z_min,
+            "z_max": z_max,
+            "scale_init": scale_init,
+            "scale_init_log_jitter": scale_init_log_jitter,
+            "opacity_init": opacity_init,
+            "head_hidden_dim": head_hidden_dim,
+            "head_hidden_layers": head_hidden_layers,
+            "head_output_init_std": head_output_init_std,
+            "position_init_extent_coverage": position_init_extent_coverage,
+            "rotation_init": rotation_init,
+            "rgb_init": rgb_init,
+            "rgb_init_min": rgb_init_min,
+            "rgb_init_max": rgb_init_max,
+        }
+        if self.use_static_dynamic_split:
+            if dynamic_motion_extent is None:
+                dynamic_motion_extent = 0.25 * float(scene_extent)
+            self.static_gaussian_heads = GaussianParameterHeads(**gaussian_head_kwargs)
+            self.dynamic_gaussian_heads = DynamicResidualGaussianBankHead(
+                **gaussian_head_kwargs,
+                time_basis_count=dynamic_time_basis_count,
+                motion_extent=dynamic_motion_extent,
+                rotation_degrees=dynamic_rotation_degrees,
+                alpha_logit_extent=dynamic_alpha_logit_extent,
+                coeff_output_init_std=dynamic_coeff_output_init_std,
+            )
+        else:
+            self.gaussian_heads = GaussianParameterHeads(**gaussian_head_kwargs)
         self.global_camera_head = build_global_camera_head(
             camera_global_head,
             feat_dim=feat_dim,
@@ -1550,6 +1594,54 @@ class UnconditionedTokenGSImplicitCamera(nn.Module):
             ),
         )
 
+    def _eval_dynamic_bank(self, bank, decode_time):
+        return DynamicVideoTokenGSImplicitCamera._eval_dynamic_bank(self, bank, decode_time)
+
+    def _decode_static_dynamic_split(self, fixed_queries, decode_times, fixed_global_camera_token):
+        static_token_slice = fixed_queries[:, 2 : 2 + self.static_tokens, :]
+        dynamic_token_slice = fixed_queries[:, 2 + self.static_tokens :, :]
+        static_xyz, static_scales, static_quats, static_opacities, static_rgbs = self.static_gaussian_heads(
+            static_token_slice
+        )
+        dynamic_bank = self.dynamic_gaussian_heads(dynamic_token_slice)
+
+        decoded = []
+        dynamic_opacity_frames = []
+        for index in range(decode_times.shape[1]):
+            dynamic_xyz, dynamic_scales, dynamic_quats, dynamic_opacities, dynamic_rgbs = self._eval_dynamic_bank(
+                dynamic_bank,
+                decode_times[:, index],
+            )
+            dynamic_opacity_frames.append(dynamic_opacities.squeeze(0))
+            camera, camera_state = DynamicVideoTokenGSImplicitCamera._decode_camera_single_time(
+                self,
+                self.refine_queries(1, decode_time=decode_times[:, index]),
+                decode_times[:, index],
+                fixed_global_camera_token,
+            )
+            decoded.append(
+                (
+                    torch.cat([static_xyz, dynamic_xyz], dim=1).squeeze(0),
+                    torch.cat([static_scales, dynamic_scales], dim=1).squeeze(0),
+                    torch.cat([static_quats, dynamic_quats], dim=1).squeeze(0),
+                    torch.cat([static_opacities, dynamic_opacities], dim=1).squeeze(0),
+                    torch.cat([static_rgbs, dynamic_rgbs], dim=1).squeeze(0),
+                    camera,
+                    camera_state,
+                )
+            )
+
+        return DynamicVideoTokenGSImplicitCamera._merge_decoded_frames(
+            decoded,
+            auxiliary={
+                "static_opacities": static_opacities,
+                "dynamic_opacities": torch.stack(dynamic_opacity_frames, dim=0),
+                "dynamic_A_mu": dynamic_bank.A_mu,
+                "dynamic_A_rot": dynamic_bank.A_rot,
+                "dynamic_A_alpha": dynamic_bank.A_alpha,
+            },
+        )
+
     def forward(self, video, decode_times, input_times=None):
         del video, input_times
         if decode_times.ndim != 2:
@@ -1558,6 +1650,8 @@ class UnconditionedTokenGSImplicitCamera(nn.Module):
             raise ValueError("UnconditionedTokenGSImplicitCamera currently expects clip batch size 1.")
         fixed_queries = self.refine_queries(1, decode_time=None)
         fixed_global_camera_token = fixed_queries[:, 0, :]
+        if self.use_static_dynamic_split:
+            return self._decode_static_dynamic_split(fixed_queries, decode_times, fixed_global_camera_token)
         decoded = [
             self._decode_single_time(decode_times[:, index], fixed_global_camera_token)
             for index in range(decode_times.shape[1])

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Dynaworld Headless Render</title>
+		<style>
+			html,
+			body {
+				margin: 0;
+				background: #0b0e13;
+				color: #dfe7f1;
+				font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+			}
+
+			#status {
+				padding: 12px;
+				font-size: 13px;
+			}
+
+			#renderCanvas {
+				display: block;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="status">Starting headless render...</div>
+		<canvas id="renderCanvas"></canvas>
+		<script type="module" src="./headless.js"></script>
+	</body>
+</html>

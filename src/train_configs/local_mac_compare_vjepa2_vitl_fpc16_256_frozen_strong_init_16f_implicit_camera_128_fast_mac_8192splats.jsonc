@@ -1,9 +1,11 @@
 {
-  // Four cross-attention layers plus explicit static/dynamic splat-token split.
-  // This is the structured-dynamics ablation: most tokens model the static
-  // scene, while 32 dynamic tokens own time-basis xyz/rotation/opacity residuals.
+  // Strong-init sibling for the fast-start HF V-JEPA fpc16/256 comparison.
+  // Intended diff from local_mac_compare_vjepa2_vitl_fpc16_256_frozen_16f...:
+  // - query/head scale matches the best RGB-uniform init ablations
+  // - RGB head bias samples the full sigmoid range at init
+  // This isolates the init confound in the recent matrix. It still does not
+  // test the stronger static/dynamic + V-JEPA 2.1 ViT-B/384 recipe.
   "arch": "tokengs_video_implicit_camera",
-  "export": true,
   "data": {
     "sequence_dir": "test_data",
     "frames_dir": null,
@@ -13,18 +15,15 @@
   },
   "model": {
     "variant": "learned_time_orbit_path",
-    "video_encoder_backend": "local",
+    "video_encoder_backend": "vjepa_hf",
+    "vjepa_model_id": "facebook/vjepa2-vitl-fpc16-256-ssv2",
+    "vjepa_feature_dim": 1024,
+    "vjepa_freeze": true,
+    "vjepa_attn_implementation": "sdpa",
+    "vjepa_dtype": "auto",
     "size": 128,
     "train_frame_count": 16,
     "tokens": 128,
-    "static_tokens": 96,
-    "dynamic_tokens": 32,
-    "dynamic_time_basis_count": 8,
-    "dynamic_time_max_frequency": 8.0,
-    "dynamic_motion_extent": 0.375,
-    "dynamic_rotation_degrees": 10.0,
-    "dynamic_alpha_logit_extent": 2.0,
-    "dynamic_coeff_output_init_std": 0.0001,
     "gaussians_per_token": 64,
     "model_dim": 128,
     "bottleneck_dim": 256,
@@ -46,11 +45,12 @@
     "rgb_init": "uniform",
     "rgb_init_min": 0.0,
     "rgb_init_max": 1.0,
+    // Local-encoder-only geometry knobs kept present for schema compatibility.
     "tubelet_size_t": 4,
     "patch_compression": 16,
     "encoder_self_attn_layers": 1,
     "bottleneck_self_attn_layers": 2,
-    "cross_attn_layers": 4,
+    "cross_attn_layers": 1,
     "time_fourier_bands": 8,
     "time_max_frequency": 128.0
   },
@@ -99,12 +99,7 @@
     "ssim_window_size": 11,
     "camera_motion_weight": 0.01,
     "camera_temporal_weight": 0.02,
-    "camera_global_weight": 0.005,
-    "static_alpha_rate_weight": 0.0,
-    "dynamic_alpha_rate_weight": 0.0,
-    "dynamic_motion_rate_weight": 0.0,
-    "dynamic_rotation_rate_weight": 0.0,
-    "dynamic_alpha_time_rate_weight": 0.0
+    "camera_global_weight": 0.005
   },
   "logging": {
     "log_every": 10,
@@ -112,20 +107,22 @@
     "video_log_every": 250,
     "always_log_last_step": true,
     "wandb_project": "dynaworld",
-    "wandb_run_name": "ablate-time-static-dynamic-96-32-crossattn4-rgb-uniform-strong-video-implicit-128-fast-mac-8192splats",
+    "wandb_run_name": "compare-vjepa2-vitl-fpc16-256-frozen-strong-init-16f-implicit-camera-128-fast-mac-8192splats",
     "wandb_tags": [
-      "temporal-ablation",
-      "static-dynamic-split",
-      "static-96",
-      "dynamic-32",
-      "cross-attn-4",
-      "init-ablation",
+      "compare-vjepa",
+      "strong-init",
       "rgb-uniform",
       "strong-token-head",
+      "fast-start",
       "overfit-local",
+      "arch-tokengs",
       "camera-implicit",
       "video-token",
-      "local-encoder",
+      "vjepa2",
+      "hf",
+      "vitl-256",
+      "fpc16",
+      "frozen-encoder",
       "16f",
       "128px",
       "fast-mac",

@@ -137,6 +137,15 @@ CAMERA_OPTION_DEFAULTS = {
 }
 
 
+EXPORT_OPTION_DEFAULTS = {
+    "enabled": False,
+    "output_root": "outputs/browser_exports",
+    "id": None,
+    "sequence_index": 0,
+    "window_start": 0,
+}
+
+
 @dataclass
 class StepResult:
     source_path: Path | None
@@ -252,8 +261,6 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
             "known_camera_video_token",
             "unconditioned_residual_free_bank",
             "residual_free_bank_unconditioned_tokens",
-            "unconditioned_tokens",
-            "token_decoder_unconditioned",
         }:
             raise ValueError("static/dynamic splat split is not wired for this model.variant yet.")
         if cfg["model"]["variant"] == "token_to_pose_to_plucker":
@@ -327,6 +334,27 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Non-pinhole camera.lens_model requires render.camera_projection='auto' or 'camera_model'.")
     if "fast_mac" not in cfg["render"]:
         cfg["render"]["fast_mac"] = None
+    export_cfg = cfg.get("export", False)
+    if isinstance(export_cfg, bool):
+        export_cfg = {"enabled": export_cfg}
+    elif isinstance(export_cfg, dict):
+        export_cfg = dict(export_cfg)
+    else:
+        raise ValueError("config['export'] must be a boolean or object when provided.")
+    apply_defaults(export_cfg, EXPORT_OPTION_DEFAULTS)
+    export_cfg["enabled"] = bool(export_cfg["enabled"])
+    export_cfg["output_root"] = path_or_none(export_cfg["output_root"])
+    if export_cfg["output_root"] is None:
+        raise ValueError("export.output_root cannot be null.")
+    if export_cfg["id"] is not None:
+        export_cfg["id"] = str(export_cfg["id"])
+    export_cfg["sequence_index"] = int(export_cfg["sequence_index"])
+    export_cfg["window_start"] = int(export_cfg["window_start"])
+    if export_cfg["sequence_index"] < 0:
+        raise ValueError("export.sequence_index must be >= 0.")
+    if export_cfg["window_start"] < 0:
+        raise ValueError("export.window_start must be >= 0.")
+    cfg["export"] = export_cfg
     return cfg
 
 
@@ -841,6 +869,7 @@ class Trainer:
         self.train_cfg = self.cfg["train"]
         self.loss_cfg = self.cfg["losses"]
         self.logging_cfg = self.cfg["logging"]
+        self.export_cfg = self.cfg["export"]
         self.recon_backward_strategy = self.train_cfg["recon_backward_strategy"]
         if self.recon_backward_strategy not in {"framewise", "microbatch", "batched"}:
             raise ValueError(
@@ -1003,6 +1032,52 @@ class Trainer:
         )
         clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
         return sequence_data, clip_frames, clip_times
+
+    def export_window_indices(self, sequence_data: SequenceData) -> torch.Tensor:
+        window = min(int(self.model_cfg["train_frame_count"]), int(sequence_data.frame_count))
+        if window < 1:
+            raise ValueError("Export window must contain at least one frame.")
+        if window >= sequence_data.frame_count:
+            return torch.arange(sequence_data.frame_count, device=self.device)
+        start = min(int(self.export_cfg["window_start"]), sequence_data.frame_count - window)
+        return torch.arange(start, start + window, device=self.device)
+
+    def export_browser_bundle(self) -> Path | None:
+        if not self.export_cfg["enabled"]:
+            return None
+        if not self.model_cfg["use_static_dynamic_split"]:
+            raise ValueError("export=true currently requires model.static_tokens + model.dynamic_tokens.")
+        sequence_index = int(self.export_cfg["sequence_index"])
+        if sequence_index >= len(self.train_sequences):
+            raise IndexError(
+                f"export.sequence_index={sequence_index} is out of range for "
+                f"{len(self.train_sequences)} loaded train sequences."
+            )
+        from export_dynaworld_browser_bundle import export_browser_bundle_from_model, export_id_from_config
+
+        sequence_data = self.train_sequences[sequence_index]
+        clip_indices = self.export_window_indices(sequence_data)
+        clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
+        model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
+        suffix = None
+        if wandb.run is not None and getattr(wandb.run, "id", None):
+            suffix = str(wandb.run.id)
+        export_id = export_id_from_config(self.cfg, suffix=suffix)
+        output_dir = self.export_cfg["output_root"] / export_id
+        manifest_path = export_browser_bundle_from_model(
+            model=self.model,
+            resolved=self.cfg,
+            sequence_data=sequence_data,
+            clip_indices=clip_indices,
+            clip_times=clip_times,
+            model_input=model_input,
+            output_dir=output_dir,
+            config_path=None,
+            state_dict_path=None,
+            export_id=export_id,
+        )
+        print(f"Browser export written: {manifest_path}")
+        return manifest_path
 
     def model_input_for_clip(
         self,
@@ -1462,6 +1537,7 @@ class Trainer:
                 result = self.step(keep_preview=keep_preview)
                 pbar.set_description(self.progress_message(result))
                 self.val_log(step, result)
+            self.export_browser_bundle()
         finally:
             wandb.finish()
 
