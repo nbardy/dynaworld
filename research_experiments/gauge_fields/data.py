@@ -10,7 +10,7 @@ import torch
 
 from common import resolve_dynaworld_path
 from config_utils import path_or_none
-from multicam_val_data import load_multicam_val_manifest, load_multicam_val_sample
+from multicam_val_data import load_multicam_val_camera_frames, load_multicam_val_manifest, load_multicam_val_sample
 from sequence_data import load_uncalibrated_sequence
 
 
@@ -26,6 +26,11 @@ class GaugeVideoBundle:
     heldout_K: torch.Tensor | None = None
     heldout_w2c: torch.Tensor | None = None
     heldout_pose_source: str | None = None
+    train_videos: torch.Tensor | None = None
+    train_K: torch.Tensor | None = None
+    train_w2c: torch.Tensor | None = None
+    train_camera_names: list[str] | None = None
+    heldout_camera_name: str | None = None
 
 
 def make_fixed_pinhole_camera(
@@ -182,6 +187,40 @@ def make_multicam_pair_cameras(
     return source_K, source_w2c, target_K, target_w2c, "source_camera_proxy_uncalibrated"
 
 
+def make_deepview_multiview_cameras(
+    record: dict[str, Any],
+    *,
+    train_cameras: list[str],
+    heldout_camera: str,
+    anchor_camera: str,
+    T: int,
+    H: int,
+    W: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    if record.get("dataset") != "deepview_video" or not record.get("models_path"):
+        raise ValueError("Configured multicam_train_cameras currently require a DeepView record with models_path.")
+
+    _, anchor_c2w = deepview_camera_from_models(record, anchor_camera, H=H, W=W, device=device)
+    train_K = []
+    train_w2c = []
+    for camera_name in train_cameras:
+        K, c2w = deepview_camera_from_models(record, camera_name, H=H, W=W, device=device)
+        rel_w2c = torch.linalg.inv(c2w) @ anchor_c2w
+        train_K.append(K)
+        train_w2c.append(rel_w2c.unsqueeze(0).repeat(T, 1, 1))
+
+    heldout_K, heldout_c2w = deepview_camera_from_models(record, heldout_camera, H=H, W=W, device=device)
+    heldout_w2c = torch.linalg.inv(heldout_c2w) @ anchor_c2w
+    return (
+        torch.stack(train_K, dim=0),
+        torch.stack(train_w2c, dim=0),
+        heldout_K,
+        heldout_w2c.unsqueeze(0).repeat(T, 1, 1),
+        "deepview_models_relative_pinhole",
+    )
+
+
 def load_baseline_video(
     sequence_dir: Path,
     frames_dir: Optional[Path],
@@ -230,6 +269,43 @@ def select_configured_frames(video: torch.Tensor, frame_indices: Any) -> torch.T
     return video[indices].contiguous()
 
 
+def select_configured_multiview_frames(videos: torch.Tensor, frame_indices: Any) -> torch.Tensor:
+    if frame_indices is None:
+        return videos
+    if not isinstance(frame_indices, list) or not frame_indices:
+        raise ValueError("data.frame_indices must be a non-empty list of integer frame indices when provided.")
+    indices = torch.as_tensor(frame_indices, dtype=torch.long, device=videos.device)
+    if bool((indices < 0).any()) or bool((indices >= videos.shape[1]).any()):
+        raise IndexError(f"data.frame_indices {frame_indices!r} out of range for {videos.shape[1]} loaded frames.")
+    return videos[:, indices].contiguous()
+
+
+def deepview_video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
+    scene_dir = Path(record["dataset_scene_dir"])
+    path = scene_dir / f"{camera_name}.mp4"
+    if not path.exists():
+        raise FileNotFoundError(f"DeepView camera video not found: {path}")
+    return path
+
+
+def load_deepview_camera_video(
+    record: dict[str, Any],
+    camera_name: str,
+    *,
+    target_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    frames = load_multicam_val_camera_frames(
+        video_path=deepview_video_path_for_camera(record, camera_name),
+        start_seconds=float(record.get("source_start_seconds", record.get("target_start_seconds", 0.0))),
+        fps=float(record["fps"]),
+        frame_count=int(record["frame_count"]),
+        target_size=target_size,
+        device=device,
+    )
+    return frames.permute(0, 2, 3, 1).contiguous()
+
+
 def load_gauge_video_bundle(
     *,
     data_cfg: dict[str, Any],
@@ -240,6 +316,63 @@ def load_gauge_video_bundle(
     frame_source = str(data_cfg["frame_source"])
     if frame_source == "multicam_val":
         record = select_multicam_record(data_cfg)
+        train_cameras_raw = data_cfg.get("multicam_train_cameras")
+        if train_cameras_raw:
+            train_cameras = [str(camera) for camera in train_cameras_raw]
+            heldout_camera = str(data_cfg.get("multicam_heldout_camera") or record["target_camera"])
+            anchor_camera = str(data_cfg.get("multicam_anchor_camera") or train_cameras[0])
+            if anchor_camera not in train_cameras:
+                raise ValueError("data.multicam_anchor_camera must be one of data.multicam_train_cameras.")
+
+            train_videos = torch.stack(
+                [
+                    load_deepview_camera_video(record, camera, target_size=render_size, device=device)
+                    for camera in train_cameras
+                ],
+                dim=0,
+            )
+            heldout_video = load_deepview_camera_video(record, heldout_camera, target_size=render_size, device=device)
+            max_frames = int(data_cfg["max_frames"])
+            if max_frames > 0:
+                train_videos = train_videos[:, :max_frames].contiguous()
+                heldout_video = heldout_video[:max_frames].contiguous()
+            train_videos = select_configured_multiview_frames(train_videos, data_cfg["frame_indices"])
+            heldout_video = select_configured_frames(heldout_video, data_cfg["frame_indices"])
+
+            _, T, H, W, _ = train_videos.shape
+            train_K, train_w2c, heldout_K, heldout_w2c, pose_note = make_deepview_multiview_cameras(
+                record,
+                train_cameras=train_cameras,
+                heldout_camera=heldout_camera,
+                anchor_camera=anchor_camera,
+                T=T,
+                H=H,
+                W=W,
+                device=device,
+            )
+            return GaugeVideoBundle(
+                video=train_videos[0],
+                K=train_K[0],
+                w2c=train_w2c[0],
+                fps=float(record.get("fps", 4.0)),
+                source_path=",".join(str(deepview_video_path_for_camera(record, camera)) for camera in train_cameras),
+                metadata={
+                    **record,
+                    "train_cameras": train_cameras,
+                    "heldout_camera": heldout_camera,
+                    "anchor_camera": anchor_camera,
+                },
+                heldout_video=heldout_video,
+                heldout_K=heldout_K,
+                heldout_w2c=heldout_w2c,
+                heldout_pose_source=pose_note,
+                train_videos=train_videos,
+                train_K=train_K,
+                train_w2c=train_w2c,
+                train_camera_names=train_cameras,
+                heldout_camera_name=heldout_camera,
+            )
+
         sample = load_multicam_val_sample(record, target_size=render_size, device=device)
         video = sample.source_frames.permute(0, 2, 3, 1).contiguous()
         heldout_video = sample.target_frames.permute(0, 2, 3, 1).contiguous()

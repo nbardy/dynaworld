@@ -10,45 +10,44 @@ from pathlib import Path
 from common import resolve_dynaworld_path
 
 
+BASE_CONFIG = (
+    "src/train_configs/"
+    "local_mac_gauge_fields_multicam_deepview_3cam_train2_test1_rank_adaptive_metric_128_16f_2048el.jsonc"
+)
+
+
 RUNS = [
-    {
-        "name": "free_dynamic_3dgs",
-        "script": "research_experiments/gauge_fields/train_splat_baseline.py",
-        "config": "src/train_configs/local_mac_splat_baseline_multicam_deepview_free_dynamic_3dgs_128_16f_2048splats.jsonc",
-    },
     {
         "name": "screen_disk_projected_conic",
         "script": "research_experiments/gauge_fields/train.py",
-        "config": "src/train_configs/local_mac_gauge_fields_multicam_deepview_screen_disk_128_16f_2048el.jsonc",
+        "config": BASE_CONFIG,
+        "extra_args": ["--support-mode", "screen_disk"],
     },
     {
         "name": "rank_adaptive_metric_projected_conic",
         "script": "research_experiments/gauge_fields/train.py",
-        "config": "src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_128_16f_2048el.jsonc",
-    },
-    {
-        "name": "rank_adaptive_metric_ray_gaussian_line_mass",
-        "script": "research_experiments/gauge_fields/train.py",
-        "config": "src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_ray_gaussian_line_mass_128_16f_2048el.jsonc",
+        "config": BASE_CONFIG,
+        "extra_args": [],
     },
     {
         "name": "rank_adaptive_metric_ray_gaussian_line_mass_candidate_tiled",
         "script": "research_experiments/gauge_fields/train.py",
-        "config": "src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_ray_gaussian_line_mass_candidate_tiled_128_16f_2048el.jsonc",
-    },
-    {
-        "name": "rank_adaptive_metric_ray_gaussian_line_peak",
-        "script": "research_experiments/gauge_fields/train.py",
-        "config": "src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_ray_gaussian_line_peak_128_16f_2048el.jsonc",
+        "config": BASE_CONFIG,
+        "extra_args": [
+            "--incidence-mode",
+            "ray_gaussian_line_mass",
+            "--line-candidate-mode",
+            "projected_bbox",
+        ],
     },
 ]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the DeepView incidence-mode benchmark matrix.")
+    parser = argparse.ArgumentParser(description="Run DeepView train-2-cameras/test-1-camera gauge matrix.")
     parser.add_argument(
         "--output-root",
-        default="outputs/gauge_fields/multicam_deepview_incidence_matrix_80step",
+        default="outputs/gauge_fields/multicam_deepview_3cam_train2_test1_80step",
     )
     parser.add_argument("--steps", type=int, default=80)
     parser.add_argument("--device", default="mps")
@@ -84,6 +83,7 @@ def main() -> None:
             str(args.steps),
             "--output-dir",
             str(output_dir),
+            *spec.get("extra_args", []),
         ]
         if args.no_wandb:
             cmd.append("--no-wandb")

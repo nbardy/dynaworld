@@ -49,6 +49,7 @@ from train_logging import build_validation_video_payload, make_preview_image, ma
 DEFAULT_CONFIG_PATH = "src/train_configs/local_mac_gauge_fields_material_surfel_128_16f_512el.jsonc"
 SUPPORT_MODES = {"screen_disk", "oriented_slab", "rank_adaptive_metric"}
 OPACITY_TRANSFERS = {"linear", "optical_thickness"}
+LINE_CANDIDATE_MODES = {"all_pairs", "projected_bbox"}
 SUPPORT_LOG_SCALE_MIN = -12.0
 SUPPORT_LOG_SCALE_MAX = 4.0
 
@@ -63,6 +64,9 @@ DATA_DEFAULTS = {
     "multicam_split": "val",
     "multicam_sample_id": None,
     "multicam_sample_index": 0,
+    "multicam_train_cameras": None,
+    "multicam_heldout_camera": None,
+    "multicam_anchor_camera": None,
 }
 
 MODEL_DEFAULTS = {
@@ -96,6 +100,9 @@ RENDER_DEFAULTS = {
     "max_radius_px": 24.0,
     "max_alpha_per_element": 0.95,
     "incidence_mode": "projected_conic",
+    "line_candidate_mode": "all_pairs",
+    "line_tile_size": 16,
+    "line_tile_sigma": 4.0,
     "opacity_transfer": "linear",
     "pixel_chunk": 2048,
 }
@@ -155,6 +162,9 @@ class RenderConfig:
     max_radius_px: float = 24.0
     max_alpha_per_element: float = 0.95
     incidence_mode: str = "projected_conic"
+    line_candidate_mode: str = "all_pairs"
+    line_tile_size: int = 16
+    line_tile_sigma: float = 4.0
     opacity_transfer: str = "linear"
     pixel_chunk: int = 4096
 
@@ -274,6 +284,15 @@ def validate_opacity_transfer(value: str) -> str:
             f"render.opacity_transfer must be one of {sorted(OPACITY_TRANSFERS)}, got {value!r}."
         )
     return transfer
+
+
+def validate_line_candidate_mode(value: str) -> str:
+    mode = str(value)
+    if mode not in LINE_CANDIDATE_MODES:
+        raise ValueError(
+            f"render.line_candidate_mode must be one of {sorted(LINE_CANDIDATE_MODES)}, got {value!r}."
+        )
+    return mode
 
 
 def estimate_local_deformation_jacobian(
@@ -693,30 +712,109 @@ def render_material_field(
         flow_i = flow_i * (valid & valid_next)[:, None].float()
         flow_s = flow_i[order]
 
-    rgb_chunks = []
-    alpha_chunks = []
-    depth_chunks = []
-    xmap_chunks = []
-    flow_chunks = []
+    rgb_flat = torch.empty(P, 3, device=device, dtype=x_t.dtype)
+    alpha_flat = torch.empty(P, device=device, dtype=x_t.dtype)
+    depth_flat = torch.empty(P, device=device, dtype=x_t.dtype)
+    xmap_flat = torch.empty(P, 3, device=device, dtype=x_t.dtype)
+    flow_flat = torch.empty(P, 2, device=device, dtype=x_t.dtype) if flow_s is not None else None
 
-    pixel_chunk = P if cfg.pixel_chunk <= 0 else min(cfg.pixel_chunk, P)
-    for start in range(0, P, pixel_chunk):
-        end = min(start + pixel_chunk, P)
-        pix = grid[start:end]                         # [C,2]
+    line_strength_s = None
+    bbox_xmin = bbox_xmax = bbox_ymin = bbox_ymax = None
+    if use_line_integral:
+        line_strength_s = alpha_s
+        if cfg.incidence_mode == "ray_gaussian_line_mass":
+            line_strength_s = centerline_strength_to_mass(alpha_s, cov3_s)
+
+        if cfg.line_candidate_mode == "projected_bbox":
+            cov_trace = cov2_s[:, 0, 0] + cov2_s[:, 1, 1]
+            cov_disc = torch.sqrt(
+                (
+                    (cov2_s[:, 0, 0] - cov2_s[:, 1, 1]).square()
+                    + 4.0 * cov2_s[:, 0, 1].square()
+                ).clamp_min(0.0)
+            )
+            lambda_max = (0.5 * (cov_trace + cov_disc)).clamp_min(1e-8)
+            radius_px = float(cfg.line_tile_sigma) * torch.sqrt(lambda_max)
+            bbox_xmin = uv_s[:, 0] - radius_px
+            bbox_xmax = uv_s[:, 0] + radius_px
+            bbox_ymin = uv_s[:, 1] - radius_px
+            bbox_ymax = uv_s[:, 1] + radius_px
+
+    def fill_empty(indices: torch.Tensor) -> None:
+        rgb_flat[indices] = float(cfg.bg)
+        alpha_flat[indices] = 0.0
+        depth_flat[indices] = 0.0
+        xmap_flat[indices] = 0.0
+        if flow_flat is not None:
+            flow_flat[indices] = 0.0
+
+    def iter_pixel_blocks():
+        if use_line_integral and cfg.line_candidate_mode == "projected_bbox":
+            tile_size = max(1, int(cfg.line_tile_size))
+            for y0 in range(0, H, tile_size):
+                y1 = min(y0 + tile_size, H)
+                ys = torch.arange(y0, y1, device=device)
+                for x0 in range(0, W, tile_size):
+                    x1 = min(x0 + tile_size, W)
+                    xs = torch.arange(x0, x1, device=device)
+                    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+                    indices = (yy.reshape(-1) * W + xx.reshape(-1)).long()
+                    yield indices, grid[indices], (x0, x1 - 1, y0, y1 - 1)
+            return
+
+        pixel_chunk = P if cfg.pixel_chunk <= 0 else min(cfg.pixel_chunk, P)
+        for start in range(0, P, pixel_chunk):
+            end = min(start + pixel_chunk, P)
+            indices = torch.arange(start, end, device=device)
+            yield indices, grid[indices], None
+
+    for indices, pix, tile_bounds in iter_pixel_blocks():
+        comp_z = z_s
+        comp_valid = valid_s
+        comp_color = color_s
+        comp_x0 = x0_s
+        comp_flow = flow_s
 
         if use_line_integral:
+            comp_x = x_s
+            comp_cov3 = cov3_s
+            comp_strength = line_strength_s
+
+            if cfg.line_candidate_mode == "projected_bbox":
+                assert tile_bounds is not None
+                assert bbox_xmin is not None and bbox_xmax is not None
+                assert bbox_ymin is not None and bbox_ymax is not None
+                x0_tile, x1_tile, y0_tile, y1_tile = tile_bounds
+                cand_mask = (
+                    valid_s
+                    & (bbox_xmax >= float(x0_tile))
+                    & (bbox_xmin <= float(x1_tile))
+                    & (bbox_ymax >= float(y0_tile))
+                    & (bbox_ymin <= float(y1_tile))
+                )
+                cand = cand_mask.nonzero(as_tuple=False).flatten()
+                if cand.numel() == 0:
+                    fill_empty(indices)
+                    continue
+
+                comp_z = z_s[cand]
+                comp_valid = valid_s[cand]
+                comp_color = color_s[cand]
+                comp_x0 = x0_s[cand]
+                comp_x = x_s[cand]
+                comp_cov3 = cov3_s[cand]
+                comp_strength = line_strength_s[cand]
+                comp_flow = flow_s[cand] if flow_s is not None else None
+
             _ray_origin_check, ray_dirs = make_world_rays_for_pixels(pix, K, w2c)
-            line_strength = alpha_s
-            if cfg.incidence_mode == "ray_gaussian_line_mass":
-                line_strength = centerline_strength_to_mass(alpha_s, cov3_s)
             tau = ray_gaussian_line_optical_depth(
                 ray_origin=ray_origin,
                 ray_dirs=ray_dirs,
                 s0=cfg.near,
                 s1=cfg.far,
-                mu=x_s,
-                cov3=cov3_s,
-                strength=line_strength,
+                mu=comp_x,
+                cov3=comp_cov3,
+                strength=comp_strength,
                 mass_normalized=cfg.incidence_mode == "ray_gaussian_line_mass",
             )
             a_s = 1.0 - torch.exp(-tau)
@@ -732,45 +830,45 @@ def render_material_field(
             else:
                 a_s = alpha_s[:, None] * kernel
         a_s = a_s.clamp(0.0, cfg.max_alpha_per_element)
-        a_s = a_s * valid_s[:, None].float()
+        a_s = a_s * comp_valid[:, None].float()
 
         one_minus = (1.0 - a_s).clamp(1e-5, 1.0)
         trans = torch.cumprod(
-            torch.cat([torch.ones(1, end - start, device=device), one_minus[:-1]], dim=0),
+            torch.cat([torch.ones(1, indices.numel(), device=device), one_minus[:-1]], dim=0),
             dim=0,
         )
         weights = trans * a_s                         # [N,C]
 
         alpha_map = weights.sum(dim=0).clamp(0.0, 1.0)
-        rgb = weights.T @ color_s
+        rgb = weights.T @ comp_color
         rgb = rgb + (1.0 - alpha_map)[:, None] * cfg.bg
 
-        depth_num = (weights * z_s[:, None]).sum(dim=0)
+        depth_num = (weights * comp_z[:, None]).sum(dim=0)
         depth = depth_num / alpha_map.clamp_min(1e-6)
 
-        xmap_num = weights.T @ x0_s
+        xmap_num = weights.T @ comp_x0
         xmap = xmap_num / alpha_map[:, None].clamp_min(1e-6)
 
-        rgb_chunks.append(rgb)
-        alpha_chunks.append(alpha_map)
-        depth_chunks.append(depth)
-        xmap_chunks.append(xmap)
+        rgb_flat[indices] = rgb
+        alpha_flat[indices] = alpha_map
+        depth_flat[indices] = depth
+        xmap_flat[indices] = xmap
 
-        if flow_s is not None:
-            flow_num = weights.T @ flow_s
+        if flow_flat is not None and comp_flow is not None:
+            flow_num = weights.T @ comp_flow
             flow = flow_num / alpha_map[:, None].clamp_min(1e-6)
-            flow_chunks.append(flow)
+            flow_flat[indices] = flow
 
     out = {
-        "rgb": torch.cat(rgb_chunks, dim=0).reshape(H, W, 3),
-        "alpha": torch.cat(alpha_chunks, dim=0).reshape(H, W),
-        "depth": torch.cat(depth_chunks, dim=0).reshape(H, W),
-        "xmap": torch.cat(xmap_chunks, dim=0).reshape(H, W, 3),
+        "rgb": rgb_flat.reshape(H, W, 3),
+        "alpha": alpha_flat.reshape(H, W),
+        "depth": depth_flat.reshape(H, W),
+        "xmap": xmap_flat.reshape(H, W, 3),
     }
 
     # Render induced optical flow from material transport if requested.
-    if flow_s is not None:
-        out["flow"] = torch.cat(flow_chunks, dim=0).reshape(H, W, 2)
+    if flow_flat is not None:
+        out["flow"] = flow_flat.reshape(H, W, 2)
 
     return out
 
@@ -858,9 +956,9 @@ class TrainWeights:
 
 
 def train_material_surfel_field(
-    video: torch.Tensor,              # [T,H,W,3], float in [0,1]
-    K: torch.Tensor,                  # [3,3] or [T,3,3]
-    w2c: torch.Tensor,                # [T,4,4]
+    video: torch.Tensor,              # [T,H,W,3] or [V,T,H,W,3], float in [0,1]
+    K: torch.Tensor,                  # [3,3], [T,3,3], [V,3,3], or [V,T,3,3]
+    w2c: torch.Tensor,                # [T,4,4] or [V,T,4,4]
     init_x0: torch.Tensor,            # [N,3]
     init_color: Optional[torch.Tensor] = None,  # [N,3]
     flow: Optional[torch.Tensor] = None,   # [T-1,H,W,2], optional
@@ -894,7 +992,15 @@ def train_material_surfel_field(
       - Good first config: H=W=64, N=256-1024, T=20-100.
     """
     device = video.device
-    T, H, W, _ = video.shape
+    if video.ndim == 5:
+        train_video = video
+        view_count, T, H, W, _ = train_video.shape
+    elif video.ndim == 4:
+        T, H, W, _ = video.shape
+        view_count = 1
+        train_video = video.unsqueeze(0)
+    else:
+        raise ValueError(f"Expected video shape [T,H,W,3] or [V,T,H,W,3], got {tuple(video.shape)}.")
     cfg = render_cfg if render_cfg is not None else RenderConfig(H=H, W=W)
     if cfg.H != H or cfg.W != W:
         raise ValueError(f"RenderConfig size {(cfg.H, cfg.W)} does not match video size {(H, W)}.")
@@ -922,8 +1028,17 @@ def train_material_surfel_field(
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
-    def get_K(t: int):
-        return K[t] if K.ndim == 3 else K
+    def get_K(view: int, t: int):
+        if K.ndim == 4:
+            return K[view, t]
+        if K.ndim == 3:
+            if K.shape[0] == view_count:
+                return K[view]
+            return K[t]
+        return K
+
+    def get_w2c(view: int, t: int):
+        return w2c[view, t] if w2c.ndim == 4 else w2c[t]
 
     logs = []
 
@@ -939,25 +1054,26 @@ def train_material_surfel_field(
             frames = window[local]
         else:
             frames = torch.randint(0, T, (batch_size,), device=device)
+        views = torch.randint(0, view_count, (batch_size,), device=device)
 
         total_loss = video.new_zeros(())
         rgb_meter = 0.0
 
-        for tb in frames.tolist():
-            use_flow = flow is not None and tb < T - 1
+        for vb, tb in zip(views.tolist(), frames.tolist()):
+            use_flow = flow is not None and view_count == 1 and tb < T - 1
 
             out = render_material_field(
                 model=model,
                 t=tb,
-                K=get_K(tb),
-                w2c=w2c[tb],
+                K=get_K(vb, tb),
+                w2c=get_w2c(vb, tb),
                 cfg=cfg,
-                K_next=get_K(tb + 1) if use_flow else None,
-                w2c_next=w2c[tb + 1] if use_flow else None,
+                K_next=get_K(vb, tb + 1) if use_flow else None,
+                w2c_next=get_w2c(vb, tb + 1) if use_flow else None,
                 t_next=tb + 1 if use_flow else None,
             )
 
-            rgb_l = robust_l1(out["rgb"] - video[tb])
+            rgb_l = robust_l1(out["rgb"] - train_video[vb, tb])
             rgb_meter += float(rgb_l.detach())
 
             loss = weights.rgb * rgb_l
@@ -980,14 +1096,15 @@ def train_material_surfel_field(
         # No private paths exist in this toy model, so query loss directly pressures shared material geometry.
         if weights.query > 0 and (step % query_every == 0):
             tq = torch.randint(0, T, (1,), device=device).item()
+            vq = torch.randint(0, view_count, (1,), device=device).item()
             out_q = render_material_field(
                 model=model,
                 t=tq,
-                K=get_K(tq),
-                w2c=w2c[tq],
+                K=get_K(vq, tq),
+                w2c=get_w2c(vq, tq),
                 cfg=cfg,
             )
-            query_l = robust_l1(out_q["rgb"] - video[tq])
+            query_l = robust_l1(out_q["rgb"] - train_video[vq, tq])
             total_loss = total_loss + weights.query * query_l
 
         total_loss = total_loss + weights.smooth * model.motion_smoothness_loss()
@@ -1341,6 +1458,9 @@ def gauge_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg["model"]["slab_rotation_init_std"] = float(cfg["model"]["slab_rotation_init_std"])
     cfg["model"]["metric_offdiag_scale"] = float(cfg["model"]["metric_offdiag_scale"])
     cfg["render"]["incidence_mode"] = validate_incidence_mode(cfg["render"]["incidence_mode"])
+    cfg["render"]["line_candidate_mode"] = validate_line_candidate_mode(cfg["render"]["line_candidate_mode"])
+    cfg["render"]["line_tile_size"] = int(cfg["render"]["line_tile_size"])
+    cfg["render"]["line_tile_sigma"] = float(cfg["render"]["line_tile_sigma"])
     cfg["render"]["opacity_transfer"] = validate_opacity_transfer(cfg["render"]["opacity_transfer"])
     return cfg
 
@@ -1365,6 +1485,12 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(OPACITY_TRANSFERS),
         help="Override render.opacity_transfer.",
     )
+    parser.add_argument(
+        "--line-candidate-mode",
+        default=None,
+        choices=sorted(LINE_CANDIDATE_MODES),
+        help="Override render.line_candidate_mode for ray-Gaussian incidence.",
+    )
     parser.add_argument("--output-dir", default=None, help="Override logging.output_dir from the config.")
     parser.add_argument("--wandb-mode", default=None, help="Override logging.wandb_mode from the config.")
     parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging for local probes.")
@@ -1385,6 +1511,8 @@ def main() -> None:
         cfg["render"]["incidence_mode"] = validate_incidence_mode(args.incidence_mode)
     if args.opacity_transfer is not None:
         cfg["render"]["opacity_transfer"] = validate_opacity_transfer(args.opacity_transfer)
+    if args.line_candidate_mode is not None:
+        cfg["render"]["line_candidate_mode"] = validate_line_candidate_mode(args.line_candidate_mode)
     if args.output_dir is not None:
         cfg["logging"]["output_dir"] = args.output_dir
     if args.wandb_mode is not None:
@@ -1418,6 +1546,9 @@ def main() -> None:
     heldout_video = bundle.heldout_video
     heldout_K = bundle.heldout_K
     heldout_w2c = bundle.heldout_w2c
+    train_video = bundle.train_videos if bundle.train_videos is not None else video
+    train_K = bundle.train_K if bundle.train_K is not None else K
+    train_w2c = bundle.train_w2c if bundle.train_w2c is not None else w2c
     T, H, W, _ = video.shape
     init_x0, init_color = initialize_material_points_from_first_frame(
         video=video,
@@ -1436,6 +1567,9 @@ def main() -> None:
         max_radius_px=float(render_cfg_values["max_radius_px"]),
         max_alpha_per_element=float(render_cfg_values["max_alpha_per_element"]),
         incidence_mode=str(render_cfg_values["incidence_mode"]),
+        line_candidate_mode=str(render_cfg_values["line_candidate_mode"]),
+        line_tile_size=int(render_cfg_values["line_tile_size"]),
+        line_tile_sigma=float(render_cfg_values["line_tile_sigma"]),
         opacity_transfer=str(render_cfg_values["opacity_transfer"]),
         pixel_chunk=int(render_cfg_values["pixel_chunk"]),
     )
@@ -1455,26 +1589,33 @@ def main() -> None:
         f"config={config_path} video={bundle.source_path} frames={T}/{data_cfg['max_frames'] or 'all'} size={H}x{W} "
         f"elements={model_cfg['num_elements']} basis={model_cfg['num_basis']} "
         f"support_mode={model_cfg['support_mode']} incidence_mode={render_cfg.incidence_mode} "
+        f"line_candidate_mode={render_cfg.line_candidate_mode} "
         f"opacity_transfer={render_cfg.opacity_transfer} "
         f"train_frame_count={train_cfg['train_frame_count']} frames_per_step={train_cfg['frames_per_step']} "
         f"steps={train_cfg['steps']} device={device}"
     )
+    if bundle.train_camera_names:
+        print(
+            "Train cameras "
+            f"anchor={bundle.metadata.get('anchor_camera') if bundle.metadata else None} "
+            f"views={','.join(bundle.train_camera_names)}"
+        )
     if heldout_video is not None:
         print(
             "Held-out camera eval "
             f"sample={bundle.metadata.get('sample_id') if bundle.metadata else None} "
             f"dataset={bundle.metadata.get('dataset') if bundle.metadata else None} "
             f"source={bundle.metadata.get('source_camera') if bundle.metadata else None} "
-            f"target={bundle.metadata.get('target_camera') if bundle.metadata else None} "
+            f"target={bundle.heldout_camera_name or (bundle.metadata.get('target_camera') if bundle.metadata else None)} "
             f"pose_source={bundle.heldout_pose_source}"
         )
 
     wandb_enabled = init_wandb_if_enabled(logging_cfg, cfg)
     try:
         model, logs = train_material_surfel_field(
-            video=video,
-            K=K,
-            w2c=w2c,
+            video=train_video,
+            K=train_K,
+            w2c=train_w2c,
             init_x0=init_x0,
             init_color=init_color,
             num_steps=int(train_cfg["steps"]),
@@ -1509,6 +1650,8 @@ def main() -> None:
             **alpha_metrics(rendered["alpha"]),
             **model_metrics(model),
         }
+        if bundle.train_camera_names:
+            metrics["train_camera_count"] = float(len(bundle.train_camera_names))
         if bool(diagnostics_cfg["projection_stats"]):
             metrics.update(projection_health_metrics(model, K=K, w2c=w2c, cfg=render_cfg))
         if bool(diagnostics_cfg["motion_stats"]):
@@ -1601,6 +1744,10 @@ def main() -> None:
             "w2c": w2c.detach().cpu(),
             "heldout_K": heldout_K.detach().cpu() if heldout_K is not None else None,
             "heldout_w2c": heldout_w2c.detach().cpu() if heldout_w2c is not None else None,
+            "train_K": train_K.detach().cpu() if isinstance(train_K, torch.Tensor) else None,
+            "train_w2c": train_w2c.detach().cpu() if isinstance(train_w2c, torch.Tensor) else None,
+            "train_camera_names": bundle.train_camera_names,
+            "heldout_camera_name": bundle.heldout_camera_name,
             "heldout_pose_source": bundle.heldout_pose_source,
             "render_config": render_cfg.__dict__,
             "config": serialize_config_value(cfg),

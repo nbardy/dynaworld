@@ -122,6 +122,27 @@ def _load_record_frames(record: dict[str, Any], *, prefix: str, target_size: int
     )
 
 
+def load_multicam_val_camera_frames(
+    *,
+    video_path: Path,
+    start_seconds: float,
+    fps: float,
+    frame_count: int,
+    target_size: int,
+    device: torch.device | str | None = None,
+) -> torch.Tensor:
+    frames = _sample_video_frames(
+        video_path=video_path,
+        start_seconds=start_seconds,
+        sample_fps=fps,
+        frame_count=frame_count,
+        target_size=target_size,
+    )
+    if device is not None:
+        frames = frames.to(device)
+    return frames
+
+
 def load_multicam_val_sample(
     record: dict[str, Any],
     *,
