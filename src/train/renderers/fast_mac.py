@@ -21,7 +21,7 @@ class FastMacRendererConfig:
     transmittance_threshold: float = 1.0e-4
     background: tuple[float, float, float] = (1.0, 1.0, 1.0)
     enable_overflow_fallback: bool = True
-    inputs_sorted_by_depth: bool = False
+    inputs_sorted_by_depth: bool = True
     batch_strategy: str = "flatten"
     batch_launch_limit_tiles: int = 262144
     batch_launch_limit_gaussians: int = 262144
