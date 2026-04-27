@@ -7,13 +7,14 @@ from pathlib import Path
 from typing import Any
 
 
-DYNAWORLD_ROOT = Path(__file__).resolve().parents[2]
+from common import DYNAWORLD_ROOT, resolve_dynaworld_path
 
 
 SUMMARY_COLUMNS = [
     "run",
     "steps",
     "support_mode",
+    "incidence_mode",
     "wandb_run_name",
     "elements",
     "basis",
@@ -39,13 +40,6 @@ SUMMARY_COLUMNS = [
 ]
 
 
-def resolve_path(path: str | Path) -> Path:
-    value = Path(path)
-    if value.is_absolute():
-        return value
-    return DYNAWORLD_ROOT / value
-
-
 def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
@@ -53,7 +47,7 @@ def load_json(path: Path) -> dict[str, Any]:
 def expand_roots(patterns: list[str]) -> list[Path]:
     roots: list[Path] = []
     for pattern in patterns:
-        resolved = resolve_path(pattern)
+        resolved = resolve_dynaworld_path(pattern)
         matches = glob.glob(str(resolved))
         roots.extend(Path(match) for match in matches)
     return sorted(set(roots))
@@ -92,6 +86,7 @@ def read_run(run_dir: Path) -> dict[str, Any]:
         "run": str(run_dir.relative_to(DYNAWORLD_ROOT)) if run_dir.is_relative_to(DYNAWORLD_ROOT) else str(run_dir),
         "steps": nested_get(config, "train.steps", last_log.get("step")),
         "support_mode": nested_get(config, "model.support_mode", "screen_disk"),
+        "incidence_mode": nested_get(config, "render.incidence_mode", "projected_conic"),
         "wandb_run_name": nested_get(config, "logging.wandb_run_name"),
         "wandb_tags": ",".join(nested_get(config, "logging.wandb_tags", []) or []),
         "output_dir": nested_get(config, "logging.output_dir"),

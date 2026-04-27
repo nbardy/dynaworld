@@ -1,12 +1,13 @@
 {
-  // Source-camera train, held-out-camera eval on the calibrated DeepView pair.
+  // Compact held-out-camera smoke for incidence-mode plumbing.
+  // Use the full 128px/16f configs for real comparisons.
   "arch": "gauge_fields_material_surfel",
   "data": {
     "sequence_dir": "test_data",
     "frames_dir": null,
     "video_path": null,
     "frame_source": "multicam_val",
-    "max_frames": 16,
+    "max_frames": 2,
     "frame_indices": null,
     "multicam_manifest": "data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/manifest.jsonl",
     "multicam_split": "val",
@@ -14,13 +15,13 @@
     "multicam_sample_index": 0
   },
   "model": {
-    "num_elements": 2048,
-    "num_basis": 16,
+    "num_elements": 64,
+    "num_basis": 2,
     "support_mode": "rank_adaptive_metric",
     "support_knn_k": 8,
     "support_jacobian_lambda": 0.0001,
-    "init_basis_std": 0.01,
-    "init_coeff_std": 0.01,
+    "init_basis_std": 0.001,
+    "init_coeff_std": 0.0,
     "init_depth": 0.5,
     "init_radius": 0.035,
     "init_thickness": 0.0035,
@@ -34,7 +35,7 @@
     "multicam_pose_source": "auto"
   },
   "render": {
-    "render_size": 128,
+    "render_size": 32,
     "background": [1.0, 1.0, 1.0],
     "near_plane": 0.001,
     "far_plane": 10000.0,
@@ -43,15 +44,15 @@
     "max_alpha_per_element": 0.95,
     "incidence_mode": "projected_conic",
     "opacity_transfer": "linear",
-    "pixel_chunk": 2048
+    "pixel_chunk": 256
   },
   "train": {
-    "steps": 250,
+    "steps": 2,
     "lr": 0.002,
     "device": "auto",
     "seed": 0,
     "frames_per_step": 1,
-    "train_frame_count": 16
+    "train_frame_count": 2
   },
   "losses": {
     "rgb_weight": 1.0,
@@ -64,22 +65,22 @@
     "radius_weight": 0.0001
   },
   "logging": {
-    "log_every": 25,
-    "log_to_wandb": true,
+    "log_every": 1,
+    "log_to_wandb": false,
     "wandb_project": "dynaworld",
-    "wandb_run_name": "gauge-fields-multicam-deepview-rank-adaptive-metric-128-16f-2048el",
+    "wandb_run_name": "gauge-fields-multicam-deepview-rank-adaptive-metric-incidence-smoke-32-2f-64el",
     "wandb_tags": [
       "gauge-fields",
       "rank-adaptive-metric",
-      "support-mode",
+      "incidence-smoke",
       "multicam-val",
       "deepview",
       "heldout-camera",
-      "128px",
-      "16f",
-      "2048el"
+      "32px",
+      "2f",
+      "64el"
     ],
     "wandb_mode": "online",
-    "output_dir": "outputs/gauge_fields/multicam_deepview_rank_adaptive_metric_128_16f_2048el"
+    "output_dir": "outputs/gauge_fields/multicam_deepview_incidence_smoke_32_2f_64el/projected_conic"
   }
 }

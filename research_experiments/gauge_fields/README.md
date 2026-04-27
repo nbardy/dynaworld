@@ -83,6 +83,76 @@ uv run python research_experiments/gauge_fields/train.py \
   src/train_configs/local_mac_gauge_fields_rank_adaptive_metric_smoke_32_2f_32el.jsonc
 ```
 
+## Incidence Modes
+
+`support_mode` chooses the world/event support state. `render.incidence_mode`
+chooses how a camera ray interacts with that same state.
+
+Current incidence laws:
+
+```text
+projected_conic             existing fast projected-kernel approximation
+ray_gaussian_line_peak      finite-segment ray integral with peak density
+ray_gaussian_line_mass      finite-segment ray integral with calibrated mass
+```
+
+The first intended comparison keeps:
+
+```text
+support_mode = rank_adaptive_metric
+x_i(t), Sigma_i(t), alpha/mass strength, c_i
+```
+
+fixed and swaps only `render.incidence_mode`.
+
+Full-size DeepView configs:
+
+```bash
+# Fast control.
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_128_16f_2048el.jsonc
+
+# Exact line integral, peak-density interpretation.
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_ray_gaussian_line_peak_128_16f_2048el.jsonc
+
+# Exact line integral, mass-normalized interpretation.
+uv run python research_experiments/gauge_fields/train.py \
+  src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_ray_gaussian_line_mass_128_16f_2048el.jsonc
+```
+
+Compact held-out-camera smoke:
+
+```bash
+for mode in projected_conic ray_gaussian_line_peak ray_gaussian_line_mass; do
+  uv run python research_experiments/gauge_fields/train.py \
+    src/train_configs/local_mac_gauge_fields_multicam_deepview_rank_adaptive_metric_incidence_smoke_32_2f_64el.jsonc \
+    --incidence-mode "$mode" \
+    --steps 2 \
+    --no-wandb \
+    --output-dir "outputs/gauge_fields/multicam_deepview_incidence_smoke_32_2f_64el/$mode"
+done
+
+uv run python research_experiments/gauge_fields/summarize_runs.py \
+  'outputs/gauge_fields/multicam_deepview_incidence_smoke_32_2f_64el/*' \
+  --sort-by heldout_eval_psnr \
+  --out-md outputs/gauge_fields/multicam_deepview_incidence_smoke_32_2f_64el/summary.md \
+  --out-json outputs/gauge_fields/multicam_deepview_incidence_smoke_32_2f_64el/summary.json
+```
+
+Current smoke result, 32px / 2 frames / 64 elements / 2 steps:
+
+| incidence_mode | eval_psnr | heldout_eval_psnr | heldout_eval_l1 | heldout_alpha_coverage_050 |
+| --- | ---: | ---: | ---: | ---: |
+| `projected_conic` | 6.2087 | 5.3154 | 0.5048 | 0.0234 |
+| `ray_gaussian_line_mass` | 5.8856 | 5.0739 | 0.5218 | 0.0000 |
+| `ray_gaussian_line_peak` | 3.9617 | 3.7377 | 0.6199 | 0.0000 |
+
+This is a plumbing/scale sanity check, not a representation result. It says the
+line-integral path trains and evaluates through the held-out-camera lane; it
+also says peak density starts under-covered and mass-normalized line incidence
+is the only exact candidate close enough to benchmark seriously.
+
 ## Current Baseline
 
 The current stable baseline candidate is the 2048-element, 16-frame,
@@ -265,6 +335,7 @@ uv run python research_experiments/gauge_fields/make_sweep_configs.py \
   --radii 0.05,0.07,0.09 \
   --alpha-logits=-1.2,0.0 \
   --support-modes screen_disk,oriented_slab,rank_adaptive_metric \
+  --incidence-modes projected_conic \
   --steps 150
 ```
 

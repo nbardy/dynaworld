@@ -1,5 +1,6 @@
 {
   // Source-camera train, held-out-camera eval on the calibrated DeepView pair.
+  // Same event state as rank_adaptive_metric projected_conic; only render.incidence_mode changes.
   "arch": "gauge_fields_material_surfel",
   "data": {
     "sequence_dir": "test_data",
@@ -41,7 +42,7 @@
     "min_radius_px": 0.75,
     "max_radius_px": 24.0,
     "max_alpha_per_element": 0.95,
-    "incidence_mode": "projected_conic",
+    "incidence_mode": "ray_gaussian_line_mass",
     "opacity_transfer": "linear",
     "pixel_chunk": 2048
   },
@@ -67,11 +68,12 @@
     "log_every": 25,
     "log_to_wandb": true,
     "wandb_project": "dynaworld",
-    "wandb_run_name": "gauge-fields-multicam-deepview-rank-adaptive-metric-128-16f-2048el",
+    "wandb_run_name": "gauge-fields-multicam-deepview-rank-adaptive-metric-ray-gaussian-line-mass-128-16f-2048el",
     "wandb_tags": [
       "gauge-fields",
       "rank-adaptive-metric",
-      "support-mode",
+      "ray-gaussian-line-mass",
+      "incidence-mode",
       "multicam-val",
       "deepview",
       "heldout-camera",
@@ -80,6 +82,6 @@
       "2048el"
     ],
     "wandb_mode": "online",
-    "output_dir": "outputs/gauge_fields/multicam_deepview_rank_adaptive_metric_128_16f_2048el"
+    "output_dir": "outputs/gauge_fields/multicam_deepview_rank_adaptive_metric_ray_gaussian_line_mass_128_16f_2048el"
   }
 }

@@ -34,6 +34,14 @@ from data import (
     make_fixed_pinhole_camera,
     select_configured_frames,
 )
+from incidence import (
+    INCIDENCE_MODES,
+    centerline_strength_to_mass,
+    make_world_rays_for_pixels,
+    ray_gaussian_line_optical_depth,
+    uses_ray_gaussian_line,
+    validate_incidence_mode,
+)
 from sequence_data import load_uncalibrated_sequence, select_window_indices
 from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 
@@ -87,6 +95,7 @@ RENDER_DEFAULTS = {
     "min_radius_px": 0.75,
     "max_radius_px": 24.0,
     "max_alpha_per_element": 0.95,
+    "incidence_mode": "projected_conic",
     "opacity_transfer": "linear",
     "pixel_chunk": 2048,
 }
@@ -145,6 +154,7 @@ class RenderConfig:
     min_radius_px: float = 0.75
     max_radius_px: float = 24.0
     max_alpha_per_element: float = 0.95
+    incidence_mode: str = "projected_conic"
     opacity_transfer: str = "linear"
     pixel_chunk: int = 4096
 
@@ -335,6 +345,17 @@ def covariance_equivalent_radius_and_anisotropy(cov2: torch.Tensor) -> tuple[tor
     radius_eq = torch.sqrt(torch.sqrt((lambda_min * lambda_max).clamp_min(1e-16)))
     anisotropy = torch.sqrt(lambda_max / lambda_min)
     return radius_eq, anisotropy
+
+
+def world_support_covariance_for_incidence(
+    model: MaterialSurfelField,
+    x_t: torch.Tensor,
+) -> torch.Tensor:
+    if model.support_mode == "screen_disk":
+        radius = model.radius()[:, 0].clamp_min(1e-6)
+        eye3 = torch.eye(3, device=x_t.device, dtype=x_t.dtype).expand(model.N, 3, 3)
+        return eye3 * radius.square()[:, None, None]
+    return model.world_support_covariance(x_t)
 
 
 def exp_bounded_log_scale(log_scale: torch.Tensor) -> torch.Tensor:
@@ -630,6 +651,7 @@ def render_material_field(
 
     x_t = model.positions(t)                         # [N,3]
     uv, z, valid, cov2 = projected_support(model, x_t, K, w2c, cfg)
+    use_line_integral = uses_ray_gaussian_line(cfg.incidence_mode)
 
     grid = make_pixel_grid(H, W, device=device)      # [P,2]
 
@@ -647,6 +669,7 @@ def render_material_field(
     valid_s = valid[order]                           # [N]
     color_s = model.colors()[order]                  # [N,3]
     x0_s = model.x0[order]                           # [N,3]
+    x_s = x_t[order]                                 # [N,3]
 
     cov_a = cov2_s[:, 0, 0]
     cov_b = cov2_s[:, 0, 1]
@@ -655,6 +678,12 @@ def render_material_field(
     inv00 = cov_c / det
     inv01 = -cov_b / det
     inv11 = cov_a / det
+    cov3_s = None
+    ray_origin = None
+    if use_line_integral:
+        cov3 = world_support_covariance_for_incidence(model, x_t)
+        cov3_s = cov3[order]
+        ray_origin = torch.linalg.inv(w2c)[:3, 3]
 
     flow_s = None
     if K_next is not None and w2c_next is not None and t_next is not None:
@@ -675,16 +704,33 @@ def render_material_field(
         end = min(start + pixel_chunk, P)
         pix = grid[start:end]                         # [C,2]
 
-        diff = pix[None, :, :] - uv_s[:, None, :]     # [N,C,2]
-        dx = diff[..., 0]
-        dy = diff[..., 1]
-        maha = inv00[:, None] * dx * dx + 2.0 * inv01[:, None] * dx * dy + inv11[:, None] * dy * dy
-        kernel = torch.exp(-0.5 * maha.clamp_min(0.0))
-
-        if cfg.opacity_transfer == "optical_thickness":
-            a_s = 1.0 - torch.exp(-alpha_s[:, None].clamp_min(0.0) * kernel)
+        if use_line_integral:
+            _ray_origin_check, ray_dirs = make_world_rays_for_pixels(pix, K, w2c)
+            line_strength = alpha_s
+            if cfg.incidence_mode == "ray_gaussian_line_mass":
+                line_strength = centerline_strength_to_mass(alpha_s, cov3_s)
+            tau = ray_gaussian_line_optical_depth(
+                ray_origin=ray_origin,
+                ray_dirs=ray_dirs,
+                s0=cfg.near,
+                s1=cfg.far,
+                mu=x_s,
+                cov3=cov3_s,
+                strength=line_strength,
+                mass_normalized=cfg.incidence_mode == "ray_gaussian_line_mass",
+            )
+            a_s = 1.0 - torch.exp(-tau)
         else:
-            a_s = alpha_s[:, None] * kernel
+            diff = pix[None, :, :] - uv_s[:, None, :]     # [N,C,2]
+            dx = diff[..., 0]
+            dy = diff[..., 1]
+            maha = inv00[:, None] * dx * dx + 2.0 * inv01[:, None] * dx * dy + inv11[:, None] * dy * dy
+            kernel = torch.exp(-0.5 * maha.clamp_min(0.0))
+
+            if cfg.opacity_transfer == "optical_thickness":
+                a_s = 1.0 - torch.exp(-alpha_s[:, None].clamp_min(0.0) * kernel)
+            else:
+                a_s = alpha_s[:, None] * kernel
         a_s = a_s.clamp(0.0, cfg.max_alpha_per_element)
         a_s = a_s * valid_s[:, None].float()
 
@@ -1294,6 +1340,7 @@ def gauge_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg["model"]["init_thickness"] = float(cfg["model"]["init_thickness"])
     cfg["model"]["slab_rotation_init_std"] = float(cfg["model"]["slab_rotation_init_std"])
     cfg["model"]["metric_offdiag_scale"] = float(cfg["model"]["metric_offdiag_scale"])
+    cfg["render"]["incidence_mode"] = validate_incidence_mode(cfg["render"]["incidence_mode"])
     cfg["render"]["opacity_transfer"] = validate_opacity_transfer(cfg["render"]["opacity_transfer"])
     return cfg
 
@@ -1306,6 +1353,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default=None, help="Override train.device from the config.")
     parser.add_argument("--steps", type=int, default=None, help="Override train.steps from the config.")
     parser.add_argument("--support-mode", default=None, choices=sorted(SUPPORT_MODES), help="Override model.support_mode.")
+    parser.add_argument(
+        "--incidence-mode",
+        default=None,
+        choices=sorted(INCIDENCE_MODES),
+        help="Override render.incidence_mode.",
+    )
     parser.add_argument(
         "--opacity-transfer",
         default=None,
@@ -1328,6 +1381,8 @@ def main() -> None:
         cfg["train"]["steps"] = args.steps
     if args.support_mode is not None:
         cfg["model"]["support_mode"] = validate_support_mode(args.support_mode)
+    if args.incidence_mode is not None:
+        cfg["render"]["incidence_mode"] = validate_incidence_mode(args.incidence_mode)
     if args.opacity_transfer is not None:
         cfg["render"]["opacity_transfer"] = validate_opacity_transfer(args.opacity_transfer)
     if args.output_dir is not None:
@@ -1380,6 +1435,7 @@ def main() -> None:
         min_radius_px=float(render_cfg_values["min_radius_px"]),
         max_radius_px=float(render_cfg_values["max_radius_px"]),
         max_alpha_per_element=float(render_cfg_values["max_alpha_per_element"]),
+        incidence_mode=str(render_cfg_values["incidence_mode"]),
         opacity_transfer=str(render_cfg_values["opacity_transfer"]),
         pixel_chunk=int(render_cfg_values["pixel_chunk"]),
     )
@@ -1398,7 +1454,8 @@ def main() -> None:
         "Gauge-field overfit "
         f"config={config_path} video={bundle.source_path} frames={T}/{data_cfg['max_frames'] or 'all'} size={H}x{W} "
         f"elements={model_cfg['num_elements']} basis={model_cfg['num_basis']} "
-        f"support_mode={model_cfg['support_mode']} opacity_transfer={render_cfg.opacity_transfer} "
+        f"support_mode={model_cfg['support_mode']} incidence_mode={render_cfg.incidence_mode} "
+        f"opacity_transfer={render_cfg.opacity_transfer} "
         f"train_frame_count={train_cfg['train_frame_count']} frames_per_step={train_cfg['frames_per_step']} "
         f"steps={train_cfg['steps']} device={device}"
     )

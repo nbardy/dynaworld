@@ -3,25 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import sys
 from typing import Any
 
 
-EXPERIMENT_DIR = Path(__file__).resolve().parent
-DYNAWORLD_ROOT = Path(__file__).resolve().parents[2]
-TRAIN_SRC = DYNAWORLD_ROOT / "src" / "train"
-if str(TRAIN_SRC) not in sys.path:
-    sys.path.insert(0, str(TRAIN_SRC))
-
+from common import DYNAWORLD_ROOT, resolve_dynaworld_path  # noqa: E402
 from config_utils import load_config_file  # noqa: E402
 from train import gauge_config  # noqa: E402
-
-
-def resolve_dynaworld_path(path: str | Path) -> Path:
-    value = Path(path)
-    if value.is_absolute():
-        return value
-    return DYNAWORLD_ROOT / value
 
 
 def parse_float_list(value: str) -> list[float]:
@@ -61,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--radii", default="0.05,0.07,0.09")
     parser.add_argument("--alpha-logits", default="-1.2,0.0")
     parser.add_argument("--support-modes", default="screen_disk,oriented_slab,rank_adaptive_metric")
+    parser.add_argument("--incidence-modes", default="projected_conic")
     parser.add_argument("--steps", type=int, default=150)
     parser.add_argument("--wandb-mode", default="online")
     parser.add_argument("--disable-wandb", action="store_true")
@@ -74,44 +62,49 @@ def main() -> None:
 
     written = []
     for support_mode in parse_string_list(args.support_modes):
-        for elements in parse_int_list(args.elements):
-            for radius in parse_float_list(args.radii):
-                for alpha_logit in parse_float_list(args.alpha_logits):
-                    cfg = json.loads(json.dumps(base_config))
-                    cfg.setdefault("model", {})
-                    cfg.setdefault("train", {})
-                    cfg.setdefault("logging", {})
-                    cfg["model"]["support_mode"] = support_mode
-                    cfg["model"]["num_elements"] = int(elements)
-                    cfg["model"]["init_radius"] = float(radius)
-                    cfg["model"]["init_alpha_logit"] = float(alpha_logit)
-                    cfg["train"]["steps"] = int(args.steps)
+        for incidence_mode in parse_string_list(args.incidence_modes):
+            for elements in parse_int_list(args.elements):
+                for radius in parse_float_list(args.radii):
+                    for alpha_logit in parse_float_list(args.alpha_logits):
+                        cfg = json.loads(json.dumps(base_config))
+                        cfg.setdefault("model", {})
+                        cfg.setdefault("render", {})
+                        cfg.setdefault("train", {})
+                        cfg.setdefault("logging", {})
+                        cfg["model"]["support_mode"] = support_mode
+                        cfg["render"]["incidence_mode"] = incidence_mode
+                        cfg["model"]["num_elements"] = int(elements)
+                        cfg["model"]["init_radius"] = float(radius)
+                        cfg["model"]["init_alpha_logit"] = float(alpha_logit)
+                        cfg["train"]["steps"] = int(args.steps)
 
-                    run_slug = (
-                        f"gauge_fields_{support_mode}_motion_128_16f_"
-                        f"{elements}el-r{format_float_token(radius)}-a{format_float_token(alpha_logit)}-"
-                        f"{int(args.steps)}step"
-                    )
-                    cfg["logging"]["wandb_run_name"] = run_slug
-                    cfg["logging"]["wandb_mode"] = args.wandb_mode
-                    cfg["logging"]["log_to_wandb"] = not bool(args.disable_wandb)
-                    cfg["logging"]["output_dir"] = f"outputs/gauge_fields/sweeps/{run_slug}"
-                    cfg["logging"]["wandb_tags"] = [
-                        "gauge-fields",
-                        support_mode,
-                        "support-mode",
-                        "coverage-sweep",
-                        "128px",
-                        "16f",
-                        f"{int(args.steps)}step",
-                        f"{elements}el",
-                        f"r{format_float_token(radius)}",
-                        f"a{format_float_token(alpha_logit)}",
-                    ]
+                        run_slug = (
+                            f"gauge_fields_{support_mode}_{incidence_mode}_motion_128_16f_"
+                            f"{elements}el-r{format_float_token(radius)}-a{format_float_token(alpha_logit)}-"
+                            f"{int(args.steps)}step"
+                        )
+                        cfg["logging"]["wandb_run_name"] = run_slug
+                        cfg["logging"]["wandb_mode"] = args.wandb_mode
+                        cfg["logging"]["log_to_wandb"] = not bool(args.disable_wandb)
+                        cfg["logging"]["output_dir"] = f"outputs/gauge_fields/sweeps/{run_slug}"
+                        cfg["logging"]["wandb_tags"] = [
+                            "gauge-fields",
+                            support_mode,
+                            "support-mode",
+                            incidence_mode,
+                            "incidence-mode",
+                            "coverage-sweep",
+                            "128px",
+                            "16f",
+                            f"{int(args.steps)}step",
+                            f"{elements}el",
+                            f"r{format_float_token(radius)}",
+                            f"a{format_float_token(alpha_logit)}",
+                        ]
 
-                    path = output_dir / f"local_mac_{run_slug}.jsonc"
-                    write_jsonc(path, cfg)
-                    written.append(path)
+                        path = output_dir / f"local_mac_{run_slug}.jsonc"
+                        write_jsonc(path, cfg)
+                        written.append(path)
 
     for path in written:
         try:
