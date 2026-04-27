@@ -70,6 +70,33 @@ RUNS = [
         "extra_args": [],
     },
     {
+        "name": "derived_support_metric_ray_gaussian_line_mass_multiview_init_pair_x",
+        "script": "research_experiments/gauge_fields/train.py",
+        "config": (
+            "src/train_configs/"
+            "local_mac_gauge_fields_multicam_deepview_3cam_train2_test1_derived_support_metric_ray_gaussian_line_mass_multiview_init_pair_x_128_16f_2048el.jsonc"
+        ),
+        "extra_args": [],
+    },
+    {
+        "name": "derived_support_metric_scale_0p025_multiview_init_pair_x",
+        "script": "research_experiments/gauge_fields/train.py",
+        "config": (
+            "src/train_configs/"
+            "local_mac_gauge_fields_multicam_deepview_3cam_train2_test1_derived_support_metric_scale_0p025_multiview_init_pair_x_128_16f_2048el.jsonc"
+        ),
+        "extra_args": [],
+    },
+    {
+        "name": "derived_support_metric_scale_0p050_multiview_init_pair_x",
+        "script": "research_experiments/gauge_fields/train.py",
+        "config": (
+            "src/train_configs/"
+            "local_mac_gauge_fields_multicam_deepview_3cam_train2_test1_derived_support_metric_scale_0p050_multiview_init_pair_x_128_16f_2048el.jsonc"
+        ),
+        "extra_args": [],
+    },
+    {
         "name": "screen_disk_2048_multiview_init_pair_x",
         "script": "research_experiments/gauge_fields/train.py",
         "config": (

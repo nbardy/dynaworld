@@ -177,6 +177,20 @@ No per-element covariance is learned in this mode. The existing
 `world_support_covariance_for_incidence`, but the first benchmark row used the
 fast projected-conic approximation.
 
+Follow-up config pass added the exact-incidence and calibration run rows without
+changing the trainer:
+
+```text
+derived_support_metric / ray_gaussian_line_mass / pair-X
+derived_support_metric / projected_conic / pair-X / scale 0.025
+derived_support_metric / projected_conic / pair-X / scale 0.050
+```
+
+The holdout runner now includes those rows, `make_sweep_configs.py` can also
+generate small derived-support calibration sweeps over scale/floor/weight-tau
+and trace normalization, and `summarize_runs.py` exposes the derived-support
+knobs plus emitted trace diagnostics.
+
 Added diagnostics:
 
 ```text
@@ -207,3 +221,96 @@ Interpretation: derived support is the best gauge row so far and materially
 faster than the learned rank-adaptive pair-X row, but it still does not approach
 the free dynamic 3DGS baseline. This makes it worth one calibration pass, not a
 full new renderer yet.
+
+## Calibration And Probe Pass
+
+Added the first derived-support red-team probes to
+`cheat_probe_material_gauge.py`:
+
+```text
+neighborhood_support_shuffle   shuffle KNN support rows while positions remain fixed
+graph_expansion                insert low-opacity midpoint support anchors
+xmap_shuffle                   preserve rendered positions but permute canonical identity
+```
+
+The probe harness now loads `multicam_val` checkpoints through the same
+`load_gauge_video_bundle` path as training, so probes can run on train-2/test-1
+DeepView checkpoints instead of only explicit-video clips.
+
+Validation:
+
+```text
+uv run python -m py_compile research_experiments/gauge_fields/cheat_probe_material_gauge.py \
+  research_experiments/gauge_fields/run_deepview_3cam_holdout.py \
+  research_experiments/gauge_fields/summarize_runs.py \
+  tests/test_gauge_incidence.py
+
+uv run --with pytest python -m pytest tests/test_gauge_incidence.py -q
+# 8 passed
+```
+
+Projected-conic scale calibration at 80 steps:
+
+```text
+derived_support_scale  heldout PSNR  heldout L1  wall
+0.025                  8.0715        0.3145      2.61 min
+0.035                  8.8518        0.2869      2.08 min
+0.050                  9.8654        0.2562      2.34 min
+```
+
+The wider derived-support row is now the best gauge row in this local matrix,
+but still trails `free_dynamic_3dgs`:
+
+```text
+free_dynamic_3dgs                         heldout PSNR 13.2940, wall 3.07 min
+derived_support_metric scale 0.050        heldout PSNR  9.8654, wall 2.34 min
+derived_support_metric scale 0.035        heldout PSNR  8.8518, wall 2.08 min
+screen_disk naked                         heldout PSNR  7.4607, wall 3.44 min
+```
+
+This is useful but not a breakthrough yet. The apparent gain is coupled to
+coverage: `scale=0.050` raises held-out alpha coverage and projection coverage
+substantially. The next fair question is whether the gain survives matched
+coverage or whether it is mainly broad support.
+
+Exact line-mass incidence:
+
+```text
+tiny 1-step smoke passed, but was under-covered
+20-step / 2048el / 128px probe was terminated after ~4:40 without completion
+```
+
+So `ray_gaussian_line_mass` remains a correctness/diagnostic path. Do not put it
+in the main 80-step matrix until the tiled incidence raster is much faster or
+the candidate count is reduced.
+
+Probe result on the best gauge checkpoint
+(`derived_support_metric_scale_0p050_multiview_init_pair_x`):
+
+```text
+probe                          d_render_l1      d_target_l1      d_xmap_l1
+basis_scale_gauge              0                0                0
+radius_inflate                 0                0                0
+depth_slide                    0.01018          0.00121          0.00393
+motion_phase_shift             0.00720          0.0000069        0.00237
+neighborhood_support_shuffle   0.02698          0.00965          0.00868
+graph_expansion                0.06350          0.03729          0.01860
+dormant_insert                 0.06451          0.03774          0.01903
+opacity_split_clone            0.06820          0.04063          0.01944
+xmap_shuffle                   0.00000058       0.00000002       0.05533
+```
+
+The important signal is `xmap_shuffle`: it is almost RGB-null while strongly
+moving the rendered identity map. This is exactly the kind of degeneracy the
+red-team framing is meant to expose. The current renderer can preserve pixels
+while breaking canonical identity. That argues for treating X/identity
+consistency as a real certificate or future loss, not just a visualization.
+
+Current recommendation:
+
+```text
+keep derived_support_metric / projected_conic / scale 0.050 as the best gauge control
+do not spend more on exact line incidence until tiled incidence exists
+add matched-coverage comparisons before claiming derived support is better
+promote xmap_shuffle into the standard red-team report for every gauge row
+```

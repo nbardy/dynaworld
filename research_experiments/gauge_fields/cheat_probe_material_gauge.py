@@ -22,6 +22,7 @@ from train import (  # noqa: E402
     flow_health_metrics,
     gauge_config,
     load_baseline_video,
+    load_gauge_video_bundle,
     model_metrics,
     motion_health_metrics,
     path_or_none,
@@ -202,6 +203,15 @@ def append_elements(
 def load_target_video(cfg: dict[str, Any], device: torch.device) -> torch.Tensor:
     data_cfg = cfg["data"]
     render_cfg = cfg["render"]
+    if str(data_cfg["frame_source"]) == "multicam_val":
+        bundle = load_gauge_video_bundle(
+            data_cfg=data_cfg,
+            camera_cfg=cfg["camera"],
+            render_size=int(render_cfg["render_size"]),
+            device=device,
+        )
+        return bundle.video
+
     frames_dir = path_or_none(data_cfg["frames_dir"])
     if frames_dir is not None:
         frames_dir = resolve_dynaworld_path(frames_dir)
@@ -244,6 +254,19 @@ def choose_indices(model: MaterialSurfelField, sample_fraction: float, seed: int
     gen.manual_seed(int(seed))
     idx = torch.randperm(model.N, generator=gen)[:count]
     return idx.to(model.x0.device)
+
+
+def shuffled_like(idx: torch.Tensor, seed: int) -> torch.Tensor:
+    if idx.numel() <= 1:
+        return idx
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(int(seed))
+    order = torch.randperm(idx.numel(), generator=gen).to(idx.device)
+    return idx[order]
+
+
+def has_derived_support_graph(model: MaterialSurfelField) -> bool:
+    return model.support_mode == "derived_support_metric" and model.support_knn_idx.numel() > 0
 
 
 @torch.no_grad()
@@ -351,6 +374,65 @@ def probe_dormant_insert(model: MaterialSurfelField, args: argparse.Namespace) -
     )
 
 
+@torch.no_grad()
+def probe_neighborhood_support_shuffle(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
+    if not has_derived_support_graph(model):
+        return model
+    idx = choose_indices(model, args.sample_fraction, args.seed)
+    src = shuffled_like(idx, args.seed + 101)
+    model.support_knn_idx[idx] = model.support_knn_idx[src]
+    model.support_knn_weights[idx] = model.support_knn_weights[src]
+    return model
+
+
+@torch.no_grad()
+def probe_graph_expansion(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
+    if not has_derived_support_graph(model):
+        return model
+    idx = choose_indices(model, args.sample_fraction, args.seed + 23)
+    neighbor = model.support_knn_idx[idx, 0]
+    x0 = 0.5 * (model.x0[idx] + model.x0[neighbor])
+    color = 0.5 * (model.color_logits[idx] + model.color_logits[neighbor])
+    raw_alpha = torch.full_like(model.raw_alpha[idx], float(args.graph_expansion_alpha_logit))
+    log_radius = 0.5 * (model.log_radius[idx] + model.log_radius[neighbor])
+    basis = 0.5 * (model.nr_basis[idx] + model.nr_basis[neighbor])
+    slab_log_scales = 0.5 * (model.slab_log_scales[idx] + model.slab_log_scales[neighbor])
+    metric_log_diag = 0.5 * (model.metric_log_diag[idx] + model.metric_log_diag[neighbor])
+    metric_offdiag = 0.5 * (model.metric_offdiag[idx] + model.metric_offdiag[neighbor])
+    slab_raw_rot = 0.5 * (model.slab_raw_rot[idx] + model.slab_raw_rot[neighbor])
+    return append_elements(
+        model,
+        x0,
+        color,
+        raw_alpha,
+        log_radius,
+        basis,
+        slab_log_scales,
+        metric_log_diag,
+        metric_offdiag,
+        slab_raw_rot,
+    )
+
+
+@torch.no_grad()
+def probe_xmap_shuffle(model: MaterialSurfelField, args: argparse.Namespace) -> MaterialSurfelField:
+    if not has_derived_support_graph(model) or model.L == 0:
+        return model
+    coeff_cpu = model.nr_coeff.detach().cpu()
+    if int(torch.linalg.matrix_rank(coeff_cpu).item()) < model.T:
+        return model
+
+    idx = choose_indices(model, args.sample_fraction, args.seed + 41)
+    src = shuffled_like(idx, args.seed + 149)
+    positions = torch.stack([model.positions(t)[idx].detach().clone() for t in range(model.T)], dim=0)
+    shuffled_x0 = model.x0[src].detach().clone()
+    rhs = (positions - shuffled_x0[None, :, :]).reshape(model.T, -1).cpu()
+    solution = torch.linalg.lstsq(coeff_cpu, rhs).solution.reshape(model.L, idx.numel(), 3).permute(1, 0, 2)
+    model.x0[idx] = shuffled_x0
+    model.nr_basis[idx] = solution.to(device=model.x0.device, dtype=model.x0.dtype)
+    return model
+
+
 PROBES: dict[str, ProbeFn] = {
     "depth_slide": probe_depth_slide,
     "radius_inflate": probe_radius_inflate,
@@ -359,6 +441,9 @@ PROBES: dict[str, ProbeFn] = {
     "motion_phase_shift": probe_motion_phase_shift,
     "opacity_split_clone": probe_opacity_split_clone,
     "dormant_insert": probe_dormant_insert,
+    "neighborhood_support_shuffle": probe_neighborhood_support_shuffle,
+    "graph_expansion": probe_graph_expansion,
+    "xmap_shuffle": probe_xmap_shuffle,
 }
 
 
@@ -588,6 +673,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dormant-fraction", type=float, default=0.05)
     parser.add_argument("--dormant-depth-offset", type=float, default=0.25)
     parser.add_argument("--dormant-alpha-logit", type=float, default=-4.0)
+    parser.add_argument("--graph-expansion-alpha-logit", type=float, default=-8.0)
     parser.add_argument("--xmap-bins", type=int, default=16)
     parser.add_argument("--xmap-alpha-min", type=float, default=0.05)
     parser.add_argument("--include-flow", action="store_true")

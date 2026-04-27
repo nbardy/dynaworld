@@ -12,6 +12,17 @@ sys.path.insert(0, str(ROOT / "research_experiments" / "gauge_fields"))
 
 from incidence import ray_gaussian_line_optical_depth, validate_incidence_mode  # noqa: E402
 from train import MaterialSurfelField, gauge_config  # noqa: E402
+from cheat_probe_material_gauge import (  # noqa: E402
+    probe_graph_expansion,
+    probe_neighborhood_support_shuffle,
+    probe_xmap_shuffle,
+)
+
+
+class ProbeArgs:
+    sample_fraction = 1.0
+    seed = 0
+    graph_expansion_alpha_logit = -8.0
 
 
 def test_mass_normalized_isotropic_whole_line_matches_closed_form() -> None:
@@ -165,3 +176,88 @@ def test_derived_support_metric_uses_transported_neighbor_covariance() -> None:
     assert torch.allclose(cov, cov.transpose(-1, -2))
     eig = torch.linalg.eigvalsh(cov)
     assert torch.all(eig > 0)
+
+
+def test_neighborhood_support_shuffle_changes_derived_support_graph() -> None:
+    x0 = torch.tensor(
+        [
+            [-1.0, 0.0, 0.0],
+            [-0.2, 0.0, 0.0],
+            [0.4, 0.1, 0.0],
+            [1.2, 0.0, 0.0],
+            [0.2, 1.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = MaterialSurfelField(
+        init_x0=x0,
+        num_frames=1,
+        num_basis=0,
+        support_mode="derived_support_metric",
+        support_knn_k=2,
+    )
+    before = model.support_knn_idx.clone()
+
+    probe_neighborhood_support_shuffle(model, ProbeArgs())
+
+    assert model.support_knn_idx.shape == before.shape
+    assert not torch.equal(model.support_knn_idx, before)
+    assert set(map(tuple, model.support_knn_idx.tolist())) == set(map(tuple, before.tolist()))
+
+
+def test_graph_expansion_adds_low_opacity_midpoint_support_anchors() -> None:
+    x0 = torch.tensor(
+        [
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.5, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = MaterialSurfelField(
+        init_x0=x0,
+        num_frames=1,
+        num_basis=0,
+        support_mode="derived_support_metric",
+        support_knn_k=2,
+    )
+    expanded = probe_graph_expansion(model, ProbeArgs())
+
+    assert expanded.N == 8
+    assert torch.allclose(
+        expanded.raw_alpha[4:],
+        torch.full_like(expanded.raw_alpha[4:], ProbeArgs.graph_expansion_alpha_logit),
+    )
+    assert expanded.support_knn_idx.shape == (8, 2)
+
+
+def test_xmap_shuffle_preserves_positions_when_coefficients_span_frames() -> None:
+    x0 = torch.tensor(
+        [
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = MaterialSurfelField(
+        init_x0=x0,
+        num_frames=2,
+        num_basis=2,
+        support_mode="derived_support_metric",
+        support_knn_k=2,
+    )
+    with torch.no_grad():
+        model.nr_coeff.copy_(torch.eye(2))
+        model.nr_basis[:, 0, :] = torch.tensor([0.05, 0.0, 0.0])
+        model.nr_basis[:, 1, :] = torch.tensor([0.0, 0.05, 0.0])
+    positions_before = torch.stack([model.positions(t).detach().clone() for t in range(model.T)], dim=0)
+    x0_before = model.x0.detach().clone()
+
+    probe_xmap_shuffle(model, ProbeArgs())
+
+    positions_after = torch.stack([model.positions(t).detach().clone() for t in range(model.T)], dim=0)
+    assert torch.allclose(positions_after, positions_before, atol=1e-6)
+    assert not torch.allclose(model.x0, x0_before)
