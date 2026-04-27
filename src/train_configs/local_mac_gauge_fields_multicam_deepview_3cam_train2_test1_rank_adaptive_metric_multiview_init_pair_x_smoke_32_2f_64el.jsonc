@@ -1,0 +1,93 @@
+{
+  // Train on two DeepView cameras with multi-view init and pairwise X-map consistency.
+  "arch": "gauge_fields_material_surfel",
+  "data": {
+    "sequence_dir": "test_data",
+    "frames_dir": null,
+    "video_path": null,
+    "frame_source": "multicam_val",
+    "max_frames": 2,
+    "frame_indices": null,
+    "multicam_manifest": "data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/manifest.jsonl",
+    "multicam_split": "val",
+    "multicam_sample_id": "deepview_03_Dog_camera_0001_to_camera_0040",
+    "multicam_sample_index": 0,
+    "multicam_train_cameras": ["camera_0001", "camera_0015"],
+    "multicam_heldout_camera": "camera_0040",
+    "multicam_anchor_camera": "camera_0001"
+  },
+  "model": {
+    "num_elements": 64,
+    "num_basis": 2,
+    "support_mode": "rank_adaptive_metric",
+    "init_source": "multiview_first_frames",
+    "support_knn_k": 8,
+    "support_jacobian_lambda": 0.0001,
+    "init_basis_std": 0.001,
+    "init_coeff_std": 0.0,
+    "init_depth": 0.5,
+    "init_radius": 0.035,
+    "init_thickness": 0.0035,
+    "slab_rotation_init_std": 0.0,
+    "metric_offdiag_scale": 0.01,
+    "init_alpha_logit": 0.0
+  },
+  "camera": {
+    "lens_model": "pinhole",
+    "base_fov_degrees": 60.0,
+    "multicam_pose_source": "auto"
+  },
+  "render": {
+    "render_size": 32,
+    "background": [1.0, 1.0, 1.0],
+    "near_plane": 0.001,
+    "far_plane": 10000.0,
+    "min_radius_px": 0.75,
+    "max_radius_px": 24.0,
+    "max_alpha_per_element": 0.95,
+    "incidence_mode": "projected_conic",
+    "line_candidate_mode": "all_pairs",
+    "line_tile_size": 16,
+    "line_tile_sigma": 4.0,
+    "opacity_transfer": "linear",
+    "pixel_chunk": 256
+  },
+  "train": {
+    "steps": 2,
+    "lr": 0.002,
+    "device": "auto",
+    "seed": 0,
+    "frames_per_step": 1,
+    "train_frame_count": 2
+  },
+  "losses": {
+    "rgb_weight": 1.0,
+    "query_weight": 0.0,
+    "pair_x_weight": 0.05,
+    "pair_x_depth_sigma": 0.1,
+    "pair_x_alpha_min": 0.05,
+    "pair_x_every": 1,
+    "flow_weight": 0.0,
+    "depth_weight": 0.0,
+    "arap_weight": 0.0,
+    "smooth_weight": 0.001,
+    "mass_weight": 0.0,
+    "radius_weight": 0.0001
+  },
+  "logging": {
+    "log_every": 1,
+    "log_to_wandb": false,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "gauge-fields-3cam-rank-adaptive-multiview-init-pair-x-smoke-32-2f-64el",
+    "wandb_tags": [
+      "gauge-fields",
+      "rank-adaptive-metric",
+      "3cam-train2-test1",
+      "multiview-init",
+      "pair-x",
+      "smoke"
+    ],
+    "wandb_mode": "online",
+    "output_dir": "outputs/gauge_fields/multicam_deepview_3cam_rank_adaptive_multiview_init_pair_x_smoke_32_2f_64el"
+  }
+}

@@ -41,6 +41,15 @@ RUNS = [
         "extra_args": [],
     },
     {
+        "name": "rank_adaptive_metric_multiview_init_pair_x",
+        "script": "research_experiments/gauge_fields/train.py",
+        "config": (
+            "src/train_configs/"
+            "local_mac_gauge_fields_multicam_deepview_3cam_train2_test1_rank_adaptive_metric_multiview_init_pair_x_128_16f_2048el.jsonc"
+        ),
+        "extra_args": [],
+    },
+    {
         "name": "rank_adaptive_metric_ray_gaussian_line_mass_candidate_tiled",
         "script": "research_experiments/gauge_fields/train.py",
         "config": BASE_CONFIG,

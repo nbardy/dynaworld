@@ -29,6 +29,7 @@ from config_utils import apply_defaults, load_config_file, path_or_none, resolve
 from data import (
     GaugeVideoBundle,
     initialize_material_points_from_first_frame,
+    initialize_material_points_from_multiview_first_frames,
     load_baseline_video,
     load_gauge_video_bundle,
     make_fixed_pinhole_camera,
@@ -73,6 +74,7 @@ MODEL_DEFAULTS = {
     "num_elements": 512,
     "num_basis": 8,
     "support_mode": "screen_disk",
+    "init_source": "anchor_first_frame",
     "support_knn_k": 8,
     "support_jacobian_lambda": 1e-4,
     "init_basis_std": 0.001,
@@ -119,6 +121,10 @@ TRAIN_DEFAULTS = {
 LOSS_DEFAULTS = {
     "rgb_weight": 1.0,
     "query_weight": 0.25,
+    "pair_x_weight": 0.0,
+    "pair_x_depth_sigma": 0.1,
+    "pair_x_alpha_min": 0.05,
+    "pair_x_every": 4,
     "flow_weight": 0.0,
     "depth_weight": 0.0,
     "arap_weight": 0.05,
@@ -939,6 +945,95 @@ def scale_shift_depth_loss(
     return robust_l1(aligned[mask] - target_depth[mask])
 
 
+def world_positions_from_depth(depth: torch.Tensor, K: torch.Tensor, w2c: torch.Tensor) -> torch.Tensor:
+    H, W = depth.shape
+    pixels = make_pixel_grid(H, W, depth.device).to(dtype=depth.dtype)
+    z = depth.reshape(-1)
+    x = (pixels[:, 0] - K[0, 2]) * z / K[0, 0].clamp_min(1e-6)
+    y = (pixels[:, 1] - K[1, 2]) * z / K[1, 1].clamp_min(1e-6)
+    x_cam = torch.stack([x, y, z], dim=-1)
+    xh = torch.cat([x_cam, torch.ones(x_cam.shape[0], 1, device=depth.device, dtype=depth.dtype)], dim=-1)
+    return (xh @ torch.linalg.inv(w2c).T)[:, :3]
+
+
+def bilinear_sample_map(image: torch.Tensor, uv: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    H, W = image.shape[:2]
+    channels = 1 if image.ndim == 2 else image.shape[-1]
+    flat_image = image.reshape(H * W, channels) if image.ndim == 3 else image.reshape(H * W, 1)
+
+    x = uv[:, 0].detach()
+    y = uv[:, 1].detach()
+    valid = (x >= 0.0) & (x <= float(W - 1)) & (y >= 0.0) & (y <= float(H - 1))
+
+    x0 = torch.floor(x).long().clamp(0, W - 1)
+    y0 = torch.floor(y).long().clamp(0, H - 1)
+    x1 = (x0 + 1).clamp(0, W - 1)
+    y1 = (y0 + 1).clamp(0, H - 1)
+
+    wx = (x - x0.to(dtype=x.dtype)).clamp(0.0, 1.0)
+    wy = (y - y0.to(dtype=y.dtype)).clamp(0.0, 1.0)
+    w00 = ((1.0 - wx) * (1.0 - wy)).unsqueeze(-1)
+    w10 = (wx * (1.0 - wy)).unsqueeze(-1)
+    w01 = ((1.0 - wx) * wy).unsqueeze(-1)
+    w11 = (wx * wy).unsqueeze(-1)
+
+    idx00 = y0 * W + x0
+    idx10 = y0 * W + x1
+    idx01 = y1 * W + x0
+    idx11 = y1 * W + x1
+    sampled = (
+        w00 * flat_image[idx00]
+        + w10 * flat_image[idx10]
+        + w01 * flat_image[idx01]
+        + w11 * flat_image[idx11]
+    )
+    if image.ndim == 2:
+        return sampled[:, 0], valid
+    return sampled, valid
+
+
+def pairwise_x_consistency_loss(
+    src: dict[str, torch.Tensor],
+    dst: dict[str, torch.Tensor],
+    *,
+    K_src: torch.Tensor,
+    w2c_src: torch.Tensor,
+    K_dst: torch.Tensor,
+    w2c_dst: torch.Tensor,
+    near: float,
+    far: float,
+    alpha_min: float,
+    depth_sigma: float,
+) -> torch.Tensor:
+    H, W = src["depth"].shape
+    P_world = world_positions_from_depth(src["depth"], K_src, w2c_src)
+    uv_dst, z_dst, project_valid = project_points(P_world, K_dst, w2c_dst, near=near, far=far)
+
+    dst_x, sample_valid = bilinear_sample_map(dst["xmap"], uv_dst)
+    dst_alpha, _ = bilinear_sample_map(dst["alpha"], uv_dst)
+    dst_depth, _ = bilinear_sample_map(dst["depth"], uv_dst)
+
+    src_x = src["xmap"].reshape(H * W, 3)
+    src_alpha = src["alpha"].reshape(H * W)
+    src_depth = src["depth"].reshape(H * W)
+    finite = torch.isfinite(src_x).all(dim=-1) & torch.isfinite(dst_x).all(dim=-1)
+    finite = finite & torch.isfinite(src_depth) & torch.isfinite(dst_depth)
+    mask = (
+        project_valid
+        & sample_valid
+        & finite
+        & (src_alpha.detach() > float(alpha_min))
+        & (dst_alpha.detach() > float(alpha_min))
+    )
+    if mask.sum() < 32:
+        return src["xmap"].new_zeros(())
+
+    depth_weight = torch.exp(-torch.abs(dst_depth - z_dst.detach()) / max(float(depth_sigma), 1e-6))
+    weight = (src_alpha.detach() * dst_alpha.detach() * depth_weight.detach())[mask].clamp_min(1e-4)
+    diff = (src_x[mask] - dst_x[mask]).abs().mean(dim=-1)
+    return (weight * diff).sum() / weight.sum().clamp_min(1e-6)
+
+
 # ----------------------------
 # Training loop
 # ----------------------------
@@ -947,6 +1042,7 @@ def scale_shift_depth_loss(
 class TrainWeights:
     rgb: float = 1.0
     query: float = 0.25
+    pair_x: float = 0.0
     flow: float = 0.05
     depth: float = 0.02
     arap: float = 0.05
@@ -980,6 +1076,9 @@ def train_material_surfel_field(
     lr: float = 2e-3,
     weights: TrainWeights = TrainWeights(),
     query_every: int = 4,
+    pair_x_every: int = 1,
+    pair_x_depth_sigma: float = 0.1,
+    pair_x_alpha_min: float = 0.05,
     render_cfg: Optional[RenderConfig] = None,
     log_every: int = 50,
 ):
@@ -1058,6 +1157,7 @@ def train_material_surfel_field(
 
         total_loss = video.new_zeros(())
         rgb_meter = 0.0
+        pair_x_meter = 0.0
 
         for vb, tb in zip(views.tolist(), frames.tolist()):
             use_flow = flow is not None and view_count == 1 and tb < T - 1
@@ -1090,6 +1190,39 @@ def train_material_surfel_field(
             total_loss = total_loss + loss
 
         total_loss = total_loss / float(batch_size)
+
+        if weights.pair_x > 0 and view_count > 1 and (step % pair_x_every == 0):
+            tp = torch.randint(0, T, (1,), device=device).item()
+            src_view = torch.randint(0, view_count, (1,), device=device).item()
+            dst_view = (src_view + 1 + torch.randint(0, view_count - 1, (1,), device=device).item()) % view_count
+            src_out = render_material_field(
+                model=model,
+                t=tp,
+                K=get_K(src_view, tp),
+                w2c=get_w2c(src_view, tp),
+                cfg=cfg,
+            )
+            dst_out = render_material_field(
+                model=model,
+                t=tp,
+                K=get_K(dst_view, tp),
+                w2c=get_w2c(dst_view, tp),
+                cfg=cfg,
+            )
+            pair_x_l = pairwise_x_consistency_loss(
+                src_out,
+                dst_out,
+                K_src=get_K(src_view, tp),
+                w2c_src=get_w2c(src_view, tp),
+                K_dst=get_K(dst_view, tp),
+                w2c_dst=get_w2c(dst_view, tp),
+                near=cfg.near,
+                far=cfg.far,
+                alpha_min=pair_x_alpha_min,
+                depth_sigma=pair_x_depth_sigma,
+            )
+            pair_x_meter = float(pair_x_l.detach())
+            total_loss = total_loss + weights.pair_x * pair_x_l
 
         # Omitted/query frame loss.
         # Very simple version: every few steps, render a frame not in the sampled context batch.
@@ -1124,6 +1257,7 @@ def train_material_surfel_field(
                 "motion_smooth": float(model.motion_smoothness_loss().detach()),
                 "radius": float(model.radius().mean().detach()),
                 "support_radius_loss": float(model.radius_loss().detach()),
+                "pair_x": pair_x_meter,
             }
             logs.append(log)
             print(log)
@@ -1452,6 +1586,7 @@ def gauge_config(config: dict[str, Any]) -> dict[str, Any]:
     apply_defaults(cfg["logging"], LOGGING_DEFAULTS)
     apply_defaults(cfg["diagnostics"], DIAGNOSTIC_DEFAULTS)
     cfg["model"]["support_mode"] = validate_support_mode(cfg["model"]["support_mode"])
+    cfg["model"]["init_source"] = str(cfg["model"]["init_source"])
     cfg["model"]["support_knn_k"] = int(cfg["model"]["support_knn_k"])
     cfg["model"]["support_jacobian_lambda"] = float(cfg["model"]["support_jacobian_lambda"])
     cfg["model"]["init_thickness"] = float(cfg["model"]["init_thickness"])
@@ -1550,12 +1685,31 @@ def main() -> None:
     train_K = bundle.train_K if bundle.train_K is not None else K
     train_w2c = bundle.train_w2c if bundle.train_w2c is not None else w2c
     T, H, W, _ = video.shape
-    init_x0, init_color = initialize_material_points_from_first_frame(
-        video=video,
-        K=K,
-        num_elements=int(model_cfg["num_elements"]),
-        init_depth=float(model_cfg["init_depth"]),
-    )
+    if (
+        str(model_cfg["init_source"]) == "multiview_first_frames"
+        and bundle.train_videos is not None
+        and bundle.train_K is not None
+        and bundle.train_w2c is not None
+    ):
+        init_x0, init_color = initialize_material_points_from_multiview_first_frames(
+            videos=bundle.train_videos,
+            K=bundle.train_K,
+            w2c=bundle.train_w2c,
+            num_elements=int(model_cfg["num_elements"]),
+            init_depth=float(model_cfg["init_depth"]),
+        )
+    elif str(model_cfg["init_source"]) == "anchor_first_frame":
+        init_x0, init_color = initialize_material_points_from_first_frame(
+            video=video,
+            K=K,
+            num_elements=int(model_cfg["num_elements"]),
+            init_depth=float(model_cfg["init_depth"]),
+        )
+    else:
+        raise ValueError(
+            "model.init_source must be 'anchor_first_frame' or 'multiview_first_frames', "
+            f"got {model_cfg['init_source']!r}."
+        )
 
     render_cfg = RenderConfig(
         H=H,
@@ -1576,6 +1730,7 @@ def main() -> None:
     weights = TrainWeights(
         rgb=float(loss_cfg["rgb_weight"]),
         query=float(loss_cfg["query_weight"]),
+        pair_x=float(loss_cfg["pair_x_weight"]),
         flow=float(loss_cfg["flow_weight"]),
         depth=float(loss_cfg["depth_weight"]),
         arap=float(loss_cfg["arap_weight"]),
@@ -1634,6 +1789,9 @@ def main() -> None:
             metric_offdiag_scale=float(model_cfg["metric_offdiag_scale"]),
             lr=float(train_cfg["lr"]),
             weights=weights,
+            pair_x_every=int(loss_cfg["pair_x_every"]),
+            pair_x_depth_sigma=float(loss_cfg["pair_x_depth_sigma"]),
+            pair_x_alpha_min=float(loss_cfg["pair_x_alpha_min"]),
             render_cfg=render_cfg,
             log_every=int(logging_cfg["log_every"]),
         )

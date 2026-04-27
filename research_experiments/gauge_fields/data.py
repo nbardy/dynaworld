@@ -471,3 +471,50 @@ def initialize_material_points_from_first_frame(
     py = pixels[:, 1].round().long().clamp(0, H - 1)
     color = video[0, py, px]
     return x0, color
+
+
+def initialize_material_points_from_multiview_first_frames(
+    videos: torch.Tensor,
+    K: torch.Tensor,
+    w2c: torch.Tensor,
+    num_elements: int,
+    init_depth: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if videos.ndim != 5:
+        raise ValueError(f"Expected videos [V,T,H,W,3], got {tuple(videos.shape)}.")
+    view_count, _T, H, W, _C = videos.shape
+    device = videos.device
+    base = int(num_elements) // int(view_count)
+    rem = int(num_elements) % int(view_count)
+
+    points = []
+    colors = []
+    for view in range(int(view_count)):
+        count = base + (1 if view < rem else 0)
+        if count <= 0:
+            continue
+        K_view = K[view, 0] if K.ndim == 4 else (K[view] if K.ndim == 3 else K)
+        w2c_view = w2c[view, 0] if w2c.ndim == 4 else w2c[0]
+
+        grid_x = max(1, math.ceil(math.sqrt(float(count) * float(W) / float(H))))
+        grid_y = max(1, math.ceil(float(count) / float(grid_x)))
+        xs = torch.linspace(0.5, float(W) - 0.5, grid_x, device=device)
+        ys = torch.linspace(0.5, float(H) - 0.5, grid_y, device=device)
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+        pixels = torch.stack([xx.reshape(-1), yy.reshape(-1)], dim=-1)[:count]
+
+        z = torch.full((pixels.shape[0],), init_depth, device=device)
+        x = (pixels[:, 0] - K_view[0, 2]) * z / K_view[0, 0]
+        y = (pixels[:, 1] - K_view[1, 2]) * z / K_view[1, 1]
+        x_cam = torch.stack([x, y, z], dim=-1)
+        xh = torch.cat([x_cam, torch.ones(x_cam.shape[0], 1, device=device)], dim=-1)
+        c2w_view = torch.linalg.inv(w2c_view)
+        points.append((xh @ c2w_view.T)[:, :3])
+
+        px = pixels[:, 0].round().long().clamp(0, W - 1)
+        py = pixels[:, 1].round().long().clamp(0, H - 1)
+        colors.append(videos[view, 0, py, px])
+
+    if not points:
+        raise ValueError("num_elements must allocate at least one material point.")
+    return torch.cat(points, dim=0)[:num_elements].contiguous(), torch.cat(colors, dim=0)[:num_elements].contiguous()
