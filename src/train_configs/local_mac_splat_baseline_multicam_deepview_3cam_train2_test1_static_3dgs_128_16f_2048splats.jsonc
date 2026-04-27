@@ -1,0 +1,79 @@
+{
+  // Static 3DGS lower-bound control on the same train-2-cameras/test-1-camera DeepView split.
+  "arch": "splat_baseline_static_3dgs",
+  "data": {
+    "sequence_dir": "test_data",
+    "frames_dir": null,
+    "video_path": null,
+    "frame_source": "multicam_val",
+    "max_frames": 16,
+    "frame_indices": null,
+    "multicam_manifest": "data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/manifest.jsonl",
+    "multicam_split": "val",
+    "multicam_sample_id": "deepview_03_Dog_camera_0001_to_camera_0040",
+    "multicam_sample_index": 0,
+    "multicam_train_cameras": ["camera_0001", "camera_0015"],
+    "multicam_heldout_camera": "camera_0040",
+    "multicam_anchor_camera": "camera_0001"
+  },
+  "model": {
+    "support_mode": "static_3dgs",
+    "splat_mode": "static",
+    "num_splats": 2048,
+    "init_depth": 0.5,
+    "init_scale": 0.035,
+    "scale_init_log_jitter": 0.0,
+    "init_alpha_logit": 0.0,
+    "init_xyz_noise": 0.001,
+    "init_quat_noise": 0.0,
+    "log_scale_min": -12.0,
+    "log_scale_max": 4.0
+  },
+  "camera": {
+    "lens_model": "pinhole",
+    "base_fov_degrees": 60.0,
+    "multicam_pose_source": "auto"
+  },
+  "render": {
+    "render_size": 128,
+    "background": [1.0, 1.0, 1.0],
+    "near_plane": 0.001,
+    "renderer": "dense",
+    "tile_size": 8,
+    "bound_scale": 3.0,
+    "alpha_threshold": 0.00392156862745098,
+    "camera_projection": "legacy_pinhole"
+  },
+  "train": {
+    "steps": 250,
+    "lr": 0.002,
+    "device": "auto",
+    "seed": 0,
+    "frames_per_step": 1,
+    "train_frame_count": 16
+  },
+  "losses": {
+    "rgb_weight": 1.0,
+    "scale_weight": 0.0001,
+    "temporal_smooth_weight": 0.001
+  },
+  "logging": {
+    "log_every": 25,
+    "log_to_wandb": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "splat-baseline-multicam-deepview-3cam-train2-test1-static-3dgs-128-16f-2048splats",
+    "wandb_tags": [
+      "splat-baseline",
+      "static-3dgs",
+      "3cam-train2-test1",
+      "multicam-val",
+      "deepview",
+      "heldout-camera",
+      "128px",
+      "16f",
+      "2048splats"
+    ],
+    "wandb_mode": "online",
+    "output_dir": "outputs/gauge_fields/multicam_deepview_3cam_train2_test1_static_3dgs_128_16f_2048splats"
+  }
+}

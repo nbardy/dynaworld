@@ -48,7 +48,7 @@ from train_logging import build_validation_video_payload, make_preview_image, ma
 
 
 DEFAULT_CONFIG_PATH = "src/train_configs/local_mac_gauge_fields_material_surfel_128_16f_512el.jsonc"
-SUPPORT_MODES = {"screen_disk", "oriented_slab", "rank_adaptive_metric"}
+SUPPORT_MODES = {"screen_disk", "transported_world_ball", "oriented_slab", "rank_adaptive_metric"}
 OPACITY_TRANSFERS = {"linear", "optical_thickness"}
 LINE_CANDIDATE_MODES = {"all_pairs", "projected_bbox"}
 SUPPORT_LOG_SCALE_MIN = -12.0
@@ -122,6 +122,7 @@ LOSS_DEFAULTS = {
     "rgb_weight": 1.0,
     "query_weight": 0.25,
     "pair_x_weight": 0.0,
+    "pair_x_start_step": 0,
     "pair_x_depth_sigma": 0.1,
     "pair_x_alpha_min": 0.05,
     "pair_x_every": 4,
@@ -376,7 +377,7 @@ def world_support_covariance_for_incidence(
     model: MaterialSurfelField,
     x_t: torch.Tensor,
 ) -> torch.Tensor:
-    if model.support_mode == "screen_disk":
+    if model.support_mode in {"screen_disk", "transported_world_ball"}:
         radius = model.radius()[:, 0].clamp_min(1e-6)
         eye3 = torch.eye(3, device=x_t.device, dtype=x_t.dtype).expand(model.N, 3, 3)
         return eye3 * radius.square()[:, None, None]
@@ -533,11 +534,11 @@ class MaterialSurfelField(nn.Module):
         self.nr_coeff = nn.Parameter(
             float(init_coeff_std) * torch.randn(num_frames, num_basis, device=init_x0.device, dtype=init_x0.dtype)
         )
-        self.register_buffer(
-            "support_knn_idx",
-            build_knn_index(init_x0, self.support_knn_k),
-            persistent=True,
-        )
+        if self.support_mode in {"oriented_slab", "rank_adaptive_metric"}:
+            support_knn_idx = build_knn_index(init_x0, self.support_knn_k)
+        else:
+            support_knn_idx = torch.empty(N, 0, device=init_x0.device, dtype=torch.long)
+        self.register_buffer("support_knn_idx", support_knn_idx, persistent=True)
 
     def positions(self, t: int):
         if self.L == 0:
@@ -573,6 +574,10 @@ class MaterialSurfelField(nn.Module):
         return L @ L.transpose(-1, -2)
 
     def world_support_covariance(self, x_t: torch.Tensor) -> torch.Tensor:
+        if self.support_mode == "transported_world_ball":
+            radius = self.radius()[:, 0].clamp_min(1e-6)
+            eye3 = torch.eye(3, device=self.x0.device, dtype=self.x0.dtype).expand(self.N, 3, 3)
+            return eye3 * radius.square()[:, None, None]
         if self.support_mode == "oriented_slab":
             R = self.slab_rotation()
             local_cov = torch.diag_embed(self.slab_scales().square())
@@ -611,7 +616,7 @@ class MaterialSurfelField(nn.Module):
 
     def radius_loss(self):
         # prevents huge image-space blobs
-        if self.support_mode == "screen_disk":
+        if self.support_mode in {"screen_disk", "transported_world_ball"}:
             return (self.radius() ** 2).mean()
         if self.support_mode == "oriented_slab":
             return (self.slab_scales() ** 2).mean()
@@ -1077,6 +1082,7 @@ def train_material_surfel_field(
     weights: TrainWeights = TrainWeights(),
     query_every: int = 4,
     pair_x_every: int = 1,
+    pair_x_start_step: int = 0,
     pair_x_depth_sigma: float = 0.1,
     pair_x_alpha_min: float = 0.05,
     render_cfg: Optional[RenderConfig] = None,
@@ -1121,9 +1127,13 @@ def train_material_surfel_field(
         metric_offdiag_scale=metric_offdiag_scale,
     ).to(device)
 
-    edges, rest_lengths = build_knn_edges(init_x0.detach(), k=8)
-    edges = edges.to(device)
-    rest_lengths = rest_lengths.to(device)
+    if weights.arap > 0:
+        edges, rest_lengths = build_knn_edges(init_x0.detach(), k=8)
+        edges = edges.to(device)
+        rest_lengths = rest_lengths.to(device)
+    else:
+        edges = torch.empty(0, 2, device=device, dtype=torch.long)
+        rest_lengths = torch.empty(0, device=device, dtype=init_x0.dtype)
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -1177,7 +1187,8 @@ def train_material_surfel_field(
             rgb_meter += float(rgb_l.detach())
 
             loss = weights.rgb * rgb_l
-            loss = loss + weights.arap * arap_loss(model, tb, edges, rest_lengths)
+            if weights.arap > 0:
+                loss = loss + weights.arap * arap_loss(model, tb, edges, rest_lengths)
 
             if use_flow:
                 loss = loss + weights.flow * flow_loss(out["flow"], flow[tb], out["alpha"])
@@ -1191,7 +1202,12 @@ def train_material_surfel_field(
 
         total_loss = total_loss / float(batch_size)
 
-        if weights.pair_x > 0 and view_count > 1 and (step % pair_x_every == 0):
+        if (
+            weights.pair_x > 0
+            and view_count > 1
+            and step >= int(pair_x_start_step)
+            and (step % pair_x_every == 0)
+        ):
             tp = torch.randint(0, T, (1,), device=device).item()
             src_view = torch.randint(0, view_count, (1,), device=device).item()
             dst_view = (src_view + 1 + torch.randint(0, view_count - 1, (1,), device=device).item()) % view_count
@@ -1790,6 +1806,7 @@ def main() -> None:
             lr=float(train_cfg["lr"]),
             weights=weights,
             pair_x_every=int(loss_cfg["pair_x_every"]),
+            pair_x_start_step=int(loss_cfg["pair_x_start_step"]),
             pair_x_depth_sigma=float(loss_cfg["pair_x_depth_sigma"]),
             pair_x_alpha_min=float(loss_cfg["pair_x_alpha_min"]),
             render_cfg=render_cfg,
