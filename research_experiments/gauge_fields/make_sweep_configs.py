@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--elements", default="1024,2048,4096")
     parser.add_argument("--radii", default="0.05,0.07,0.09")
     parser.add_argument("--alpha-logits", default="-1.2,0.0")
-    parser.add_argument("--support-modes", default="screen_disk,oriented_slab,rank_adaptive_metric")
+    parser.add_argument("--support-modes", default="screen_disk,derived_support_metric,rank_adaptive_metric")
     parser.add_argument("--incidence-modes", default="projected_conic")
     parser.add_argument("--steps", type=int, default=150)
     parser.add_argument("--wandb-mode", default="online")

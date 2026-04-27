@@ -48,7 +48,13 @@ from train_logging import build_validation_video_payload, make_preview_image, ma
 
 
 DEFAULT_CONFIG_PATH = "src/train_configs/local_mac_gauge_fields_material_surfel_128_16f_512el.jsonc"
-SUPPORT_MODES = {"screen_disk", "transported_world_ball", "oriented_slab", "rank_adaptive_metric"}
+SUPPORT_MODES = {
+    "screen_disk",
+    "transported_world_ball",
+    "oriented_slab",
+    "rank_adaptive_metric",
+    "derived_support_metric",
+}
 OPACITY_TRANSFERS = {"linear", "optical_thickness"}
 LINE_CANDIDATE_MODES = {"all_pairs", "projected_bbox"}
 SUPPORT_LOG_SCALE_MIN = -12.0
@@ -77,6 +83,10 @@ MODEL_DEFAULTS = {
     "init_source": "anchor_first_frame",
     "support_knn_k": 8,
     "support_jacobian_lambda": 1e-4,
+    "derived_support_scale": 0.035,
+    "derived_support_floor": 1e-4,
+    "derived_support_weight_tau": 0.0,
+    "derived_support_normalize_trace": True,
     "init_basis_std": 0.001,
     "init_coeff_std": 0.0,
     "init_depth": 3.0,
@@ -149,6 +159,9 @@ DIAGNOSTIC_DEFAULTS = {
     "xmap_metrics": True,
     "motion_stats": True,
     "flow_stats": False,
+    "support_spectrum": True,
+    "plucker_witness": False,
+    "witness_confidence_threshold": 0.02,
     "xmap_bins": 16,
     "xmap_alpha_min": 0.05,
 }
@@ -258,6 +271,22 @@ def build_knn_index(x0: torch.Tensor, k: int = 8) -> torch.Tensor:
     with torch.no_grad():
         d = torch.cdist(x0.detach(), x0.detach())
         return d.topk(k=kk + 1, largest=False).indices[:, 1:]
+
+
+def build_knn_weights(x0: torch.Tensor, knn_idx: torch.Tensor, tau: float = 0.0) -> torch.Tensor:
+    if knn_idx.numel() == 0:
+        return torch.empty(x0.shape[0], 0, device=x0.device, dtype=x0.dtype)
+    with torch.no_grad():
+        if float(tau) <= 0.0:
+            return torch.full(
+                knn_idx.shape,
+                1.0 / float(knn_idx.shape[1]),
+                device=x0.device,
+                dtype=x0.dtype,
+            )
+        offsets = x0[knn_idx] - x0[:, None, :]
+        weights = torch.exp(-offsets.square().sum(dim=-1) / max(float(tau) ** 2, 1e-12))
+        return weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
 
 
 def build_knn_edges(x0: torch.Tensor, k: int = 8):
@@ -384,6 +413,12 @@ def world_support_covariance_for_incidence(
     return model.world_support_covariance(x_t)
 
 
+def second_moment_spectrum(cov3: torch.Tensor) -> torch.Tensor:
+    cov_cpu = cov3.detach().float().cpu()
+    cov_cpu = 0.5 * (cov_cpu + cov_cpu.transpose(-1, -2))
+    return torch.linalg.eigvalsh(cov_cpu).clamp_min(0.0).flip(dims=(-1,))
+
+
 def exp_bounded_log_scale(log_scale: torch.Tensor) -> torch.Tensor:
     return torch.exp(log_scale.clamp(SUPPORT_LOG_SCALE_MIN, SUPPORT_LOG_SCALE_MAX)).clamp_min(1e-6)
 
@@ -482,6 +517,10 @@ class MaterialSurfelField(nn.Module):
         support_mode: str = "screen_disk",
         support_knn_k: int = 8,
         support_jacobian_lambda: float = 1e-4,
+        derived_support_scale: float = 0.035,
+        derived_support_floor: float = 1e-4,
+        derived_support_weight_tau: float = 0.0,
+        derived_support_normalize_trace: bool = True,
         init_radius: float = 0.015,
         init_thickness: float = 0.005,
         init_color: Optional[torch.Tensor] = None,
@@ -500,6 +539,10 @@ class MaterialSurfelField(nn.Module):
         self.support_knn_k = max(0, min(int(support_knn_k), max(0, N - 1)))
         self.support_jacobian_lambda = float(support_jacobian_lambda)
         self.metric_offdiag_scale = float(metric_offdiag_scale)
+        self.derived_support_scale = float(derived_support_scale)
+        self.derived_support_floor = float(derived_support_floor)
+        self.derived_support_weight_tau = float(derived_support_weight_tau)
+        self.derived_support_normalize_trace = bool(derived_support_normalize_trace)
 
         self.x0 = nn.Parameter(init_x0.clone())                     # [N,3]
         if init_color is None:
@@ -534,11 +577,16 @@ class MaterialSurfelField(nn.Module):
         self.nr_coeff = nn.Parameter(
             float(init_coeff_std) * torch.randn(num_frames, num_basis, device=init_x0.device, dtype=init_x0.dtype)
         )
-        if self.support_mode in {"oriented_slab", "rank_adaptive_metric"}:
+        if self.support_mode in {"oriented_slab", "rank_adaptive_metric", "derived_support_metric"}:
             support_knn_idx = build_knn_index(init_x0, self.support_knn_k)
         else:
             support_knn_idx = torch.empty(N, 0, device=init_x0.device, dtype=torch.long)
         self.register_buffer("support_knn_idx", support_knn_idx, persistent=True)
+        self.register_buffer(
+            "support_knn_weights",
+            build_knn_weights(init_x0, support_knn_idx, self.derived_support_weight_tau),
+            persistent=True,
+        )
 
     def positions(self, t: int):
         if self.L == 0:
@@ -573,11 +621,33 @@ class MaterialSurfelField(nn.Module):
         L[:, 2, 2] = diag[:, 2]
         return L @ L.transpose(-1, -2)
 
+    def derived_support_covariance(self, x_t: torch.Tensor) -> torch.Tensor:
+        eye3 = torch.eye(3, device=x_t.device, dtype=x_t.dtype).expand(self.N, 3, 3)
+        if self.support_knn_idx.numel() == 0:
+            floor_var = max(float(self.derived_support_floor), 1e-8) ** 2
+            return floor_var * eye3
+
+        offsets = x_t[self.support_knn_idx] - x_t[:, None, :]
+        weights = self.support_knn_weights.to(device=x_t.device, dtype=x_t.dtype)
+        cov = torch.einsum("nk,nki,nkj->nij", weights, offsets, offsets)
+
+        if self.derived_support_normalize_trace:
+            trace_mean = cov.diagonal(dim1=-2, dim2=-1).sum(dim=-1, keepdim=True) / 3.0
+            cov = cov / trace_mean.clamp_min(1e-10)[:, None]
+
+        scale_var = max(float(self.derived_support_scale), 1e-8) ** 2
+        floor_var = max(float(self.derived_support_floor), 1e-8) ** 2
+        cov = scale_var * cov + floor_var * eye3
+        cov = 0.5 * (cov + cov.transpose(-1, -2))
+        return torch.nan_to_num(cov, nan=floor_var, posinf=1.0e2, neginf=0.0)
+
     def world_support_covariance(self, x_t: torch.Tensor) -> torch.Tensor:
         if self.support_mode == "transported_world_ball":
             radius = self.radius()[:, 0].clamp_min(1e-6)
             eye3 = torch.eye(3, device=self.x0.device, dtype=self.x0.dtype).expand(self.N, 3, 3)
             return eye3 * radius.square()[:, None, None]
+        if self.support_mode == "derived_support_metric":
+            return self.derived_support_covariance(x_t)
         if self.support_mode == "oriented_slab":
             R = self.slab_rotation()
             local_cov = torch.diag_embed(self.slab_scales().square())
@@ -620,6 +690,9 @@ class MaterialSurfelField(nn.Module):
             return (self.radius() ** 2).mean()
         if self.support_mode == "oriented_slab":
             return (self.slab_scales() ** 2).mean()
+        if self.support_mode == "derived_support_metric":
+            trace = self.derived_support_covariance(self.positions(0)).diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+            return trace.mean() / 3.0
         trace = self.metric_covariance().diagonal(dim1=-2, dim2=-1).sum(dim=-1)
         return trace.mean() / 3.0
 
@@ -1071,6 +1144,10 @@ def train_material_surfel_field(
     support_mode: str = "screen_disk",
     support_knn_k: int = 8,
     support_jacobian_lambda: float = 1e-4,
+    derived_support_scale: float = 0.035,
+    derived_support_floor: float = 1e-4,
+    derived_support_weight_tau: float = 0.0,
+    derived_support_normalize_trace: bool = True,
     init_radius: float = 0.04,
     init_thickness: float = 0.005,
     init_alpha_logit: float = -1.2,
@@ -1117,6 +1194,10 @@ def train_material_surfel_field(
         support_mode=support_mode,
         support_knn_k=support_knn_k,
         support_jacobian_lambda=support_jacobian_lambda,
+        derived_support_scale=derived_support_scale,
+        derived_support_floor=derived_support_floor,
+        derived_support_weight_tau=derived_support_weight_tau,
+        derived_support_normalize_trace=derived_support_normalize_trace,
         init_color=init_color,
         init_radius=init_radius,
         init_thickness=init_thickness,
@@ -1354,7 +1435,146 @@ def model_metrics(model: MaterialSurfelField) -> dict[str, float]:
                 "model_metric_diag_z_mean": float(diag[:, 2].mean().cpu()),
             }
         )
+    if model.support_mode == "derived_support_metric":
+        cov = model.derived_support_covariance(model.positions(0)).detach()
+        diag = cov.diagonal(dim1=-2, dim2=-1)
+        metrics.update(
+            {
+                "model_derived_support_scale": float(model.derived_support_scale),
+                "model_derived_support_floor": float(model.derived_support_floor),
+                "model_derived_support_trace_mean": float(diag.sum(dim=-1).mean().cpu()),
+                "model_derived_support_trace_p95": float(torch.quantile(diag.sum(dim=-1).detach().cpu(), 0.95)),
+            }
+        )
     return metrics
+
+
+@torch.no_grad()
+def support_spectrum_metrics(
+    model: MaterialSurfelField,
+    frames: Optional[list[int]] = None,
+) -> dict[str, float]:
+    if model.support_mode == "screen_disk":
+        return {}
+
+    frames = list(range(model.T)) if frames is None else frames
+    rows: list[dict[str, float]] = []
+    for t in frames:
+        cov = world_support_covariance_for_incidence(model, model.positions(int(t)))
+        eig = second_moment_spectrum(cov)
+        lambda1 = eig[:, 0].clamp_min(1e-12)
+        lambda2 = eig[:, 1].clamp_min(1e-12)
+        lambda3 = eig[:, 2].clamp_min(1e-12)
+        line_ratio = lambda2 / lambda1
+        plane_ratio = lambda3 / lambda2
+        volume_ratio = lambda3 / lambda1
+        surface_score = (line_ratio * (1.0 - plane_ratio)).clamp(0.0, 1.0)
+        fiber_score = (1.0 - line_ratio).clamp(0.0, 1.0)
+        volume_score = volume_ratio.clamp(0.0, 1.0)
+        row = {
+            "support_eig_l1_mean": float(lambda1.mean()),
+            "support_eig_l2_mean": float(lambda2.mean()),
+            "support_eig_l3_mean": float(lambda3.mean()),
+            "support_line_ratio_mean": float(line_ratio.mean()),
+            "support_plane_ratio_mean": float(plane_ratio.mean()),
+            "support_volume_ratio_mean": float(volume_ratio.mean()),
+            "support_surface_score_mean": float(surface_score.mean()),
+            "support_fiber_score_mean": float(fiber_score.mean()),
+            "support_volume_score_mean": float(volume_score.mean()),
+        }
+        row.update(stats_for_tensor("support_line_ratio", line_ratio))
+        row.update(stats_for_tensor("support_plane_ratio", plane_ratio))
+        rows.append(row)
+    return mean_metric_rows(rows)
+
+
+@torch.no_grad()
+def plucker_witness_metrics(
+    rendered: dict[str, torch.Tensor],
+    canonical_x0: torch.Tensor,
+    K: torch.Tensor,
+    w2c: torch.Tensor,
+    alpha_min: float = 0.05,
+    confidence_threshold: float = 0.02,
+    max_pixels_per_frame: int = 4096,
+    assign_chunk: int = 2048,
+) -> dict[str, float]:
+    xmap = rendered["xmap"]
+    alpha = rendered["alpha"]
+    T = int(alpha.shape[0])
+    N = int(canonical_x0.shape[0])
+    device = canonical_x0.device
+    dtype = canonical_x0.dtype
+    W_acc = torch.zeros(N, 3, 3, device=device, dtype=dtype)
+    b_acc = torch.zeros(N, 3, device=device, dtype=dtype)
+    c_acc = torch.zeros(N, device=device, dtype=dtype)
+    weight_acc = torch.zeros(N, device=device, dtype=dtype)
+
+    pixels_full = make_pixel_grid(int(alpha.shape[1]), int(alpha.shape[2]), device=device).to(dtype=dtype)
+    eye3 = torch.eye(3, device=device, dtype=dtype)
+
+    for t in range(T):
+        mask = alpha[t].reshape(-1) > float(alpha_min)
+        idx = mask.nonzero(as_tuple=False).flatten()
+        if idx.numel() == 0:
+            continue
+        if idx.numel() > int(max_pixels_per_frame):
+            pick = torch.linspace(0, idx.numel() - 1, int(max_pixels_per_frame), device=device).long()
+            idx = idx[pick]
+
+        x_query = xmap[t].reshape(-1, 3)[idx]
+        assigned = []
+        for start in range(0, x_query.shape[0], int(assign_chunk)):
+            chunk = x_query[start : start + int(assign_chunk)]
+            assigned.append(torch.cdist(chunk, canonical_x0.detach()).argmin(dim=-1))
+        elem_idx = torch.cat(assigned, dim=0)
+
+        K_t = K[t] if K.ndim == 3 else K
+        w2c_t = w2c[t]
+        ray_origin, ray_dirs = make_world_rays_for_pixels(pixels_full[idx], K_t, w2c_t)
+        ray_dirs = ray_dirs.to(dtype=dtype)
+        ray_origin = ray_origin.to(dtype=dtype)
+        weights = alpha[t].reshape(-1)[idx].to(dtype=dtype)
+        P = eye3[None, :, :] - ray_dirs[:, :, None] @ ray_dirs[:, None, :]
+        weighted_P = weights[:, None, None] * P
+        weighted_b = weights[:, None] * (P @ ray_origin[None, :, None]).squeeze(-1)
+        weighted_c = weights * (
+            ray_origin[None, None, :] @ P @ ray_origin[None, :, None]
+        ).reshape(-1)
+        W_acc.index_add_(0, elem_idx, weighted_P)
+        b_acc.index_add_(0, elem_idx, weighted_b)
+        c_acc.index_add_(0, elem_idx, weighted_c)
+        weight_acc.index_add_(0, elem_idx, weights)
+
+    supported = weight_acc > 1e-6
+    if not bool(supported.any().detach().cpu()):
+        return {
+            "witness_supported_fraction": 0.0,
+            "witness_confidence_mean": 0.0,
+            "witness_confidence_p50": 0.0,
+            "witness_confidence_p95": 0.0,
+            "witness_weak_fraction": 1.0,
+            "witness_concurrence_residual_mean": 0.0,
+        }
+
+    W_cpu = W_acc[supported].detach().float().cpu()
+    b_cpu = b_acc[supported].detach().float().cpu()
+    c_cpu = c_acc[supported].detach().float().cpu()
+    weight_cpu = weight_acc[supported].detach().float().cpu()
+    eig = torch.linalg.eigvalsh(0.5 * (W_cpu + W_cpu.transpose(-1, -2))).clamp_min(0.0)
+    conf = eig[:, 0] / eig[:, 2].clamp_min(1e-8)
+    x_star = torch.linalg.pinv(W_cpu) @ b_cpu[:, :, None]
+    quad = (x_star.transpose(-1, -2) @ W_cpu @ x_star).reshape(-1)
+    lin = 2.0 * (x_star.squeeze(-1) * b_cpu).sum(dim=-1)
+    residual = (quad - lin + c_cpu).clamp_min(0.0) / weight_cpu.clamp_min(1e-8)
+    return {
+        "witness_supported_fraction": tensor_scalar(supported.float().mean()),
+        "witness_confidence_mean": float(conf.mean()),
+        "witness_confidence_p50": float(torch.quantile(conf, 0.50)),
+        "witness_confidence_p95": float(torch.quantile(conf, 0.95)),
+        "witness_weak_fraction": float((conf < float(confidence_threshold)).float().mean()),
+        "witness_concurrence_residual_mean": float(residual.mean()),
+    }
 
 
 @torch.no_grad()
@@ -1605,6 +1825,10 @@ def gauge_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg["model"]["init_source"] = str(cfg["model"]["init_source"])
     cfg["model"]["support_knn_k"] = int(cfg["model"]["support_knn_k"])
     cfg["model"]["support_jacobian_lambda"] = float(cfg["model"]["support_jacobian_lambda"])
+    cfg["model"]["derived_support_scale"] = float(cfg["model"]["derived_support_scale"])
+    cfg["model"]["derived_support_floor"] = float(cfg["model"]["derived_support_floor"])
+    cfg["model"]["derived_support_weight_tau"] = float(cfg["model"]["derived_support_weight_tau"])
+    cfg["model"]["derived_support_normalize_trace"] = bool(cfg["model"]["derived_support_normalize_trace"])
     cfg["model"]["init_thickness"] = float(cfg["model"]["init_thickness"])
     cfg["model"]["slab_rotation_init_std"] = float(cfg["model"]["slab_rotation_init_std"])
     cfg["model"]["metric_offdiag_scale"] = float(cfg["model"]["metric_offdiag_scale"])
@@ -1796,6 +2020,10 @@ def main() -> None:
             support_mode=str(model_cfg["support_mode"]),
             support_knn_k=int(model_cfg["support_knn_k"]),
             support_jacobian_lambda=float(model_cfg["support_jacobian_lambda"]),
+            derived_support_scale=float(model_cfg["derived_support_scale"]),
+            derived_support_floor=float(model_cfg["derived_support_floor"]),
+            derived_support_weight_tau=float(model_cfg["derived_support_weight_tau"]),
+            derived_support_normalize_trace=bool(model_cfg["derived_support_normalize_trace"]),
             init_radius=float(model_cfg["init_radius"]),
             init_thickness=float(model_cfg["init_thickness"]),
             init_alpha_logit=float(model_cfg["init_alpha_logit"]),
@@ -1831,6 +2059,8 @@ def main() -> None:
             metrics.update(projection_health_metrics(model, K=K, w2c=w2c, cfg=render_cfg))
         if bool(diagnostics_cfg["motion_stats"]):
             metrics.update(motion_health_metrics(model))
+        if bool(diagnostics_cfg["support_spectrum"]):
+            metrics.update(support_spectrum_metrics(model))
         if bool(diagnostics_cfg["xmap_metrics"]):
             metrics.update(
                 xmap_health_metrics(
@@ -1839,6 +2069,17 @@ def main() -> None:
                     canonical_x0=model.x0,
                     bins=int(diagnostics_cfg["xmap_bins"]),
                     alpha_min=float(diagnostics_cfg["xmap_alpha_min"]),
+                )
+            )
+        if bool(diagnostics_cfg["plucker_witness"]):
+            metrics.update(
+                plucker_witness_metrics(
+                    rendered,
+                    canonical_x0=model.x0,
+                    K=K,
+                    w2c=w2c,
+                    alpha_min=float(diagnostics_cfg["xmap_alpha_min"]),
+                    confidence_threshold=float(diagnostics_cfg["witness_confidence_threshold"]),
                 )
             )
         heldout_rendered = None
@@ -1879,6 +2120,20 @@ def main() -> None:
                             canonical_x0=model.x0,
                             bins=int(diagnostics_cfg["xmap_bins"]),
                             alpha_min=float(diagnostics_cfg["xmap_alpha_min"]),
+                        ),
+                    )
+                )
+            if bool(diagnostics_cfg["plucker_witness"]):
+                heldout_metrics.update(
+                    prefix_metrics(
+                        "heldout",
+                        plucker_witness_metrics(
+                            heldout_rendered,
+                            canonical_x0=model.x0,
+                            K=heldout_K,
+                            w2c=heldout_w2c,
+                            alpha_min=float(diagnostics_cfg["xmap_alpha_min"]),
+                            confidence_threshold=float(diagnostics_cfg["witness_confidence_threshold"]),
                         ),
                     )
                 )

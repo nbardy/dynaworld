@@ -47,6 +47,7 @@ SUPPORT_STATE_KEYS = {
 }
 OPTIONAL_STATE_KEYS = {
     "support_knn_idx",
+    "support_knn_weights",
 }
 
 
@@ -60,6 +61,10 @@ def build_model_from_state(
     support_mode: str = "screen_disk",
     support_knn_k: int = 8,
     support_jacobian_lambda: float = 1e-4,
+    derived_support_scale: float = 0.035,
+    derived_support_floor: float = 1e-4,
+    derived_support_weight_tau: float = 0.0,
+    derived_support_normalize_trace: bool = True,
     slab_rotation_init_std: float = 0.0,
     metric_offdiag_scale: float = 0.01,
 ) -> MaterialSurfelField:
@@ -74,6 +79,10 @@ def build_model_from_state(
         support_mode=support_mode,
         support_knn_k=support_knn_k,
         support_jacobian_lambda=support_jacobian_lambda,
+        derived_support_scale=derived_support_scale,
+        derived_support_floor=derived_support_floor,
+        derived_support_weight_tau=derived_support_weight_tau,
+        derived_support_normalize_trace=derived_support_normalize_trace,
         slab_rotation_init_std=slab_rotation_init_std,
         metric_offdiag_scale=metric_offdiag_scale,
         init_radius=0.01,
@@ -117,6 +126,10 @@ def clone_model(model: MaterialSurfelField) -> MaterialSurfelField:
         support_mode=model.support_mode,
         support_knn_k=model.support_knn_k,
         support_jacobian_lambda=model.support_jacobian_lambda,
+        derived_support_scale=model.derived_support_scale,
+        derived_support_floor=model.derived_support_floor,
+        derived_support_weight_tau=model.derived_support_weight_tau,
+        derived_support_normalize_trace=model.derived_support_normalize_trace,
         slab_rotation_init_std=0.0,
         metric_offdiag_scale=model.metric_offdiag_scale,
     )
@@ -177,6 +190,10 @@ def append_elements(
         support_mode=model.support_mode,
         support_knn_k=model.support_knn_k,
         support_jacobian_lambda=model.support_jacobian_lambda,
+        derived_support_scale=model.derived_support_scale,
+        derived_support_floor=model.derived_support_floor,
+        derived_support_weight_tau=model.derived_support_weight_tau,
+        derived_support_normalize_trace=model.derived_support_normalize_trace,
         slab_rotation_init_std=0.0,
         metric_offdiag_scale=model.metric_offdiag_scale,
     )
@@ -596,6 +613,10 @@ def main() -> None:
         support_mode=str(cfg["model"].get("support_mode", "screen_disk")),
         support_knn_k=int(cfg["model"].get("support_knn_k", 8)),
         support_jacobian_lambda=float(cfg["model"].get("support_jacobian_lambda", 1e-4)),
+        derived_support_scale=float(cfg["model"].get("derived_support_scale", 0.035)),
+        derived_support_floor=float(cfg["model"].get("derived_support_floor", 1e-4)),
+        derived_support_weight_tau=float(cfg["model"].get("derived_support_weight_tau", 0.0)),
+        derived_support_normalize_trace=bool(cfg["model"].get("derived_support_normalize_trace", True)),
         slab_rotation_init_std=float(cfg["model"].get("slab_rotation_init_std", 0.0)),
         metric_offdiag_scale=float(cfg["model"].get("metric_offdiag_scale", 0.01)),
     )

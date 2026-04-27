@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "src" / "train"))
 sys.path.insert(0, str(ROOT / "research_experiments" / "gauge_fields"))
 
 from incidence import ray_gaussian_line_optical_depth, validate_incidence_mode  # noqa: E402
-from train import gauge_config  # noqa: E402
+from train import MaterialSurfelField, gauge_config  # noqa: E402
 
 
 def test_mass_normalized_isotropic_whole_line_matches_closed_form() -> None:
@@ -134,4 +134,34 @@ def test_gauge_config_accepts_incidence_mode_default_and_overrides() -> None:
         }
     )
     assert cfg["render"]["incidence_mode"] == "projected_conic"
+    cfg["model"]["support_mode"] = "derived_support_metric"
+    assert gauge_config(cfg)["model"]["support_mode"] == "derived_support_metric"
     assert validate_incidence_mode("ray_gaussian_line_mass") == "ray_gaussian_line_mass"
+
+
+def test_derived_support_metric_uses_transported_neighbor_covariance() -> None:
+    x0 = torch.tensor(
+        [
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.5, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = MaterialSurfelField(
+        init_x0=x0,
+        num_frames=1,
+        num_basis=0,
+        support_mode="derived_support_metric",
+        support_knn_k=2,
+        derived_support_scale=0.1,
+        derived_support_floor=0.01,
+        derived_support_normalize_trace=True,
+    )
+    cov = model.world_support_covariance(model.positions(0))
+    assert cov.shape == (4, 3, 3)
+    assert torch.isfinite(cov).all()
+    assert torch.allclose(cov, cov.transpose(-1, -2))
+    eig = torch.linalg.eigvalsh(cov)
+    assert torch.all(eig > 0)
