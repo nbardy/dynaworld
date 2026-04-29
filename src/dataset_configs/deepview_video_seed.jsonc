@@ -1,0 +1,100 @@
+{
+  // Raw GT multi-camera light-field videos from:
+  // https://github.com/augmentedperception/deepview_video_dataset
+  //
+  // Each scene archive contains up to 46 synchronized fisheye camera videos and
+  // a models.json calibration file. The full configured set is about 65.5 GB
+  // compressed, so the default download starts with the tiny structure-smoke
+  // scene plus the smallest non-trivial scene.
+  "dataset_name": "deepview_video_seed",
+  "root_dir": "data/external/deepview_video",
+  "project_url": "https://github.com/augmentedperception/deepview_video_dataset",
+  "paper_url": "https://augmentedperception.github.io/deepviewvideo/",
+  "download": {
+    "scene_names": [
+      "03_Dog",
+      "15_Branches"
+    ],
+    "overwrite": false
+  },
+  "extract": {
+    "overwrite": false
+  },
+  "scenes": [
+    {
+      "name": "01_Welder",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/01_Welder.zip",
+      "expected_size_bytes": 10554565078
+    },
+    {
+      "name": "02_Flames",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/02_Flames.zip",
+      "expected_size_bytes": 5474948990
+    },
+    {
+      "name": "03_Dog",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/03_Dog.zip",
+      "expected_size_bytes": 1398414399
+    },
+    {
+      "name": "04_Truck",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/04_Truck.zip",
+      "expected_size_bytes": 1811297781
+    },
+    {
+      "name": "05_Horse",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/05_Horse.zip",
+      "expected_size_bytes": 3462199574
+    },
+    {
+      "name": "06_Goats",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/06_Goats.zip",
+      "expected_size_bytes": 1617389119
+    },
+    {
+      "name": "07_Car",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/07_Car.zip",
+      "expected_size_bytes": 3122877276
+    },
+    {
+      "name": "08_Pond",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/08_Pond.zip",
+      "expected_size_bytes": 1780220296
+    },
+    {
+      "name": "09_Alexa_Meade_Exhibit",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/09_Alexa_Meade_Exhibit.zip",
+      "expected_size_bytes": 3500462687
+    },
+    {
+      "name": "10_Alexa_Meade_Face_Paint_1",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/10_Alexa_Meade_Face_Paint_1.zip",
+      "expected_size_bytes": 10587538727
+    },
+    {
+      "name": "11_Alexa_Meade_Face_Paint_2",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/11_Alexa_Meade_Face_Paint_2.zip",
+      "expected_size_bytes": 3578161493
+    },
+    {
+      "name": "12_Cave",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/12_Cave.zip",
+      "expected_size_bytes": 4578867676
+    },
+    {
+      "name": "13_Birds",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/13_Birds.zip",
+      "expected_size_bytes": 4887272734
+    },
+    {
+      "name": "14_Puppy",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/14_Puppy.zip",
+      "expected_size_bytes": 8927189887
+    },
+    {
+      "name": "15_Branches",
+      "url": "https://storage.googleapis.com/deepview_video_raw_data/15_Branches.zip",
+      "expected_size_bytes": 179620533
+    }
+  ]
+}

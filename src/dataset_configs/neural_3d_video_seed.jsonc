@@ -16,6 +16,39 @@
     ],
     "overwrite": false
   },
+  "validation_todo_assets": [
+    {
+      "scene": "cook_spinach",
+      "asset_names": ["cook_spinach.zip"],
+      "size_bytes": 1212423873
+    },
+    {
+      "scene": "cut_roasted_beef",
+      "asset_names": ["cut_roasted_beef.zip"],
+      "size_bytes": 1143395383
+    },
+    {
+      "scene": "flame_salmon_1",
+      "asset_names": [
+        "flame_salmon_1_split.z01",
+        "flame_salmon_1_split.z02",
+        "flame_salmon_1_split.z03",
+        "flame_salmon_1_split.zip"
+      ],
+      "size_bytes": 4991502788,
+      "repair_note": "Download all split parts, then run `zip -F flame_salmon_1_split.zip --out flame_salmon_1.zip` before extraction."
+    },
+    {
+      "scene": "flame_steak",
+      "asset_names": ["flame_steak.zip"],
+      "size_bytes": 1199567884
+    },
+    {
+      "scene": "sear_steak",
+      "asset_names": ["sear_steak.zip"],
+      "size_bytes": 1188520069
+    }
+  ],
   "extract": {
     "overwrite": false
   }

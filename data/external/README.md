@@ -32,15 +32,22 @@ compressed and about `1.1 GB` extracted on disk.
 
 Release assets seen on `v1.0`:
 
-- `coffee_martini.zip`
-- `cook_spinach.zip`
-- `cut_roasted_beef.zip`
-- `flame_steak.zip`
-- `sear_steak.zip`
-- `flame_salmon_1_split.z01`
-- `flame_salmon_1_split.z02`
-- `flame_salmon_1_split.z03`
-- `flame_salmon_1_split.zip`
+- `coffee_martini.zip`, about 1.19 GB compressed, local seed.
+- `cook_spinach.zip`, about 1.21 GB compressed, validation TODO.
+- `cut_roasted_beef.zip`, about 1.14 GB compressed, validation TODO.
+- `flame_steak.zip`, about 1.20 GB compressed, validation TODO.
+- `sear_steak.zip`, about 1.19 GB compressed, validation TODO.
+- `flame_salmon_1_split.z01`, `flame_salmon_1_split.z02`,
+  `flame_salmon_1_split.z03`, and `flame_salmon_1_split.zip`, about 4.99 GB
+  compressed total, validation TODO after split-zip repair.
+
+Use `--all-assets` only when there is enough disk:
+
+```bash
+uv run python src/dataset_pipeline/neural_3d_video.py download --config src/dataset_configs/neural_3d_video_seed.jsonc --all-assets
+uv run python src/dataset_pipeline/neural_3d_video.py extract --config src/dataset_configs/neural_3d_video_seed.jsonc
+uv run python src/dataset_pipeline/neural_3d_video.py inspect --config src/dataset_configs/neural_3d_video_seed.jsonc
+```
 
 ## ViVo
 
@@ -51,6 +58,10 @@ GitHub-release dataset:
 
 - The website says downloads require an MS Form submission and email link.
 - A temporary Google Drive folder is linked from the project page.
+- MS Form: <https://forms.office.com/e/gtKpYriSMJ>
+- Temporary dataset folder:
+  <https://drive.google.com/drive/folders/1uG4JB2GDWrIRMqmbI6NCP2kA0jUDAbvp?usp=sharing>
+- Processing code: <https://github.com/azzarelli/ViVo-DataProcessing>
 - The catalogue warns that the full zipped dataset is `> 1 TB`.
 - Each scene has `14x` RGB and depth video-camera pairs.
 - The documented paper split uses `10x` train cameras and `4x` test cameras.

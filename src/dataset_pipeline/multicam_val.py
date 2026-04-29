@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -165,6 +166,119 @@ def download_aist(config: dict[str, Any], paths: Paths, overwrite: bool) -> None
             )
     write_jsonl(paths.metadata / "aist" / "selected_videos.jsonl", selected)
     print(f"Wrote {len(selected)} AIST selected-video records.")
+
+
+# AIST++ camera bundle layout (after extraction):
+#   <cameras_dir>/cameras/mapping.txt              one line per AIST seq: "<seq_name>  <env_name>"
+#   <cameras_dir>/cameras/<env_name>.json          list of 9 dicts: {name, size, matrix, rotation, translation, distortions}
+# Schema, axis convention, and the raw archive URL come from
+#   https://google.github.io/aistplusplus_dataset/download.html
+# rotation/translation are OpenCV-style (rvec, tvec); R = cv2.Rodrigues(rotation) gives
+#   x_camera = R @ x_world + translation (i.e. world-to-camera).
+# size = [W, H] in pixels (1920x1080 at native resolution).
+def aist_camera_zip_path(aist_cfg: dict[str, Any], paths: Paths) -> Path:
+    cameras_root = resolve_path(aist_cfg.get("cameras_dir") or paths.metadata / "aist" / "cameras")
+    return cameras_root / "cameras.zip"
+
+
+def aist_cameras_dir(aist_cfg: dict[str, Any], paths: Paths) -> Path:
+    cameras_root = resolve_path(aist_cfg.get("cameras_dir") or paths.metadata / "aist" / "cameras")
+    return cameras_root / "extracted" / "cameras"
+
+
+def parse_aist_mapping(mapping_path: Path) -> dict[str, str]:
+    if not mapping_path.exists():
+        raise FileNotFoundError(f"AIST++ mapping.txt not found: {mapping_path}")
+    mapping: dict[str, str] = {}
+    for line_number, raw in enumerate(mapping_path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            raise ValueError(f"Unexpected mapping line at {mapping_path}:{line_number}: {raw!r}")
+        seq_name, env_name = parts
+        mapping[seq_name] = env_name
+    return mapping
+
+
+def aist_seq_name(sequence: dict[str, Any]) -> str:
+    # AIST++ keys all sequences by the canonical "cAll" video name:
+    #   <genre>_<situation>_cAll_<dancer>_<music>_<choreography>
+    # We never run inference on cAll itself; it is only the joint multi-view key into mapping.txt.
+    return "_".join(
+        [
+            str(sequence["genre"]),
+            str(sequence["situation"]),
+            "cAll",
+            str(sequence["dancer"]),
+            str(sequence["music"]),
+            str(sequence["choreography"]),
+        ]
+    )
+
+
+def download_aist_cameras(config: dict[str, Any], paths: Paths, overwrite: bool) -> None:
+    aist_cfg = config.get("aist", {})
+    if not bool(aist_cfg.get("enabled", False)):
+        print("AIST disabled in config.")
+        return
+    cameras_zip_url = str(
+        aist_cfg.get(
+            "cameras_zip_url",
+            "https://github.com/google/aistplusplus_dataset/releases/download/v1.0/cameras.zip",
+        )
+    )
+    zip_path = aist_camera_zip_path(aist_cfg, paths)
+    download_file(cameras_zip_url, zip_path, overwrite=overwrite)
+
+    extracted_root = zip_path.parent / "extracted"
+    extracted_root.mkdir(parents=True, exist_ok=True)
+    cameras_dir = aist_cameras_dir(aist_cfg, paths)
+    if not cameras_dir.exists() or overwrite:
+        with zipfile.ZipFile(zip_path) as archive:
+            for member in archive.namelist():
+                # Strip the macOS-only AppleDouble metadata; keep payload only.
+                if member.startswith("__MACOSX/") or "/._" in member or member.endswith("/"):
+                    continue
+                archive.extract(member, extracted_root)
+
+    mapping_path = cameras_dir / "mapping.txt"
+    mapping = parse_aist_mapping(mapping_path)
+    inventory: list[dict[str, Any]] = []
+    for sequence in aist_cfg.get("sequences", []):
+        seq_name = aist_seq_name(sequence)
+        env_name = mapping.get(seq_name)
+        if env_name is None:
+            raise KeyError(
+                f"AIST++ mapping.txt has no entry for sequence {seq_name!r}; "
+                f"check genre/situation/dancer/music/choreography in config."
+            )
+        setting_path = cameras_dir / f"{env_name}.json"
+        if not setting_path.exists():
+            raise FileNotFoundError(f"Expected AIST++ setting file at {setting_path}")
+        params = json.loads(setting_path.read_text(encoding="utf-8"))
+        camera_names = [str(item["name"]) for item in params]
+        inventory.append(
+            {
+                "sequence_key": "_".join(
+                    [
+                        str(sequence["genre"]),
+                        str(sequence["situation"]),
+                        str(sequence["dancer"]),
+                        str(sequence["music"]),
+                        str(sequence["choreography"]),
+                    ]
+                ),
+                "aist_seq_name": seq_name,
+                "aist_setting_name": env_name,
+                "aist_setting_path": str(setting_path.resolve()),
+                "available_cameras": camera_names,
+            }
+        )
+    inventory_path = paths.metadata / "aist" / "camera_inventory.jsonl"
+    write_jsonl(inventory_path, inventory)
+    print(f"Wrote AIST camera inventory to {inventory_path} ({len(inventory)} sequences).")
 
 
 def ffprobe(path: Path) -> dict[str, Any]:
@@ -399,11 +513,41 @@ def aist_pairs(config: dict[str, Any], paths: Paths) -> list[dict[str, Any]]:
         raise FileNotFoundError("Missing AIST selected videos. Run download-aist first.")
     selected = read_jsonl(selected_path)
     by_key_camera = {(record["sequence_key"], record["CAMERA"]): record for record in selected}
+
+    # AIST++ camera-parameter bundle is required for any multi-view rendering of these clips,
+    # so we resolve and validate the per-sequence setting JSON path up front. This matches the
+    # DeepView path which carries `models_path` for the same audit-trail reason.
+    cameras_dir = aist_cameras_dir(aist_cfg, paths)
+    mapping_path = cameras_dir / "mapping.txt"
+    cameras_available = mapping_path.exists()
+    mapping = parse_aist_mapping(mapping_path) if cameras_available else {}
+    raw_dir = resolve_path(aist_cfg["raw_dir"])
+
     pairs = []
     for sequence in aist_cfg.get("sequences", []):
         sequence_key = aist_sequence_key(sequence)
+        full_seq_name = aist_seq_name(sequence)
         source_camera = str(sequence["source_camera"])
         source = by_key_camera[(sequence_key, source_camera)]
+
+        if cameras_available:
+            env_name = mapping.get(full_seq_name)
+            if env_name is None:
+                raise KeyError(
+                    f"AIST++ mapping.txt has no entry for {full_seq_name!r}; rerun download-aist-cameras."
+                )
+            setting_path = cameras_dir / f"{env_name}.json"
+            aist_camera_metadata = {
+                "aist_seq_name": full_seq_name,
+                "aist_setting_name": env_name,
+                "aist_setting_path": str(setting_path.resolve()),
+                "aist_cameras_dir": str(cameras_dir.resolve()),
+                "aist_raw_dir": str(raw_dir.resolve()),
+                "camera_model": "opencv_pinhole_radial",
+            }
+        else:
+            aist_camera_metadata = {}
+
         for target_camera in sequence["target_cameras"]:
             target = by_key_camera[(sequence_key, str(target_camera))]
             pairs.append(
@@ -424,6 +568,7 @@ def aist_pairs(config: dict[str, Any], paths: Paths) -> list[dict[str, Any]]:
                         "dancer": sequence["dancer"],
                         "music": sequence["music"],
                         "choreography": sequence["choreography"],
+                        **aist_camera_metadata,
                     },
                 }
             )
@@ -662,7 +807,10 @@ def inspect(config: dict[str, Any], paths: Paths) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build tiny synchronized multi-camera validation clips.")
-    parser.add_argument("stage", choices=("download-aist", "build", "inspect", "all"))
+    parser.add_argument(
+        "stage",
+        choices=("download-aist", "download-aist-cameras", "build", "inspect", "all"),
+    )
     parser.add_argument("--config", type=Path, default=Path("src/dataset_configs/multicam_val_v1_128_4fps_16f.jsonc"))
     parser.add_argument("--overwrite", action="store_true", help="Overwrite downloaded AIST videos and generated clips.")
     return parser.parse_args()
@@ -675,6 +823,8 @@ def main() -> None:
     overwrite = bool(args.overwrite or config.get("overwrite", False))
     if args.stage in {"download-aist", "all"}:
         download_aist(config, paths, overwrite=overwrite)
+    if args.stage in {"download-aist-cameras", "all"}:
+        download_aist_cameras(config, paths, overwrite=overwrite)
     if args.stage in {"build", "all"}:
         build(config, paths, overwrite=overwrite)
     if args.stage in {"inspect", "all"}:

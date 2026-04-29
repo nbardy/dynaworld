@@ -324,19 +324,129 @@ def compact_rgb(config: dict[str, Any], root: Path, scene_name: str | None, dele
     print(f"Encoded {len(records)} camera RGB videos. Wrote manifest: {output_path}")
 
 
+# ---------------------------------------------------------------------------
+# Cleanup classification.
+#
+# What is recoverable WITHOUT going back through the MS Form access flow:
+#   - rgb_mp4/<scene>/...       : derived from extracted/<scene>/<split>/<cam>/*.jpg
+#                                  via compact-rgb. Recoverable.
+#   - metadata/                  : derived from extracted/. Recoverable.
+#
+# What is NOT recoverable without going back through the MS Form access flow:
+#   - extracted/<scene>/{train,test}/<cam>/*.jpg(.meta.json)  : the raw upstream
+#                                                              colour frames.
+#   - extracted/<scene>/calibration.json                      : the rig calibration.
+#   - extracted/<scene>/rotation_correction.json (when present)
+#   - raw/<...>                  : the raw zip/tar bundles before extraction.
+#
+# Therefore, by default we only consider rgb_mp4/ + metadata/rgb_mp4_frames/
+# safe to mark as deletable. We never auto-mark extracted/ or raw/ for deletion.
+# Users who really want to drop extracted/ after compaction must use the
+# `compact-rgb --delete-heavy` flag, which is opt-in and only deletes the
+# DEPTH/POINTCLOUD/MASK directories the original pipeline considers heavy --
+# never the colour frames or calibration.
+# ---------------------------------------------------------------------------
+def cleanup_targets(root: Path) -> list[tuple[Path, str]]:
+    targets: list[tuple[Path, str]] = []
+    rgb_mp4 = root / "rgb_mp4"
+    if rgb_mp4.exists():
+        targets.append((rgb_mp4, "compacted MP4s; rebuildable from extracted/ via compact-rgb"))
+    rgb_mp4_meta = root / "metadata" / "rgb_mp4_frames"
+    if rgb_mp4_meta.exists():
+        targets.append((rgb_mp4_meta, "per-camera frame manifests; rebuilt by compact-rgb"))
+    rgb_mp4_manifest = root / "metadata" / "rgb_mp4_manifest.jsonl"
+    if rgb_mp4_manifest.exists():
+        targets.append((rgb_mp4_manifest, "rgb_mp4 manifest; rebuilt by compact-rgb"))
+    scene_inv = root / "metadata" / "scene_inventory.json"
+    if scene_inv.exists():
+        targets.append((scene_inv, "scene inventory; rebuilt by inspect"))
+    logs = root / "logs"
+    if logs.exists() and any(logs.iterdir()):
+        targets.append((logs, "ffmpeg/inspect logs; safe to drop"))
+    return targets
+
+
+def directory_size_bytes(path: Path) -> int:
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for entry in path.rglob("*"):
+        if entry.is_file():
+            try:
+                total += entry.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def cleanup_staging(root: Path, *, execute: bool) -> None:
+    targets = cleanup_targets(root)
+    if not targets:
+        print("Nothing to clean: no derived ViVo staging artifacts under "
+              f"{root} match the cleanup contract.")
+        print("Note: extracted/ and raw/ are NEVER auto-deletable -- they require "
+              "the manual MS-Form upstream access flow to recreate.")
+        return
+
+    grand_total = 0
+    print("ViVo cleanup-staging plan")
+    print(f"  root: {root}")
+    print(f"  mode: {'EXECUTE (will delete)' if execute else 'dry-run (no changes)'}")
+    print()
+    print(f"  {'recover':<8s} {'bytes':>14s}    {'MB':>10s}    target")
+    for path, reason in targets:
+        size = directory_size_bytes(path)
+        grand_total += size
+        rel = path.relative_to(root) if path.is_relative_to(root) else path
+        print(f"  derived  {size:>14d}    {size / 1024 / 1024:>10.2f}    {rel}  -- {reason}")
+    print(f"  {'TOTAL':<8s} {grand_total:>14d}    {grand_total / 1024 / 1024:>10.2f}")
+    print()
+    print("PROTECTED (NOT deletable -- requires MS-Form upstream access to recreate):")
+    for protected in ("raw", "extracted"):
+        protected_path = root / protected
+        if protected_path.exists():
+            size = directory_size_bytes(protected_path)
+            print(f"  {protected:<10s}  {size:>14d} B  ({size / 1024 / 1024:>10.2f} MB)")
+
+    if not execute:
+        print()
+        print("Dry-run complete. Re-run with --execute to actually delete.")
+        return
+
+    print()
+    print("Executing cleanup...")
+    for path, _ in targets:
+        if path.is_file():
+            path.unlink()
+            print(f"  removed file: {path.relative_to(root)}")
+        elif path.is_dir():
+            shutil.rmtree(path)
+            print(f"  removed dir:  {path.relative_to(root)}")
+    print(f"Done. Reclaimed {grand_total} B ({grand_total / 1024 / 1024:.2f} MB).")
+
+
 def show_info(config: dict[str, Any]) -> None:
     print(json.dumps(config["source"], indent=2, sort_keys=True))
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Inspect locally downloaded ViVo dataset scenes.")
-    parser.add_argument("stage", choices=("info", "inspect", "compact-rgb"))
+    parser.add_argument("stage", choices=("info", "inspect", "compact-rgb", "cleanup-staging"))
     parser.add_argument("--config", type=Path, default=Path("src/dataset_configs/vivo_seed.jsonc"))
     parser.add_argument("--scene", default=None, help="Optional scene name to compact.")
     parser.add_argument(
         "--delete-heavy",
         action="store_true",
         help="After RGB MP4 encoding succeeds, delete configured depth/pointcloud/mask folders.",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="cleanup-staging only: actually delete derived staging artifacts. "
+        "Default is dry-run. NEVER deletes raw/ or extracted/ which require MS-Form upstream access.",
     )
     return parser.parse_args()
 
@@ -351,6 +461,8 @@ def main() -> None:
         inspect(config, root)
     elif args.stage == "compact-rgb":
         compact_rgb(config, root, scene_name=args.scene, delete_heavy=args.delete_heavy)
+    elif args.stage == "cleanup-staging":
+        cleanup_staging(root, execute=args.execute)
 
 
 if __name__ == "__main__":

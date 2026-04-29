@@ -1,0 +1,55 @@
+{
+  // 256px materialization of the same scene/source-distinct 30-video set.
+  //
+  // This reuses data/youtube_scene_distinct/candidates and local raw/segment
+  // MP4s from the 64px seed when present. Run the build-clips stage to avoid
+  // touching network data and only rebuild the training-compatible PNG clips.
+  "dataset_name": "youtube_scene_distinct_30_256_4fps_16f",
+  "root_dir": "data/youtube_scene_distinct",
+
+  "search": {
+    "max_results_per_query": 8,
+    "queries": [
+      "walking tour pov no cuts 4k",
+      "bike ride pov stabilized city",
+      "drone fly through forest no cuts",
+      "fpv drone cinematic one shot",
+      "gopro walking through market pov",
+      "roller coaster pov 4k",
+      "train cab ride forward view",
+      "dashcam scenic mountain road no cuts",
+      "real estate walkthrough one take",
+      "museum walkthrough pov no cuts"
+    ]
+  },
+
+  "download": {
+    "limit": 45,
+    "max_height": 720,
+    "section_start_seconds": 12.0,
+    "section_duration_seconds": 8.0,
+    "cookies_from_browser": null,
+    "continue_on_error": true
+  },
+
+  "segment": {
+    "min_seconds": 4.0,
+    "max_seconds": 6.0,
+    "target_clip_seconds": 4.0,
+    "analysis_fps": 4.0,
+    "scene_cut_threshold": 0.58,
+    "min_motion_score": 0.25,
+    "max_windows_per_video": 1,
+    "continue_on_error": true
+  },
+
+  "clip_dataset": {
+    "target_count": 30,
+    "train_count": 20,
+    "test_count": 10,
+    "clip_frames": 16,
+    "fps": 4.0,
+    "target_size": 256,
+    "max_clips_per_source": 1
+  }
+}

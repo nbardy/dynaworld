@@ -23,7 +23,7 @@
     }
   ],
   "download": {
-    "max_height": 360,
+    "max_height": 720,
     "continue_on_error": true
   },
   "clip_dataset": {

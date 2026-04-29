@@ -103,6 +103,11 @@ def canonical_youtube_url(record: dict[str, Any]) -> str | None:
     return None
 
 
+def existing_download(raw_dir: Path, video_id: str) -> Path | None:
+    matches = sorted(raw_dir.glob(f"{video_id}.*"))
+    return matches[-1].resolve() if matches else None
+
+
 def search(config: dict[str, Any], paths: Paths) -> None:
     search_cfg = config["search"]
     max_results = int(search_cfg["max_results_per_query"])
@@ -135,7 +140,7 @@ def search(config: dict[str, Any], paths: Paths) -> None:
     print(f"Wrote {len(candidates)} search candidates to {output_path}")
 
 
-def download(config: dict[str, Any], paths: Paths) -> None:
+def download(config: dict[str, Any], paths: Paths, overwrite: bool) -> None:
     candidates = read_jsonl(paths.candidates / "search_results.jsonl")
     if not candidates:
         raise RuntimeError("No search candidates found. Run the search stage first.")
@@ -154,6 +159,12 @@ def download(config: dict[str, Any], paths: Paths) -> None:
         url = canonical_youtube_url(candidate)
         if not url:
             continue
+        video_id = str(candidate["id"])
+        if not overwrite:
+            existing = existing_download(paths.raw, video_id)
+            if existing is not None:
+                downloaded.append({**candidate, "local_path": str(existing)})
+                continue
         output_template = str(paths.raw / "%(id)s.%(ext)s")
         base_command = yt_dlp_command()
         command = [
@@ -167,6 +178,8 @@ def download(config: dict[str, Any], paths: Paths) -> None:
             output_template,
             url,
         ]
+        if overwrite:
+            command[len(base_command):len(base_command)] = ["--force-overwrites"]
         if section_start is not None and section_duration is not None:
             start = float(section_start)
             end = start + float(section_duration)
@@ -187,9 +200,9 @@ def download(config: dict[str, Any], paths: Paths) -> None:
             if continue_on_error:
                 continue
             raise
-        matches = sorted(paths.raw.glob(f"{candidate['id']}.*"))
-        if matches:
-            downloaded.append({**candidate, "local_path": str(matches[-1].resolve())})
+        match = existing_download(paths.raw, video_id)
+        if match is not None:
+            downloaded.append({**candidate, "local_path": str(match)})
 
     output_path = paths.candidates / "downloads.jsonl"
     write_jsonl(output_path, downloaded)
@@ -428,11 +441,223 @@ def build_clips(config: dict[str, Any], paths: Paths, overwrite: bool) -> None:
     run_command(command)
 
 
+# --- validate-local + cleanup-intermediates ----------------------------------
+#
+# Network-free walks of the local tree resolved from the same config the rest
+# of the pipeline uses. Used by both scene-distinct and high-camera-motion seeds
+# (they share this entrypoint).
+#
+# Source-of-truth (never auto-deleted):
+#   candidates/*.jsonl, raw/*.mp4, segments/*.mp4
+# Intermediates (safe to delete, derivable from raw + this config):
+#   clip_sets/<dataset_name>/, logs/, raw/*.part, raw/*.ytdl, raw/*.tmp
+
+
+PARTIAL_DOWNLOAD_SUFFIXES = (".part", ".ytdl", ".tmp")
+
+
+def file_byte_size(path: Path) -> int:
+    return path.stat().st_size if path.exists() and path.is_file() else 0
+
+
+def directory_byte_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    total = 0
+    for entry in path.rglob("*"):
+        if entry.is_file():
+            total += entry.stat().st_size
+    return total
+
+
+def ffprobe_video(path: Path) -> dict[str, Any]:
+    if shutil.which("ffprobe") is None:
+        raise RuntimeError("ffprobe is required for validate-local; install ffmpeg.")
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,width,height,nb_read_packets,duration",
+        "-count_packets",
+        "-of",
+        "json",
+        str(path),
+    ]
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed for {path}: {result.stderr.strip()}")
+    payload = json.loads(result.stdout or "{}")
+    streams = payload.get("streams") or []
+    if not streams:
+        raise RuntimeError(f"ffprobe found no video stream in {path}")
+    stream = streams[0]
+    packets = stream.get("nb_read_packets")
+    if packets is not None and int(packets) < 1:
+        raise RuntimeError(f"ffprobe reports zero packets in {path}")
+    return stream
+
+
+def validate_local(config: dict[str, Any], paths: Paths, *, sample_probes: int) -> None:
+    downloads = read_jsonl(paths.candidates / "downloads.jsonl")
+    segments = read_jsonl(paths.candidates / "segments_manifest.jsonl")
+
+    missing_raw: list[dict[str, Any]] = []
+    present_raw: list[Path] = []
+    for record in downloads:
+        local = record.get("local_path")
+        if not local:
+            missing_raw.append({"id": record.get("id"), "reason": "no local_path in downloads.jsonl"})
+            continue
+        local_path = Path(local)
+        if local_path.exists():
+            present_raw.append(local_path)
+        else:
+            missing_raw.append({"id": record.get("id"), "local_path": local, "reason": "missing on disk"})
+
+    missing_segments: list[dict[str, Any]] = []
+    present_segments: list[Path] = []
+    for record in segments:
+        seg_path = Path(record.get("path", ""))
+        if seg_path.exists():
+            present_segments.append(seg_path)
+        else:
+            missing_segments.append({"segment_id": record.get("segment_id"), "path": str(seg_path)})
+
+    partials = [
+        entry for entry in paths.raw.iterdir()
+        if entry.is_file() and entry.suffix in PARTIAL_DOWNLOAD_SUFFIXES
+    ] if paths.raw.exists() else []
+
+    probe_targets = present_raw[: max(0, int(sample_probes))]
+    probe_results: list[dict[str, Any]] = []
+    for target in probe_targets:
+        stream = ffprobe_video(target)
+        probe_results.append(
+            {
+                "path": str(target),
+                "codec": stream.get("codec_name"),
+                "width": stream.get("width"),
+                "height": stream.get("height"),
+                "packets": stream.get("nb_read_packets"),
+                "duration": stream.get("duration"),
+            }
+        )
+
+    summary = {
+        "root_dir": str(paths.root),
+        "downloads_recorded": len(downloads),
+        "raw_present": len(present_raw),
+        "raw_missing": len(missing_raw),
+        "segments_recorded": len(segments),
+        "segments_present": len(present_segments),
+        "segments_missing": len(missing_segments),
+        "raw_partials": [str(p) for p in partials],
+        "probes": probe_results,
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    if missing_raw:
+        print(f"WARN: {len(missing_raw)} downloads.jsonl entries have no on-disk raw mp4.")
+    if missing_segments:
+        print(f"WARN: {len(missing_segments)} segments_manifest.jsonl entries have no on-disk segment mp4.")
+    if partials:
+        print(f"WARN: {len(partials)} partial yt-dlp files; clean with cleanup-intermediates --execute.")
+
+
+def cleanup_intermediates(
+    config: dict[str, Any],
+    paths: Paths,
+    *,
+    execute: bool,
+    include_raw: bool,
+    include_segments: bool,
+) -> None:
+    dataset_name = str(config["dataset_name"])
+    targets: list[tuple[str, Path]] = []
+
+    clip_set_dir = paths.clip_sets / dataset_name
+    if clip_set_dir.exists():
+        targets.append((f"clip_sets/{dataset_name}", clip_set_dir))
+
+    if paths.logs.exists():
+        targets.append(("logs/", paths.logs))
+
+    partials: list[Path] = []
+    if paths.raw.exists():
+        partials = [
+            entry for entry in paths.raw.iterdir()
+            if entry.is_file() and entry.suffix in PARTIAL_DOWNLOAD_SUFFIXES
+        ]
+    for partial in partials:
+        targets.append((f"raw/{partial.name}", partial))
+
+    if include_segments and paths.segments.exists():
+        seg_files = [entry for entry in paths.segments.iterdir() if entry.is_file()]
+        for seg_file in seg_files:
+            targets.append((f"segments/{seg_file.name}  [SOURCE-OF-TRUTH]", seg_file))
+
+    if include_raw and paths.raw.exists():
+        raw_files = [
+            entry for entry in paths.raw.iterdir()
+            if entry.is_file() and entry.suffix not in PARTIAL_DOWNLOAD_SUFFIXES
+        ]
+        for raw_file in raw_files:
+            targets.append((f"raw/{raw_file.name}  [SOURCE-OF-TRUTH]", raw_file))
+
+    total = 0
+    print(
+        f"# cleanup-intermediates  root={paths.root}  execute={execute}  "
+        f"include_raw={include_raw}  include_segments={include_segments}"
+    )
+    for label, path in targets:
+        size = directory_byte_size(path) if path.is_dir() else file_byte_size(path)
+        total += size
+        print(f"  - {label:60s} {size:>14d} B  ({size / 1024 / 1024:.2f} MB)")
+    print(f"  TOTAL reclaimable: {total} B  ({total / 1024 / 1024:.2f} MB)")
+
+    if not execute:
+        print("# DRY RUN -- pass --execute to actually delete these.")
+        return
+
+    for label, path in targets:
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.is_file():
+            path.unlink()
+        print(f"  deleted {label}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Mine YouTube videos for high camera-motion single-path clips.")
-    parser.add_argument("stage", choices=("search", "download", "segment", "build-clips", "all"))
+    parser.add_argument(
+        "stage",
+        choices=("search", "download", "segment", "build-clips", "all", "validate-local", "cleanup-intermediates"),
+    )
     parser.add_argument("--config", type=Path, default=Path("src/dataset_configs/youtube_high_camera_motion_seed.jsonc"))
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite final clip dataset in build-clips stage.")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite local downloads and the final clip dataset.")
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="cleanup-intermediates: actually delete (default is dry-run).",
+    )
+    parser.add_argument(
+        "--include-raw",
+        action="store_true",
+        help="cleanup-intermediates: also delete raw/*.mp4 (NOT recoverable without yt-dlp + network).",
+    )
+    parser.add_argument(
+        "--include-segments",
+        action="store_true",
+        help="cleanup-intermediates: also delete segments/*.mp4 (recoverable from raw via segment stage).",
+    )
+    parser.add_argument(
+        "--sample-probes",
+        type=int,
+        default=3,
+        help="validate-local: how many raw mp4s to ffprobe (default 3).",
+    )
     return parser.parse_args()
 
 
@@ -443,11 +668,21 @@ def main() -> None:
     if args.stage in {"search", "all"}:
         search(config, paths)
     if args.stage in {"download", "all"}:
-        download(config, paths)
+        download(config, paths, overwrite=args.overwrite)
     if args.stage in {"segment", "all"}:
         segment(config, paths)
     if args.stage in {"build-clips", "all"}:
         build_clips(config, paths, overwrite=args.overwrite)
+    if args.stage == "validate-local":
+        validate_local(config, paths, sample_probes=args.sample_probes)
+    if args.stage == "cleanup-intermediates":
+        cleanup_intermediates(
+            config,
+            paths,
+            execute=args.execute,
+            include_raw=args.include_raw,
+            include_segments=args.include_segments,
+        )
 
 
 if __name__ == "__main__":

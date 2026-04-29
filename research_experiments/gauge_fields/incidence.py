@@ -118,3 +118,57 @@ def ray_gaussian_line_optical_depth(
 
     tau = norm[:, None] * line_factor
     return torch.nan_to_num(tau, nan=0.0, posinf=1.0e6, neginf=0.0).clamp_min(0.0)
+
+
+def compact_poly_ellipsoid_optical_depth(
+    ray_origin: torch.Tensor,
+    ray_dirs: torch.Tensor,
+    s0: float,
+    s1: float,
+    mu: torch.Tensor,
+    precision3: torch.Tensor,
+    beta: torch.Tensor,
+    *,
+    power: int = 2,
+) -> torch.Tensor:
+    """
+    Analytic finite-segment optical depth for compact polynomial ellipsoids.
+
+    Density:
+        beta * [1 - (x - mu)^T A (x - mu)]_+^power
+
+    ray_origin: [3]
+    ray_dirs: [C,3], unit world directions
+    mu: [N,3]
+    precision3: [N,3,3], SPD precision matrices A
+    beta: [N], peak density strength
+    returns: [N,C] optical depths
+    """
+    if power < 0:
+        raise ValueError(f"compact polynomial ellipsoid power must be nonnegative, got {power}.")
+
+    A = 0.5 * (precision3 + precision3.transpose(-1, -2))
+    A = torch.nan_to_num(A, nan=0.0, posinf=WORLD_COV_MAX_VAR, neginf=0.0)
+    eye3 = torch.eye(3, device=A.device, dtype=A.dtype).expand(A.shape[0], 3, 3)
+    A = A + WORLD_COV_MIN_VAR * eye3
+
+    v = ray_origin[None, :] - mu
+    av = torch.einsum("nij,nj->ni", A, v)
+    a = torch.einsum("cd,ndk,ck->nc", ray_dirs, A, ray_dirs).clamp_min(1e-8)
+    b = torch.einsum("nd,cd->nc", av, ray_dirs)
+    c = (v * av).sum(dim=-1)[:, None]
+    delta = b.square() + a * (1.0 - c)
+
+    sqrt_delta = torch.sqrt(delta.clamp_min(0.0))
+    y0 = ((a * float(s0) + b) / sqrt_delta.clamp_min(1e-12)).clamp(-1.0, 1.0)
+    y1 = ((a * float(s1) + b) / sqrt_delta.clamp_min(1e-12)).clamp(-1.0, 1.0)
+
+    integral = torch.zeros_like(y0)
+    for j in range(power + 1):
+        coeff = ((-1.0) ** j) * math.comb(power, j) / float(2 * j + 1)
+        integral = integral + coeff * (y1.pow(2 * j + 1) - y0.pow(2 * j + 1))
+
+    scale = delta.clamp_min(0.0).pow(power + 0.5) / a.pow(power + 1)
+    tau = beta.clamp_min(0.0)[:, None] * scale * integral.clamp_min(0.0)
+    tau = torch.where(delta > 0.0, tau, torch.zeros_like(tau))
+    return torch.nan_to_num(tau, nan=0.0, posinf=1.0e6, neginf=0.0).clamp_min(0.0)

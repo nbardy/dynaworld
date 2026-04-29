@@ -159,7 +159,9 @@ class GaussianFrame:
     scales: [G, 3]
     quats: [G, 4], normalized
     opacities: [G, 1]
-    rgbs: [G, 3], 0..1
+    rgbs: [G, F]: F-channel splat features. F=3 means RGB-3 (legacy
+        path); F>3 requires a downstream colorize MLP to map to RGB at
+        the loss boundary. Field name retained for cascade compatibility.
     """
 
     xyz: Tensor
@@ -187,6 +189,9 @@ class GaussianSequence:
     """Decoded model output for K frames.
 
     Tensor shapes are [K, G, C].
+    rgbs is [K, G, F]: F-channel splat features. F=3 means RGB-3 (legacy
+    path); F>3 requires a downstream colorize MLP to map to RGB at the loss
+    boundary. Field name retained for cascade compatibility.
     cameras is present for implicit-camera outputs and known-camera render payloads.
     camera_state is present only for implicit-camera models.
     """

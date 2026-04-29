@@ -71,3 +71,34 @@ data/youtube_curated_spans/raw/matrix_bullettime.mp4
 - `build-clips`: wrote 19 usable 64px/4fps/16-frame clips (`18` train, `1`
   test). The very short 2-3 second spans downloaded correctly as MP4s but are
   too short for 16 frames at 4fps, so the frame builder skipped them.
+
+Follow-up correction after inline review:
+
+- Updated the parent hand-labeled source
+  `/Users/nicholasbardy/git/gsplats_browser/corrective_splat_trainer/manual_list.jsonl`.
+- Corrected `mkVYpzyJvG8` segment 0 to `1:51 => 2:10`, corresponding to
+  `0:36 => 0:55` inside the original local `1:15 => 2:10` clip. An
+  intermediate attempt incorrectly treated `0:35 => 0:55` as absolute YouTube
+  time; the final manifest uses the absolute source times.
+- Corrected `hlaZbH_OFBU` segment 4 from `7:48 => 7:54` to `7:49 => 7:54`,
+  matching the user's "start at 0:01 not 0:00" review note for the local clip.
+- Raised the curated raw download cap from 360p to 720p, then regenerated
+  `curated_spans.jsonl`, `downloads.jsonl`, and the 64px/4fps/16f clip set.
+  The same stale `ODmhPsgqGgQ` source still fails.
+
+Download infra follow-up:
+
+- The curated-span and scene-distinct wrapper scripts no longer force raw-media
+  overwrite by default.
+- Default runs now reuse existing local raw MP4s when the clip/video ID already
+  exists. Use `--overwrite`, `--overwrite-raw`, or `OVERWRITE_RAW=1` when a real
+  redownload is intended.
+- Derived 64px clip sets still overwrite by default because those are cheap
+  generated artifacts and otherwise `build_clip_dataset.py` refuses to replace
+  an existing output directory. Use `--no-overwrite-clips` to keep them.
+- Added local-file reuse to `youtube_ingest.py`; the curated-span pipeline
+  already had the skip path, but the wrapper was previously bypassing it by
+  always passing `--overwrite`.
+- Loader smoke: the default scene-distinct manifest loads a train and test
+  sequence as `(16, 3, 64, 64)` tensors at 4fps, with `20` train and `10` test
+  manifest entries.

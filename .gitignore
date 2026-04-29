@@ -24,6 +24,35 @@ data/youtube_scene_distinct/logs/
 data/youtube_curated_spans/raw/
 data/youtube_curated_spans/clip_sets/
 data/youtube_curated_spans/logs/
+data/youtube_multiview_comms/raw/
+data/youtube_multiview_comms/segments/
+data/youtube_multiview_comms/tile_crops/
+data/youtube_multiview_comms/clip_sets/
+data/youtube_multiview_comms/logs/
+data/brettzone_nhrl/raw/
+data/brettzone_nhrl/clip_sets/
+data/brettzone_nhrl/logs/
+data/multicam_val/clip_sets/
+data/multicam_val/logs/
+data/multicam_val/manifests/
+data/multicam_val/metadata/
+data/external/aist_dance_db/raw/
+data/external/aist_dance_db/extracted/
+data/external/aist_dance_db/cameras/
+data/external/aist_dance_db/logs/
+data/external/aist_dance_db/metadata/
+data/external/deepview_video/raw/
+data/external/deepview_video/extracted/
+data/external/deepview_video/logs/
+data/external/deepview_video/metadata/
+data/external/ex4dgs_pretrained/raw/
+data/external/ex4dgs_pretrained/extracted/
+data/external/ex4dgs_pretrained/logs/
+data/external/ex4dgs_pretrained/metadata/
+data/external/tvmce/raw/
+data/external/tvmce/extracted/
+data/external/tvmce/logs/
+data/external/tvmce/metadata/
 data/external/neural_3d_video/raw/
 data/external/neural_3d_video/extracted/
 data/external/neural_3d_video/logs/
@@ -35,6 +64,10 @@ data/external/vivo/rgb_mp4/
 data/external/vivo/logs/
 data/external/vivo/metadata/
 data/external/vivo/
+
+# Local synthetic/render outputs. Rehydrate or regenerate from scripts/configs.
+data/blender_synthetic/
+outputs/
 
 # Large local research corpora. Keep curated notes and indexes tracked.
 research_notes/blur_dof_motion_papers/pdfs/

@@ -1,0 +1,22 @@
+{
+  // Ex4DGS pretrained model assets. These are model/checkpoint artifacts, not
+  // raw multi-camera validation videos.
+  "dataset_name": "ex4dgs_pretrained_val_seed",
+  "root_dir": "data/external/ex4dgs_pretrained",
+  "github": {
+    "owner": "juno181",
+    "repo": "Ex4DGS",
+    "tag": "v0.1"
+  },
+  "download": {
+    "asset_names": [
+      "coffee_martini.zip",
+      "Birthday.zip",
+      "Fabien.zip"
+    ],
+    "overwrite": false
+  },
+  "extract": {
+    "overwrite": false
+  }
+}

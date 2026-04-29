@@ -21,6 +21,7 @@
     "cache_version": 1,
     "force_rebake": false,
     "keep_in_memory": true,
+    "release_extractor_after_prebake": true,
     "save_dtype": "float16",
     "torch_dtype": "float32",
     "vae_torch_dtype": "float32",

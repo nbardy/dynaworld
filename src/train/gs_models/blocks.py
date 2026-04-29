@@ -104,6 +104,7 @@ class GaussianParameterHeads(nn.Module):
         rgb_init=None,
         rgb_init_min=0.01,
         rgb_init_max=0.99,
+        feature_dim=3,
     ):
         super().__init__()
         if z_max <= z_min:
@@ -135,6 +136,9 @@ class GaussianParameterHeads(nn.Module):
             )
 
         self.gaussians_per_token = gaussians_per_token
+        self.feature_dim = int(feature_dim)
+        if self.feature_dim < 1:
+            raise ValueError(f"feature_dim must be >= 1, got {feature_dim}.")
         self.xy_extent = float(xy_extent)
         self.z_min = float(z_min)
         self.z_extent = float(z_max) - float(z_min)
@@ -148,7 +152,7 @@ class GaussianParameterHeads(nn.Module):
         self.scale_head = build_mlp(feat_dim, gaussians_per_token * 3, **mlp_kwargs)
         self.rot_head = build_mlp(feat_dim, gaussians_per_token * 4, **mlp_kwargs)
         self.opacity_head = build_mlp(feat_dim, gaussians_per_token, **mlp_kwargs)
-        self.rgb_head = build_mlp(feat_dim, gaussians_per_token * 3, **mlp_kwargs)
+        self.rgb_head = build_mlp(feat_dim, gaussians_per_token * self.feature_dim, **mlp_kwargs)
         self._init_output_biases(
             scale_init_log_jitter=float(scale_init_log_jitter),
             opacity_init=opacity_init,
@@ -187,7 +191,10 @@ class GaussianParameterHeads(nn.Module):
                 rot_bias[:, 0] = 1.0
         if opacity_init is not None:
             nn.init.constant_(self.opacity_head[-1].bias, inverse_sigmoid(float(opacity_init)))
-        if rgb_init == "uniform":
+        # rgb_init only makes sense when output channels are RGB (feature_dim == 3).
+        # For feature splatting (feature_dim != 3) the head emits raw features and
+        # any rgb_init request is silently ignored.
+        if rgb_init == "uniform" and self.feature_dim == 3:
             with torch.no_grad():
                 rgb_bias = self.rgb_head[-1].bias.view(self.gaussians_per_token, 3)
                 rgb_target = torch.empty_like(rgb_bias).uniform_(rgb_init_min, rgb_init_max)
@@ -211,7 +218,13 @@ class GaussianParameterHeads(nn.Module):
         scales = torch.exp(self._reshape(self.scale_head(tokens), 3)) * self.scale_init
         quats = F.normalize(self._reshape(self.rot_head(tokens), 4), p=2, dim=-1)
         opacities = torch.sigmoid(self._reshape(self.opacity_head(tokens), 1))
-        rgbs = torch.sigmoid(self._reshape(self.rgb_head(tokens), 3))
+        # F=3 keeps the legacy sigmoid-RGB path bit-identical; F!=3 emits raw
+        # features for a downstream colorize MLP — sigmoid would clamp the
+        # representation and break feature-splat training.
+        if self.feature_dim == 3:
+            rgbs = torch.sigmoid(self._reshape(self.rgb_head(tokens), 3))
+        else:
+            rgbs = self._reshape(self.rgb_head(tokens), self.feature_dim)
         return xyz, scales, quats, opacities, rgbs
 
 
@@ -236,11 +249,13 @@ class TokenGSBackbone(nn.Module):
         rgb_init=None,
         rgb_init_min=0.01,
         rgb_init_max=0.99,
+        feature_dim=3,
     ):
         super().__init__()
         self.num_tokens = num_tokens
         self.feat_dim = feat_dim
         self.gaussians_per_token = gaussians_per_token
+        self.feature_dim = int(feature_dim)
 
         self.encoder = ConvImageEncoder(feat_dim)
         self.tokens = nn.Parameter(torch.randn(1, num_tokens, feat_dim) * float(token_init_std))
@@ -263,6 +278,7 @@ class TokenGSBackbone(nn.Module):
             rgb_init=rgb_init,
             rgb_init_min=rgb_init_min,
             rgb_init_max=rgb_init_max,
+            feature_dim=self.feature_dim,
         )
 
     def encode_grounded_features(self, image, plucker_grid):

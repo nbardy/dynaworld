@@ -10,7 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "train"))
 sys.path.insert(0, str(ROOT / "research_experiments" / "gauge_fields"))
 
-from incidence import ray_gaussian_line_optical_depth, validate_incidence_mode  # noqa: E402
+from incidence import (  # noqa: E402
+    compact_poly_ellipsoid_optical_depth,
+    ray_gaussian_line_optical_depth,
+    validate_incidence_mode,
+)
 from train import MaterialSurfelField, gauge_config  # noqa: E402
 from cheat_probe_material_gauge import (  # noqa: E402
     probe_graph_expansion,
@@ -130,6 +134,150 @@ def test_ray_gaussian_tau_is_rigid_invariant() -> None:
     )
 
     assert torch.allclose(base, transformed, rtol=2e-5, atol=2e-6)
+
+
+def test_compact_poly_ellipsoid_matches_numeric_quadrature() -> None:
+    mu = torch.tensor([[0.1, -0.2, 0.7]], dtype=torch.float32)
+    precision = torch.tensor(
+        [
+            [
+                [2.4, 0.2, -0.1],
+                [0.2, 1.8, 0.15],
+                [-0.1, 0.15, 1.3],
+            ]
+        ],
+        dtype=torch.float32,
+    )
+    origin = torch.tensor([0.05, -0.1, -0.3], dtype=torch.float32)
+    ray_dirs = torch.tensor([[0.08, -0.04, 1.0]], dtype=torch.float32)
+    ray_dirs = ray_dirs / ray_dirs.norm(dim=-1, keepdim=True)
+    beta = torch.tensor([0.9], dtype=torch.float32)
+    s0, s1 = 0.0, 3.0
+
+    closed = compact_poly_ellipsoid_optical_depth(
+        ray_origin=origin,
+        ray_dirs=ray_dirs,
+        s0=s0,
+        s1=s1,
+        mu=mu,
+        precision3=precision,
+        beta=beta,
+        power=2,
+    )[0, 0]
+
+    samples = torch.linspace(s0, s1, 8192)
+    pts = origin[None, :] + samples[:, None] * ray_dirs[0][None, :]
+    diff = pts - mu[0][None, :]
+    r2 = torch.einsum("bi,ij,bj->b", diff, precision[0], diff)
+    density = beta[0] * (1.0 - r2).clamp_min(0.0).pow(2)
+    numeric = torch.trapz(density, samples)
+
+    assert torch.allclose(closed, numeric, rtol=2e-3, atol=2e-4)
+
+
+def test_compact_poly_ellipsoid_radial_gauge_is_invariant() -> None:
+    mu = torch.tensor([[0.2, -0.1, 3.0]], dtype=torch.float32)
+    precision = torch.tensor(
+        [
+            [
+                [7.0, 0.6, 0.2],
+                [0.6, 5.5, -0.3],
+                [0.2, -0.3, 4.0],
+            ]
+        ],
+        dtype=torch.float32,
+    )
+    beta = torch.tensor([0.75], dtype=torch.float32)
+    dirs = torch.tensor(
+        [
+            [-0.08, -0.05, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.06, -0.02, 1.0],
+            [0.09, 0.04, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    dirs = dirs / dirs.norm(dim=-1, keepdim=True)
+    origin = torch.zeros(3, dtype=torch.float32)
+    base = compact_poly_ellipsoid_optical_depth(
+        ray_origin=origin,
+        ray_dirs=dirs,
+        s0=0.0,
+        s1=20.0,
+        mu=mu,
+        precision3=precision,
+        beta=beta,
+        power=2,
+    )
+
+    scale = 1.4
+    shifted = compact_poly_ellipsoid_optical_depth(
+        ray_origin=origin,
+        ray_dirs=dirs,
+        s0=0.0,
+        s1=20.0,
+        mu=scale * mu,
+        precision3=(scale ** -2) * precision,
+        beta=(scale ** -1) * beta,
+        power=2,
+    )
+
+    assert torch.allclose(base, shifted, rtol=2e-5, atol=2e-6)
+
+
+def test_compact_poly_ellipsoid_removes_projected_covariance_null_direction() -> None:
+    mu = torch.tensor([0.2, -0.1, 3.0], dtype=torch.float32)
+    cov = torch.tensor(
+        [
+            [0.12, 0.015, 0.01],
+            [0.015, 0.09, -0.012],
+            [0.01, -0.012, 0.07],
+        ],
+        dtype=torch.float32,
+    )
+    precision = torch.linalg.inv(cov)
+    axis = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32)
+    cov_null = mu[:, None] @ axis[None, :] + axis[:, None] @ mu[None, :]
+
+    x, y, z = mu
+    jac = torch.tensor(
+        [
+            [1.0 / z, 0.0, -x / (z * z)],
+            [0.0, 1.0 / z, -y / (z * z)],
+        ],
+        dtype=torch.float32,
+    )
+    projected_before = jac @ cov @ jac.T
+    projected_after = jac @ (cov + 1.0e-3 * cov_null) @ jac.T
+    assert torch.allclose(projected_before, projected_after, atol=2e-8)
+
+    precision_delta = -precision @ cov_null @ precision
+    rays = torch.tensor(
+        [
+            [-0.02, -0.04, 1.0],
+            [0.03, -0.03, 1.0],
+            [0.08, 0.00, 1.0],
+            [0.12, 0.04, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    rays = rays / rays.norm(dim=-1, keepdim=True)
+    kwargs = {
+        "ray_origin": torch.zeros(3, dtype=torch.float32),
+        "ray_dirs": rays,
+        "s0": 0.0,
+        "s1": 20.0,
+        "mu": mu[None, :],
+        "beta": torch.tensor([0.8], dtype=torch.float32),
+        "power": 2,
+    }
+    base = compact_poly_ellipsoid_optical_depth(precision3=precision[None, :, :], **kwargs)
+    perturbed = compact_poly_ellipsoid_optical_depth(
+        precision3=(precision + 1.0e-5 * precision_delta)[None, :, :],
+        **kwargs,
+    )
+
+    assert (perturbed - base).abs().max() > 1.0e-6
 
 
 def test_gauge_config_accepts_incidence_mode_default_and_overrides() -> None:

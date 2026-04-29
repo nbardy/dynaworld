@@ -883,6 +883,7 @@ class DynamicResidualGaussianBankHead(nn.Module):
         rotation_degrees=10.0,
         alpha_logit_extent=2.0,
         coeff_output_init_std=1.0e-4,
+        feature_dim=3,
     ):
         super().__init__()
         if time_basis_count < 1:
@@ -899,6 +900,7 @@ class DynamicResidualGaussianBankHead(nn.Module):
         self.motion_extent = float(motion_extent)
         self.rotation_radians = math.radians(float(rotation_degrees))
         self.alpha_logit_extent = float(alpha_logit_extent)
+        self.feature_dim = int(feature_dim)
         self.base_heads = GaussianParameterHeads(
             feat_dim=feat_dim,
             gaussians_per_token=gaussians_per_token,
@@ -916,6 +918,7 @@ class DynamicResidualGaussianBankHead(nn.Module):
             rgb_init=rgb_init,
             rgb_init_min=rgb_init_min,
             rgb_init_max=rgb_init_max,
+            feature_dim=self.feature_dim,
         )
         mlp_kwargs = {
             "hidden_dim": head_hidden_dim,
@@ -977,6 +980,7 @@ def _init_free_gaussian_raw_params(
     rgb_init: str | None,
     rgb_init_min: float,
     rgb_init_max: float,
+    feature_dim: int = 3,
 ) -> dict[str, torch.Tensor]:
     if position_init_extent_coverage > 0:
         coverage = float(position_init_extent_coverage)
@@ -1000,8 +1004,11 @@ def _init_free_gaussian_raw_params(
     if opacity_init is not None:
         raw_opacities.fill_(inverse_sigmoid(float(opacity_init)))
 
-    raw_rgbs = torch.zeros(gaussian_count, 3)
-    if rgb_init == "uniform":
+    raw_rgbs = torch.zeros(gaussian_count, int(feature_dim))
+    # rgb_init only makes sense for true RGB output (feature_dim == 3); for
+    # feature splatting the base raw values stay zeroed and the rgb_init
+    # request is silently ignored.
+    if rgb_init == "uniform" and int(feature_dim) == 3:
         rgb_target = torch.empty_like(raw_rgbs).uniform_(float(rgb_init_min), float(rgb_init_max))
         raw_rgbs.copy_(inverse_sigmoid_values(rgb_target))
 
@@ -1292,10 +1299,14 @@ class ResidualFreeGaussianParameterHeads(nn.Module):
         residual_opacity_logit_scale=1.0,
         residual_rgb_logit_scale=1.0,
         residual_head_input_norm="rmsnorm",
+        feature_dim=3,
     ):
         super().__init__()
         self.num_tokens = int(num_tokens)
         self.gaussians_per_token = int(gaussians_per_token)
+        self.feature_dim = int(feature_dim)
+        if self.feature_dim < 1:
+            raise ValueError(f"feature_dim must be >= 1, got {feature_dim}.")
         self.xy_extent = float(xy_extent)
         self.z_min = float(z_min)
         self.z_extent = float(z_max) - float(z_min)
@@ -1326,13 +1337,15 @@ class ResidualFreeGaussianParameterHeads(nn.Module):
             rgb_init=None if rgb_init is None else str(rgb_init).lower(),
             rgb_init_min=float(rgb_init_min),
             rgb_init_max=float(rgb_init_max),
+            feature_dim=self.feature_dim,
         )
         shape3 = (self.num_tokens, self.gaussians_per_token, 3)
+        feature_shape = (self.num_tokens, self.gaussians_per_token, self.feature_dim)
         self.base_raw_xyz = nn.Parameter(raw["xyz"].reshape(shape3))
         self.base_raw_scales = nn.Parameter(raw["scales"].reshape(shape3))
         self.base_raw_quats = nn.Parameter(raw["quats"].reshape(self.num_tokens, self.gaussians_per_token, 4))
         self.base_raw_opacities = nn.Parameter(raw["opacities"].reshape(self.num_tokens, self.gaussians_per_token, 1))
-        self.base_raw_rgbs = nn.Parameter(raw["rgbs"].reshape(shape3))
+        self.base_raw_rgbs = nn.Parameter(raw["rgbs"].reshape(feature_shape))
 
         norm_name = str(residual_head_input_norm).lower()
         if norm_name in {"none", "false", "off"}:
@@ -1356,7 +1369,7 @@ class ResidualFreeGaussianParameterHeads(nn.Module):
         self.scale_residual_head = build_mlp(feat_dim, gaussians_per_token * 3, **mlp_kwargs)
         self.rot_residual_head = build_mlp(feat_dim, gaussians_per_token * 4, **mlp_kwargs)
         self.opacity_residual_head = build_mlp(feat_dim, gaussians_per_token, **mlp_kwargs)
-        self.rgb_residual_head = build_mlp(feat_dim, gaussians_per_token * 3, **mlp_kwargs)
+        self.rgb_residual_head = build_mlp(feat_dim, gaussians_per_token * self.feature_dim, **mlp_kwargs)
 
     def _reshape(self, values, channels):
         return values.reshape(values.shape[0], self.num_tokens, self.gaussians_per_token, channels)
@@ -1392,7 +1405,7 @@ class ResidualFreeGaussianParameterHeads(nn.Module):
         )
         raw_rgbs = self.base_raw_rgbs.unsqueeze(0) + self._bounded_residual(
             self.rgb_residual_head(head_tokens),
-            3,
+            self.feature_dim,
             self.residual_rgb_logit_scale,
         )
 
@@ -1404,12 +1417,18 @@ class ResidualFreeGaussianParameterHeads(nn.Module):
             dim=-1,
         )
         batch_size = tokens.shape[0]
+        # F=3 keeps the legacy sigmoid-RGB path bit-identical; F!=3 emits raw
+        # features for a downstream colorize MLP.
+        if self.feature_dim == 3:
+            rgbs_out = torch.sigmoid(raw_rgbs)
+        else:
+            rgbs_out = raw_rgbs
         return (
             xyz.reshape(batch_size, self.num_tokens * self.gaussians_per_token, 3),
             (torch.exp(raw_scales) * self.scale_init).reshape(batch_size, self.num_tokens * self.gaussians_per_token, 3),
             F.normalize(raw_quats, p=2, dim=-1).reshape(batch_size, self.num_tokens * self.gaussians_per_token, 4),
             torch.sigmoid(raw_opacities).reshape(batch_size, self.num_tokens * self.gaussians_per_token, 1),
-            torch.sigmoid(raw_rgbs).reshape(batch_size, self.num_tokens * self.gaussians_per_token, 3),
+            rgbs_out.reshape(batch_size, self.num_tokens * self.gaussians_per_token, self.feature_dim),
         )
 
 
@@ -1460,12 +1479,14 @@ class UnconditionedTokenGSImplicitCamera(nn.Module):
         dynamic_rotation_degrees=10.0,
         dynamic_alpha_logit_extent=2.0,
         dynamic_coeff_output_init_std=1.0e-4,
+        feature_dim=3,
         **_unused,
     ):
         super().__init__()
         self.clip_length = int(clip_length)
         self.image_size = int(image_size)
         self.num_tokens = int(num_tokens)
+        self.feature_dim = int(feature_dim)
         self.static_tokens = None if static_tokens is None else int(static_tokens)
         self.dynamic_tokens = None if dynamic_tokens is None else int(dynamic_tokens)
         self.use_static_dynamic_split = self.static_tokens is not None or self.dynamic_tokens is not None
@@ -1518,6 +1539,7 @@ class UnconditionedTokenGSImplicitCamera(nn.Module):
             "rgb_init": rgb_init,
             "rgb_init_min": rgb_init_min,
             "rgb_init_max": rgb_init_max,
+            "feature_dim": self.feature_dim,
         }
         if self.use_static_dynamic_split:
             if dynamic_motion_extent is None:
@@ -1691,6 +1713,7 @@ class UnconditionedResidualFreeBankImplicitCamera(UnconditionedTokenGSImplicitCa
         rgb_init = kwargs.get("rgb_init")
         rgb_init_min = kwargs.get("rgb_init_min", 0.01)
         rgb_init_max = kwargs.get("rgb_init_max", 0.99)
+        feature_dim = int(kwargs.get("feature_dim", 3))
         super().__init__(*args, **kwargs)
         self.gaussian_heads = ResidualFreeGaussianParameterHeads(
             feat_dim=feat_dim,
@@ -1716,6 +1739,7 @@ class UnconditionedResidualFreeBankImplicitCamera(UnconditionedTokenGSImplicitCa
             residual_opacity_logit_scale=residual_opacity_logit_scale,
             residual_rgb_logit_scale=residual_rgb_logit_scale,
             residual_head_input_norm=residual_head_input_norm,
+            feature_dim=feature_dim,
         )
 
 
@@ -1781,6 +1805,7 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         dynamic_rotation_degrees=10.0,
         dynamic_alpha_logit_extent=2.0,
         dynamic_coeff_output_init_std=1.0e-4,
+        feature_dim=3,
     ):
         super().__init__()
         self.clip_length = clip_length
@@ -1805,6 +1830,7 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         self.total_tokens = self.num_tokens + 2
         self.feat_dim = feat_dim
         self.gaussians_per_token = gaussians_per_token
+        self.feature_dim = int(feature_dim)
         self.dynamic_time_basis_count = int(dynamic_time_basis_count)
         self.dynamic_time_max_frequency = float(dynamic_time_max_frequency)
         self.video_encoder_backend = str(video_encoder_backend).lower()
@@ -1864,6 +1890,7 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
             "rgb_init": rgb_init,
             "rgb_init_min": rgb_init_min,
             "rgb_init_max": rgb_init_max,
+            "feature_dim": self.feature_dim,
         }
         if self.use_static_dynamic_split:
             if dynamic_motion_extent is None:
@@ -2136,6 +2163,7 @@ class ResidualFreeBankVideoTokenGSImplicitCamera(DynamicVideoTokenGSImplicitCame
         rgb_init = kwargs.get("rgb_init")
         rgb_init_min = kwargs.get("rgb_init_min", 0.01)
         rgb_init_max = kwargs.get("rgb_init_max", 0.99)
+        feature_dim = int(kwargs.get("feature_dim", 3))
         super().__init__(*args, **kwargs)
         if self.use_static_dynamic_split:
             raise ValueError("Residual free-bank heads are not wired for static/dynamic split yet.")
@@ -2163,6 +2191,7 @@ class ResidualFreeBankVideoTokenGSImplicitCamera(DynamicVideoTokenGSImplicitCame
             residual_opacity_logit_scale=residual_opacity_logit_scale,
             residual_rgb_logit_scale=residual_rgb_logit_scale,
             residual_head_input_norm=residual_head_input_norm,
+            feature_dim=feature_dim,
         )
 
 
@@ -2215,6 +2244,7 @@ class DynamicVideoTokenGSKnownCamera(nn.Module):
         video_feature_layers=None,
         video_feature_channels=None,
         cross_attn_layers=1,
+        feature_dim=3,
         **_unused_camera_kwargs,
     ):
         super().__init__()
@@ -2224,6 +2254,7 @@ class DynamicVideoTokenGSKnownCamera(nn.Module):
         self.total_tokens = self.num_tokens
         self.feat_dim = feat_dim
         self.gaussians_per_token = gaussians_per_token
+        self.feature_dim = int(feature_dim)
         self.video_encoder_backend = str(video_encoder_backend).lower()
         self.video_encoder = build_video_encoder(
             self.video_encoder_backend,
@@ -2281,6 +2312,7 @@ class DynamicVideoTokenGSKnownCamera(nn.Module):
             rgb_init=rgb_init,
             rgb_init_min=rgb_init_min,
             rgb_init_max=rgb_init_max,
+            feature_dim=self.feature_dim,
         )
         self.time_proj = build_time_projector(1, feat_dim)
         self.head_time_proj = build_time_projector(1, feat_dim)

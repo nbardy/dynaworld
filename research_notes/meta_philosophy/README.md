@@ -10,9 +10,10 @@ slop, and what this project is actually trying to do.
 3. **`world_splat_tokens_vs_observed_modality_tokens.md`** — why world/splat tokens are latent predictive assets, not text/image/video tokenizer targets. Read before proposing a tokenizer, splat-token target, or two-stage token prediction scheme.
 4. **`how_to_think_about_architecture.md`** — mistakes to not repeat. 15+ named slop patterns with principles. Checklist before proposing. F1–F7 lookup. This is the "avoid regression to familiar-shaped bad answers" doc.
 5. **`dynaworld_architecture_solution_prompt.md`** — DynaWorld-specific external-model prompt for generating 3-4 concrete architecture solutions around world/splat tokens, held-out source-video training, and non-degenerate splats.
-6. **`mathematical_web_of_thought_prompt.md`** — XML-journal prompt for long mathematical exploration: branching, equations, proofs, derivations, backtracking, falsification, and compression toward a simple geometric object.
-7. **`how_prompt_guidance_could_have_been_better_for_model_architecture_research.md`** — how to ask external models for adjudication instead of mechanism-stacking. Use when designing the next research prompt.
-8. **`chatgpt_pro_prompt_for_expert_divergent_web_of_thought_model_architecture_development.md`** — general architecture prompt for driving external strong-reasoning models. Required XML output format, methodology contract, forbidden moves. Paste the System Brief into the external model; attach the companion docs.
+6. **`mathematical_object_discovery_markdown_prompt.md`** — Markdown-native prompt for mathematical object discovery when machine-parseable XML is not needed; forces evidence-first branching, branch statuses, equations tied to implementation, notation-vs-representation checks, and final compression.
+7. **`mathematical_web_of_thought_prompt.md`** — XML-journal prompt for long mathematical exploration: branching, equations, proofs, derivations, backtracking, falsification, and compression toward a simple geometric object.
+8. **`how_prompt_guidance_could_have_been_better_for_model_architecture_research.md`** — how to ask external models for adjudication instead of mechanism-stacking. Use when designing the next research prompt.
+9. **`chatgpt_pro_prompt_for_expert_divergent_web_of_thought_model_architecture_development.md`** — general architecture prompt for driving external strong-reasoning models. Required XML output format, methodology contract, forbidden moves. Paste the System Brief into the external model; attach the companion docs.
 
 ## Companion material elsewhere
 

@@ -227,6 +227,53 @@ Sort primary tables by held-out-camera quality, not source-view quality.
    invocation.
    - Convert only the strongest resulting diagnostic or primitive into code.
 
+## New Incidence Candidate: Compact Ray-Integrated Ellipsoid
+
+The latest theory pass produced a narrower candidate than the broad
+ray-Gaussian line integral:
+
+```text
+kappa(x) = beta * [1 - (x - mu)^T A (x - mu)]_+^k
+```
+
+This keeps world-space ray integration but gives finite compact support, a conic
+footprint, and constant per-pixel polynomial evaluation. The local theorem-level
+claim is:
+
+```text
+projected-splat screen-covariance nulls are removed;
+the radial depth / opacity-support gauge remains.
+```
+
+Implemented gate:
+
+```text
+research_experiments/gauge_fields/incidence.py::compact_poly_ellipsoid_optical_depth
+tests/test_gauge_incidence.py
+```
+
+Verified:
+
+```text
+closed form vs numeric quadrature
+radial gauge invariance
+projected covariance-null perturbation is not null under compact ray integration
+```
+
+Next integration, if pursued:
+
+```text
+render.incidence_mode = compact_poly_ellipsoid
+support_mode = derived_support_metric first
+```
+
+Use `A = inv(Sigma)` from the existing world support covariance and calibrate
+`beta` so the center-ray optical depth matches current alpha initialization. Do
+not promote it based on source-view fit. It must beat
+`derived_support_metric/projected_conic` on the 3-camera DeepView held-out
+selector without the broad-coverage failure mode seen in
+`ray_gaussian_line_peak`.
+
 ## Kill Criteria
 
 Kill or demote a support mode if:

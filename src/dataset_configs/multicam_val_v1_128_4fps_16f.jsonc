@@ -15,6 +15,10 @@
   "aist": {
     "enabled": true,
     "csv_url": "https://aistdancedb.ongaaccel.jp/data/video_refined/10M/refined_10M_sBM_all.csv",
+    // AIST++ companion bundle. 19KB zip with mapping.txt + per-environment setting JSONs.
+    // Schema and convention: https://google.github.io/aistplusplus_dataset/download.html
+    "cameras_zip_url": "https://github.com/google/aistplusplus_dataset/releases/download/v1.0/cameras.zip",
+    "cameras_dir": "data/external/aist_dance_db/cameras",
     "raw_dir": "data/external/aist_dance_db/raw/refined_10M_sBM",
     "start_seconds": 2.0,
     "sequences": [

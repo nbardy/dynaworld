@@ -10,6 +10,7 @@ from typing import Any
 
 import torch
 import wandb
+from camera import build_camera_rays_batch
 from config_utils import apply_defaults, load_config_file, path_or_none, resolved_config, serialize_config_value
 from dynamicTokenGS import (
     configure_fast_attn,
@@ -28,7 +29,13 @@ from gs_models import (
     UnconditionedTokenGSImplicitCamera,
 )
 from losses import reconstruction_loss_per_image, ssim_per_image
-from rendering import build_or_reuse_grid, camera_for_viewport, render_gaussian_frames, resize_images
+from rendering import (
+    build_or_reuse_grid,
+    camera_for_viewport,
+    render_gaussian_frames,
+    render_gaussian_frames_alpha_aware,
+    resize_images,
+)
 from rendering import pick_renderer_mode as resolve_renderer_mode
 from runtime_types import CameraState, GaussianSequence, SequenceData
 from sequence_data import load_camera_sequence, load_uncalibrated_sequence, resolve_frames_dir, select_window_indices
@@ -68,6 +75,7 @@ DATA_OPTION_DEFAULTS = {
 
 MODEL_OPTION_DEFAULTS = {
     "variant": "learned_time_orbit_path",
+    "feature_dim": 3,
     "xy_extent": None,
     "z_min": None,
     "z_max": None,
@@ -152,6 +160,7 @@ class StepResult:
     sequence_frame_count: int
     clip_frames: torch.Tensor
     preview_render: torch.Tensor | None
+    preview_features: torch.Tensor | None
     camera_state: CameraState | None
     loss: torch.Tensor
     recon_loss: torch.Tensor
@@ -184,6 +193,9 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("config['data']['eval_max_sequences'] must be >= 0.")
     apply_defaults(cfg["model"], MODEL_OPTION_DEFAULTS)
     cfg["model"]["variant"] = str(cfg["model"]["variant"]).lower()
+    cfg["model"]["feature_dim"] = int(cfg["model"]["feature_dim"])
+    if cfg["model"]["feature_dim"] < 1:
+        raise ValueError(f"model.feature_dim must be >= 1, got {cfg['model']['feature_dim']}.")
     cfg["model"]["video_encoder_backend"] = str(cfg["model"]["video_encoder_backend"]).lower()
     if cfg["model"]["video_encoder_backend"] not in {
         "local",
@@ -475,6 +487,56 @@ def viewport_cameras(
     )
 
 
+def camera_center_ray_dirs(cameras: tuple[Any, ...], *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    dirs = torch.stack(
+        [
+            camera.camera_to_world.to(device=device, dtype=dtype)[:3, 2]
+            for camera in cameras
+        ],
+        dim=0,
+    )
+    return dirs / torch.linalg.norm(dirs, dim=-1, keepdim=True).clamp_min(1.0e-8)
+
+
+def colorize_view_dirs_for_features(
+    features: torch.Tensor,
+    cameras: tuple[Any, ...],
+    *,
+    view_condition: str,
+    input_size: int,
+    render_size: int,
+    detach: bool,
+) -> torch.Tensor | None:
+    if view_condition == "none":
+        return None
+    if features.dim() != 4:
+        raise ValueError(f"View-conditioned colorize expects [T, F, H, W] features, got {tuple(features.shape)}.")
+    if len(cameras) != features.shape[0]:
+        raise ValueError(f"Expected {features.shape[0]} cameras for colorize view conditioning, got {len(cameras)}.")
+
+    render_cameras = viewport_cameras(cameras, input_size=input_size, render_size=render_size)
+    frame_count, _feature_dim, height, width = features.shape
+    if view_condition == "camera_center_ray":
+        dirs = camera_center_ray_dirs(render_cameras, device=features.device, dtype=features.dtype)
+        view_dirs = dirs.reshape(frame_count, 3, 1, 1).expand(-1, -1, height, width)
+    elif view_condition == "pixel_ray":
+        _origins, dirs_hw3 = build_camera_rays_batch(
+            list(render_cameras),
+            height=height,
+            width=width,
+            device=features.device,
+            dtype=features.dtype,
+            pixel_center=0.5,
+        )
+        view_dirs = dirs_hw3.permute(0, 3, 1, 2).contiguous()
+    else:
+        raise ValueError(
+            "colorize.view_condition must be one of none, camera_center_ray, pixel_ray; "
+            f"got {view_condition!r}."
+        )
+    return view_dirs.detach() if detach else view_dirs
+
+
 def gaussian_sequence_slice(sequence: GaussianSequence, start: int, end: int) -> GaussianSequence:
     cameras = None
     if sequence.cameras is not None:
@@ -500,9 +562,11 @@ def render_clip_sequence(
     input_size: int,
     render_size: int,
     dense_grid: torch.Tensor,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Returns (rendered_features, alpha_mask). Alpha is None for non-fast_mac
+    modes and for the F=3 v5 legacy path; a [T, H, W] tensor for F!=3 fast_mac."""
     render_cameras = viewport_cameras(cameras, input_size=input_size, render_size=render_size)
-    return render_gaussian_frames(
+    return render_gaussian_frames_alpha_aware(
         sequence,
         render_cameras,
         height=render_size,
@@ -516,6 +580,23 @@ def render_clip_sequence(
         fast_mac_options=render_cfg["fast_mac"],
         camera_projection=render_cfg["camera_projection"],
     )
+
+
+def stack_complete_frame_list(frames: list[torch.Tensor | None], *, name: str) -> torch.Tensor:
+    complete_frames = []
+    missing_indices = []
+    for index, frame in enumerate(frames):
+        if frame is None:
+            missing_indices.append(index)
+        else:
+            complete_frames.append(frame)
+    if missing_indices:
+        preview = ", ".join(str(index) for index in missing_indices[:8])
+        suffix = ", ..." if len(missing_indices) > 8 else ""
+        raise RuntimeError(f"{name} did not cover all frames; missing indices: {preview}{suffix}")
+    if not complete_frames:
+        raise RuntimeError(f"{name} did not produce any frames.")
+    return torch.stack(complete_frames, dim=0)
 
 
 def eval_metric_payload(
@@ -675,7 +756,7 @@ def render_full_sequence(
     render_cfg = config["render"]
     clip_length = model_cfg["train_frame_count"]
     num_frames = sequence_data.frame_count
-    rendered_frames = [None] * num_frames
+    rendered_frames: list[torch.Tensor | None] = [None] * num_frames
     decoded_buffers = init_decoded_frame_buffers(num_frames)
     camera_states = []
 
@@ -694,7 +775,7 @@ def render_full_sequence(
             raise ValueError("Implicit-camera video decode must include camera_state.")
         camera_states.append(decoded.camera_state)
         fill_decoded_frame_buffers(decoded_buffers, decoded, clip_indices)
-        rendered_clip = render_clip_sequence(
+        rendered_features_clip, _alpha_unused = render_clip_sequence(
             decoded,
             decoded.cameras,
             renderer_mode=renderer_mode,
@@ -702,7 +783,10 @@ def render_full_sequence(
             input_size=model_cfg["size"],
             render_size=render_cfg["render_size"],
             dense_grid=dense_grid,
-        ).cpu()
+        )
+        # Module-level legacy path: no colorize, no alpha composition. Alpha is
+        # discarded here. Trainer-class methods below do the alpha-aware path.
+        rendered_clip = rendered_features_clip.cpu()
 
         for local_index, frame_index in enumerate(clip_indices.tolist()):
             if rendered_frames[frame_index] is not None:
@@ -765,6 +849,7 @@ def build_model_from_config(
         clip_length=model_cfg["train_frame_count"],
         image_size=model_cfg["size"],
         num_tokens=model_cfg["tokens"],
+        feature_dim=model_cfg["feature_dim"],
         feat_dim=model_cfg["model_dim"],
         bottleneck_dim=model_cfg["bottleneck_dim"],
         num_heads=model_cfg["num_heads"],
@@ -918,8 +1003,39 @@ class Trainer:
 
         self.model = build_model_from_config(self.cfg).to(self.device)
         self.model.train()
+        self.feature_dim = int(self.model_cfg["feature_dim"])
+        self.colorize = None
+        self.colorize_view_condition = "none"
+        self.colorize_detach_view_condition = True
+        colorize_cfg = self.cfg.get("colorize")
+        if colorize_cfg is not None:
+            from colorize import FeatureToColor, normalize_view_condition
+
+            self.colorize_view_condition = normalize_view_condition(colorize_cfg.get("view_condition", "none"))
+            self.colorize_detach_view_condition = bool(colorize_cfg.get("detach_view_condition", True))
+            self.colorize = FeatureToColor(
+                feature_dim=self.feature_dim,
+                hidden_dim=colorize_cfg.get("hidden_dim"),
+                activation=colorize_cfg.get("activation", "sigmoid"),
+                pre_norm=bool(colorize_cfg.get("pre_norm", False)),
+                weight_init=str(colorize_cfg.get("weight_init", "kaiming")).lower(),
+                weight_init_gain=float(colorize_cfg.get("weight_init_gain", 1.0)),
+                view_condition=self.colorize_view_condition,
+            ).to(self.device)
+        elif self.feature_dim != 3:
+            raise ValueError(
+                f"model.feature_dim={self.feature_dim} requires a 'colorize' config section. "
+                "Add `\"colorize\": {\"hidden_dim\": null, \"activation\": \"sigmoid\"}` to the train config, "
+                "or set model.feature_dim=3 for the legacy RGB path."
+            )
+        self.feature_pca_log = bool(self.logging_cfg.get("feature_pca_log", False))
+        if self.feature_pca_log and self.feature_dim == 3:
+            raise ValueError("logging.feature_pca_log=true requires model.feature_dim != 3.")
+        trainable_parameters = list(self.model.parameters())
+        if self.colorize is not None:
+            trainable_parameters = trainable_parameters + list(self.colorize.parameters())
         self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
+            trainable_parameters,
             lr=self.train_cfg["lr"],
             fused=self.device.type in {"cuda", "mps"},
         )
@@ -940,6 +1056,19 @@ class Trainer:
 
     def on_sequences_loaded(self) -> None:
         pass
+
+    def colorize_features(self, features: torch.Tensor, cameras: tuple[Any, ...]) -> torch.Tensor:
+        if self.colorize is None:
+            return features
+        view_dirs = colorize_view_dirs_for_features(
+            features,
+            cameras,
+            view_condition=self.colorize_view_condition,
+            input_size=self.model_cfg["size"],
+            render_size=self.render_size,
+            detach=self.colorize_detach_view_condition,
+        )
+        return self.colorize(features, view_dirs=view_dirs)
 
     def load_single_sequence_data(self) -> SequenceData:
         if self.data_cfg["sequence_dir"] is None:
@@ -1183,19 +1312,27 @@ class Trainer:
         decoded: GaussianSequence,
         regularizer_loss: torch.Tensor,
         keep_preview: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         recon_loss = clip_frames.new_tensor(0.0)
         preview_render = None
+        preview_features = None
         if decoded.cameras is None:
             raise ValueError("Implicit-camera video decode must include cameras.")
         frame_count = len(decoded.cameras)
         chunk_size = self.temporal_recon_chunk_size(frame_count)
         target_frames = resize_images(clip_frames[0], self.render_size)
 
+        # Random per-step background (3DGS-canonical trick to remove the
+        # degenerate (alpha, splat_rgb) cheating manifold). Sampled ONCE per
+        # training step, broadcast across all chunks, frames, and pixels of
+        # this step. Different step → different bg → the only solution that
+        # works across iterations is alpha = 1 + splat_rgb = GT.
+        random_bg = torch.rand(3, device=clip_frames.device, dtype=clip_frames.dtype).view(1, 3, 1, 1)
+
         for chunk_start in range(0, frame_count, chunk_size):
             chunk_end = min(chunk_start + chunk_size, frame_count)
             chunk_sequence = gaussian_sequence_slice(decoded, chunk_start, chunk_end)
-            chunk_renders = render_clip_sequence(
+            chunk_features, chunk_alpha = render_clip_sequence(
                 chunk_sequence,
                 tuple(decoded.cameras[chunk_start:chunk_end]),
                 renderer_mode=self.renderer_mode,
@@ -1204,6 +1341,24 @@ class Trainer:
                 render_size=self.render_size,
                 dense_grid=self.dense_grid,
             )
+            if keep_preview and self.feature_pca_log and preview_features is None:
+                preview_features = chunk_features[0].detach()
+            if self.colorize is not None:
+                splat_rgb = self.colorize_features(
+                    chunk_features,
+                    tuple(decoded.cameras[chunk_start:chunk_end]),
+                )
+                if chunk_alpha is not None:
+                    # Alpha-aware compositing with per-step random bg.
+                    # Replaces the previous hardcoded white bg, which created a
+                    # degenerate manifold where the model could fit any GT
+                    # color via partial opacity instead of full splat coverage.
+                    alpha_expanded = chunk_alpha.unsqueeze(1)  # [T, 1, H, W]
+                    chunk_renders = alpha_expanded * splat_rgb + (1.0 - alpha_expanded) * random_bg
+                else:
+                    chunk_renders = splat_rgb
+            else:
+                chunk_renders = chunk_features
             if keep_preview and preview_render is None:
                 preview_render = chunk_renders[0].detach()
             target = target_frames[chunk_start:chunk_end]
@@ -1214,9 +1369,9 @@ class Trainer:
             backward_loss = chunk_recon_loss + (regularizer_loss if is_last_chunk else 0.0)
             backward_loss.backward(retain_graph=not is_last_chunk)
 
-        return recon_loss, preview_render
+        return recon_loss, preview_render, preview_features
 
-    def render_decoded_clip(self, decoded: GaussianSequence) -> torch.Tensor:
+    def render_decoded_clip(self, decoded: GaussianSequence) -> tuple[torch.Tensor, torch.Tensor | None]:
         if decoded.cameras is None:
             raise ValueError("Video decode must include cameras.")
         return render_clip_sequence(
@@ -1248,7 +1403,17 @@ class Trainer:
                 decoded.camera_state,
             )
             bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
-            rendered_clip = self.render_decoded_clip(decoded)
+            rendered_features, alpha_clip = self.render_decoded_clip(decoded)
+            preview_features = rendered_features[0].detach() if self.feature_pca_log else None
+            if self.colorize is not None:
+                splat_rgb = self.colorize_features(rendered_features, decoded.cameras)
+                if alpha_clip is not None:
+                    alpha_expanded = alpha_clip.unsqueeze(1)
+                    rendered_clip = alpha_expanded * splat_rgb + (1.0 - alpha_expanded) * 1.0
+                else:
+                    rendered_clip = splat_rgb
+            else:
+                rendered_clip = rendered_features
             target_frames = resize_images(clip_frames[0], self.render_size)
             recon_loss = reconstruction_loss_per_image(rendered_clip, target_frames, self.loss_cfg).mean()
             loss = recon_loss + camera_loss + bank_rate_loss
@@ -1257,6 +1422,7 @@ class Trainer:
                 sequence_frame_count=sequence_data.frame_count,
                 clip_frames=clip_frames,
                 preview_render=rendered_clip[0].detach(),
+                preview_features=preview_features,
                 camera_state=decoded.camera_state,
                 loss=loss.detach(),
                 recon_loss=recon_loss.detach(),
@@ -1284,7 +1450,7 @@ class Trainer:
         )
         bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
 
-        recon_loss, preview_render = self.recon_backward(
+        recon_loss, preview_render, preview_features = self.recon_backward(
             clip_frames,
             decoded,
             camera_loss + bank_rate_loss,
@@ -1298,6 +1464,7 @@ class Trainer:
             sequence_frame_count=sequence_data.frame_count,
             clip_frames=clip_frames,
             preview_render=preview_render,
+            preview_features=preview_features,
             camera_state=decoded.camera_state,
             loss=loss,
             recon_loss=recon_loss,
@@ -1383,12 +1550,21 @@ class Trainer:
     def render_full_sequence(
         self,
         sequence_data: SequenceData,
-    ) -> tuple[torch.Tensor, CameraState | None, dict[str, float]]:
+    ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
         was_training = self.model.training
         self.model.eval()
         clip_length = self.model_cfg["train_frame_count"]
         num_frames = sequence_data.frame_count
-        rendered_frames = [None] * num_frames
+        rendered_frames: list[torch.Tensor | None] = [None] * num_frames
+        # When feature_pca_log is on, accumulate the pre-colorize F-channel feature
+        # buffer per frame so the validation pass can render a PCA video across all
+        # frames. None entries stay None for frames that were skipped.
+        feature_frames: list[torch.Tensor | None] | None = (
+            [None] * num_frames if self.feature_pca_log else None
+        )
+        # alpha_frames is allocated lazily on the first chunk that produces a
+        # non-None alpha (the F!=3 fast_mac path). Stays None for F=3 / non-fast_mac.
+        alpha_frames: list[torch.Tensor | None] | None = None
         decoded_buffers = init_decoded_frame_buffers(num_frames)
         camera_states = []
 
@@ -1405,7 +1581,7 @@ class Trainer:
                 raise ValueError("Implicit-camera video decode must include camera_state.")
             camera_states.append(decoded.camera_state)
             fill_decoded_frame_buffers(decoded_buffers, decoded, clip_indices)
-            rendered_clip = render_clip_sequence(
+            rendered_features, alpha_clip = render_clip_sequence(
                 decoded,
                 decoded.cameras,
                 renderer_mode=self.renderer_mode,
@@ -1413,12 +1589,33 @@ class Trainer:
                 input_size=self.model_cfg["size"],
                 render_size=self.render_size,
                 dense_grid=self.dense_grid,
-            ).cpu()
+            )
+            if feature_frames is not None:
+                features_cpu = rendered_features.detach().cpu()
+            if alpha_clip is not None:
+                if alpha_frames is None:
+                    alpha_frames = [None] * num_frames
+                alpha_cpu = alpha_clip.detach().cpu()
+            if self.colorize is not None:
+                splat_rgb = self.colorize_features(rendered_features, decoded.cameras)
+                if alpha_clip is not None:
+                    alpha_expanded = alpha_clip.unsqueeze(1)
+                    rendered_clip = (
+                        alpha_expanded * splat_rgb + (1.0 - alpha_expanded) * 1.0
+                    ).cpu()
+                else:
+                    rendered_clip = splat_rgb.cpu()
+            else:
+                rendered_clip = rendered_features.cpu()
 
             for local_index, frame_index in enumerate(clip_indices.tolist()):
                 if rendered_frames[frame_index] is not None:
                     continue
                 rendered_frames[frame_index] = rendered_clip[local_index]
+                if feature_frames is not None:
+                    feature_frames[frame_index] = features_cpu[local_index]
+                if alpha_frames is not None and alpha_clip is not None:
+                    alpha_frames[frame_index] = alpha_cpu[local_index]
 
         if was_training:
             self.model.train()
@@ -1430,7 +1627,24 @@ class Trainer:
             translation_delta=torch.cat([state.translation_delta for state in camera_states], dim=0),
             path_residuals=torch.cat([state.path_residuals for state in camera_states], dim=0),
         )
-        return torch.stack(rendered_frames, dim=0), merged_camera_state, decoded_temporal_payload(decoded_buffers)
+        rendered_sequence = stack_complete_frame_list(rendered_frames, name="validation render")
+        feature_sequence = (
+            stack_complete_frame_list(feature_frames, name="validation feature PCA")
+            if feature_frames is not None
+            else None
+        )
+        alpha_sequence = (
+            stack_complete_frame_list(alpha_frames, name="validation alpha mask")
+            if alpha_frames is not None
+            else None
+        )
+        return (
+            rendered_sequence,
+            merged_camera_state,
+            decoded_temporal_payload(decoded_buffers),
+            feature_sequence,
+            alpha_sequence,
+        )
 
     def validation_video_payload(self) -> dict[str, Any]:
         sequences = self.eval_sequences or [self.sequence_data]
@@ -1439,7 +1653,13 @@ class Trainer:
             "Eval/SequenceCount": len(sequences),
         }
         for sequence_index, sequence_data in enumerate(sequences):
-            rendered_sequence, eval_camera_state, decoded_metrics = self.render_full_sequence(sequence_data)
+            (
+                rendered_sequence,
+                eval_camera_state,
+                decoded_metrics,
+                feature_sequence,
+                alpha_sequence,
+            ) = self.render_full_sequence(sequence_data)
             gt_sequence = resize_images(sequence_data.frames, self.render_size).detach().cpu()
             metrics = {
                 **eval_metric_payload(rendered_sequence, gt_sequence, self.loss_cfg),
@@ -1473,6 +1693,43 @@ class Trainer:
                     payload["GT_Video"] = make_wandb_video(gt_sequence, sequence_data.video_fps)
                     self.gt_video_logged = True
 
+                # Build a list of video columns for the side-by-side composite.
+                # Always start with GT and predicted RGB; conditionally append
+                # Alpha mask and Feature PCA when available. Each entry is
+                # [T, 3, H, W], so torch.cat along dim=-1 produces [T, 3, H, K*W].
+                composite_columns: list[torch.Tensor] = [gt_sequence, rendered_sequence]
+
+                # Alpha mask video: [T, H, W] -> [T, 3, H, W] grayscale.
+                # alpha_sequence is None until v5_features exposes alpha; once
+                # the rasterizer change lands, this fires automatically.
+                if alpha_sequence is not None:
+                    alpha_grayscale = (
+                        alpha_sequence.unsqueeze(1).expand(-1, 3, -1, -1).contiguous()
+                    )
+                    payload["Alpha_Mask_Video"] = make_wandb_video(
+                        alpha_grayscale, sequence_data.video_fps
+                    )
+                    composite_columns.append(alpha_grayscale)
+
+                # PCA-of-features video: F-channel feature buffer projected to
+                # 3 components, normalized per-clip, encoded as a video. Detached
+                # at render-time; viz only.
+                if feature_sequence is not None:
+                    from feature_pca_viz import feature_pca_to_rgb
+                    pca_sequence = feature_pca_to_rgb(feature_sequence)
+                    payload["Feature_PCA_Video"] = make_wandb_video(
+                        pca_sequence, sequence_data.video_fps
+                    )
+                    composite_columns.append(pca_sequence)
+
+                # Side-by-side composite of every available column. Skip when
+                # only GT + Pred are present (Render_GT_Video already covers that).
+                if len(composite_columns) > 2:
+                    composite = torch.cat(composite_columns, dim=-1)
+                    payload["Render_Composite_Video"] = make_wandb_video(
+                        composite, sequence_data.video_fps
+                    )
+
         metric_keys = sorted({key for item in metric_payloads for key in item})
         for key in metric_keys:
             values = [item[key] for item in metric_payloads if key in item]
@@ -1489,6 +1746,17 @@ class Trainer:
         payload = self.scalar_payload(result)
         if should_log_images:
             payload["Render_GT_vs_Pred"] = self.render_preview_image(result, step)
+            if self.feature_pca_log:
+                if result.preview_features is None:
+                    raise ValueError(
+                        "feature_pca_log is on but preview_features was not retained for the training step."
+                    )
+                from feature_pca_viz import feature_pca_to_rgb
+                pca_rgb = feature_pca_to_rgb(result.preview_features)
+                pca_image = (
+                    pca_rgb.detach().cpu().clamp(0, 1).permute(1, 2, 0) * 255.0
+                ).to(torch.uint8).numpy()
+                payload["media/feature_pca_image"] = wandb.Image(pca_image, caption=f"Step {step}")
         if should_log_videos:
             payload.update(self.validation_video_payload())
         wandb.log(payload, step=step)
@@ -1583,7 +1851,7 @@ class KnownCameraTrainer(Trainer):
 
         zero = clip_frames.new_tensor(0.0)
         bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
-        recon_loss, preview_render = self.recon_backward(
+        recon_loss, preview_render, preview_features = self.recon_backward(
             clip_frames,
             decoded,
             bank_rate_loss,
@@ -1597,6 +1865,7 @@ class KnownCameraTrainer(Trainer):
             sequence_frame_count=sequence_data.frame_count,
             clip_frames=clip_frames,
             preview_render=preview_render,
+            preview_features=preview_features,
             camera_state=None,
             loss=loss,
             recon_loss=recon_loss,
@@ -1625,7 +1894,12 @@ class KnownCameraTrainer(Trainer):
 
             zero = clip_frames.new_tensor(0.0)
             bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
-            rendered_clip = self.render_decoded_clip(decoded)
+            rendered_features = self.render_decoded_clip(decoded)
+            preview_features = rendered_features[0].detach() if self.feature_pca_log else None
+            if self.colorize is not None:
+                rendered_clip = self.colorize_features(rendered_features, decoded.cameras)
+            else:
+                rendered_clip = rendered_features
             target_frames = resize_images(clip_frames[0], self.render_size)
             recon_loss = reconstruction_loss_per_image(rendered_clip, target_frames, self.loss_cfg).mean()
             loss = recon_loss + bank_rate_loss
@@ -1634,6 +1908,7 @@ class KnownCameraTrainer(Trainer):
                 sequence_frame_count=sequence_data.frame_count,
                 clip_frames=clip_frames,
                 preview_render=rendered_clip[0].detach(),
+                preview_features=preview_features,
                 camera_state=None,
                 loss=loss.detach(),
                 recon_loss=recon_loss.detach(),
@@ -1651,14 +1926,19 @@ class KnownCameraTrainer(Trainer):
     def render_full_sequence(
         self,
         sequence_data: SequenceData,
-    ) -> tuple[torch.Tensor, CameraState | None, dict[str, float]]:
+    ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
         if sequence_data.cameras is None:
             raise ValueError(f"Known-camera sequence has no cameras: {sequence_data.source_path}")
         was_training = self.model.training
         self.model.eval()
         clip_length = self.model_cfg["train_frame_count"]
         num_frames = sequence_data.frame_count
-        rendered_frames = [None] * num_frames
+        rendered_frames: list[torch.Tensor | None] = [None] * num_frames
+        feature_frames: list[torch.Tensor | None] | None = (
+            [None] * num_frames if self.feature_pca_log else None
+        )
+        # alpha_frames placeholder; populated once v5_features exposes alpha.
+        alpha_frames: list[torch.Tensor | None] | None = None
         decoded_buffers = init_decoded_frame_buffers(num_frames)
 
         for end in range(clip_length, num_frames + clip_length, clip_length):
@@ -1671,7 +1951,7 @@ class KnownCameraTrainer(Trainer):
             if decoded.cameras is None:
                 raise ValueError("Known-camera video decode must include cameras.")
             fill_decoded_frame_buffers(decoded_buffers, decoded, clip_indices)
-            rendered_clip = render_clip_sequence(
+            rendered_features, alpha_clip = render_clip_sequence(
                 decoded,
                 decoded.cameras,
                 renderer_mode=self.renderer_mode,
@@ -1679,16 +1959,54 @@ class KnownCameraTrainer(Trainer):
                 input_size=self.model_cfg["size"],
                 render_size=self.render_size,
                 dense_grid=self.dense_grid,
-            ).cpu()
+            )
+            if feature_frames is not None:
+                features_cpu = rendered_features.detach().cpu()
+            if alpha_clip is not None:
+                if alpha_frames is None:
+                    alpha_frames = [None] * num_frames
+                alpha_cpu = alpha_clip.detach().cpu()
+            if self.colorize is not None:
+                splat_rgb = self.colorize_features(rendered_features, decoded.cameras)
+                if alpha_clip is not None:
+                    alpha_expanded = alpha_clip.unsqueeze(1)
+                    rendered_clip = (
+                        alpha_expanded * splat_rgb + (1.0 - alpha_expanded) * 1.0
+                    ).cpu()
+                else:
+                    rendered_clip = splat_rgb.cpu()
+            else:
+                rendered_clip = rendered_features.cpu()
 
             for local_index, frame_index in enumerate(clip_indices.tolist()):
                 if rendered_frames[frame_index] is not None:
                     continue
                 rendered_frames[frame_index] = rendered_clip[local_index]
+                if feature_frames is not None:
+                    feature_frames[frame_index] = features_cpu[local_index]
+                if alpha_frames is not None and alpha_clip is not None:
+                    alpha_frames[frame_index] = alpha_cpu[local_index]
 
         if was_training:
             self.model.train()
-        return torch.stack(rendered_frames, dim=0), None, decoded_temporal_payload(decoded_buffers)
+        rendered_sequence = stack_complete_frame_list(rendered_frames, name="validation render")
+        feature_sequence = (
+            stack_complete_frame_list(feature_frames, name="validation feature PCA")
+            if feature_frames is not None
+            else None
+        )
+        alpha_sequence = (
+            stack_complete_frame_list(alpha_frames, name="validation alpha mask")
+            if alpha_frames is not None
+            else None
+        )
+        return (
+            rendered_sequence,
+            None,
+            decoded_temporal_payload(decoded_buffers),
+            feature_sequence,
+            alpha_sequence,
+        )
 
     def run(self) -> None:
         print(

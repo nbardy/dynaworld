@@ -10,7 +10,37 @@ import torch
 from renderers.common import MIN_RENDER_DEPTH, project_gaussians_2d, project_gaussians_2d_batch
 from renderers.projection import project_gaussians_2d_camera, project_gaussians_2d_camera_batch
 
+FeatureBackground = float | tuple[float, ...]
+
 FAST_MAC_V5_DIR = Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v5"
+FAST_MAC_V5_FEATURES_DIR = (
+    Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v5_features"
+)
+
+
+def _float_tuple(value: Any, *, field_name: str) -> tuple[float, ...]:
+    if isinstance(value, (str, bytes)):
+        raise ValueError(f"{field_name} must be numeric, got {value!r}.")
+    try:
+        return tuple(float(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a numeric sequence, got {value!r}.") from exc
+
+
+def _normalize_rgb_background(value: Any) -> tuple[float, float, float]:
+    background = _float_tuple(value, field_name="fast_mac.background")
+    if len(background) != 3:
+        raise ValueError(f"fast_mac.background must contain three RGB values, got {value!r}.")
+    return background
+
+
+def _normalize_feature_background(value: Any) -> FeatureBackground:
+    if isinstance(value, (int, float)):
+        return float(value)
+    background = _float_tuple(value, field_name="fast_mac.feature_background")
+    if len(background) == 0:
+        raise ValueError("fast_mac.feature_background must be a scalar or a non-empty sequence.")
+    return background
 
 
 @dataclass(frozen=True)
@@ -20,6 +50,7 @@ class FastMacRendererConfig:
     alpha_threshold: float = 1.0 / 255.0
     transmittance_threshold: float = 1.0e-4
     background: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    feature_background: FeatureBackground = 0.0
     enable_overflow_fallback: bool = True
     inputs_sorted_by_depth: bool = True
     batch_strategy: str = "flatten"
@@ -35,15 +66,15 @@ class FastMacRendererConfig:
         fallback_alpha_threshold: float,
     ) -> "FastMacRendererConfig":
         values = values or {}
-        background = values.get("background", cls.background)
-        if len(background) != 3:
-            raise ValueError(f"fast_mac.background must contain three values, got {background!r}.")
         return cls(
             tile_size=int(values.get("tile_size", fallback_tile_size)),
             max_fast_pairs=int(values.get("max_fast_pairs", cls.max_fast_pairs)),
             alpha_threshold=float(values.get("alpha_threshold", fallback_alpha_threshold)),
             transmittance_threshold=float(values.get("transmittance_threshold", cls.transmittance_threshold)),
-            background=tuple(float(value) for value in background),
+            background=_normalize_rgb_background(values.get("background", cls.background)),
+            feature_background=_normalize_feature_background(
+                values.get("feature_background", cls.feature_background)
+            ),
             enable_overflow_fallback=bool(values.get("enable_overflow_fallback", cls.enable_overflow_fallback)),
             inputs_sorted_by_depth=bool(values.get("inputs_sorted_by_depth", cls.inputs_sorted_by_depth)),
             batch_strategy=str(values.get("batch_strategy", cls.batch_strategy)),
@@ -61,6 +92,13 @@ def _ensure_fast_mac_v5_on_path() -> None:
         sys.path.insert(0, str(FAST_MAC_V5_DIR))
 
 
+def _ensure_fast_mac_v5_features_on_path() -> None:
+    if not FAST_MAC_V5_FEATURES_DIR.exists():
+        raise RuntimeError(f"fast-mac-gsplat v5_features directory not found: {FAST_MAC_V5_FEATURES_DIR}")
+    if str(FAST_MAC_V5_FEATURES_DIR) not in sys.path:
+        sys.path.insert(0, str(FAST_MAC_V5_FEATURES_DIR))
+
+
 def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
     _ensure_fast_mac_v5_on_path()
     from torch_gsplat_bridge_v5 import RasterConfig
@@ -73,6 +111,35 @@ def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
         alpha_threshold=config.alpha_threshold,
         transmittance_threshold=config.transmittance_threshold,
         background=config.background,
+        enable_overflow_fallback=config.enable_overflow_fallback,
+        inputs_sorted_by_depth=config.inputs_sorted_by_depth,
+        batch_strategy=config.batch_strategy,
+        batch_launch_limit_tiles=config.batch_launch_limit_tiles,
+        batch_launch_limit_gaussians=config.batch_launch_limit_gaussians,
+    )
+
+
+def _make_v5_features_config(config: FastMacRendererConfig, height: int, width: int, feature_dim: int):
+    _ensure_fast_mac_v5_features_on_path()
+    from torch_gsplat_bridge_v5_features import RasterConfig as FeatureRasterConfig
+
+    if isinstance(config.feature_background, (int, float)):
+        background = (config.feature_background,)
+    elif len(config.feature_background) in (1, feature_dim):
+        background = config.feature_background
+    else:
+        raise ValueError(
+            "fast_mac.feature_background must be a scalar or contain "
+            f"feature_dim={feature_dim} values; got {len(config.feature_background)}."
+        )
+    return FeatureRasterConfig(
+        height=height,
+        width=width,
+        tile_size=config.tile_size,
+        max_fast_pairs=config.max_fast_pairs,
+        alpha_threshold=config.alpha_threshold,
+        transmittance_threshold=config.transmittance_threshold,
+        background=background,
         enable_overflow_fallback=config.enable_overflow_fallback,
         inputs_sorted_by_depth=config.inputs_sorted_by_depth,
         batch_strategy=config.batch_strategy,
@@ -234,10 +301,8 @@ def render_fast_mac_3dgs(
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
     config: FastMacRendererConfig,
-) -> torch.Tensor:
-    _ensure_fast_mac_v5_on_path()
-    from torch_gsplat_bridge_v5 import rasterize_projected_gaussians
-
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    feature_dim = rgbs.shape[-1]
     means2d, conics, colors, projected_opacities, depths = project_for_fast_mac(
         means3d.float(),
         scales.float(),
@@ -253,15 +318,37 @@ def render_fast_mac_3dgs(
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
     )
-    image_hwc = rasterize_projected_gaussians(
+    # F=3 -> v5 (legacy RGB, output clamped to [0,1] for direct loss). Returns (features, None).
+    # F!=3 -> v5_features (raw F-channel feature map + accumulated alpha mask).
+    if feature_dim == 3:
+        _ensure_fast_mac_v5_on_path()
+        from torch_gsplat_bridge_v5 import rasterize_projected_gaussians
+
+        image_hwc = rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_v5_config(config, height, width),
+        )
+        return image_hwc.clamp(0.0, 1.0).permute(2, 0, 1).contiguous(), None
+    _ensure_fast_mac_v5_features_on_path()
+    from torch_gsplat_bridge_v5_features import rasterize_projected_gaussians as rasterize_v5_features
+
+    rasterize_out = rasterize_v5_features(
         means2d,
         conics,
         colors,
         projected_opacities,
         depths,
-        _make_v5_config(config, height, width),
+        _make_v5_features_config(config, height, width, feature_dim),
     )
-    return image_hwc.clamp(0.0, 1.0).permute(2, 0, 1).contiguous()
+    if isinstance(rasterize_out, tuple):
+        image_hwf, alpha_hw = rasterize_out
+    else:
+        image_hwf, alpha_hw = rasterize_out, None
+    return image_hwf.permute(2, 0, 1).contiguous(), alpha_hw
 
 
 def render_fast_mac_3dgs_batch(
@@ -282,10 +369,8 @@ def render_fast_mac_3dgs_batch(
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
     config: FastMacRendererConfig,
-) -> torch.Tensor:
-    _ensure_fast_mac_v5_on_path()
-    from torch_gsplat_bridge_v5 import rasterize_projected_gaussians
-
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    feature_dim = rgbs.shape[-1]
     means2d, conics, colors, projected_opacities, depths = project_for_fast_mac_batch(
         means3d.float(),
         scales.float(),
@@ -301,15 +386,37 @@ def render_fast_mac_3dgs_batch(
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
     )
-    image_bhwc = rasterize_projected_gaussians(
+    # Returns (features, alpha_mask). Alpha is None for the F=3 v5 legacy path
+    # and a tensor of shape [B, H, W] for the F!=3 v5_features path.
+    if feature_dim == 3:
+        _ensure_fast_mac_v5_on_path()
+        from torch_gsplat_bridge_v5 import rasterize_projected_gaussians
+
+        image_bhwc = rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_v5_config(config, height, width),
+        )
+        return image_bhwc.clamp(0.0, 1.0).permute(0, 3, 1, 2).contiguous(), None
+    _ensure_fast_mac_v5_features_on_path()
+    from torch_gsplat_bridge_v5_features import rasterize_projected_gaussians as rasterize_v5_features
+
+    rasterize_out = rasterize_v5_features(
         means2d,
         conics,
         colors,
         projected_opacities,
         depths,
-        _make_v5_config(config, height, width),
+        _make_v5_features_config(config, height, width, feature_dim),
     )
-    return image_bhwc.clamp(0.0, 1.0).permute(0, 3, 1, 2).contiguous()
+    if isinstance(rasterize_out, tuple):
+        image_bhwf, alpha_bhw = rasterize_out
+    else:
+        image_bhwf, alpha_bhw = rasterize_out, None
+    return image_bhwf.permute(0, 3, 1, 2).contiguous(), alpha_bhw
 
 
 __all__ = [

@@ -227,12 +227,87 @@ def np_median(values: list[float]) -> float:
     return 0.5 * (ordered[middle - 1] + ordered[middle])
 
 
+def cleanup_zips(root: Path, *, execute: bool) -> None:
+    """Drop raw/*.zip archives once the corresponding extracted scene exists.
+
+    Default mode is dry-run -- we print what *would* be deleted plus the total
+    reclaimable bytes. Pass `--execute` to actually unlink. Each zip is matched
+    against `extracted/<scene_name>/<scene_name>/poses_bounds.npy` (the canonical
+    Neural 3D Video extracted layout) so we never delete a zip whose extraction
+    didn't land. Split flame_salmon parts (`flame_salmon_1_split.*`) are matched
+    against the merged `flame_salmon_1` extraction.
+    """
+    raw_dir = root / "raw"
+    extracted_dir = root / "extracted"
+    archives = sorted(raw_dir.glob("*.zip")) + sorted(raw_dir.glob("*.z01"))
+    archives += sorted(raw_dir.glob("*.z02")) + sorted(raw_dir.glob("*.z03"))
+    if not archives:
+        print(f"No zip archives found under {raw_dir}.")
+        return
+
+    total_reclaimable = 0
+    deletable: list[Path] = []
+    skipped: list[tuple[Path, str]] = []
+    for archive in archives:
+        scene_name = archive.name
+        for suffix in (".zip", ".ZIP"):
+            if scene_name.endswith(suffix):
+                scene_name = scene_name[: -len(suffix)]
+                break
+        # Split-zip parts and the recombined flame_salmon_1.zip both map to the
+        # same extracted scene. Strip the `_split[.zNN]` suffix to find it.
+        canonical_scene = scene_name.replace("_split", "")
+        if canonical_scene.endswith((".z01", ".z02", ".z03")):
+            canonical_scene = canonical_scene[:-4]
+        extracted_marker = extracted_dir / canonical_scene / canonical_scene / "poses_bounds.npy"
+        size_bytes = archive.stat().st_size
+        if extracted_marker.exists():
+            deletable.append(archive)
+            total_reclaimable += size_bytes
+        else:
+            skipped.append((archive, str(extracted_marker)))
+
+    if not deletable:
+        print("No archives are safe to delete (no matching extracted scene found).")
+        for archive, expected in skipped:
+            print(f"  SKIP {archive.name}  (missing {expected})")
+        return
+
+    mode = "DELETING" if execute else "DRY-RUN -- would delete"
+    print(f"{mode} {len(deletable)} zip archive(s) with extracted counterparts:")
+    for archive in deletable:
+        size_mb = archive.stat().st_size / 1_000_000.0
+        print(f"  {archive}  ({size_mb:.2f} MB, {archive.stat().st_size} bytes)")
+    print(f"Total reclaimable: {total_reclaimable / 1_000_000.0:.2f} MB ({total_reclaimable} bytes)")
+
+    if skipped:
+        print(f"Skipping {len(skipped)} archive(s) without matching extracted scene:")
+        for archive, expected in skipped:
+            print(f"  SKIP {archive.name}  (missing {expected})")
+
+    if not execute:
+        print("Re-run with --execute to actually delete the archives above.")
+        return
+
+    for archive in deletable:
+        archive.unlink()
+        print(f"Deleted: {archive}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Download and inspect Neural 3D Video release assets.")
-    parser.add_argument("stage", choices=("list-assets", "download", "extract", "inspect", "all"))
+    parser.add_argument(
+        "stage",
+        choices=("list-assets", "download", "extract", "inspect", "cleanup-zips", "all"),
+    )
     parser.add_argument("--config", type=Path, default=Path("src/dataset_configs/neural_3d_video_seed.jsonc"))
     parser.add_argument("--all-assets", action="store_true", help="Download all release assets instead of configured names.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite downloaded archives or extracted folders.")
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="cleanup-zips only: actually delete zip archives. Default is dry-run.",
+    )
     return parser.parse_args()
 
 
@@ -249,6 +324,8 @@ def main() -> None:
         extract(config, root, overwrite=overwrite)
     if args.stage in {"inspect", "all"}:
         inspect(config, root)
+    if args.stage == "cleanup-zips":
+        cleanup_zips(root, execute=bool(args.execute))
 
 
 if __name__ == "__main__":

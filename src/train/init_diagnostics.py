@@ -297,6 +297,122 @@ def raw_head_output_diagnostics(
     return metrics
 
 
+def post_colorize_image_diagnostics(
+    rgb_image: torch.Tensor,
+    *,
+    logits: torch.Tensor | None = None,
+    prefix: str = "ColorizeOut",
+    bins: int = 20,
+) -> dict[str, float]:
+    """Diagnostics on the post-colorize-MLP RGB image (the actual rendered colors).
+
+    Differs from the splat-level `RGB` stats: those measure the per-splat
+    parameters, which for feature splatting are F-channel raw features. This
+    function measures the *image* the loss actually sees.
+
+    The gray-collapse signal is `PerPixelChroma/Mean` near zero combined with
+    `SpatialStdMean` near zero — every pixel is roughly the same color and that
+    color is gray-ish (R≈G≈B).
+
+    Args:
+        rgb_image: [*, 3, H, W] in [0, 1] (post-sigmoid) — the colorize output.
+        logits: [*, 3, H, W] pre-sigmoid colorize output, optional. When
+            provided, adds saturation diagnostics on the linear map.
+        prefix: metric name prefix.
+        bins: histogram bins for entropy.
+
+    Returns:
+        Flat dict of float metrics.
+    """
+    if rgb_image.dim() < 3 or rgb_image.shape[-3] != 3:
+        raise ValueError(f"rgb_image must have shape [..., 3, H, W], got {tuple(rgb_image.shape)}")
+
+    image = rgb_image.detach().float()
+    H = image.shape[-2]
+    W = image.shape[-1]
+    # Flatten leading dims and spatial dims, keep channel: [N, 3, P]
+    flat = image.reshape(-1, 3, H * W)
+    metrics: dict[str, float] = {}
+
+    # Per-channel statistics across all pixels (catches "all blue" / "all teal")
+    for channel_index, channel_name in enumerate(("R", "G", "B")):
+        channel_values = flat[:, channel_index, :].reshape(-1)
+        _add_prefixed_metrics(
+            metrics,
+            f"{prefix}/{channel_name}",
+            distribution_stats(channel_values, lower=0.0, upper=1.0, bins=bins),
+        )
+
+    # Per-pixel chroma: std across the 3 channels per pixel.
+    # Near zero => every pixel is gray (R==G==B). This is the gray-collapse signal.
+    per_pixel_chroma = flat.std(dim=1, unbiased=False)  # [N, P]
+    _add_prefixed_metrics(
+        metrics,
+        f"{prefix}/PerPixelChroma",
+        distribution_stats(per_pixel_chroma, lower=0.0, upper=0.5, bins=bins),
+    )
+
+    # Spatial std: std over pixels per channel, averaged over channels.
+    # Near zero => image is spatially uniform.
+    spatial_std_per_channel = flat.std(dim=-1, unbiased=False)  # [N, 3]
+    metrics[f"{prefix}/SpatialStdMean"] = _float_or_nan(spatial_std_per_channel.mean())
+    metrics[f"{prefix}/SpatialStdR"] = _float_or_nan(spatial_std_per_channel[:, 0].mean())
+    metrics[f"{prefix}/SpatialStdG"] = _float_or_nan(spatial_std_per_channel[:, 1].mean())
+    metrics[f"{prefix}/SpatialStdB"] = _float_or_nan(spatial_std_per_channel[:, 2].mean())
+
+    # Range coverage of [0, 1].
+    metrics[f"{prefix}/Range"] = _float_or_nan(image.max() - image.min())
+
+    # Pre-sigmoid logit diagnostics (when available).
+    # Sigmoid only "engages" when |logit| is meaningful. |logit| < ~0.5 => output stuck near 0.5 (gray).
+    if logits is not None:
+        if logits.shape != rgb_image.shape:
+            raise ValueError(
+                f"logits shape {tuple(logits.shape)} must match rgb_image shape {tuple(rgb_image.shape)}"
+            )
+        logit = logits.detach().float()
+        logit_flat = logit.reshape(-1, 3, H * W)
+        for channel_index, channel_name in enumerate(("R", "G", "B")):
+            _add_prefixed_metrics(
+                metrics,
+                f"{prefix}/Logit/{channel_name}",
+                distribution_stats(logit_flat[:, channel_index, :].reshape(-1), bins=bins),
+            )
+        abs_logit = logit.reshape(-1).abs()
+        metrics[f"{prefix}/Logit/AbsGt0p5Frac"] = _float_or_nan((abs_logit > 0.5).float().mean())
+        metrics[f"{prefix}/Logit/AbsGt2Frac"] = _float_or_nan((abs_logit > 2.0).float().mean())
+        metrics[f"{prefix}/Logit/AbsGt4Frac"] = _float_or_nan((abs_logit > 4.0).float().mean())
+
+    return metrics
+
+
+def format_colorize_init_summary(metrics: Mapping[str, float]) -> str:
+    keys = (
+        f"{k}" for k in (
+            "ColorizeOut/PerPixelChroma/Mean",
+            "ColorizeOut/PerPixelChroma/P50",
+            "ColorizeOut/PerPixelChroma/P99",
+            "ColorizeOut/SpatialStdMean",
+            "ColorizeOut/SpatialStdR",
+            "ColorizeOut/SpatialStdG",
+            "ColorizeOut/SpatialStdB",
+            "ColorizeOut/Range",
+            "ColorizeOut/R/Mean",
+            "ColorizeOut/G/Mean",
+            "ColorizeOut/B/Mean",
+            "ColorizeOut/R/Std",
+            "ColorizeOut/G/Std",
+            "ColorizeOut/B/Std",
+            "ColorizeOut/R/Entropy01",
+            "ColorizeOut/G/Entropy01",
+            "ColorizeOut/B/Entropy01",
+            "ColorizeOut/Logit/AbsGt0p5Frac",
+            "ColorizeOut/Logit/AbsGt2Frac",
+        )
+    )
+    return ", ".join(f"{k}={metrics[k]:.4g}" for k in keys if k in metrics)
+
+
 def format_init_diagnostic_summary(metrics: Mapping[str, float]) -> str:
     keys = (
         "InitDiag/XYZ/X/Coverage",

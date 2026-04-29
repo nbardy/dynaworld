@@ -368,15 +368,204 @@ def build_clips(config: dict[str, Any], paths: Paths, overwrite: bool) -> None:
     run_command(command)
 
 
+# --- validate-local + cleanup-intermediates ----------------------------------
+#
+# These stages do NOT touch the network. They walk the local tree resolved from
+# the same config the rest of the pipeline uses.
+#
+# Source-of-truth (never auto-deleted):
+#   candidates/*.jsonl, raw/*.mp4
+# Intermediates (safe to delete, derivable from raw + this config):
+#   clip_sets/<dataset_name>/, logs/, raw/*.part, raw/*.ytdl, raw/*.tmp
+
+
+PARTIAL_DOWNLOAD_SUFFIXES = (".part", ".ytdl", ".tmp")
+
+
+def file_byte_size(path: Path) -> int:
+    return path.stat().st_size if path.exists() and path.is_file() else 0
+
+
+def directory_byte_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    total = 0
+    for entry in path.rglob("*"):
+        if entry.is_file():
+            total += entry.stat().st_size
+    return total
+
+
+def ffprobe_video(path: Path) -> dict[str, Any]:
+    if shutil.which("ffprobe") is None:
+        raise RuntimeError("ffprobe is required for validate-local; install ffmpeg.")
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,width,height,nb_read_packets,duration",
+        "-count_packets",
+        "-of",
+        "json",
+        str(path),
+    ]
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed for {path}: {result.stderr.strip()}")
+    payload = json.loads(result.stdout or "{}")
+    streams = payload.get("streams") or []
+    if not streams:
+        raise RuntimeError(f"ffprobe found no video stream in {path}")
+    stream = streams[0]
+    packets = stream.get("nb_read_packets")
+    if packets is not None and int(packets) < 1:
+        raise RuntimeError(f"ffprobe reports zero packets in {path}")
+    return stream
+
+
+def validate_local(config: dict[str, Any], config_dir: Path, paths: Paths, *, sample_probes: int) -> None:
+    expected_records = flatten_records(config, config_dir)
+    candidates_path = paths.candidates / "curated_spans.jsonl"
+    materialized = read_jsonl(candidates_path)
+
+    missing_raw: list[dict[str, Any]] = []
+    present_raw: list[Path] = []
+    for record in expected_records:
+        clip_id = str(record["clip_id"])
+        # `existing_download` globs `clip_id.*`, which can select a `.part` if a
+        # download was interrupted. Filter those out here -- the partial is a
+        # separate signal reported below.
+        match = existing_download(paths.raw, clip_id)
+        if match is not None and match.suffix in PARTIAL_DOWNLOAD_SUFFIXES:
+            match = None
+        if match is None:
+            missing_raw.append({"clip_id": clip_id, "url": record.get("url")})
+        else:
+            present_raw.append(match)
+
+    partials = [
+        entry for entry in paths.raw.iterdir()
+        if entry.is_file() and entry.suffix in PARTIAL_DOWNLOAD_SUFFIXES
+    ] if paths.raw.exists() else []
+
+    probe_targets = present_raw[: max(0, int(sample_probes))]
+    probe_results: list[dict[str, Any]] = []
+    for target in probe_targets:
+        stream = ffprobe_video(target)
+        probe_results.append(
+            {
+                "path": str(target),
+                "codec": stream.get("codec_name"),
+                "width": stream.get("width"),
+                "height": stream.get("height"),
+                "packets": stream.get("nb_read_packets"),
+                "duration": stream.get("duration"),
+            }
+        )
+
+    summary = {
+        "config": str(config_dir),
+        "root_dir": str(paths.root),
+        "expected_spans": len(expected_records),
+        "materialized_spans": len(materialized),
+        "raw_present": len(present_raw),
+        "raw_missing": len(missing_raw),
+        "raw_partials": [str(p) for p in partials],
+        "probes": probe_results,
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    if missing_raw:
+        print(f"WARN: {len(missing_raw)} curated spans have no matching raw mp4 (rerun yt-dlp download stage).")
+    if partials:
+        print(f"WARN: {len(partials)} partial yt-dlp files; clean with cleanup-intermediates --execute.")
+
+
+def cleanup_intermediates(
+    config: dict[str, Any],
+    paths: Paths,
+    *,
+    execute: bool,
+    include_raw: bool,
+) -> None:
+    dataset_name = str(config["dataset_name"])
+    targets: list[tuple[str, Path]] = []
+
+    clip_set_dir = paths.clip_sets / dataset_name
+    if clip_set_dir.exists():
+        targets.append((f"clip_sets/{dataset_name}", clip_set_dir))
+
+    if paths.logs.exists():
+        targets.append(("logs/", paths.logs))
+
+    partials: list[Path] = []
+    if paths.raw.exists():
+        partials = [
+            entry for entry in paths.raw.iterdir()
+            if entry.is_file() and entry.suffix in PARTIAL_DOWNLOAD_SUFFIXES
+        ]
+    for partial in partials:
+        targets.append((f"raw/{partial.name}", partial))
+
+    raw_targets: list[Path] = []
+    if include_raw and paths.raw.exists():
+        raw_targets = [
+            entry for entry in paths.raw.iterdir()
+            if entry.is_file() and entry.suffix not in PARTIAL_DOWNLOAD_SUFFIXES
+        ]
+        for raw_file in raw_targets:
+            targets.append((f"raw/{raw_file.name}  [SOURCE-OF-TRUTH]", raw_file))
+
+    total = 0
+    print(f"# cleanup-intermediates  root={paths.root}  execute={execute}  include_raw={include_raw}")
+    for label, path in targets:
+        size = directory_byte_size(path) if path.is_dir() else file_byte_size(path)
+        total += size
+        print(f"  - {label:60s} {size:>14d} B  ({size / 1024 / 1024:.2f} MB)")
+    print(f"  TOTAL reclaimable: {total} B  ({total / 1024 / 1024:.2f} MB)")
+
+    if not execute:
+        print("# DRY RUN -- pass --execute to actually delete these.")
+        return
+
+    for label, path in targets:
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.is_file():
+            path.unlink()
+        print(f"  deleted {label}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Download user-curated YouTube spans as small local test clips.")
-    parser.add_argument("stage", choices=("materialize", "download", "build-clips", "all"))
+    parser.add_argument(
+        "stage",
+        choices=("materialize", "download", "build-clips", "all", "validate-local", "cleanup-intermediates"),
+    )
     parser.add_argument(
         "--config",
         type=Path,
         default=Path("src/dataset_configs/youtube_curated_spans_64_4fps_16f.jsonc"),
     )
     parser.add_argument("--overwrite", action="store_true", help="Replace existing raw downloads and clip datasets.")
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="cleanup-intermediates: actually delete (default is dry-run).",
+    )
+    parser.add_argument(
+        "--include-raw",
+        action="store_true",
+        help="cleanup-intermediates: also delete raw/*.mp4 (NOT recoverable without yt-dlp + network).",
+    )
+    parser.add_argument(
+        "--sample-probes",
+        type=int,
+        default=3,
+        help="validate-local: how many raw mp4s to ffprobe (default 3).",
+    )
     return parser.parse_args()
 
 
@@ -391,6 +580,10 @@ def main() -> None:
         download(config, paths, overwrite=args.overwrite)
     if args.stage in {"build-clips", "all"}:
         build_clips(config, paths, overwrite=args.overwrite)
+    if args.stage == "validate-local":
+        validate_local(config, config_dir, paths, sample_probes=args.sample_probes)
+    if args.stage == "cleanup-intermediates":
+        cleanup_intermediates(config, paths, execute=args.execute, include_raw=args.include_raw)
 
 
 if __name__ == "__main__":
