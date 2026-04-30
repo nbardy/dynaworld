@@ -64,6 +64,7 @@ class FeatureToColor(nn.Module):
         weight_init: str = "kaiming",
         weight_init_gain: float = 1.0,
         view_condition: str | None = "none",
+        detach_view_condition: bool = True,
     ):
         super().__init__()
         if activation not in {"sigmoid", "identity"}:
@@ -77,6 +78,7 @@ class FeatureToColor(nn.Module):
         self.weight_init = weight_init
         self.weight_init_gain = float(weight_init_gain)
         self.view_condition = normalize_view_condition(view_condition)
+        self.detach_view_condition = bool(detach_view_condition)
         self.input_dim = self.feature_dim + (3 if self.view_condition != "none" else 0)
 
         # Optional per-pixel LayerNorm over the F channel-dim. nn.LayerNorm normalizes

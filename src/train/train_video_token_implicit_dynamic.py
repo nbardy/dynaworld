@@ -51,7 +51,6 @@ from pipeline.render import (
     gaussian_sequence_slice,
     render_clip_sequence,
     render_full_sequence as _render_full_sequence_impl,
-    render_full_sequence_known_cameras as _render_full_sequence_known_cameras_impl,
 )
 from pipeline.validation_media import (
     render_preview_image as _render_preview_image_impl,
@@ -594,8 +593,6 @@ class Trainer:
         self.feature_dim = int(self.model_cfg["feature_dim"])
         colorizer = build_colorizer(self.cfg["colorize"], feature_dim=self.feature_dim)
         self.colorize = None if colorizer.module is None else colorizer.module.to(self.device)
-        self.colorize_view_condition = colorizer.view_condition
-        self.colorize_detach_view_condition = colorizer.detach_view_condition
         self.feature_pca_log = bool(self.logging_cfg["feature_pca_log"])
         if self.feature_pca_log and self.feature_dim == 3:
             raise ValueError("logging.feature_pca_log=true requires model.feature_dim != 3.")
@@ -631,16 +628,9 @@ class Trainer:
         pass
 
     def view_dirs_for_features(self, features: torch.Tensor, cameras: tuple[Any, ...]) -> torch.Tensor | None:
-        if self.colorize is None or self.colorize_view_condition == "none":
+        if self.colorize is None or self.colorize.view_condition == "none":
             return None
-        return colorize_view_dirs_for_features(
-            features,
-            cameras,
-            view_condition=self.colorize_view_condition,
-            input_size=self.model_cfg["size"],
-            render_size=self.render_size,
-            detach=self.colorize_detach_view_condition,
-        )
+        return colorize_view_dirs_for_features(self.cfg, self.colorize, features, cameras)
 
     def make_target_view(
         self,
@@ -679,12 +669,10 @@ class Trainer:
         cameras: tuple[Any, ...],
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         return render_clip_sequence(
+            self.cfg,
             decoded,
             cameras,
             renderer_mode=self.renderer_mode,
-            render_cfg=self.render_cfg,
-            input_size=self.model_cfg["size"],
-            render_size=self.render_size,
             dense_grid=self.dense_grid,
         )
 
@@ -1092,16 +1080,14 @@ class Trainer:
 
     def scalar_payload(self, result: StepResult) -> dict[str, Any]:
         return _scalar_payload_impl(
+            self.cfg,
             result,
-            train_frame_count=int(self.model_cfg["train_frame_count"]),
             train_sequence_count=len(self.train_sequences),
             eval_sequence_count=len(self.eval_sequences),
-            input_size=int(self.model_cfg["size"]),
-            render_size=int(self.render_size),
         )
 
     def render_preview_image(self, result: StepResult, step: int) -> wandb.Image:
-        return _render_preview_image_impl(result, render_size=self.render_size, step=step)
+        return _render_preview_image_impl(self.cfg, result, step)
 
     def _full_sequence_deps(self) -> FullSequenceDeps:
         def decode_clip(
@@ -1147,14 +1133,7 @@ class Trainer:
         self,
         sequence_data: SequenceData,
     ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
-        clip = _render_full_sequence_impl(
-            model=self.model,
-            sequence_data=sequence_data,
-            train_frame_count=int(self.model_cfg["train_frame_count"]),
-            feature_pca_log=self.feature_pca_log,
-            device=self.device,
-            deps=self._full_sequence_deps(),
-        )
+        clip = _render_full_sequence_impl(self.cfg, self.model, sequence_data, self._full_sequence_deps())
         return (
             clip.rgb_sequence,
             clip.camera_state,
@@ -1199,13 +1178,13 @@ class Trainer:
                 metrics.update(camera_temporal_payload(eval_camera_state))
             metric_payloads.append(metrics)
             sequence_payload, self.gt_video_logged = single_cam_validation_video_payload(
+                self.cfg,
                 sequence_index=sequence_index,
                 rendered_sequence=rendered_sequence,
                 gt_sequence=gt_sequence,
                 feature_sequence=feature_sequence,
                 alpha_sequence=alpha_sequence,
                 eval_payload={},
-                feature_pca_log=self.feature_pca_log,
                 gt_video_logged=self.gt_video_logged,
                 fps=sequence_data.video_fps,
             )
@@ -1453,14 +1432,7 @@ class KnownCameraTrainer(Trainer):
         self,
         sequence_data: SequenceData,
     ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
-        clip = _render_full_sequence_known_cameras_impl(
-            model=self.model,
-            sequence_data=sequence_data,
-            train_frame_count=int(self.model_cfg["train_frame_count"]),
-            feature_pca_log=self.feature_pca_log,
-            device=self.device,
-            deps=self._full_sequence_deps(),
-        )
+        clip = _render_full_sequence_impl(self.cfg, self.model, sequence_data, self._full_sequence_deps())
         return (
             clip.rgb_sequence,
             clip.camera_state,

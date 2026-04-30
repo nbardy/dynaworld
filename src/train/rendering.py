@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 import torch
 import torch.nn.functional as F
 from camera import CameraSpec, make_camera_like
@@ -232,62 +234,55 @@ def _camera_scalar_vector(cameras: list[CameraSpec] | tuple[CameraSpec, ...], fi
 
 
 def render_gaussian_frames(
+    cfg: Mapping[str, Any],
     sequence: GaussianSequence,
     cameras: list[CameraSpec] | tuple[CameraSpec, ...],
-    height: int,
-    width: int,
+    *,
     mode: str,
     dense_grid: torch.Tensor | None = None,
-    tile_size: int = 8,
-    bound_scale: float = 3.0,
-    alpha_threshold: float = 1.0 / 255.0,
-    near_plane: float = 1.0e-4,
-    taichi_options: dict | None = None,
-    fast_mac_options: dict | None = None,
-    camera_projection: str | None = "auto",
     return_aux: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     if sequence.frame_count != len(cameras):
         raise ValueError(f"Expected {sequence.frame_count} cameras, got {len(cameras)}.")
 
-    projection_mode = _resolve_camera_projection_mode(cameras, camera_projection)
+    device = sequence.xyz.device
     if mode == "dense":
-        device = sequence.xyz.device
         return render_pytorch_3dgs_batch(
             sequence.xyz.float(),
             sequence.scales.float(),
             sequence.quats.float(),
             sequence.opacities.float(),
             sequence.rgbs.float(),
-            height,
-            width,
+            int(cfg["render"]["render_size"]),
+            int(cfg["render"]["render_size"]),
             _camera_scalar_vector(cameras, "fx", device),
             _camera_scalar_vector(cameras, "fy", device),
             _camera_scalar_vector(cameras, "cx", device),
             _camera_scalar_vector(cameras, "cy", device),
-            grid=build_or_reuse_grid(height, width, device, dense_grid),
+            grid=build_or_reuse_grid(
+                int(cfg["render"]["render_size"]), int(cfg["render"]["render_size"]), device, dense_grid
+            ),
             camera_to_world=torch.stack(
                 [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
                 dim=0,
             ),
-            near_plane=near_plane,
+            near_plane=cfg["render"]["near_plane"],
             return_aux=return_aux,
             cameras=cameras,
-            projection_mode=projection_mode,
+            projection_mode=_resolve_camera_projection_mode(cameras, cfg["render"]["camera_projection"]),
         )
 
     if return_aux:
         raise ValueError("return_aux is only supported by the dense renderer.")
     if mode == "taichi":
-        device = sequence.xyz.device
         return render_taichi_3dgs_batch(
             sequence.xyz,
             sequence.scales,
             sequence.quats,
             sequence.opacities,
             sequence.rgbs,
-            height,
-            width,
+            int(cfg["render"]["render_size"]),
+            int(cfg["render"]["render_size"]),
             _camera_scalar_vector(cameras, "fx", device),
             _camera_scalar_vector(cameras, "fy", device),
             _camera_scalar_vector(cameras, "cx", device),
@@ -296,29 +291,26 @@ def render_gaussian_frames(
                 [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
                 dim=0,
             ),
-            near_plane=near_plane,
+            near_plane=cfg["render"]["near_plane"],
             cameras=cameras,
-            projection_mode=projection_mode,
+            projection_mode=_resolve_camera_projection_mode(cameras, cfg["render"]["camera_projection"]),
             config=TaichiRendererConfig.from_mapping(
-                taichi_options,
-                fallback_tile_size=tile_size,
-                fallback_alpha_threshold=alpha_threshold,
+                cfg["render"].get("taichi"),
+                fallback_tile_size=cfg["render"]["tile_size"],
+                fallback_alpha_threshold=cfg["render"]["alpha_threshold"],
             ),
         )
     if mode == "fast_mac":
-        device = sequence.xyz.device
-        # render_fast_mac_3dgs_batch now returns (features, alpha). Existing
-        # callers of render_gaussian_frames expect a Tensor, so strip alpha here.
-        # Trainer paths that need alpha use render_gaussian_frames_alpha_aware
-        # below instead.
+        # render_fast_mac_3dgs_batch returns (features, alpha); callers of
+        # render_gaussian_frames expect a Tensor, so strip alpha here.
         features, _alpha = render_fast_mac_3dgs_batch(
             sequence.xyz,
             sequence.scales,
             sequence.quats,
             sequence.opacities,
             sequence.rgbs,
-            height,
-            width,
+            int(cfg["render"]["render_size"]),
+            int(cfg["render"]["render_size"]),
             _camera_scalar_vector(cameras, "fx", device),
             _camera_scalar_vector(cameras, "fy", device),
             _camera_scalar_vector(cameras, "cx", device),
@@ -327,13 +319,13 @@ def render_gaussian_frames(
                 [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
                 dim=0,
             ),
-            near_plane=near_plane,
+            near_plane=cfg["render"]["near_plane"],
             cameras=cameras,
-            projection_mode=projection_mode,
+            projection_mode=_resolve_camera_projection_mode(cameras, cfg["render"]["camera_projection"]),
             config=FastMacRendererConfig.from_mapping(
-                fast_mac_options,
-                fallback_tile_size=tile_size,
-                fallback_alpha_threshold=alpha_threshold,
+                cfg["render"]["fast_mac"],
+                fallback_tile_size=cfg["render"]["tile_size"],
+                fallback_alpha_threshold=cfg["render"]["alpha_threshold"],
             ),
         )
         return features
@@ -342,17 +334,17 @@ def render_gaussian_frames(
             render_gaussian_frame(
                 sequence.frame(index),
                 camera=camera,
-                height=height,
-                width=width,
+                height=int(cfg["render"]["render_size"]),
+                width=int(cfg["render"]["render_size"]),
                 mode=mode,
                 dense_grid=dense_grid,
-                tile_size=tile_size,
-                bound_scale=bound_scale,
-                alpha_threshold=alpha_threshold,
-                near_plane=near_plane,
-                taichi_options=taichi_options,
-                fast_mac_options=fast_mac_options,
-                camera_projection=camera_projection,
+                tile_size=cfg["render"]["tile_size"],
+                bound_scale=cfg["render"]["bound_scale"],
+                alpha_threshold=cfg["render"]["alpha_threshold"],
+                near_plane=cfg["render"]["near_plane"],
+                taichi_options=cfg["render"].get("taichi"),
+                fast_mac_options=cfg["render"]["fast_mac"],
+                camera_projection=cfg["render"]["camera_projection"],
             )
             for index, camera in enumerate(cameras)
         ],
@@ -361,19 +353,12 @@ def render_gaussian_frames(
 
 
 def render_gaussian_frames_alpha_aware(
+    cfg: Mapping[str, Any],
     sequence: GaussianSequence,
     cameras: list[CameraSpec] | tuple[CameraSpec, ...],
-    height: int,
-    width: int,
+    *,
     mode: str,
     dense_grid: torch.Tensor | None = None,
-    tile_size: int = 8,
-    bound_scale: float = 3.0,
-    alpha_threshold: float = 1.0 / 255.0,
-    near_plane: float = 1.0e-4,
-    taichi_options: dict | None = None,
-    fast_mac_options: dict | None = None,
-    camera_projection: str | None = "auto",
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Like render_gaussian_frames, but also returns the per-pixel alpha mask.
 
@@ -385,7 +370,6 @@ def render_gaussian_frames_alpha_aware(
     if mode == "fast_mac":
         if sequence.frame_count != len(cameras):
             raise ValueError(f"Expected {sequence.frame_count} cameras, got {len(cameras)}.")
-        projection_mode = _resolve_camera_projection_mode(cameras, camera_projection)
         device = sequence.xyz.device
         return render_fast_mac_3dgs_batch(
             sequence.xyz,
@@ -393,8 +377,8 @@ def render_gaussian_frames_alpha_aware(
             sequence.quats,
             sequence.opacities,
             sequence.rgbs,
-            height,
-            width,
+            int(cfg["render"]["render_size"]),
+            int(cfg["render"]["render_size"]),
             _camera_scalar_vector(cameras, "fx", device),
             _camera_scalar_vector(cameras, "fy", device),
             _camera_scalar_vector(cameras, "cx", device),
@@ -403,33 +387,24 @@ def render_gaussian_frames_alpha_aware(
                 [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
                 dim=0,
             ),
-            near_plane=near_plane,
+            near_plane=cfg["render"]["near_plane"],
             cameras=cameras,
-            projection_mode=projection_mode,
+            projection_mode=_resolve_camera_projection_mode(cameras, cfg["render"]["camera_projection"]),
             config=FastMacRendererConfig.from_mapping(
-                fast_mac_options,
-                fallback_tile_size=tile_size,
-                fallback_alpha_threshold=alpha_threshold,
+                cfg["render"]["fast_mac"],
+                fallback_tile_size=cfg["render"]["tile_size"],
+                fallback_alpha_threshold=cfg["render"]["alpha_threshold"],
             ),
         )
     # Non-fast_mac modes don't expose alpha; fall back to the standard renderer.
     features = render_gaussian_frames(
+        cfg,
         sequence,
         cameras,
-        height=height,
-        width=width,
         mode=mode,
         dense_grid=dense_grid,
-        tile_size=tile_size,
-        bound_scale=bound_scale,
-        alpha_threshold=alpha_threshold,
-        near_plane=near_plane,
-        taichi_options=taichi_options,
-        fast_mac_options=fast_mac_options,
-        camera_projection=camera_projection,
     )
     if isinstance(features, tuple):
-        # dense + return_aux path; not used in the alpha-aware trainer flow.
         raise RuntimeError("render_gaussian_frames_alpha_aware does not support return_aux modes")
     return features, None
 

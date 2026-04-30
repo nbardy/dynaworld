@@ -520,8 +520,9 @@ def validated_colorize_kwargs(
         "weight_init": str(colorize.get("weight_init", "kaiming")).lower(),
         "weight_init_gain": float(colorize.get("weight_init_gain", 1.0)),
         "view_condition": view_condition,
+        "detach_view_condition": bool(colorize.get("detach_view_condition", True)),
     }
-    return kwargs, view_condition, bool(colorize.get("detach_view_condition", True))
+    return kwargs, view_condition, kwargs["detach_view_condition"]
 
 
 def build_colorizer(

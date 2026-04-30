@@ -14,7 +14,7 @@ with `PYTHONPATH=src/train`), so this file uses `from runtime_types import
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 import torch
 
@@ -171,20 +171,17 @@ def _viewport_cameras(
 
 
 def colorize_view_dirs_for_features(
+    cfg: Mapping[str, Any],
+    colorize: Any,
     features: torch.Tensor,
     cameras: tuple[Any, ...],
-    *,
-    view_condition: str,
-    input_size: int,
-    render_size: int,
-    detach: bool,
 ) -> torch.Tensor | None:
     """View-conditioning vector field for the colorize MLP.
 
-    Returns `None` when `view_condition == "none"`. Returns
-    `[T, 3, H, W]` directions when `camera_center_ray` (constant per
-    frame) or `pixel_ray` (per-pixel).
+    Returns `None` when the colorize module's view_condition is "none".
+    Returns `[T, 3, H, W]` directions for `camera_center_ray`/`pixel_ray`.
     """
+    view_condition = colorize.view_condition
     if view_condition == "none":
         return None
     if features.dim() != 4:
@@ -196,7 +193,9 @@ def colorize_view_dirs_for_features(
             f"Expected {features.shape[0]} cameras for colorize view conditioning, got {len(cameras)}."
         )
 
-    render_cameras = _viewport_cameras(cameras, input_size=input_size, render_size=render_size)
+    render_cameras = _viewport_cameras(
+        cameras, input_size=cfg["model"]["size"], render_size=cfg["render"]["render_size"]
+    )
     frame_count, _, height, width = features.shape
     if view_condition == "camera_center_ray":
         dirs = _camera_center_ray_dirs(render_cameras, device=features.device, dtype=features.dtype)
@@ -216,7 +215,7 @@ def colorize_view_dirs_for_features(
             "colorize.view_condition must be one of none, camera_center_ray, pixel_ray; "
             f"got {view_condition!r}."
         )
-    return view_dirs.detach() if detach else view_dirs
+    return view_dirs.detach() if colorize.detach_view_condition else view_dirs
 
 
 def gaussian_sequence_slice(sequence: GaussianSequence, start: int, end: int) -> GaussianSequence:
@@ -239,33 +238,27 @@ def gaussian_sequence_slice(sequence: GaussianSequence, start: int, end: int) ->
 
 
 def render_clip_sequence(
+    cfg: Mapping[str, Any],
     sequence: GaussianSequence,
     cameras: tuple[Any, ...],
     *,
     renderer_mode: str,
-    render_cfg: dict[str, Any],
-    input_size: int,
-    render_size: int,
     dense_grid: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Returns `(rendered_features, alpha_mask)`. Alpha is `None` for
     non-fast_mac modes and for the F=3 v5 legacy path; a `[T, H, W]`
     tensor for F!=3 fast_mac.
     """
-    render_cameras = _viewport_cameras(cameras, input_size=input_size, render_size=render_size)
     return render_gaussian_frames_alpha_aware(
+        cfg,
         sequence,
-        render_cameras,
-        height=render_size,
-        width=render_size,
+        _viewport_cameras(
+            cameras,
+            input_size=int(cfg["model"]["size"]),
+            render_size=int(cfg["render"]["render_size"]),
+        ),
         mode=renderer_mode,
         dense_grid=dense_grid,
-        tile_size=render_cfg["tile_size"],
-        bound_scale=render_cfg["bound_scale"],
-        alpha_threshold=render_cfg["alpha_threshold"],
-        near_plane=render_cfg["near_plane"],
-        fast_mac_options=render_cfg["fast_mac"],
-        camera_projection=render_cfg["camera_projection"],
     )
 
 
@@ -382,119 +375,48 @@ def _aggregate_camera_state(camera_states: list[CameraState]) -> CameraState:
 
 @torch.no_grad()
 def render_full_sequence(
-    *,
+    cfg: Mapping[str, Any],
     model: torch.nn.Module,
     sequence_data: SequenceData,
-    train_frame_count: int,
-    feature_pca_log: bool,
-    device: torch.device,
     deps: FullSequenceDeps,
 ) -> RenderedClip:
-    """Implicit-camera variant. Was `Trainer.render_full_sequence`.
+    """Render a sequence chunk-by-chunk and stitch.
 
-    Aggregates camera_state across clips since the implicit model emits
-    one per clip; the known-camera variant returns `camera_state=None`.
+    Mode is auto-selected from ``sequence_data.cameras``:
+      - ``None``  -> implicit-camera; aggregates per-clip ``CameraState``
+      - populated -> known-camera; returns ``camera_state=None``
     """
+    is_implicit = sequence_data.cameras is None
     was_training = model.training
     model.eval()
     try:
-        (
-            rendered_frames,
-            feature_frames,
-            alpha_frames,
-            decoded_buffers,
-            camera_states,
-        ) = _render_full_sequence_chunked(
-            sequence_data=sequence_data,
-            train_frame_count=train_frame_count,
-            feature_pca_log=feature_pca_log,
-            device=device,
-            deps=deps,
-            view_id_prefix="eval_sequence",
-            require_camera_state=True,
+        rendered_frames, feature_frames, alpha_frames, decoded_buffers, camera_states = (
+            _render_full_sequence_chunked(
+                sequence_data=sequence_data,
+                train_frame_count=int(cfg["model"]["train_frame_count"]),
+                feature_pca_log=bool(cfg["logging"]["feature_pca_log"]),
+                device=next(model.parameters()).device,
+                deps=deps,
+                view_id_prefix="eval_sequence" if is_implicit else "known_eval",
+                require_camera_state=is_implicit,
+            )
         )
     finally:
         if was_training:
             model.train()
 
-    merged_camera_state = _aggregate_camera_state(camera_states)
-    rendered_sequence = deps.stack_complete_frame_list(rendered_frames, name="validation render")
-    feature_sequence = (
-        deps.stack_complete_frame_list(feature_frames, name="validation feature PCA")
-        if feature_frames is not None
-        else None
-    )
-    alpha_sequence = (
-        deps.stack_complete_frame_list(alpha_frames, name="validation alpha mask")
-        if alpha_frames is not None
-        else None
-    )
     return RenderedClip(
-        rgb_sequence=rendered_sequence,
-        camera_state=merged_camera_state,
+        rgb_sequence=deps.stack_complete_frame_list(rendered_frames, name="validation render"),
+        camera_state=_aggregate_camera_state(camera_states) if is_implicit else None,
         temporal_metrics=deps.decoded_temporal_payload(decoded_buffers),
-        feature_sequence=feature_sequence,
-        alpha_sequence=alpha_sequence,
-    )
-
-
-@torch.no_grad()
-def render_full_sequence_known_cameras(
-    *,
-    model: torch.nn.Module,
-    sequence_data: SequenceData,
-    train_frame_count: int,
-    feature_pca_log: bool,
-    device: torch.device,
-    deps: FullSequenceDeps,
-) -> RenderedClip:
-    """Known-camera variant. Was `KnownCameraTrainer.render_full_sequence`.
-
-    Requires `sequence_data.cameras` to be populated. Returns
-    `camera_state=None` because the known-camera path has no implicit
-    camera regression head.
-    """
-    if sequence_data.cameras is None:
-        raise ValueError(f"Known-camera sequence has no cameras: {sequence_data.source_path}")
-    was_training = model.training
-    model.eval()
-    try:
-        (
-            rendered_frames,
-            feature_frames,
-            alpha_frames,
-            decoded_buffers,
-            _,
-        ) = _render_full_sequence_chunked(
-            sequence_data=sequence_data,
-            train_frame_count=train_frame_count,
-            feature_pca_log=feature_pca_log,
-            device=device,
-            deps=deps,
-            view_id_prefix="known_eval",
-            require_camera_state=False,
-        )
-    finally:
-        if was_training:
-            model.train()
-
-    rendered_sequence = deps.stack_complete_frame_list(rendered_frames, name="validation render")
-    feature_sequence = (
-        deps.stack_complete_frame_list(feature_frames, name="validation feature PCA")
-        if feature_frames is not None
-        else None
-    )
-    alpha_sequence = (
-        deps.stack_complete_frame_list(alpha_frames, name="validation alpha mask")
-        if alpha_frames is not None
-        else None
-    )
-    return RenderedClip(
-        rgb_sequence=rendered_sequence,
-        camera_state=None,
-        temporal_metrics=deps.decoded_temporal_payload(decoded_buffers),
-        feature_sequence=feature_sequence,
-        alpha_sequence=alpha_sequence,
+        feature_sequence=(
+            deps.stack_complete_frame_list(feature_frames, name="validation feature PCA")
+            if feature_frames is not None else None
+        ),
+        alpha_sequence=(
+            deps.stack_complete_frame_list(alpha_frames, name="validation alpha mask")
+            if alpha_frames is not None else None
+        ),
     )
 
 
@@ -505,5 +427,4 @@ __all__ = [
     "gaussian_sequence_slice",
     "render_clip_sequence",
     "render_full_sequence",
-    "render_full_sequence_known_cameras",
 ]

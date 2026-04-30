@@ -121,30 +121,13 @@ def _camera_state_metrics(camera_state) -> dict[str, float]:
 
 
 def scalar_payload(
+    cfg: Mapping[str, Any],
     result,
     *,
-    train_frame_count: int,
     train_sequence_count: int,
     eval_sequence_count: int,
-    input_size: int,
-    render_size: int,
 ) -> dict[str, Any]:
-    """Build the per-step W&B scalar payload from a `StepResult`.
-
-    Extracted verbatim from `Trainer.scalar_payload` in
-    `train_video_token_implicit_dynamic.py` (lines 1380-1407). The original
-    method pulled `train_frame_count`, sequence counts, `input_size`, and
-    `render_size` off `self.model_cfg` / `self.train_sequences` etc.; this
-    free-function variant takes them as keyword-only deps so it can serve
-    both single-cam and multicam without `self`.
-
-    NOTE for wiring agent: the original prompt suggested signature
-    ``scalar_payload(result, *, model_input, opacity_stats)``. Neither
-    `model_input` nor `opacity_stats` is referenced by the existing
-    `Trainer.scalar_payload` body. I followed the actual deps; if the wiring
-    agent wants those wired in for a richer scalar dump later, add them as
-    additional keyword args and append to the returned dict.
-    """
+    """Build the per-step W&B scalar payload from a `StepResult`."""
     payload: dict[str, Any] = {
         "Loss": result.loss.item(),
         "Loss/Reconstruction": result.recon_loss.item(),
@@ -152,12 +135,12 @@ def scalar_payload(
         "Loss/CameraTemporal": result.camera_temporal_loss.item(),
         "Loss/CameraGlobal": result.camera_global_loss.item(),
         "Loss/BankRate": result.bank_rate_loss.item(),
-        "TrainFrameCount": int(train_frame_count),
+        "TrainFrameCount": int(cfg["model"]["train_frame_count"]),
         "SequenceFrames": result.sequence_frame_count,
         "TrainSequenceCount": int(train_sequence_count),
         "EvalSequenceCount": int(eval_sequence_count),
-        "InputSize": int(input_size),
-        "RenderSize": int(render_size),
+        "InputSize": int(cfg["model"]["size"]),
+        "RenderSize": int(cfg["render"]["render_size"]),
     }
     if result.camera_state is not None:
         metrics = _camera_state_metrics(result.camera_state)
@@ -179,12 +162,8 @@ def scalar_payload(
 # --------------------------------------------------------------------------- #
 
 
-def render_preview_image(result, *, render_size: int, step: int) -> wandb.Image:
+def render_preview_image(cfg: Mapping[str, Any], result, step: int) -> wandb.Image:
     """Build the GT-vs-Pred preview image for the per-step image-log gate.
-
-    Extracted from `Trainer.render_preview_image`
-    (`train_video_token_implicit_dynamic.py` lines 1409-1413). The original
-    pulled `self.render_size` directly; this version takes it as a kwarg.
 
     `resize_images` is imported lazily so this module can be imported in a
     smoke that doesn't have the renderer dependency stack on PYTHONPATH.
@@ -196,7 +175,7 @@ def render_preview_image(result, *, render_size: int, step: int) -> wandb.Image:
         )
     from rendering import resize_images
 
-    target = resize_images(result.clip_frames[0, 0], render_size)
+    target = resize_images(result.clip_frames[0, 0], int(cfg["render"]["render_size"]))
     return make_preview_image(target, result.preview_render, caption=f"Step {step}")
 
 
@@ -206,37 +185,19 @@ def render_preview_image(result, *, render_size: int, step: int) -> wandb.Image:
 
 
 def render_diagnostics_payload(
+    cfg: Mapping[str, Any],
     *,
     prefix: str,
     target: torch.Tensor,
     pred: torch.Tensor,
     alpha: torch.Tensor | None,
     features: torch.Tensor | None,
-    feature_pca_log: bool,
     fps: float,
 ) -> dict[str, Any]:
-    """Build the per-view diagnostic W&B payload (alpha mask video, feature
-    PCA video, composite grid) and return it as a dict keyed by the given
-    ``prefix``.
-
-    This is the canonical extraction of the multicam
-    `add_render_diagnostics` method (lines 406-427 of
-    `train_multicam_precomputed_feature_implicit_dynamic.py`); the single-cam
-    `validation_video_payload` had the same logic inlined. Both go through
-    this helper now.
-
-    Args:
-        prefix: Key prefix for the W&B dict (e.g. ``"TrainView0"`` or
-            ``""`` for single-cam where there's no view prefix).
-        target: GT clip ``[T, 3, H, W]`` already at render resolution.
-        pred: Predicted RGB clip ``[T, 3, H, W]``.
-        alpha: Optional alpha mask ``[T, H, W]`` from the alpha-aware
-            renderer; when ``None``, no alpha video / no alpha column.
-        features: Optional ``[T, F, H, W]`` feature buffer. Only consulted
-            when ``feature_pca_log`` is True.
-        feature_pca_log: Whether to compute & log the F-channel PCA video.
-        fps: Output video FPS (typically ``sequence_data.video_fps``).
+    """Per-view diagnostic W&B payload (alpha mask video, feature PCA video,
+    composite grid). PCA-video gating reads ``cfg["logging"]["feature_pca_log"]``.
     """
+    feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
     payload: dict[str, Any] = {}
     composite_columns: list[torch.Tensor] = [target, pred]
 
@@ -275,6 +236,7 @@ def render_diagnostics_payload(
 
 
 def single_cam_validation_video_payload(
+    cfg: Mapping[str, Any],
     *,
     sequence_index: int,
     rendered_sequence: torch.Tensor,
@@ -282,60 +244,36 @@ def single_cam_validation_video_payload(
     feature_sequence: torch.Tensor | None,
     alpha_sequence: torch.Tensor | None,
     eval_payload: Mapping[str, float],
-    feature_pca_log: bool,
     gt_video_logged: bool,
     fps: float,
 ) -> tuple[dict[str, Any], bool]:
-    """Build the per-sequence W&B media payload for a single-cam validator.
-
-    Extracted from `Trainer.validation_video_payload` lines 1507-1595 of
-    `train_video_token_implicit_dynamic.py`. The original method ran the
-    full eval-render loop, computed metrics, AND built the W&B payload in
-    one body; this free function only handles the W&B media + side-by-side
-    composition step. The caller is responsible for:
-
-      - rendering the full sequence (giving us ``rendered_sequence``,
-        ``alpha_sequence``, ``feature_sequence``)
-      - resizing the GT (giving us ``gt_sequence``)
-      - computing eval metrics (``eval_payload``)
-
-    Only the first sequence (``sequence_index == 0``) gets media; the
-    remaining sequences only contribute their metrics. This matches the
-    existing trainer behaviour exactly.
-
-    The ``gt_video_logged`` flag is passed in and a new value returned so
-    the caller can keep the one-shot semantics without us touching ``self``.
-
-    Returns:
-        ``(payload, gt_video_logged_after)`` — payload includes the
-        eval-metric scalars merged in; the second value is the updated
-        flag (True iff GT was logged this call or previously).
+    """Per-sequence W&B media payload for a single-cam validator. Only the
+    first sequence (``sequence_index == 0``) gets media; later ones only
+    contribute their eval metrics. ``gt_video_logged`` is the one-shot flag
+    threaded in (and back out) so we don't touch ``self``.
     """
     payload: dict[str, Any] = dict(eval_payload)
 
     if sequence_index != 0:
         return payload, gt_video_logged
 
-    payload.update(
-        build_validation_video_payload(rendered_sequence, gt_sequence, fps)
-    )
+    payload.update(build_validation_video_payload(rendered_sequence, gt_sequence, fps))
     if not gt_video_logged:
         payload["GT_Video"] = make_wandb_video(gt_sequence, fps)
-        gt_video_logged_after = True
-    else:
-        gt_video_logged_after = gt_video_logged
+        gt_video_logged = True
 
-    diagnostics = render_diagnostics_payload(
-        prefix="",
-        target=gt_sequence,
-        pred=rendered_sequence,
-        alpha=alpha_sequence,
-        features=feature_sequence,
-        feature_pca_log=feature_pca_log,
-        fps=fps,
+    payload.update(
+        render_diagnostics_payload(
+            cfg,
+            prefix="",
+            target=gt_sequence,
+            pred=rendered_sequence,
+            alpha=alpha_sequence,
+            features=feature_sequence,
+            fps=fps,
+        )
     )
-    payload.update(diagnostics)
-    return payload, gt_video_logged_after
+    return payload, gt_video_logged
 
 
 # --------------------------------------------------------------------------- #
@@ -344,55 +282,35 @@ def single_cam_validation_video_payload(
 
 
 def multicam_validation_video_payload(
+    cfg: Mapping[str, Any],
     *,
     train_rendered: list,           # list[RenderedView] — one per training view
     heldout_rendered: list,         # list[RenderedView] — one per held-out view (may be empty)
     train_targets: list[torch.Tensor],          # [V_train] of [T, 3, H, W]
     heldout_targets: list[torch.Tensor],        # [V_heldout] of [T, 3, H, W]
-    train_camera_names: list[str] | tuple[str, ...],
     heldout_camera_names: list[str] | tuple[str, ...],
     decoded_metrics: Mapping[str, float],
     eval_metric_fn,                 # callable(pred, target, loss_cfg) -> dict
     temporal_metric_fn,              # callable(pred, target, loss_cfg) -> dict
     prefix_eval_metrics_fn,         # callable(prefix, metrics) -> dict
-    loss_cfg: Mapping[str, Any],
     camera_rig_metrics: Mapping[str, float],
-    feature_pca_log: bool,
     gt_video_logged: bool,
     fps: float,
 ) -> tuple[dict[str, Any], bool]:
-    """Build the multicam validation W&B payload.
-
-    Extracted from
-    `MulticamPrecomputedFeatureImplicitTrainer.validation_video_payload`
-    (lines 429-484 of
-    `train_multicam_precomputed_feature_implicit_dynamic.py`). The original
-    method ran the full multi-view render then formatted the payload in one
-    body; this free function only does the formatting. The caller renders
-    and resizes ahead of time.
-
-    Both metric-helpers (`eval_metric_fn`, `temporal_metric_fn`,
-    `prefix_eval_metrics_fn`) are taken as callables instead of imported
-    here so this module stays decoupled from the single-cam monolith. The
-    wiring agent should pass `eval_metric_payload`, `temporal_similarity_payload`,
-    and the local `_prefix_eval_metrics` from
-    `train_multicam_precomputed_feature_implicit_dynamic.py:62`.
-
-    Returns:
-        ``(payload, gt_video_logged_after)`` — see
-        :func:`single_cam_validation_video_payload`.
+    """Multicam validation W&B payload — train views + held-out views with
+    PSNR/SSIM, alpha mask, feature PCA, composite grids, and GT one-shots.
     """
+    feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
     payload: dict[str, Any] = {
         "Eval/SequenceCount": 1,
         **camera_rig_metrics,
     }
 
-    # Train views
     for view, rendered in enumerate(train_rendered):
         target = train_targets[view]
         metrics = {
-            **eval_metric_fn(rendered.rgb, target, loss_cfg),
-            **temporal_metric_fn(rendered.rgb, target, loss_cfg),
+            **eval_metric_fn(rendered.rgb, target, cfg["losses"]),
+            **temporal_metric_fn(rendered.rgb, target, cfg["losses"]),
         }
         if view == 0:
             metrics.update(decoded_metrics)
@@ -401,49 +319,42 @@ def multicam_validation_video_payload(
             payload["TrainView0_Rendered_Video"] = make_wandb_video(rendered.rgb, fps)
             payload.update(
                 render_diagnostics_payload(
+                    cfg,
                     prefix="TrainView0",
                     target=target,
                     pred=rendered.rgb,
                     alpha=rendered.alpha,
                     features=rendered.features if feature_pca_log else None,
-                    feature_pca_log=feature_pca_log,
                     fps=fps,
                 )
             )
             if not gt_video_logged:
                 payload["TrainView0_GT_Video"] = make_wandb_video(target, fps)
 
-    # Held-out views (novel-view metrics)
-    if heldout_rendered:
-        for view, rendered in enumerate(heldout_rendered):
-            heldout_target = heldout_targets[view]
-            camera_name = (
-                heldout_camera_names[view]
-                if view < len(heldout_camera_names)
-                else f"view{view}"
+    for view, rendered in enumerate(heldout_rendered):
+        heldout_target = heldout_targets[view]
+        camera_name = heldout_camera_names[view] if view < len(heldout_camera_names) else f"view{view}"
+        prefix = f"Heldout{view}_{camera_name}"
+        payload.update(
+            prefix_eval_metrics_fn(prefix, {
+                **eval_metric_fn(rendered.rgb, heldout_target, cfg["losses"]),
+                **temporal_metric_fn(rendered.rgb, heldout_target, cfg["losses"]),
+            })
+        )
+        payload[f"{prefix}_Rendered_Video"] = make_wandb_video(rendered.rgb, fps)
+        payload.update(
+            render_diagnostics_payload(
+                cfg,
+                prefix=prefix,
+                target=heldout_target,
+                pred=rendered.rgb,
+                alpha=rendered.alpha,
+                features=rendered.features if feature_pca_log else None,
+                fps=fps,
             )
-            prefix = f"Heldout{view}_{camera_name}"
-            heldout_metrics = {
-                **eval_metric_fn(rendered.rgb, heldout_target, loss_cfg),
-                **temporal_metric_fn(rendered.rgb, heldout_target, loss_cfg),
-            }
-            payload.update(prefix_eval_metrics_fn(prefix, heldout_metrics))
-            payload[f"{prefix}_Rendered_Video"] = make_wandb_video(rendered.rgb, fps)
-            payload.update(
-                render_diagnostics_payload(
-                    prefix=prefix,
-                    target=heldout_target,
-                    pred=rendered.rgb,
-                    alpha=rendered.alpha,
-                    features=rendered.features if feature_pca_log else None,
-                    feature_pca_log=feature_pca_log,
-                    fps=fps,
-                )
-            )
-            if not gt_video_logged:
-                payload[f"{prefix}_GT_Video"] = make_wandb_video(heldout_target, fps)
-
-    gt_video_logged_after = True
+        )
+        if not gt_video_logged:
+            payload[f"{prefix}_GT_Video"] = make_wandb_video(heldout_target, fps)
 
     summary = {
         key: round(float(value), 4)
@@ -452,4 +363,4 @@ def multicam_validation_video_payload(
     }
     if summary:
         print({"multicam_eval": summary})
-    return payload, gt_video_logged_after
+    return payload, True

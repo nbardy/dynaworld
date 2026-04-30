@@ -413,12 +413,12 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
     ) -> None:
         payload.update(
             render_diagnostics_payload(
+                self.cfg,
                 prefix=prefix,
                 target=target,
                 pred=rendered.rgb,
                 alpha=rendered.alpha,
                 features=rendered.features if self.feature_pca_log else None,
-                feature_pca_log=self.feature_pca_log,
                 fps=self.sequence_data.video_fps,
             )
         )
@@ -435,24 +435,21 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
                 resize_images(self.multicam_bundle.heldout_frames[view], self.render_size).detach().cpu()
                 for view in range(len(heldout_rendered))
             ]
-        payload, gt_video_logged_after = multicam_validation_video_payload(
+        payload, self.gt_video_logged = multicam_validation_video_payload(
+            self.cfg,
             train_rendered=train_rendered,
             heldout_rendered=heldout_rendered,
             train_targets=train_targets,
             heldout_targets=heldout_targets,
-            train_camera_names=self.multicam_bundle.train_camera_names,
             heldout_camera_names=self.multicam_bundle.heldout_camera_names or [],
             decoded_metrics=decoded_metrics,
             eval_metric_fn=eval_metric_payload,
             temporal_metric_fn=temporal_similarity_payload,
             prefix_eval_metrics_fn=_prefix_eval_metrics,
-            loss_cfg=self.loss_cfg,
             camera_rig_metrics=self.camera_rig.metrics(),
-            feature_pca_log=self.feature_pca_log,
             gt_video_logged=self.gt_video_logged,
             fps=self.sequence_data.video_fps,
         )
-        self.gt_video_logged = gt_video_logged_after
         return payload
 
     def export_browser_bundle(self) -> None:
