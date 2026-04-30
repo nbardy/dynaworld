@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal
+from typing import Literal
 
 import torch
 
@@ -84,7 +84,6 @@ class BackgroundSample:
     rgb: torch.Tensor | None  # Broadcastable to [K, 3, H, W], or None for no bg.
     mode: BackgroundMode
     phase: RunPhase
-    scope: BackgroundSampleScope
     step: int | None = None
 
 

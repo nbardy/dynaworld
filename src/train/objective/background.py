@@ -142,6 +142,5 @@ class BackgroundPolicy:
             ),
             mode=mode,
             phase=phase,
-            scope=self.spec.sample_scope,
             step=step,
         )

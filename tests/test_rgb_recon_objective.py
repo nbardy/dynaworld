@@ -8,11 +8,11 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "train"))
 
-from objective import (  # noqa: E402
+from objective.objective import RGBReconObjective  # noqa: E402
+from objective.types import (  # noqa: E402
     BackgroundSample,
     BackgroundSpec,
     ObjectiveSpec,
-    RGBReconObjective,
     RasterizedView,
     ReconstructionLossSpec,
     TargetView,
@@ -72,7 +72,6 @@ def test_alpha_composition_uses_colorized_rgb_and_background() -> None:
         rgb=torch.ones(1, 3, 1, 1),
         mode="white",
         phase="eval",
-        scope="step",
     )
     objective = RGBReconObjective(
         ObjectiveSpec(version="test", reconstruction=ReconstructionLossSpec(kind="l1")),
