@@ -4,7 +4,6 @@ import argparse
 import json
 import shutil
 import sys
-import urllib.request
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -12,10 +11,13 @@ from typing import Any
 
 
 SRC_DIR = Path(__file__).resolve().parents[1]
+TRAIN_DIR = SRC_DIR / "train"
 REPO_ROOT = SRC_DIR.parent
-sys.path.insert(0, str(SRC_DIR / "train"))
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.insert(0, str(TRAIN_DIR))
 
 from config_utils import load_config_file  # noqa: E402
+from download_utils import download_url, fetch_json_url  # noqa: E402
 
 
 def resolve_path(value: str | Path) -> Path:
@@ -38,9 +40,10 @@ def github_release_url(config: dict[str, Any]) -> str:
 
 
 def fetch_release(config: dict[str, Any], root: Path) -> dict[str, Any]:
-    request = urllib.request.Request(github_release_url(config), headers={"Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(request) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    payload = fetch_json_url(
+        github_release_url(config),
+        headers={"Accept": "application/vnd.github+json"},
+    )
     (root / "metadata" / "release.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return payload
 
@@ -68,13 +71,7 @@ def download_file(url: str, output_path: Path, overwrite: bool) -> None:
     if output_path.exists() and not overwrite:
         print(f"Already exists: {output_path}")
         return
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = output_path.with_suffix(output_path.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "dynaworld-ex4dgs-ingest"})
-    with urllib.request.urlopen(request) as response, tmp_path.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-    tmp_path.replace(output_path)
-    print(f"Downloaded: {output_path}")
+    download_url(url, output_path, overwrite=True, user_agent="dynaworld-ex4dgs-ingest")
 
 
 def list_assets(config: dict[str, Any], root: Path) -> None:

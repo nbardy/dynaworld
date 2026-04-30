@@ -1,20 +1,16 @@
-"""Pipeline-level diagnostic / eval-payload helpers.
+"""Pipeline-level diagnostic and eval-payload helpers.
 
 These functions produce W&B-style scalar dicts from validation tensors. None of
 them carry gradient. They are pure: dispatch is by tensor shape, and any
 "missing data" path is a typed absence (empty dict or `None` buffers) rather
 than a silent fallback to a fabricated value.
 
-The split between this file and `pipeline/losses.py` is by gradient flow:
+The split between this file and `pipeline.losses` is by gradient flow:
 
-* `pipeline.diagnostics`  — eval/validation scalar payloads, `torch.no_grad`
-  side, no learnable parameters touched.
-* `pipeline.losses`       — loss-construction helpers that participate in
+* `pipeline.diagnostics` handles eval/validation scalars on the `torch.no_grad`
+  side, with no learnable parameters touched.
+* `pipeline.losses` handles loss-construction helpers that participate in
   backward.
-
-Wave 1 of the trainer cleanup is additive: this module is created from
-`train_video_token_implicit_dynamic.py` lines 614-753 (HEAD 37f5f0b) without
-modifying the monolith. Wave 2 rewires the trainer to call into here.
 """
 
 from __future__ import annotations

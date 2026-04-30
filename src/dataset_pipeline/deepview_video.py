@@ -5,17 +5,19 @@ import json
 import shutil
 import subprocess
 import sys
-import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any
 
 
 SRC_DIR = Path(__file__).resolve().parents[1]
+TRAIN_DIR = SRC_DIR / "train"
 REPO_ROOT = SRC_DIR.parent
-sys.path.insert(0, str(SRC_DIR / "train"))
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.insert(0, str(TRAIN_DIR))
 
 from config_utils import load_config_file  # noqa: E402
+from download_utils import download_url  # noqa: E402
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v"}
@@ -80,13 +82,7 @@ def download_file(url: str, output_path: Path, overwrite: bool) -> None:
     if output_path.exists() and not overwrite:
         print(f"Already exists: {output_path}")
         return
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = output_path.with_suffix(output_path.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "dynaworld-deepview-ingest"})
-    with urllib.request.urlopen(request) as response, tmp_path.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-    tmp_path.replace(output_path)
-    print(f"Downloaded: {output_path}")
+    download_url(url, output_path, overwrite=True, user_agent="dynaworld-deepview-ingest")
 
 
 def download(config: dict[str, Any], root: Path, *, all_scenes: bool, overwrite: bool | None) -> None:

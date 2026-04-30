@@ -13,7 +13,9 @@ from PIL import Image
 
 
 SRC_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(SRC_DIR / "train"))
+TRAIN_DIR = SRC_DIR / "train"
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.insert(0, str(TRAIN_DIR))
 
 from config_utils import load_config_file  # noqa: E402
 

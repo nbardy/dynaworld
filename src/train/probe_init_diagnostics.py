@@ -15,6 +15,7 @@ from init_diagnostics import (
     infer_valid_ranges_from_config,
     raw_head_output_diagnostics,
 )
+from model_factories import build_model_from_config
 
 
 GAUSSIAN_FIELDS = ("xyz", "scales", "quats", "opacities", "rgbs")
@@ -66,14 +67,11 @@ def _probe_target_from_config(config: dict[str, Any]):
         import train_video_token_implicit_dynamic as trainer
 
         resolved = trainer.resolve_config(config)
-        model = trainer.build_model_from_config(resolved).eval()
+        model = build_model_from_config(resolved).eval()
         variant = str(resolved["model"]["variant"]).lower()
         if variant in {
             "free_splats",
-            "free_gaussian_bank",
-            "free_linear_splats",
             "free_linear_time_splats",
-            "linear_free_splats",
         }:
             return {
                 "arch": arch,
@@ -86,7 +84,6 @@ def _probe_target_from_config(config: dict[str, Any]):
         tokens = _video_splat_tokens(model)
     elif arch in PRECOMPUTED_FEATURE_ARCHES:
         import train_precomputed_feature_implicit_dynamic as trainer
-        import train_video_token_implicit_dynamic as video_trainer
 
         resolved = trainer.PrecomputedFeatureImplicitTrainer.resolve_config(config)
         if resolved["model"]["video_feature_channels"] is None:
@@ -94,7 +91,7 @@ def _probe_target_from_config(config: dict[str, Any]):
                 "Precomputed-feature init probing needs model.video_feature_channels. "
                 "Run after feature prebake/inference or set the cached layer channel counts in the config."
             )
-        model = video_trainer.build_model_from_config(resolved).eval()
+        model = build_model_from_config(resolved).eval()
         tokens = _video_splat_tokens(model)
     else:
         raise ValueError(f"Unsupported arch={arch!r}.")

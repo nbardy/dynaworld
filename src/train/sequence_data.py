@@ -370,6 +370,91 @@ def load_uncalibrated_sequence(
     return sequence
 
 
+def _optional_path(value: str | Path | None) -> Path | None:
+    return None if value is None else Path(value)
+
+
+def load_manifest_entries(manifest_path: Path, split: str | None = None) -> list[dict[str, Any]]:
+    entries = []
+    with manifest_path.open() as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                entry = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSONL record in {manifest_path}:{line_number}: {exc}") from exc
+            if not isinstance(entry, dict):
+                raise ValueError(f"Expected object on {manifest_path}:{line_number}.")
+            if split is None or str(entry.get("split", "train")) == split:
+                entries.append(entry)
+    if not entries:
+        split_text = f" split={split!r}" if split is not None else ""
+        raise ValueError(f"No manifest entries found in {manifest_path}{split_text}.")
+    return entries
+
+
+def load_manifest_sequence(
+    entry: dict[str, Any],
+    *,
+    data_cfg: dict[str, Any],
+    model_cfg: dict[str, Any],
+    device: torch.device,
+) -> SequenceData:
+    sequence_dir = Path(entry["sequence_dir"])
+    frames_dir = _optional_path(entry.get("frames_dir"))
+    if frames_dir is None:
+        frames_dir = resolve_frames_dir(sequence_dir, data_cfg["frames_dir"])
+    video_path = _optional_path(entry.get("video_path"))
+    frame_source = entry.get("frame_source", data_cfg["frame_source"])
+    max_frames = int(entry.get("max_frames", data_cfg["max_frames"]))
+    if frame_source == "camera_json":
+        camera_json = _optional_path(entry.get("camera_json")) or data_cfg["camera_json"] or (
+            sequence_dir / "per_frame_cameras.json"
+        )
+        return load_camera_sequence(
+            camera_json_path=camera_json,
+            target_size=model_cfg["size"],
+            camera_image_size=int(entry.get("camera_image_size", data_cfg["camera_image_size"])),
+            max_frames=max_frames,
+            focal_mode=str(entry.get("camera_focal_mode", data_cfg["camera_focal_mode"])),
+            device=device,
+        )
+    return load_uncalibrated_sequence(
+        sequence_dir=sequence_dir,
+        frames_dir=frames_dir,
+        video_path=video_path,
+        target_size=model_cfg["size"],
+        max_frames=max_frames,
+        frame_source=frame_source,
+        device=device,
+    )
+
+
+def load_manifest_sequences(
+    manifest_path: Path,
+    *,
+    split: str,
+    data_cfg: dict[str, Any],
+    model_cfg: dict[str, Any],
+    device: torch.device,
+    limit: int = 0,
+) -> list[SequenceData]:
+    entries = load_manifest_entries(manifest_path, split=split)
+    if limit > 0:
+        entries = entries[:limit]
+    return [
+        load_manifest_sequence(
+            entry,
+            data_cfg=data_cfg,
+            model_cfg=model_cfg,
+            device=device,
+        )
+        for entry in entries
+    ]
+
+
 def select_window_indices(
     num_frames: int,
     window_size: int,

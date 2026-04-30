@@ -72,9 +72,8 @@ def metric_config_from_logging(logging_cfg: dict[str, Any]) -> MetricConfig:
         raise ValueError("logging.with_metrics must be a boolean or object.")
 
     metric_sets = raw_metrics.get("sets", {})
-    legacy_render_every = int(logging_cfg.get("debug_render_metrics_every", 0) or 0)
-    every = int(raw_metrics.get("every", legacy_render_every) or 0)
-    renderer = bool(raw_metrics.get("renderer", metric_sets.get("renderer", legacy_render_every > 0)))
+    every = int(raw_metrics.get("every", 0) or 0)
+    renderer = bool(raw_metrics.get("renderer", metric_sets.get("renderer", False)))
     optimizer = bool(raw_metrics.get("optimizer", metric_sets.get("optimizer", False)))
     return MetricConfig(
         renderer=renderer,

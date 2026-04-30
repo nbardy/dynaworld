@@ -5,7 +5,11 @@ from typing import Any
 
 import torch
 
+from .choices import checked_choice
 from .types import BackgroundMode, BackgroundSample, BackgroundSampleScope, BackgroundSpec, RunPhase
+
+BACKGROUND_MODES: frozenset[BackgroundMode] = frozenset(("white", "black", "fixed_rgb", "random_rgb", "none"))
+BACKGROUND_SAMPLE_SCOPES: frozenset[BackgroundSampleScope] = frozenset(("step", "view", "frame", "pixel"))
 
 
 def background_mode_for_phase(spec: BackgroundSpec, phase: RunPhase) -> BackgroundMode:
@@ -21,19 +25,11 @@ def background_mode_for_phase(spec: BackgroundSpec, phase: RunPhase) -> Backgrou
 
 
 def _validate_background_mode(value: Any, *, key: str) -> BackgroundMode:
-    mode = str(value).lower()
-    if mode not in {"white", "black", "fixed_rgb", "random_rgb", "none"}:
-        raise ValueError(
-            f"Unknown background {key}={mode!r}; expected white, black, fixed_rgb, random_rgb, or none."
-        )
-    return mode  # type: ignore[return-value]
+    return checked_choice(value, allowed=BACKGROUND_MODES, label=f"background {key}")
 
 
 def _validate_sample_scope(value: Any) -> BackgroundSampleScope:
-    scope = str(value).lower()
-    if scope not in {"step", "view", "frame", "pixel"}:
-        raise ValueError(f"Unknown background sample_scope={scope!r}; expected step, view, frame, or pixel.")
-    return scope  # type: ignore[return-value]
+    return checked_choice(value, allowed=BACKGROUND_SAMPLE_SCOPES, label="background sample_scope")
 
 
 def background_spec_from_mapping(values: Mapping[str, Any]) -> BackgroundSpec:

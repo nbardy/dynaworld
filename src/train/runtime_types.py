@@ -223,31 +223,18 @@ class GaussianSequence:
         )
 
 
-@dataclass(frozen=True)
-class StepLosses:
-    total: Tensor
-    reconstruction: Tensor
-    camera_motion: Tensor | None = None
-    camera_temporal: Tensor | None = None
-    camera_global: Tensor | None = None
-
-    def scalar_payload(self) -> dict[str, float]:
-        payload = {
-            "total": float(self.total.detach().item()),
-            "reconstruction": float(self.reconstruction.detach().item()),
-        }
-        if self.camera_motion is not None:
-            payload["camera_motion"] = float(self.camera_motion.detach().item())
-        if self.camera_temporal is not None:
-            payload["camera_temporal"] = float(self.camera_temporal.detach().item())
-        if self.camera_global is not None:
-            payload["camera_global"] = float(self.camera_global.detach().item())
-        return payload
-
-
-@dataclass(frozen=True)
-class TrainStepResult:
-    batch: ClipBatch
-    decoded: GaussianSequence
-    losses: StepLosses
-    preview_render: Tensor | None = None
+@dataclass
+class StepResult:
+    source_path: Path | None
+    sequence_frame_count: int
+    clip_frames: Tensor
+    preview_render: Tensor | None
+    preview_features: Tensor | None
+    camera_state: CameraState | None
+    loss: Tensor
+    recon_loss: Tensor
+    camera_motion_loss: Tensor
+    camera_temporal_loss: Tensor
+    camera_global_loss: Tensor
+    bank_rate_loss: Tensor
+    bank_rate_terms: dict[str, Tensor]

@@ -28,6 +28,8 @@ import torch
 
 from config_utils import load_config_file
 from init_diagnostics import post_colorize_image_diagnostics
+from model_factories import build_model_from_config
+from pipeline.render import render_clip_sequence
 
 
 # (label, pre_norm, weight_init, gain, hidden_dim)
@@ -71,29 +73,27 @@ def render_features_once(config_path: Path, seed: int, device: torch.device) -> 
     config = load_config_file(config_path)
 
     import train_video_token_implicit_dynamic as trainer
-    from train_video_token_implicit_dynamic import render_clip_sequence
-
     resolved = trainer.resolve_config(config)
     feature_dim = int(resolved["model"]["feature_dim"])
     if feature_dim == 3:
         raise ValueError(
             "Matrix probe assumes feature_dim != 3 (F=3 path doesn't go through FeatureToColor)."
         )
-    model = trainer.build_model_from_config(resolved).eval().to(device)
+    model = build_model_from_config(resolved).eval().to(device)
     train_frame_count = int(resolved["model"]["train_frame_count"])
     decode_times = torch.linspace(0.0, 1.0, train_frame_count, device=device).reshape(1, -1)
     decoded = model(video=None, decode_times=decode_times)
     if decoded.cameras is None:
         raise RuntimeError("Decoded output missing cameras; matrix probe expects implicit-camera models.")
     render_cfg = resolved["render"]
-    rendered, _alpha_unused = render_clip_sequence(
+    rasterized = render_clip_sequence(
         resolved,
         decoded,
         decoded.cameras,
         renderer_mode=str(render_cfg["renderer"]).lower(),
-        dense_grid=None,  # type: ignore[arg-type]
+        dense_grid=None,
     )
-    return rendered.detach(), feature_dim
+    return rasterized.features.detach(), feature_dim
 
 
 @torch.no_grad()

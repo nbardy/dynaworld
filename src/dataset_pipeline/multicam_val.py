@@ -65,8 +65,16 @@ def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
+    records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSONL record in {path}:{line_number}: {exc}") from exc
+    return records
 
 
 def run_command(command: list[str], *, log_path: Path | None = None) -> subprocess.CompletedProcess[str]:

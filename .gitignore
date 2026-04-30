@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 
+.desloppify/
+scorecard.png
+
 .venv/
 .dust3r_probe_frames/
 tea_debug.log

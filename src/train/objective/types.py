@@ -17,6 +17,7 @@ CameraRole = Literal["condition", "anchor", "target", "heldout", "debug"]
 CameraOwner = Literal["model", "target", "external_rig", "none"]
 BackgroundMode = Literal["white", "black", "fixed_rgb", "random_rgb", "none"]
 BackgroundSampleScope = Literal["step", "view", "frame", "pixel"]
+ReconstructionLossKind = Literal["mse", "l1", "l1_mse", "standard_gs"]
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,7 @@ class BackgroundSample:
 
 @dataclass(frozen=True)
 class ReconstructionLossSpec:
-    kind: Literal["mse", "l1", "l1_mse", "standard_gs"] = "standard_gs"
+    kind: ReconstructionLossKind = "standard_gs"
     l1_weight: float = 0.8
     dssim_weight: float = 0.2
     mse_weight: float = 0.0

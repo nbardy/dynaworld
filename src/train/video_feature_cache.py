@@ -105,10 +105,7 @@ def sample_cache_key(sequence_data: SequenceData, feature_cfg: Mapping[str, Any]
 
 
 def _torch_load(path: Path) -> Any:
-    try:
-        return torch.load(path, map_location="cpu", weights_only=False)
-    except TypeError:  # pragma: no cover - older torch compatibility.
-        return torch.load(path, map_location="cpu")
+    return torch.load(path, map_location="cpu", weights_only=True)
 
 
 def _dtype_from_name(name: str | None) -> torch.dtype:
@@ -511,7 +508,8 @@ class HuggingFaceVJEPAFeatureExtractor:
             from transformers import AutoModel, AutoVideoProcessor
         except ImportError as exc:
             raise ImportError(
-                "features.extractor='vjepa_hf' requires transformers with V-JEPA support."
+                "features.extractor='vjepa_hf' requires transformers with V-JEPA support. "
+                "Run with `uv run --group vjepa-hf ...` or install the matching optional dependency."
             ) from exc
 
         self.feature_cfg = dict(feature_cfg)

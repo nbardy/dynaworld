@@ -11,20 +11,17 @@ import torch
 
 from config_utils import load_config_file
 from fast_attn import fast_attn_context, pick_device
-from sequence_data import load_camera_sequence, load_uncalibrated_sequence, resolve_frames_dir
+from model_factories import build_model_from_config
+from sequence_data import load_camera_sequence, load_manifest_sequences, load_uncalibrated_sequence, resolve_frames_dir
 from pipeline.render import prepare_clip
-from train_video_token_implicit_dynamic import (
-    build_model_from_config,
-    load_manifest_sequences,
-    resolve_config,
-)
+from train_video_token_implicit_dynamic import resolve_config
 
 
 EXPORT_BUNDLE_VERSION = "dynaworld_token_head_bundle/v2"
 
 
 def _load_state_dict(checkpoint_path: Path) -> dict[str, torch.Tensor]:
-    payload = torch.load(checkpoint_path, map_location="cpu")
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     if isinstance(payload, dict) and "state_dict" in payload and isinstance(payload["state_dict"], dict):
         state_dict = payload["state_dict"]
     elif isinstance(payload, dict) and payload and all(torch.is_tensor(value) for value in payload.values()):

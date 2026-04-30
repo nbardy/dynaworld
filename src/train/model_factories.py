@@ -7,7 +7,7 @@ from typing import Any
 import torch.nn as nn
 
 from colorize import FeatureToColor, normalize_view_condition
-from gs_models import (
+from gs_models.dynamic_video_token_gs_implicit_camera import (
     DynamicVideoTokenGSKnownCamera,
     DynamicVideoTokenGSImplicitCamera,
     DynamicVideoTokenGSImplicitCameraPoseToPlucker,
@@ -150,37 +150,24 @@ COLORIZE_CONFIG_KEYS = frozenset(
 MODEL_VARIANT_CLASSES: dict[str, type[nn.Module]] = {
     "learned_time_orbit_path": DynamicVideoTokenGSImplicitCamera,
     "free_splats": FreeGaussianBankImplicitCamera,
-    "free_gaussian_bank": FreeGaussianBankImplicitCamera,
-    "free_linear_splats": LinearTimeFreeGaussianBankImplicitCamera,
     "free_linear_time_splats": LinearTimeFreeGaussianBankImplicitCamera,
-    "linear_free_splats": LinearTimeFreeGaussianBankImplicitCamera,
     "residual_free_bank": ResidualFreeBankVideoTokenGSImplicitCamera,
-    "residual_free_video": ResidualFreeBankVideoTokenGSImplicitCamera,
-    "residual_free_bank_video_tokens": ResidualFreeBankVideoTokenGSImplicitCamera,
     "known_camera": DynamicVideoTokenGSKnownCamera,
-    "known_camera_video_token": DynamicVideoTokenGSKnownCamera,
     "sinusoidal_time_path_mlp": DynamicVideoTokenGSImplicitCameraSinusoidalTime,
     "token_to_pose_to_plucker": DynamicVideoTokenGSImplicitCameraPoseToPlucker,
     "unconditioned_tokens": UnconditionedTokenGSImplicitCamera,
-    "token_decoder_unconditioned": UnconditionedTokenGSImplicitCamera,
     "unconditioned_residual_free_bank": UnconditionedResidualFreeBankImplicitCamera,
-    "residual_free_bank_unconditioned_tokens": UnconditionedResidualFreeBankImplicitCamera,
 }
 
-KNOWN_CAMERA_VARIANTS = frozenset({"known_camera", "known_camera_video_token"})
-UNCONDITIONED_VARIANTS = frozenset({"unconditioned_tokens", "token_decoder_unconditioned"})
-UNCONDITIONED_RESIDUAL_VARIANTS = frozenset(
-    {"unconditioned_residual_free_bank", "residual_free_bank_unconditioned_tokens"}
-)
-FREE_BANK_VARIANTS = frozenset({"free_splats", "free_gaussian_bank"})
-LINEAR_FREE_BANK_VARIANTS = frozenset({"free_linear_splats", "free_linear_time_splats", "linear_free_splats"})
+KNOWN_CAMERA_VARIANTS = frozenset({"known_camera"})
+UNCONDITIONED_VARIANTS = frozenset({"unconditioned_tokens"})
+UNCONDITIONED_RESIDUAL_VARIANTS = frozenset({"unconditioned_residual_free_bank"})
+FREE_BANK_VARIANTS = frozenset({"free_splats"})
+LINEAR_FREE_BANK_VARIANTS = frozenset({"free_linear_time_splats"})
 RESIDUAL_VARIANTS = frozenset(
     {
         "residual_free_bank",
-        "residual_free_video",
-        "residual_free_bank_video_tokens",
         "unconditioned_residual_free_bank",
-        "residual_free_bank_unconditioned_tokens",
     }
 )
 
@@ -493,6 +480,10 @@ def build_model_module(
         )
         kwargs.update(dict(overrides))
     return model_class_for_variant(variant)(**kwargs)
+
+
+def build_model_from_config(config: Mapping[str, Any]) -> nn.Module:
+    return build_model_module(config["model"], config["camera"])
 
 
 def validated_colorize_kwargs(

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import sys
 from contextlib import nullcontext
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,22 +13,22 @@ from fast_attn import (
     fast_attn_context,
     pick_device,
 )
-from model_factories import build_colorizer, build_model_module
-from objective import (
+from model_factories import build_colorizer, build_model_from_config
+from objective.loss import objective_spec_from_loss_config
+from objective.objective import RGBReconObjective
+from objective.types import (
     BackgroundSample,
+    CameraOwner,
+    CameraRole,
     RasterizedView,
     RenderedView,
-    RGBReconObjective,
     RunPhase,
     TargetView,
-    objective_spec_from_loss_config,
+    ViewRole,
 )
 from pipeline.diagnostics import (
     camera_temporal_payload,
-    decoded_temporal_payload,
     eval_metric_payload,
-    fill_decoded_frame_buffers,
-    init_decoded_frame_buffers,
     temporal_similarity_payload,
 )
 from pipeline.losses import (
@@ -40,18 +38,16 @@ from pipeline.losses import (
     build_camera_loss as _build_camera_loss_impl,
 )
 from pipeline.losses import (
-    compute_camera_losses as _compute_camera_losses_impl,
-)
-from pipeline.losses import (
     temporal_recon_chunk_size as _temporal_recon_chunk_size_impl,
 )
 from pipeline.render import (
+    RasterizedClip,
+    RenderedClip,
     colorize_view_dirs_for_features,
     gaussian_sequence_slice,
     prepare_clip,
     render_clip_sequence,
     render_full_sequence as _render_full_sequence_impl,
-    stack_complete_frame_list,
 )
 from pipeline.validation_media import (
     render_preview_image as _render_preview_image_impl,
@@ -63,8 +59,14 @@ from rendering import (
     resize_images,
 )
 from rendering import pick_renderer_mode as resolve_renderer_mode
-from runtime_types import CameraState, GaussianSequence, SequenceData
-from sequence_data import load_camera_sequence, load_uncalibrated_sequence, resolve_frames_dir, select_window_indices
+from runtime_types import CameraState, GaussianSequence, SequenceData, StepResult
+from sequence_data import (
+    load_camera_sequence,
+    load_manifest_sequences,
+    load_uncalibrated_sequence,
+    resolve_frames_dir,
+    select_window_indices,
+)
 from tqdm import tqdm
 
 LOSS_OPTION_DEFAULTS = {
@@ -184,23 +186,6 @@ EXPORT_OPTION_DEFAULTS = {
 }
 
 
-@dataclass
-class StepResult:
-    source_path: Path | None
-    sequence_frame_count: int
-    clip_frames: torch.Tensor
-    preview_render: torch.Tensor | None
-    preview_features: torch.Tensor | None
-    camera_state: CameraState | None
-    loss: torch.Tensor
-    recon_loss: torch.Tensor
-    camera_motion_loss: torch.Tensor
-    camera_temporal_loss: torch.Tensor
-    camera_global_loss: torch.Tensor
-    bank_rate_loss: torch.Tensor
-    bank_rate_terms: dict[str, torch.Tensor]
-
-
 def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     if config is None:
         raise ValueError("A train config is required. Pass a JSONC path or config dict.")
@@ -247,14 +232,9 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         )
     if cfg["model"]["video_encoder_backend"] == "none" and cfg["model"]["variant"] not in {
         "free_splats",
-        "free_gaussian_bank",
-        "free_linear_splats",
         "free_linear_time_splats",
-        "linear_free_splats",
         "unconditioned_residual_free_bank",
-        "residual_free_bank_unconditioned_tokens",
         "unconditioned_tokens",
-        "token_decoder_unconditioned",
     }:
         raise ValueError("model.video_encoder_backend='none' is only valid for no-conditioning model variants.")
     if cfg["model"]["vjepa_feature_dim"] is not None:
@@ -298,17 +278,10 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     if has_static_dynamic_split:
         if cfg["model"]["variant"] in {
             "free_splats",
-            "free_gaussian_bank",
-            "free_linear_splats",
             "free_linear_time_splats",
-            "linear_free_splats",
             "residual_free_bank",
-            "residual_free_bank_video_tokens",
-            "residual_free_video",
             "known_camera",
-            "known_camera_video_token",
             "unconditioned_residual_free_bank",
-            "residual_free_bank_unconditioned_tokens",
         }:
             raise ValueError("static/dynamic splat split is not wired for this model.variant yet.")
         if cfg["model"]["variant"] == "token_to_pose_to_plucker":
@@ -433,88 +406,6 @@ def pick_renderer_mode_from_config(config: dict[str, Any]) -> tuple[str, int]:
     return renderer_mode, effective_gaussians
 
 
-def load_manifest_entries(manifest_path: Path, split: str | None = None) -> list[dict[str, Any]]:
-    entries = []
-    with manifest_path.open() as handle:
-        for line_number, line in enumerate(handle, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            entry = json.loads(stripped)
-            if not isinstance(entry, dict):
-                raise ValueError(f"Expected object on {manifest_path}:{line_number}.")
-            if split is None or str(entry.get("split", "train")) == split:
-                entries.append(entry)
-    if not entries:
-        split_text = f" split={split!r}" if split is not None else ""
-        raise ValueError(f"No manifest entries found in {manifest_path}{split_text}.")
-    return entries
-
-
-def load_manifest_sequence(
-    entry: dict[str, Any],
-    *,
-    data_cfg: dict[str, Any],
-    model_cfg: dict[str, Any],
-    device: torch.device,
-) -> SequenceData:
-    sequence_dir = Path(entry["sequence_dir"])
-    frames_dir = path_or_none(entry.get("frames_dir"))
-    if frames_dir is None:
-        frames_dir = resolve_frames_dir(sequence_dir, data_cfg["frames_dir"])
-    video_path = path_or_none(entry.get("video_path"))
-    frame_source = entry.get("frame_source", data_cfg["frame_source"])
-    max_frames = int(entry.get("max_frames", data_cfg["max_frames"]))
-    if frame_source == "camera_json":
-        camera_json = path_or_none(entry.get("camera_json")) or data_cfg["camera_json"] or (
-            sequence_dir / "per_frame_cameras.json"
-        )
-        return load_camera_sequence(
-            camera_json_path=camera_json,
-            target_size=model_cfg["size"],
-            camera_image_size=int(entry.get("camera_image_size", data_cfg["camera_image_size"])),
-            max_frames=max_frames,
-            focal_mode=str(entry.get("camera_focal_mode", data_cfg["camera_focal_mode"])),
-            device=device,
-        )
-    return load_uncalibrated_sequence(
-        sequence_dir=sequence_dir,
-        frames_dir=frames_dir,
-        video_path=video_path,
-        target_size=model_cfg["size"],
-        max_frames=max_frames,
-        frame_source=frame_source,
-        device=device,
-    )
-
-
-def load_manifest_sequences(
-    manifest_path: Path,
-    *,
-    split: str,
-    data_cfg: dict[str, Any],
-    model_cfg: dict[str, Any],
-    device: torch.device,
-    limit: int = 0,
-) -> list[SequenceData]:
-    entries = load_manifest_entries(manifest_path, split=split)
-    if limit > 0:
-        entries = entries[:limit]
-    return [
-        load_manifest_sequence(
-            entry,
-            data_cfg=data_cfg,
-            model_cfg=model_cfg,
-            device=device,
-        )
-        for entry in entries
-    ]
-
-
-def build_model_from_config(config: dict[str, Any]) -> torch.nn.Module:
-    return build_model_module(config["model"], config["camera"])
-
-
 class Trainer:
     @classmethod
     def resolve_config(cls, config: dict[str, Any]) -> dict[str, Any]:
@@ -618,18 +509,18 @@ class Trainer:
         frame_indices: torch.Tensor,
         frame_times: torch.Tensor,
         cameras: tuple[Any, ...],
-        role: str = "train",
-        camera_role: str = "target",
-        camera_owner: str = "model",
+        role: ViewRole = "train",
+        camera_role: CameraRole = "target",
+        camera_owner: CameraOwner = "model",
         camera_name: str | None = None,
         metrics_prefix: str | None = None,
         log_media: bool = False,
     ) -> TargetView:
         return TargetView(
             view_id=view_id,
-            role=role,  # type: ignore[arg-type]
-            camera_role=camera_role,  # type: ignore[arg-type]
-            camera_owner=camera_owner,  # type: ignore[arg-type]
+            role=role,
+            camera_role=camera_role,
+            camera_owner=camera_owner,
             frames=frames,
             frame_indices=frame_indices,
             frame_times=frame_times.reshape(-1),
@@ -644,7 +535,7 @@ class Trainer:
         self,
         decoded: GaussianSequence,
         cameras: tuple[Any, ...],
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> RasterizedClip:
         return render_clip_sequence(
             self.cfg,
             decoded,
@@ -656,13 +547,13 @@ class Trainer:
     def rasterize(self, decoded: GaussianSequence, target: TargetView) -> RasterizedView:
         if target.cameras is None:
             raise ValueError("TargetView.cameras is required for rasterization.")
-        features, alpha = self.rasterize_decoded_clip(decoded, target.cameras)
+        rasterized = self.rasterize_decoded_clip(decoded, target.cameras)
         return RasterizedView(
             view=target,
-            features=features,
-            alpha=alpha,
+            features=rasterized.features,
+            alpha=rasterized.alpha,
             cameras=target.cameras,
-            view_dirs=self.view_dirs_for_features(features, target.cameras),
+            view_dirs=self.view_dirs_for_features(rasterized.features, target.cameras),
         )
 
     def render_decoded_rgb_clip(
@@ -846,23 +737,6 @@ class Trainer:
         with fast_attn_context(self.device), self.autocast_context():
             return self.model(model_input, decode_times=clip_times)
 
-    def compute_camera_losses(
-        self,
-        clip_times: torch.Tensor,
-        camera_state: CameraState,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return _compute_camera_losses_impl(clip_times, camera_state)
-
-    def build_camera_loss(
-        self,
-        clip_times: torch.Tensor,
-        camera_state: CameraState,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        return _build_camera_loss_impl(clip_times, camera_state, self.loss_cfg)
-
-    def build_bank_rate_loss(self, decoded: GaussianSequence) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        return _build_bank_rate_loss_impl(decoded, self.loss_cfg)
-
     def temporal_recon_chunk_size(self, frame_count: int) -> int:
         return _temporal_recon_chunk_size_impl(
             frame_count,
@@ -944,11 +818,12 @@ class Trainer:
             if decoded.camera_state is None:
                 raise ValueError("Implicit-camera video decode must include camera_state.")
 
-            camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss = self.build_camera_loss(
+            camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss = _build_camera_loss_impl(
                 clip_times,
                 decoded.camera_state,
+                self.loss_cfg,
             )
-            bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
+            bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
             rendered = self.render_decoded_rgb_clip(
                 decoded,
                 frames=clip_frames[0],
@@ -988,11 +863,12 @@ class Trainer:
         if decoded.camera_state is None:
             raise ValueError("Implicit-camera video decode must include camera_state.")
 
-        camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss = self.build_camera_loss(
+        camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss = _build_camera_loss_impl(
             clip_times,
             decoded.camera_state,
+            self.loss_cfg,
         )
-        bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
+        bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
 
         recon_loss, preview_render, preview_features = self.recon_backward(
             clip_frames,
@@ -1063,9 +939,6 @@ class Trainer:
             eval_sequence_count=len(self.eval_sequences),
         )
 
-    def render_preview_image(self, result: StepResult, step: int) -> wandb.Image:
-        return _render_preview_image_impl(self.cfg, result, step)
-
     def _eval_decode_clip(
         self,
         sequence_data: SequenceData,
@@ -1099,16 +972,9 @@ class Trainer:
     def render_full_sequence(
         self,
         sequence_data: SequenceData,
-    ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
-        clip = _render_full_sequence_impl(
+    ) -> RenderedClip:
+        return _render_full_sequence_impl(
             self.cfg, self.model, sequence_data, self._eval_decode_clip, self._eval_render_clip
-        )
-        return (
-            clip.rgb_sequence,
-            clip.camera_state,
-            clip.temporal_metrics,
-            clip.feature_sequence,
-            clip.alpha_sequence,
         )
 
     def validation_video_payload(self) -> dict[str, Any]:
@@ -1118,41 +984,37 @@ class Trainer:
             "Eval/SequenceCount": len(sequences),
         }
         for sequence_index, sequence_data in enumerate(sequences):
-            (
-                rendered_sequence,
-                eval_camera_state,
-                decoded_metrics,
-                feature_sequence,
-                alpha_sequence,
-            ) = self.render_full_sequence(sequence_data)
+            rendered = self.render_full_sequence(sequence_data)
             gt_sequence = resize_images(sequence_data.frames, self.render_size).detach().cpu()
             metrics = {
-                **eval_metric_payload(rendered_sequence, gt_sequence, self.loss_cfg),
-                **temporal_similarity_payload(rendered_sequence, gt_sequence, self.loss_cfg),
-                **decoded_metrics,
+                **eval_metric_payload(rendered.rgb_sequence, gt_sequence, self.loss_cfg),
+                **temporal_similarity_payload(rendered.rgb_sequence, gt_sequence, self.loss_cfg),
+                **rendered.temporal_metrics,
             }
-            if eval_camera_state is not None:
+            if rendered.camera_state is not None:
                 metrics.update(
                     {
-                        "Camera/EvalFOVDegrees": eval_camera_state.fov_degrees.item(),
-                        "Camera/EvalRadius": eval_camera_state.radius.item(),
+                        "Camera/EvalFOVDegrees": rendered.camera_state.fov_degrees.item(),
+                        "Camera/EvalRadius": rendered.camera_state.radius.item(),
                         "Camera/EvalRotationDeltaMeanDegrees": (
-                            torch.rad2deg(torch.linalg.norm(eval_camera_state.rotation_delta, dim=-1)).mean().item()
+                            torch.rad2deg(torch.linalg.norm(rendered.camera_state.rotation_delta, dim=-1))
+                            .mean()
+                            .item()
                         ),
                         "Camera/EvalTranslationDeltaMean": (
-                            torch.linalg.norm(eval_camera_state.translation_delta, dim=-1).mean().item()
+                            torch.linalg.norm(rendered.camera_state.translation_delta, dim=-1).mean().item()
                         ),
                     }
                 )
-                metrics.update(camera_temporal_payload(eval_camera_state))
+                metrics.update(camera_temporal_payload(rendered.camera_state))
             metric_payloads.append(metrics)
             sequence_payload, self.gt_video_logged = single_cam_validation_video_payload(
                 self.cfg,
                 sequence_index=sequence_index,
-                rendered_sequence=rendered_sequence,
+                rendered_sequence=rendered.rgb_sequence,
                 gt_sequence=gt_sequence,
-                feature_sequence=feature_sequence,
-                alpha_sequence=alpha_sequence,
+                feature_sequence=rendered.feature_sequence,
+                alpha_sequence=rendered.alpha_sequence,
                 eval_payload={},
                 gt_video_logged=self.gt_video_logged,
                 fps=sequence_data.video_fps,
@@ -1174,7 +1036,7 @@ class Trainer:
 
         payload = self.scalar_payload(result)
         if should_log_images:
-            payload["Render_GT_vs_Pred"] = self.render_preview_image(result, step)
+            payload["Render_GT_vs_Pred"] = _render_preview_image_impl(self.cfg, result, step)
             if self.feature_pca_log:
                 if result.preview_features is None:
                     raise ValueError(
@@ -1246,8 +1108,10 @@ class KnownCameraTrainer(Trainer):
         super().validate_train_sequences()
         missing = [sequence for sequence in self.train_sequences if sequence.cameras is None]
         if missing:
-            examples = ", ".join(str(sequence.source_path) for sequence in missing[:3])
-            raise ValueError(f"Known-camera training requires cameras on every train sequence. Examples: {examples}")
+            raise ValueError(
+                "Known-camera training requires cameras on every train sequence. "
+                f"Missing camera metadata for {len(missing)} sequence(s)."
+            )
 
     def sample_clip(self) -> tuple[SequenceData, torch.Tensor, torch.Tensor, tuple[Any, ...]]:
         sequence_data = self.sample_sequence()
@@ -1279,7 +1143,7 @@ class KnownCameraTrainer(Trainer):
             raise ValueError("Known-camera video decode must include cameras.")
 
         zero = clip_frames.new_tensor(0.0)
-        bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
+        bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
         recon_loss, preview_render, preview_features = self.recon_backward(
             clip_frames,
             decoded,
@@ -1322,7 +1186,7 @@ class KnownCameraTrainer(Trainer):
                 raise ValueError("Known-camera video decode must include cameras.")
 
             zero = clip_frames.new_tensor(0.0)
-            bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
+            bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
             rendered = self.render_decoded_rgb_clip(
                 decoded,
                 frames=clip_frames[0],
@@ -1370,16 +1234,9 @@ class KnownCameraTrainer(Trainer):
     def render_full_sequence(
         self,
         sequence_data: SequenceData,
-    ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
-        clip = _render_full_sequence_impl(
+    ) -> RenderedClip:
+        return _render_full_sequence_impl(
             self.cfg, self.model, sequence_data, self._eval_decode_clip, self._eval_render_clip
-        )
-        return (
-            clip.rgb_sequence,
-            clip.camera_state,
-            clip.temporal_metrics,
-            clip.feature_sequence,
-            clip.alpha_sequence,
         )
 
     def run(self) -> None:
@@ -1421,7 +1278,7 @@ class KnownCameraTrainer(Trainer):
 
 def trainer_class_for_config(config: dict[str, Any]) -> type[Trainer]:
     variant = str(config.get("model", {}).get("variant", "learned_time_orbit_path")).lower()
-    if variant in {"known_camera", "known_camera_video_token"}:
+    if variant == "known_camera":
         return KnownCameraTrainer
     return Trainer
 

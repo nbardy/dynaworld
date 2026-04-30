@@ -59,7 +59,10 @@ def strip_jsonc_comments(text: str) -> str:
 
 def load_config_file(path: str | Path) -> dict[str, Any]:
     config_path = Path(path)
-    data = json.loads(strip_jsonc_comments(config_path.read_text()))
+    try:
+        data = json.loads(strip_jsonc_comments(config_path.read_text()))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSONC config {config_path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Expected config object in {config_path}, got {type(data).__name__}.")
     return data
@@ -105,3 +108,16 @@ def serialize_config_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [serialize_config_value(inner) for inner in value]
     return value
+
+
+__all__ = [
+    "apply_defaults",
+    "format_key_values",
+    "load_config_file",
+    "path_or_none",
+    "require_config_sections",
+    "resolved_config",
+    "select_keys",
+    "serialize_config_value",
+    "strip_jsonc_comments",
+]

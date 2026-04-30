@@ -1,23 +1,16 @@
 """Pipeline-level loss-construction helpers.
 
-Free functions extracted from `Trainer` in
-`train_video_token_implicit_dynamic.py` (HEAD 37f5f0b, lines 1110-1194).
-These are gradient-bearing helpers — they read learnable tensors out of
-`CameraState` / `GaussianSequence.auxiliary` and return scalars that are
-backwarded through.
+These gradient-bearing helpers read learnable tensors out of `CameraState` and
+`GaussianSequence.auxiliary` and return scalars that participate in backward.
+Trainer state is passed explicitly:
 
-Wave-1 contract: trainer state that used to be `self.X` is now an explicit
-parameter. Caller passes:
+* `loss_cfg` is the normalized `cfg["losses"]` dict. No silent defaults are
+  applied at use sites; a missing required key should raise loudly.
+* `recon_backward_strategy` is `"batched" | "microbatch" | "framewise"` from
+  `cfg["train"]`.
+* `temporal_microbatch_size` is the normalized integer from `cfg["train"]`.
 
-* `loss_cfg`  — the `cfg["losses"]` dict (camera_motion_weight,
-  camera_temporal_weight, camera_global_weight, static_alpha_rate_weight,
-  dynamic_*_rate_weight). No silent defaults at use site; if a key is
-  missing the dict access raises and the bug is loud.
-* `recon_backward_strategy` — `"batched" | "microbatch" | "framewise"`,
-  read from `cfg["train"]`.
-* `temporal_microbatch_size` — int, read from `cfg["train"]`.
-
-Diagnostics / eval-payload helpers live in `pipeline/diagnostics.py`.
+Diagnostics and eval-payload helpers live in `pipeline.diagnostics`.
 """
 
 from __future__ import annotations

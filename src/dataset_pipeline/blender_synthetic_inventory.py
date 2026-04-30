@@ -36,12 +36,9 @@ in this list.
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 
 SRC_DIR = Path(__file__).resolve().parents[1]

@@ -13,18 +13,17 @@ from multicam_video_data import (
     heldout_cameras_from_K_w2c,
     load_multicam_video_bundle,
 )
-from objective import BackgroundSample, RenderedView, RunPhase
+from objective.types import BackgroundSample, RenderedView, RunPhase
+from pipeline.diagnostics import decoded_temporal_payload
+from pipeline.losses import build_bank_rate_loss as _build_bank_rate_loss_impl
+from pipeline.render import prepare_clip
 from pipeline.validation_media import (
     multicam_validation_video_payload,
 )
 from rendering import resize_images
+from runtime_types import StepResult
+from sequence_data import select_window_indices
 from train_precomputed_feature_implicit_dynamic import PrecomputedFeatureImplicitTrainer
-from pipeline.render import prepare_clip
-from train_video_token_implicit_dynamic import (
-    StepResult,
-    decoded_temporal_payload,
-    select_window_indices,
-)
 
 
 DATA_MULTICAM_DEFAULTS = {
@@ -280,7 +279,7 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
             clip_indices = torch.arange(0, clip_length, device=self.device)
             clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
             decoded = self._decode_clip(sequence_data, clip_frames, clip_times)
-            bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
+            bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
             rig_loss = self.rig_regularization_loss()
             recon_loss, preview_render, preview_features = self.multicam_recon_loss(
                 decoded,
@@ -314,7 +313,7 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         self.optimizer.zero_grad(set_to_none=True)
         sequence_data, clip_indices, clip_frames, clip_times, views = self.sample_multicam_clip()
         decoded = self._decode_clip(sequence_data, clip_frames, clip_times)
-        bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
+        bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
         rig_loss = self.rig_regularization_loss()
         recon_loss, preview_render, preview_features = self.multicam_recon_loss(
             decoded,

@@ -48,6 +48,12 @@ def stack_complete_frame_list(frames: list[torch.Tensor | None], *, name: str) -
 
 
 @dataclass(frozen=True)
+class RasterizedClip:
+    features: torch.Tensor
+    alpha: torch.Tensor | None
+
+
+@dataclass(frozen=True)
 class RenderedClip:
     """The 5-tuple that `render_full_sequence` used to return, but as a
     frozen typed bundle so future signature changes don't reintroduce
@@ -80,12 +86,6 @@ class RenderedClip:
 
 DecodeClipFn = Callable[[SequenceData, torch.Tensor, torch.Tensor, torch.Tensor], GaussianSequence]
 RenderClipFn = Callable[..., RenderedView]
-
-
-# ---------------------------------------------------------------------------
-# Helper: viewport_cameras lives in the monolith; we accept it as a
-# callable to avoid pulling it (out of scope for wave 1).
-# ---------------------------------------------------------------------------
 
 
 def _camera_center_ray_dirs(
@@ -198,13 +198,10 @@ def render_clip_sequence(
     cameras: tuple[Any, ...],
     *,
     renderer_mode: str,
-    dense_grid: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Returns `(rendered_features, alpha_mask)`. Alpha is `None` for
-    non-fast_mac modes and for the F=3 v5 legacy path; a `[T, H, W]`
-    tensor for F!=3 fast_mac.
-    """
-    return render_gaussian_frames_alpha_aware(
+    dense_grid: torch.Tensor | None,
+) -> RasterizedClip:
+    """Rasterize a decoded sequence into features plus optional alpha."""
+    features, alpha = render_gaussian_frames_alpha_aware(
         cfg,
         sequence,
         _viewport_cameras(
@@ -215,6 +212,7 @@ def render_clip_sequence(
         mode=renderer_mode,
         dense_grid=dense_grid,
     )
+    return RasterizedClip(features=features, alpha=alpha)
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +365,7 @@ def render_full_sequence(
 
 
 __all__ = [
+    "RasterizedClip",
     "RenderedClip",
     "DecodeClipFn",
     "RenderClipFn",

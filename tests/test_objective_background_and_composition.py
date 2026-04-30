@@ -1,21 +1,12 @@
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "train"))
-
-from objective import (
-    BackgroundPolicy,
-    BackgroundSpec,
-    ColorizedView,
-    RasterizedView,
-    TargetView,
-    compose_rgb,
-)
+from objective.background import BackgroundPolicy
+from objective.objective import compose_rgb
+from objective.types import BackgroundSpec, ColorizedView, RasterizedView, TargetView
 
 
 def _target_view(frame_count: int = 1, height: int = 4, width: int = 5) -> TargetView:

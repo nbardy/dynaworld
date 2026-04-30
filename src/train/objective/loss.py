@@ -6,9 +6,12 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from .types import ReconstructionLossSpec, RenderedView, TargetView, ViewLoss
+from .choices import checked_choice
+from .types import ReconstructionLossKind, ReconstructionLossSpec, RenderedView, TargetView, ViewLoss
 from .background import background_spec_from_mapping
 from .types import ObjectiveSpec
+
+RECONSTRUCTION_LOSS_KINDS: frozenset[ReconstructionLossKind] = frozenset(("mse", "l1", "l1_mse", "standard_gs"))
 
 
 def _mean_per_image(values: torch.Tensor) -> torch.Tensor:
@@ -60,6 +63,10 @@ def dssim_per_image(
     return (1.0 - ssim_per_image(prediction, target, window_size=window_size, c1=c1, c2=c2)) * 0.5
 
 
+def _parse_reconstruction_loss_kind(value: Any) -> ReconstructionLossKind:
+    return checked_choice(value, allowed=RECONSTRUCTION_LOSS_KINDS, label="reconstruction loss type")
+
+
 def reconstruction_loss_spec_from_mapping(values: Mapping[str, Any]) -> ReconstructionLossSpec:
     """Boundary helper for legacy loss dictionaries.
 
@@ -67,12 +74,9 @@ def reconstruction_loss_spec_from_mapping(values: Mapping[str, Any]) -> Reconstr
     stay at this adapter boundary.
     """
 
-    kind = str(values["type"])
-    allowed = {"mse", "l1", "l1_mse", "standard_gs"}
-    if kind not in allowed:
-        raise ValueError(f"Unknown reconstruction loss type: {kind!r}")
+    kind = _parse_reconstruction_loss_kind(values["type"])
     return ReconstructionLossSpec(
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         l1_weight=float(values["l1_weight"]) if "l1_weight" in values else 0.8,
         dssim_weight=float(values["dssim_weight"]) if "dssim_weight" in values else 0.2,
         mse_weight=float(values["mse_weight"]) if "mse_weight" in values else 0.0,

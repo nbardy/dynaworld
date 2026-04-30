@@ -6,7 +6,7 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 
-from camera import CameraSpec, make_camera_like
+from camera import CameraSpec
 
 
 def _skew_symmetric(vectors: torch.Tensor) -> torch.Tensor:

@@ -27,6 +27,8 @@ import torch
 
 from config_utils import load_config_file
 from init_diagnostics import format_colorize_init_summary, post_colorize_image_diagnostics
+from model_factories import build_model_from_config
+from pipeline.render import colorize_view_dirs_for_features, render_clip_sequence
 
 
 def _build_model_and_colorize(config_path: Path, seed: int) -> tuple[torch.nn.Module, torch.nn.Module | None, dict[str, Any]]:
@@ -37,7 +39,7 @@ def _build_model_and_colorize(config_path: Path, seed: int) -> tuple[torch.nn.Mo
     import train_video_token_implicit_dynamic as trainer
 
     resolved = trainer.resolve_config(config)
-    model = trainer.build_model_from_config(resolved).eval()
+    model = build_model_from_config(resolved).eval()
 
     colorize_module: torch.nn.Module | None = None
     colorize_cfg = resolved.get("colorize")
@@ -67,8 +69,6 @@ def _run_one_forward(
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Run one forward + rasterize + colorize. Returns (rgb_image, pre_sigmoid_logits or None)."""
-    from train_video_token_implicit_dynamic import colorize_view_dirs_for_features, render_clip_sequence
-
     model = model.to(device)
     if colorize_module is not None:
         colorize_module = colorize_module.to(device)
@@ -79,13 +79,14 @@ def _run_one_forward(
     if decoded.cameras is None:
         raise RuntimeError("Decoded output missing cameras; this probe expects implicit-camera models.")
 
-    rendered_features, _alpha_unused = render_clip_sequence(
+    rasterized = render_clip_sequence(
         resolved,
         decoded,
         decoded.cameras,
         renderer_mode=str(resolved["render"]["renderer"]).lower(),
         dense_grid=None,
     )
+    rendered_features = rasterized.features
 
     if colorize_module is None:
         # F=3 path: rendered_features IS the RGB image, already in [0, 1].

@@ -13,7 +13,9 @@ import numpy as np
 
 
 SRC_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(SRC_DIR / "train"))
+TRAIN_DIR = SRC_DIR / "train"
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.insert(0, str(TRAIN_DIR))
 
 from config_utils import load_config_file  # noqa: E402
 
@@ -60,8 +62,16 @@ def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
+    records: list[dict[str, Any]] = []
     with path.open() as handle:
-        return [json.loads(line) for line in handle if line.strip()]
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSONL record in {path}:{line_number}: {exc}") from exc
+    return records
 
 
 def run_command(command: list[str], *, log_path: Path | None = None) -> subprocess.CompletedProcess[str]:

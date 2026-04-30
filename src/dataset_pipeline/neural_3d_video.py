@@ -5,16 +5,18 @@ import json
 import shutil
 import subprocess
 import sys
-import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any
 
 
 SRC_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(SRC_DIR / "train"))
+TRAIN_DIR = SRC_DIR / "train"
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.insert(0, str(TRAIN_DIR))
 
 from config_utils import load_config_file  # noqa: E402
+from download_utils import download_url, fetch_json_url  # noqa: E402
 
 
 def import_cv2():
@@ -41,10 +43,10 @@ def github_release_url(config: dict[str, Any]) -> str:
 
 
 def fetch_release(config: dict[str, Any], root: Path) -> dict[str, Any]:
-    url = github_release_url(config)
-    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(request) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    payload = fetch_json_url(
+        github_release_url(config),
+        headers={"Accept": "application/vnd.github+json"},
+    )
     metadata_path = root / "metadata" / "release.json"
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return payload
@@ -80,12 +82,7 @@ def download_file(url: str, output_path: Path, overwrite: bool) -> None:
     if output_path.exists() and not overwrite:
         print(f"Already exists: {output_path}")
         return
-    tmp_path = output_path.with_suffix(output_path.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "dynaworld-dataset-ingest"})
-    with urllib.request.urlopen(request) as response, tmp_path.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-    tmp_path.replace(output_path)
-    print(f"Downloaded: {output_path}")
+    download_url(url, output_path, overwrite=True, user_agent="dynaworld-dataset-ingest")
 
 
 def list_assets(config: dict[str, Any], root: Path) -> None:

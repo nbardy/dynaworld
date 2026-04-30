@@ -60,6 +60,35 @@ function sendFile(res, filePath) {
 	});
 }
 
+function resolveContainedPath(rootDir, relativePath) {
+	let decodedPath;
+	try {
+		decodedPath = decodeURIComponent(relativePath);
+	} catch (_error) {
+		return null;
+	}
+	if (!decodedPath || decodedPath.includes("\0") || path.isAbsolute(decodedPath)) {
+		return null;
+	}
+	const root = path.resolve(rootDir);
+	const finalPath = path.resolve(root, decodedPath);
+	const relativeToRoot = path.relative(root, finalPath);
+	if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
+		return null;
+	}
+	return finalPath;
+}
+
+function sendContainedFile(res, rootDir, relativePath) {
+	const filePath = resolveContainedPath(rootDir, relativePath);
+	if (!filePath) {
+		res.writeHead(403);
+		res.end();
+		return;
+	}
+	return sendFile(res, filePath);
+}
+
 async function startServer(rootDir, bundleDir, cameraPath, port) {
 	const bundleRoot = path.resolve(bundleDir);
 	const resolvedCameraPath = cameraPath ? path.resolve(cameraPath) : null;
@@ -72,7 +101,7 @@ async function startServer(rootDir, bundleDir, cameraPath, port) {
 		}
 		if (urlPath.startsWith("/__bundle/")) {
 			const relative = urlPath.slice("/__bundle/".length);
-			return sendFile(res, path.join(bundleRoot, relative));
+			return sendContainedFile(res, bundleRoot, relative);
 		}
 		if (urlPath === "/__camera.json") {
 			if (!resolvedCameraPath) {
@@ -82,12 +111,12 @@ async function startServer(rootDir, bundleDir, cameraPath, port) {
 			}
 			return sendFile(res, resolvedCameraPath);
 		}
-		const relativePath = urlPath === "/" ? "/headless.html" : urlPath;
-		return sendFile(res, path.join(rootDir, relativePath));
+		const relativePath = urlPath === "/" ? "headless.html" : urlPath.replace(/^\/+/, "");
+		return sendContainedFile(res, rootDir, relativePath);
 	});
 	await new Promise((resolve, reject) => {
 		server.once("error", reject);
-		server.listen(port, () => {
+		server.listen(port, "127.0.0.1", () => {
 			server.off("error", reject);
 			resolve();
 		});

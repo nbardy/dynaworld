@@ -180,7 +180,6 @@ class VectorizedSparseGaussianRasterizer(nn.Module):
             x0, x1, y0, y1, tau, valid
         where x1/y1 are exclusive.
         """
-        device = means2d.device
         with torch.no_grad():
             order = _stable_argsort(depths, descending=not front_to_back)
             means_s = means2d.index_select(0, order)

@@ -783,6 +783,23 @@ def select_configured_multiview_frames(videos: torch.Tensor, frame_indices: Any)
     return videos.index_select(1, indices).contiguous()
 
 
+def camera_start_seconds(record: dict[str, Any], camera_name: str) -> float:
+    if camera_name == str(record.get("source_camera")):
+        return float(record.get("source_start_seconds", 0.0))
+    if camera_name == str(record.get("target_camera")):
+        return float(record.get("target_start_seconds", 0.0))
+
+    dataset = str(record.get("dataset") or "")
+    if dataset in {"deepview_video", "aist_dance_db", "neural_3d_video"}:
+        return float(record.get("source_start_seconds", record.get("target_start_seconds", 0.0)))
+    if dataset == "vivo":
+        raise ValueError(
+            f"ViVo camera {camera_name!r} is not the source or target camera on record "
+            f"{record.get('sample_id')!r}; the manifest does not carry its capture-timestamp offset."
+        )
+    return float(record.get("source_start_seconds", record.get("target_start_seconds", 0.0)))
+
+
 def load_camera_video(record: dict[str, Any], camera_name: str, *, target_size: int, device: torch.device) -> torch.Tensor:
     dataset = str(record.get("dataset") or "")
     if dataset == "deepview_video":
@@ -803,7 +820,7 @@ def load_camera_video(record: dict[str, Any], camera_name: str, *, target_size: 
             f"record dataset={dataset!r}."
         )
 
-    start_seconds = float(record.get("source_start_seconds", record.get("target_start_seconds", 0.0)))
+    start_seconds = camera_start_seconds(record, camera_name)
     frames = load_multicam_val_camera_frames(
         video_path=video_path,
         start_seconds=start_seconds,

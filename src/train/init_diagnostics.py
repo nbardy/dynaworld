@@ -174,7 +174,6 @@ def _spread_stats(
 
 def infer_valid_ranges_from_config(config: Mapping[str, Any]) -> dict[str, tuple[float, float]]:
     model_cfg = config.get("model", {})
-    arch = config.get("arch")
     ranges: dict[str, tuple[float, float]] = {
         "opacities": (0.0, 1.0),
         "rgbs": (0.0, 1.0),

@@ -541,8 +541,7 @@ class HuggingFaceVJEPAVideoEncoder(nn.Module):
         except ImportError as exc:
             raise ImportError(
                 "video_encoder_backend='vjepa_hf' requires transformers. "
-                "Install the current V-JEPA-capable build with: "
-                "pip install -U git+https://github.com/huggingface/transformers"
+                "Run with `uv run --group vjepa-hf ...` or install the matching optional dependency."
             ) from exc
 
         self.model_id = model_id
