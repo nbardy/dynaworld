@@ -19,6 +19,10 @@ def _device_type(device):
     return device.type if isinstance(device, torch.device) else str(device)
 
 
+def pick_device():
+    return torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+
+
 def configure_fast_attn(device, attention_dtype):
     global _MPS_REPLACE_SDPA, _MPS_SDPA_PATCHED, _MPS_SDPA_ERROR
 

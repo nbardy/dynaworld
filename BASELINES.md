@@ -84,8 +84,8 @@ signal.**
 
 | Category | Config | Script / how to launch | W&B | Steps | Wall | Eval/Loss | SSIM | PSNR | Device | Last refreshed |
 |---|---|---|---|---:|---:|---:|---:|---:|---|---|
-| Token-only smoke | `src/train_configs/local_mac_overfit_video_token_smoke.jsonc` | `src/train_scripts/train_smoke_dynamic_with_video_token_implicit_camera.sh` | TODO | 10 | TODO (~30 s target) | TODO | TODO | TODO | MPS | TODO |
-| Tiny 30-clip token smoke | `src/train_configs/local_mac_tiny_30_video_token_smoke.jsonc` | `src/train_scripts/train_smoke_dynamic_with_video_token_implicit_camera.sh` | TODO | TODO | TODO | TODO | TODO | TODO | MPS | TODO |
+| Token-only smoke | `src/train_configs/local_mac_overfit_video_token_smoke.jsonc` | `PYTHONPATH=src/train uv run python src/train/train.py src/train_configs/local_mac_overfit_video_token_smoke.jsonc` | TODO | 10 | TODO (~30 s target) | TODO | TODO | TODO | MPS | TODO |
+| Tiny 30-clip token smoke | `src/train_configs/local_mac_tiny_30_video_token_smoke.jsonc` | `PYTHONPATH=src/train uv run python src/train/train.py src/train_configs/local_mac_tiny_30_video_token_smoke.jsonc` | TODO | TODO | TODO | TODO | TODO | TODO | MPS | TODO |
 
 These rows exist to be re-run on demand, *not* to be ranked. If a smoke run
 takes more than ~60 s, treat it as a regression in the dev loop.

@@ -194,11 +194,6 @@ def infer_valid_ranges_from_config(config: Mapping[str, Any]) -> dict[str, tuple
     elif "scene_extent" in model_cfg:
         scene_extent = float(model_cfg["scene_extent"])
         ranges["xyz/z"] = (-scene_extent, scene_extent)
-    elif arch == "tokengs_image_implicit_camera":
-        scene_extent = 1.0
-        ranges["xyz/x"] = (-scene_extent, scene_extent)
-        ranges["xyz/y"] = (-scene_extent, scene_extent)
-        ranges["xyz/z"] = (-scene_extent, scene_extent)
     return ranges
 
 

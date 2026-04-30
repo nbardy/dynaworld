@@ -10,7 +10,7 @@ from typing import Any
 import torch
 
 from config_utils import load_config_file
-from dynamicTokenGS import fast_attn_context, pick_device
+from fast_attn import fast_attn_context, pick_device
 from sequence_data import load_camera_sequence, load_uncalibrated_sequence, resolve_frames_dir
 from train_video_token_implicit_dynamic import (
     build_model_from_config,

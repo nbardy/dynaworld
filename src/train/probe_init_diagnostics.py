@@ -24,25 +24,15 @@ VIDEO_TOKEN_ARCHES = {
     "tokengs_video_known_camera",
 }
 PRECOMPUTED_FEATURE_ARCHES = {
+    "precomputed_feature_implicit_camera",
     "wan_vace_feature_implicit_camera",
     "ltx_feature_implicit_camera",
-    "tokengs_precomputed_feature_implicit_camera",
 }
 
 
 def _decoded_mapping_from_head(gaussian_heads: Any, tokens: torch.Tensor) -> dict[str, torch.Tensor]:
     with torch.no_grad():
         return dict(zip(GAUSSIAN_FIELDS, gaussian_heads(tokens), strict=True))
-
-
-def _image_implicit_splat_tokens(model: torch.nn.Module) -> torch.Tensor:
-    if hasattr(model, "splat_tokens"):
-        return model.splat_tokens
-    if hasattr(model, "tokens"):
-        # Joint implicit-camera models reserve token 0 for global camera and token 1 for path camera.
-        return model.tokens[:, 2:, :]
-    raise AttributeError(f"Could not find splat tokens on {model.__class__.__name__}.")
-
 
 def _video_splat_tokens(model: torch.nn.Module) -> torch.Tensor:
     if not hasattr(model, "query_tokens"):
@@ -72,13 +62,7 @@ def _require_single_gaussian_head(model: torch.nn.Module):
 
 def _probe_target_from_config(config: dict[str, Any]):
     arch = config.get("arch")
-    if arch == "tokengs_prebaked_camera":
-        import dynamicTokenGS as trainer
-
-        resolved = trainer.resolve_config(config)
-        model = trainer.build_model_from_config(resolved["model"]).eval()
-        tokens = model.tokens
-    elif arch in VIDEO_TOKEN_ARCHES:
+    if arch in VIDEO_TOKEN_ARCHES:
         import train_video_token_implicit_dynamic as trainer
 
         resolved = trainer.resolve_config(config)
@@ -112,20 +96,6 @@ def _probe_target_from_config(config: dict[str, Any]):
             )
         model = video_trainer.build_model_from_config(resolved).eval()
         tokens = _video_splat_tokens(model)
-    elif arch == "tokengs_image_implicit_camera":
-        import train_camera_implicit_dynamic as trainer
-
-        resolved = trainer.resolve_config(config)
-        if hasattr(trainer, "build_model_from_config"):
-            model = trainer.build_model_from_config(resolved["model"]).eval()
-        else:
-            from gs_models import DynamicTokenGSImplicitCamera
-
-            model = DynamicTokenGSImplicitCamera(
-                num_tokens=resolved["model"]["tokens"],
-                gaussians_per_token=resolved["model"]["gaussians_per_token"],
-            ).eval()
-        tokens = _image_implicit_splat_tokens(model)
     else:
         raise ValueError(f"Unsupported arch={arch!r}.")
 

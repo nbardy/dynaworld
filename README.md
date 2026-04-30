@@ -239,52 +239,37 @@ debugging:
 
 ## Train
 
-Single-image baseline:
-
-```bash
-uv run python src/train/tokenGS.py src/train_configs/local_mac_overfit_single_image.jsonc
-```
-
 Tiny 30-clip local baseline:
 
 ```bash
-./src/train_scripts/train_local_mac_30_clip_baseline.sh
+PYTHONPATH=src/train uv run python src/train/train.py \
+  src/train_configs/local_mac_tiny_30_video_token_smoke.jsonc
 ```
 
 Current recommended local dynamic run:
 
 ```bash
-./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh
+PYTHONPATH=src/train uv run python src/train/train.py \
+  src/train_configs/local_mac_compare_local_video_encoder_16f_known_camera_128_fast_mac_8192splats.jsonc
 ```
 
-This defaults to the 128px/4fps known-camera fast-mac-gsplat v5 baseline:
+The retired prebaked-camera TokenGS trainer lives in git history. The active
+known-camera path is the video-token trainer config:
 
 ```bash
-src/train_configs/local_mac_overfit_prebaked_camera_128_4fps_wide_depth_fast_mac_8192splats.jsonc
+src/train_configs/local_mac_compare_local_video_encoder_16f_known_camera_128_fast_mac_8192splats.jsonc
 ```
 
-It uses 128 learned tokens, 64 Gaussians per token, native batched fast-mac v5
-rendering, low-opacity randomized scale init, Adam, cosine LR decay, and
-gradient clipping. That is the current "make it work decently first" baseline,
-not the final quality target.
-
-Taichi remains available for comparison:
+Token-only smoke:
 
 ```bash
-./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh \
-  src/train_configs/local_mac_overfit_prebaked_camera_128_4fps_wide_depth_taichi_8192splats.jsonc
+PYTHONPATH=src/train uv run python src/train/train.py \
+  src/train_configs/local_mac_overfit_video_token_smoke.jsonc
 ```
 
-Legacy 32px dense comparison:
+Fast-mac 128px implicit-camera smoke:
 
 ```bash
-./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh \
-  src/train_configs/local_mac_overfit_prebaked_camera.jsonc
-```
-
-Smaller 64px/4fps comparison:
-
-```bash
-./src/train_scripts/train_full_dynamic_with_camera_prebake_all_frames.sh \
-  src/train_configs/local_mac_overfit_prebaked_camera_64_4fps.jsonc
+PYTHONPATH=src/train uv run python src/train/train.py \
+  src/train_configs/local_mac_overfit_video_token_implicit_camera_128_4fps_fast_mac_8192splats.jsonc
 ```

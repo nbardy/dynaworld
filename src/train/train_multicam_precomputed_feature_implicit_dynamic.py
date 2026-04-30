@@ -13,6 +13,7 @@ from multicam_video_data import (
     heldout_cameras_from_K_w2c,
     load_multicam_video_bundle,
 )
+from objective import BackgroundSample, RenderedView, RunPhase
 from rendering import resize_images
 from train_logging import make_wandb_video
 from train_precomputed_feature_implicit_dynamic import PrecomputedFeatureImplicitTrainer
@@ -21,8 +22,6 @@ from train_video_token_implicit_dynamic import (
     decoded_temporal_payload,
     eval_metric_payload,
     prepare_clip,
-    reconstruction_loss_per_image,
-    render_clip_sequence,
     select_window_indices,
     temporal_similarity_payload,
 )
@@ -68,6 +67,10 @@ def _prefix_eval_metrics(prefix: str, metrics: dict[str, float]) -> dict[str, fl
         else:
             payload[f"{prefix}/{key}"] = value
     return payload
+
+
+def _alpha_grayscale(alpha: torch.Tensor) -> torch.Tensor:
+    return alpha.unsqueeze(1).expand(-1, 3, -1, -1).contiguous()
 
 
 class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTrainer):
@@ -174,16 +177,71 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
         return self.forward_clip(model_input, clip_times)
 
-    def render_view_clip(self, decoded, *, view: int, clip_indices: torch.Tensor) -> torch.Tensor:
+    def frame_times_for_indices(self, clip_indices: torch.Tensor) -> torch.Tensor:
+        denominator = max(self.sequence_data.frame_count - 1, 1)
+        return clip_indices.to(dtype=torch.float32) / float(denominator)
+
+    def render_view_clip(
+        self,
+        decoded,
+        *,
+        view: int,
+        clip_indices: torch.Tensor,
+        phase: RunPhase,
+        background: BackgroundSample | None = None,
+    ) -> RenderedView:
         cameras = self.camera_rig.cameras_for_view(view, clip_indices)
-        return render_clip_sequence(
+        target = self.make_target_view(
+            view_id=f"train_view_{view}",
+            frames=self.multicam_bundle.train_frames[int(view), clip_indices],
+            frame_indices=clip_indices,
+            frame_times=self.frame_times_for_indices(clip_indices),
+            cameras=cameras,
+            role="train",
+            camera_owner="external_rig",
+            camera_name=self.multicam_bundle.train_camera_names[int(view)],
+            metrics_prefix=f"TrainView{view}",
+            log_media=int(view) == 0,
+        )
+        return self.rgb_objective.render_view(
             decoded,
-            cameras,
-            renderer_mode=self.renderer_mode,
-            render_cfg=self.render_cfg,
-            input_size=self.model_cfg["size"],
-            render_size=self.render_size,
-            dense_grid=self.dense_grid,
+            target,
+            phase=phase,
+            background=background,
+        )
+
+    def render_heldout_view_clip(
+        self,
+        decoded,
+        *,
+        view: int,
+        clip_indices: torch.Tensor,
+        phase: RunPhase,
+        background: BackgroundSample | None = None,
+    ) -> RenderedView:
+        if self.multicam_bundle.heldout_frames is None:
+            raise ValueError("Heldout render requested but no heldout frames are loaded.")
+        cameras = self.camera_rig.heldout_cameras_for(view, clip_indices)
+        camera_names = self.multicam_bundle.heldout_camera_names or []
+        camera_name = camera_names[view] if view < len(camera_names) else f"heldout_{view}"
+        target = self.make_target_view(
+            view_id=f"heldout_view_{view}",
+            frames=self.multicam_bundle.heldout_frames[int(view), clip_indices],
+            frame_indices=clip_indices,
+            frame_times=self.frame_times_for_indices(clip_indices),
+            cameras=cameras,
+            role="heldout",
+            camera_role="heldout",
+            camera_owner="external_rig",
+            camera_name=camera_name,
+            metrics_prefix=f"Heldout{view}_{camera_name}",
+            log_media=True,
+        )
+        return self.rgb_objective.render_view(
+            decoded,
+            target,
+            phase=phase,
+            background=background,
         )
 
     def multicam_recon_loss(
@@ -192,17 +250,36 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         *,
         clip_indices: torch.Tensor,
         views: list[int],
+        phase: RunPhase,
         keep_preview: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         recon_loss = self.multicam_bundle.train_frames.new_zeros(())
         preview_render = None
+        preview_features = None
+        background = self.rgb_objective.sample_background(
+            phase=phase,
+            like=self.multicam_bundle.train_frames[int(views[0]), clip_indices],
+            frame_count=len(clip_indices),
+        )
         for view in views:
-            rendered = self.render_view_clip(decoded, view=int(view), clip_indices=clip_indices)
-            target = resize_images(self.multicam_bundle.train_frames[int(view), clip_indices], self.render_size)
-            recon_loss = recon_loss + reconstruction_loss_per_image(rendered, target, self.loss_cfg).mean()
+            rendered = self.render_view_clip(
+                decoded,
+                view=int(view),
+                clip_indices=clip_indices,
+                phase=phase,
+                background=background,
+            )
+            if phase == "train" and self.feature_dim != 3 and rendered.alpha is None:
+                raise ValueError(
+                    "F-channel multicam training requires alpha-aware render output so random-background "
+                    "composition is active. Got alpha=None; check renderer='fast_mac' and v5_features build."
+                )
+            recon_loss = recon_loss + self.rgb_objective.reconstruction_loss(rendered)
             if keep_preview and preview_render is None:
-                preview_render = rendered[0].detach()
-        return recon_loss / float(max(len(views), 1)), preview_render
+                preview_render = rendered.rgb[0].detach()
+                if self.feature_pca_log:
+                    preview_features = rendered.features[0].detach()
+        return recon_loss / float(max(len(views), 1)), preview_render, preview_features
 
     def rig_regularization_loss(self) -> torch.Tensor:
         return float(self.cfg["camera"]["rig_regularization_weight"]) * self.camera_rig.regularization_loss()
@@ -219,10 +296,11 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
             decoded = self._decode_clip(sequence_data, clip_frames, clip_times)
             bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
             rig_loss = self.rig_regularization_loss()
-            recon_loss, preview_render = self.multicam_recon_loss(
+            recon_loss, preview_render, preview_features = self.multicam_recon_loss(
                 decoded,
                 clip_indices=clip_indices,
                 views=list(range(self.multicam_bundle.train_view_count)),
+                phase="eval",
                 keep_preview=True,
             )
             zero = clip_frames.new_zeros(())
@@ -232,6 +310,7 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
                 sequence_frame_count=sequence_data.frame_count,
                 clip_frames=clip_frames,
                 preview_render=preview_render,
+                preview_features=preview_features,
                 camera_state=decoded.camera_state,
                 loss=loss.detach(),
                 recon_loss=recon_loss.detach(),
@@ -251,10 +330,11 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         decoded = self._decode_clip(sequence_data, clip_frames, clip_times)
         bank_rate_loss, bank_rate_terms = self.build_bank_rate_loss(decoded)
         rig_loss = self.rig_regularization_loss()
-        recon_loss, preview_render = self.multicam_recon_loss(
+        recon_loss, preview_render, preview_features = self.multicam_recon_loss(
             decoded,
             clip_indices=clip_indices,
             views=views,
+            phase="train",
             keep_preview=keep_preview,
         )
         loss = recon_loss + bank_rate_loss + rig_loss
@@ -266,6 +346,7 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
             sequence_frame_count=sequence_data.frame_count,
             clip_frames=clip_frames,
             preview_render=preview_render,
+            preview_features=preview_features,
             camera_state=decoded.camera_state,
             loss=loss.detach(),
             recon_loss=recon_loss.detach(),
@@ -292,22 +373,27 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         decoded = self._decode_clip(sequence_data, clip_frames, clip_times)
         train_rendered = []
         for view in range(self.multicam_bundle.train_view_count):
-            train_rendered.append(self.render_view_clip(decoded, view=view, clip_indices=frame_indices).detach().cpu())
+            train_rendered.append(
+                self.render_view_clip(
+                    decoded,
+                    view=view,
+                    clip_indices=frame_indices,
+                    phase="eval",
+                )
+            )
+            train_rendered[-1] = train_rendered[-1].detach_cpu()
         heldout_rendered = []
         if self.multicam_bundle.heldout_frames is not None:
             for view in range(self.multicam_bundle.heldout_view_count):
-                cameras = self.camera_rig.heldout_cameras_for(view, frame_indices)
                 heldout_rendered.append(
-                    render_clip_sequence(
+                    self.render_heldout_view_clip(
                         decoded,
-                        cameras,
-                        renderer_mode=self.renderer_mode,
-                        render_cfg=self.render_cfg,
-                        input_size=self.model_cfg["size"],
-                        render_size=self.render_size,
-                        dense_grid=self.dense_grid,
-                    ).detach().cpu()
+                        view=view,
+                        clip_indices=frame_indices,
+                        phase="eval",
+                    )
                 )
+                heldout_rendered[-1] = heldout_rendered[-1].detach_cpu()
         return train_rendered, heldout_rendered, decoded_temporal_payload(
             {
                 "xyz": [decoded.xyz[index].detach().cpu() for index in range(decoded.frame_count)],
@@ -316,6 +402,29 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
                 "rgbs": [decoded.rgbs[index].detach().cpu() for index in range(decoded.frame_count)],
             }
         )
+
+    def add_render_diagnostics(
+        self,
+        payload: dict[str, Any],
+        *,
+        prefix: str,
+        rendered: RenderedView,
+        target: torch.Tensor,
+    ) -> None:
+        composite_columns = [target, rendered.rgb]
+        if rendered.alpha is not None:
+            alpha_video = _alpha_grayscale(rendered.alpha)
+            payload[f"{prefix}_Alpha_Mask_Video"] = make_wandb_video(alpha_video, self.sequence_data.video_fps)
+            composite_columns.append(alpha_video)
+        if self.feature_pca_log:
+            from feature_pca_viz import feature_pca_to_rgb
+
+            feature_pca = feature_pca_to_rgb(rendered.features)
+            payload[f"{prefix}_Feature_PCA_Video"] = make_wandb_video(feature_pca, self.sequence_data.video_fps)
+            composite_columns.append(feature_pca)
+        if len(composite_columns) > 2:
+            composite = torch.cat(composite_columns, dim=-1)
+            payload[f"{prefix}_Render_Composite_Video"] = make_wandb_video(composite, self.sequence_data.video_fps)
 
     def validation_video_payload(self) -> dict[str, Any]:
         train_rendered, heldout_rendered, decoded_metrics = self.render_full_external_views()
@@ -326,14 +435,20 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         for view, rendered in enumerate(train_rendered):
             target = resize_images(self.multicam_bundle.train_frames[view], self.render_size).detach().cpu()
             metrics = {
-                **eval_metric_payload(rendered, target, self.loss_cfg),
-                **temporal_similarity_payload(rendered, target, self.loss_cfg),
+                **eval_metric_payload(rendered.rgb, target, self.loss_cfg),
+                **temporal_similarity_payload(rendered.rgb, target, self.loss_cfg),
             }
             if view == 0:
                 metrics.update(decoded_metrics)
             payload.update(_prefix_eval_metrics(f"TrainView{view}", metrics))
             if view == 0:
-                payload["TrainView0_Rendered_Video"] = make_wandb_video(rendered, self.sequence_data.video_fps)
+                payload["TrainView0_Rendered_Video"] = make_wandb_video(rendered.rgb, self.sequence_data.video_fps)
+                self.add_render_diagnostics(
+                    payload,
+                    prefix="TrainView0",
+                    rendered=rendered,
+                    target=target,
+                )
                 if not self.gt_video_logged:
                     payload["TrainView0_GT_Video"] = make_wandb_video(target, self.sequence_data.video_fps)
         if heldout_rendered and self.multicam_bundle.heldout_frames is not None:
@@ -343,11 +458,17 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
                 camera_name = heldout_names[view] if view < len(heldout_names) else f"view{view}"
                 prefix = f"Heldout{view}_{camera_name}"
                 heldout_metrics = {
-                    **eval_metric_payload(rendered, heldout_target, self.loss_cfg),
-                    **temporal_similarity_payload(rendered, heldout_target, self.loss_cfg),
+                    **eval_metric_payload(rendered.rgb, heldout_target, self.loss_cfg),
+                    **temporal_similarity_payload(rendered.rgb, heldout_target, self.loss_cfg),
                 }
                 payload.update(_prefix_eval_metrics(prefix, heldout_metrics))
-                payload[f"{prefix}_Rendered_Video"] = make_wandb_video(rendered, self.sequence_data.video_fps)
+                payload[f"{prefix}_Rendered_Video"] = make_wandb_video(rendered.rgb, self.sequence_data.video_fps)
+                self.add_render_diagnostics(
+                    payload,
+                    prefix=prefix,
+                    rendered=rendered,
+                    target=heldout_target,
+                )
                 if not self.gt_video_logged:
                     payload[f"{prefix}_GT_Video"] = make_wandb_video(heldout_target, self.sequence_data.video_fps)
         self.gt_video_logged = True
