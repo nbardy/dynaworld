@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import sys
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -10,14 +9,12 @@ from typing import Any
 
 import torch
 import wandb
-from camera import build_camera_rays_batch
 from config_utils import apply_defaults, load_config_file, path_or_none, resolved_config, serialize_config_value
 from fast_attn import (
     configure_fast_attn,
     fast_attn_context,
     pick_device,
 )
-from losses import reconstruction_loss_per_image, ssim_per_image
 from model_factories import build_colorizer, build_model_module
 from objective import (
     BackgroundSample,
@@ -28,17 +25,47 @@ from objective import (
     TargetView,
     objective_spec_from_loss_config,
 )
+from pipeline.diagnostics import (
+    camera_temporal_payload,
+    decoded_temporal_payload,
+    eval_metric_payload,
+    fill_decoded_frame_buffers,
+    init_decoded_frame_buffers,
+    temporal_similarity_payload,
+)
+from pipeline.losses import (
+    build_bank_rate_loss as _build_bank_rate_loss_impl,
+)
+from pipeline.losses import (
+    build_camera_loss as _build_camera_loss_impl,
+)
+from pipeline.losses import (
+    compute_camera_losses as _compute_camera_losses_impl,
+)
+from pipeline.losses import (
+    temporal_recon_chunk_size as _temporal_recon_chunk_size_impl,
+)
+from pipeline.render import (
+    FullSequenceDeps,
+    colorize_view_dirs_for_features,
+    gaussian_sequence_slice,
+    render_clip_sequence,
+    render_full_sequence as _render_full_sequence_impl,
+    render_full_sequence_known_cameras as _render_full_sequence_known_cameras_impl,
+)
+from pipeline.validation_media import (
+    render_preview_image as _render_preview_image_impl,
+    scalar_payload as _scalar_payload_impl,
+    single_cam_validation_video_payload,
+)
 from rendering import (
     build_or_reuse_grid,
-    camera_for_viewport,
-    render_gaussian_frames_alpha_aware,
     resize_images,
 )
 from rendering import pick_renderer_mode as resolve_renderer_mode
 from runtime_types import CameraState, GaussianSequence, SequenceData
 from sequence_data import load_camera_sequence, load_uncalibrated_sequence, resolve_frames_dir, select_window_indices
 from tqdm import tqdm
-from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
 
 LOSS_OPTION_DEFAULTS = {
     "type": "l1_mse",
@@ -481,119 +508,6 @@ def load_manifest_sequences(
     ]
 
 
-def viewport_cameras(
-    cameras: tuple[Any, ...],
-    *,
-    input_size: int,
-    render_size: int,
-) -> tuple[Any, ...]:
-    return tuple(
-        camera_for_viewport(
-            camera,
-            source_height=input_size,
-            source_width=input_size,
-            target_height=render_size,
-            target_width=render_size,
-        )
-        for camera in cameras
-    )
-
-
-def camera_center_ray_dirs(cameras: tuple[Any, ...], *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    dirs = torch.stack(
-        [
-            camera.camera_to_world.to(device=device, dtype=dtype)[:3, 2]
-            for camera in cameras
-        ],
-        dim=0,
-    )
-    return dirs / torch.linalg.norm(dirs, dim=-1, keepdim=True).clamp_min(1.0e-8)
-
-
-def colorize_view_dirs_for_features(
-    features: torch.Tensor,
-    cameras: tuple[Any, ...],
-    *,
-    view_condition: str,
-    input_size: int,
-    render_size: int,
-    detach: bool,
-) -> torch.Tensor | None:
-    if view_condition == "none":
-        return None
-    if features.dim() != 4:
-        raise ValueError(f"View-conditioned colorize expects [T, F, H, W] features, got {tuple(features.shape)}.")
-    if len(cameras) != features.shape[0]:
-        raise ValueError(f"Expected {features.shape[0]} cameras for colorize view conditioning, got {len(cameras)}.")
-
-    render_cameras = viewport_cameras(cameras, input_size=input_size, render_size=render_size)
-    frame_count, _feature_dim, height, width = features.shape
-    if view_condition == "camera_center_ray":
-        dirs = camera_center_ray_dirs(render_cameras, device=features.device, dtype=features.dtype)
-        view_dirs = dirs.reshape(frame_count, 3, 1, 1).expand(-1, -1, height, width)
-    elif view_condition == "pixel_ray":
-        _origins, dirs_hw3 = build_camera_rays_batch(
-            list(render_cameras),
-            height=height,
-            width=width,
-            device=features.device,
-            dtype=features.dtype,
-            pixel_center=0.5,
-        )
-        view_dirs = dirs_hw3.permute(0, 3, 1, 2).contiguous()
-    else:
-        raise ValueError(
-            "colorize.view_condition must be one of none, camera_center_ray, pixel_ray; "
-            f"got {view_condition!r}."
-        )
-    return view_dirs.detach() if detach else view_dirs
-
-
-def gaussian_sequence_slice(sequence: GaussianSequence, start: int, end: int) -> GaussianSequence:
-    cameras = None
-    if sequence.cameras is not None:
-        cameras = tuple(sequence.cameras[start:end])
-    return GaussianSequence(
-        xyz=sequence.xyz[start:end],
-        scales=sequence.scales[start:end],
-        quats=sequence.quats[start:end],
-        opacities=sequence.opacities[start:end],
-        rgbs=sequence.rgbs[start:end],
-        cameras=cameras,
-        camera_state=sequence.camera_state,
-        auxiliary=sequence.auxiliary,
-    )
-
-
-def render_clip_sequence(
-    sequence: GaussianSequence,
-    cameras: tuple[Any, ...],
-    *,
-    renderer_mode: str,
-    render_cfg: dict[str, Any],
-    input_size: int,
-    render_size: int,
-    dense_grid: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Returns (rendered_features, alpha_mask). Alpha is None for non-fast_mac
-    modes and for the F=3 v5 legacy path; a [T, H, W] tensor for F!=3 fast_mac."""
-    render_cameras = viewport_cameras(cameras, input_size=input_size, render_size=render_size)
-    return render_gaussian_frames_alpha_aware(
-        sequence,
-        render_cameras,
-        height=render_size,
-        width=render_size,
-        mode=renderer_mode,
-        dense_grid=dense_grid,
-        tile_size=render_cfg["tile_size"],
-        bound_scale=render_cfg["bound_scale"],
-        alpha_threshold=render_cfg["alpha_threshold"],
-        near_plane=render_cfg["near_plane"],
-        fast_mac_options=render_cfg["fast_mac"],
-        camera_projection=render_cfg["camera_projection"],
-    )
-
-
 def stack_complete_frame_list(frames: list[torch.Tensor | None], *, name: str) -> torch.Tensor:
     complete_frames = []
     missing_indices = []
@@ -609,146 +523,6 @@ def stack_complete_frame_list(frames: list[torch.Tensor | None], *, name: str) -
     if not complete_frames:
         raise RuntimeError(f"{name} did not produce any frames.")
     return torch.stack(complete_frames, dim=0)
-
-
-def eval_metric_payload(
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-    loss_cfg: dict[str, Any],
-) -> dict[str, float]:
-    prediction = prediction.float()
-    target = target.float()
-    delta = prediction - target
-    l1 = delta.abs().flatten(1).mean()
-    mse = delta.square().flatten(1).mean()
-    ssim = ssim_per_image(
-        prediction,
-        target,
-        window_size=loss_cfg["ssim_window_size"],
-        c1=float(loss_cfg["ssim_c1"]),
-        c2=float(loss_cfg["ssim_c2"]),
-    ).mean()
-    dssim = (1.0 - ssim) * 0.5
-    recon_loss = reconstruction_loss_per_image(prediction, target, loss_cfg).mean()
-    psnr = -10.0 * math.log10(max(float(mse.item()), 1.0e-12))
-    return {
-        "Eval/Loss": float(recon_loss.item()),
-        "Eval/L1": float(l1.item()),
-        "Eval/MSE": float(mse.item()),
-        "Eval/SSIM": float(ssim.item()),
-        "Eval/DSSIM": float(dssim.item()),
-        "Eval/PSNR": psnr,
-    }
-
-
-def temporal_similarity_payload(
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-    loss_cfg: dict[str, Any],
-) -> dict[str, float]:
-    if prediction.shape[0] < 2:
-        return {}
-
-    prediction = prediction.float()
-    target = target.float()
-    pred_adj_l1 = (prediction[1:] - prediction[:-1]).abs().flatten(1).mean().mean()
-    gt_adj_l1 = (target[1:] - target[:-1]).abs().flatten(1).mean().mean()
-    pred_to_first_l1 = (prediction[1:] - prediction[:1]).abs().flatten(1).mean().mean()
-    gt_to_first_l1 = (target[1:] - target[:1]).abs().flatten(1).mean().mean()
-    pred_adj_ssim = ssim_per_image(
-        prediction[1:],
-        prediction[:-1],
-        window_size=loss_cfg["ssim_window_size"],
-        c1=float(loss_cfg["ssim_c1"]),
-        c2=float(loss_cfg["ssim_c2"]),
-    ).mean()
-    gt_adj_ssim = ssim_per_image(
-        target[1:],
-        target[:-1],
-        window_size=loss_cfg["ssim_window_size"],
-        c1=float(loss_cfg["ssim_c1"]),
-        c2=float(loss_cfg["ssim_c2"]),
-    ).mean()
-    return {
-        "Eval/TemporalPredAdjacentL1": float(pred_adj_l1.item()),
-        "Eval/TemporalGTAdjacentL1": float(gt_adj_l1.item()),
-        "Eval/TemporalAdjacentL1Ratio": float((pred_adj_l1 / gt_adj_l1.clamp_min(1.0e-8)).item()),
-        "Eval/TemporalPredToFirstL1": float(pred_to_first_l1.item()),
-        "Eval/TemporalGTToFirstL1": float(gt_to_first_l1.item()),
-        "Eval/TemporalToFirstL1Ratio": float((pred_to_first_l1 / gt_to_first_l1.clamp_min(1.0e-8)).item()),
-        "Eval/TemporalPredAdjacentSSIM": float(pred_adj_ssim.item()),
-        "Eval/TemporalGTAdjacentSSIM": float(gt_adj_ssim.item()),
-    }
-
-
-DECODED_TEMPORAL_FIELDS = ("xyz", "scales", "opacities", "rgbs")
-
-
-def init_decoded_frame_buffers(num_frames: int) -> dict[str, list[torch.Tensor | None]]:
-    return {field_name: [None] * num_frames for field_name in DECODED_TEMPORAL_FIELDS}
-
-
-def fill_decoded_frame_buffers(
-    buffers: dict[str, list[torch.Tensor | None]],
-    decoded: GaussianSequence,
-    clip_indices: torch.Tensor,
-) -> None:
-    frame_indices = clip_indices.detach().cpu().tolist()
-    for local_index, frame_index in enumerate(frame_indices):
-        if buffers["xyz"][frame_index] is not None:
-            continue
-        for field_name in DECODED_TEMPORAL_FIELDS:
-            field_value = getattr(decoded, field_name)
-            buffers[field_name][frame_index] = field_value[local_index].detach().cpu()
-
-
-def decoded_temporal_payload(buffers: dict[str, list[torch.Tensor | None]]) -> dict[str, float]:
-    if not buffers or any(item is None for item in buffers["xyz"]):
-        return {}
-    xyz = torch.stack([item for item in buffers["xyz"] if item is not None], dim=0).float()
-    scales = torch.stack([item for item in buffers["scales"] if item is not None], dim=0).float()
-    opacities = torch.stack([item for item in buffers["opacities"] if item is not None], dim=0).float()
-    rgbs = torch.stack([item for item in buffers["rgbs"] if item is not None], dim=0).float()
-    if xyz.shape[0] < 2:
-        return {}
-
-    xyz_adjacent_l2 = torch.linalg.norm(xyz[1:] - xyz[:-1], dim=-1).mean()
-    xyz_to_first_l2 = torch.linalg.norm(xyz[1:] - xyz[:1], dim=-1).mean()
-    scale_adjacent_l1 = (scales[1:] - scales[:-1]).abs().mean()
-    opacity_adjacent_l1 = (opacities[1:] - opacities[:-1]).abs().mean()
-    opacity_to_first_l1 = (opacities[1:] - opacities[:1]).abs().mean()
-    rgb_adjacent_l1 = (rgbs[1:] - rgbs[:-1]).abs().mean()
-    rgb_to_first_l1 = (rgbs[1:] - rgbs[:1]).abs().mean()
-    return {
-        "Eval/DecodedXYZAdjacentL2": float(xyz_adjacent_l2.item()),
-        "Eval/DecodedXYZToFirstL2": float(xyz_to_first_l2.item()),
-        "Eval/DecodedScaleAdjacentL1": float(scale_adjacent_l1.item()),
-        "Eval/DecodedOpacityAdjacentL1": float(opacity_adjacent_l1.item()),
-        "Eval/DecodedOpacityToFirstL1": float(opacity_to_first_l1.item()),
-        "Eval/DecodedRGBAdjacentL1": float(rgb_adjacent_l1.item()),
-        "Eval/DecodedRGBToFirstL1": float(rgb_to_first_l1.item()),
-    }
-
-
-def camera_temporal_payload(camera_state: CameraState) -> dict[str, float]:
-    if camera_state.rotation_delta.shape[0] < 2:
-        return {}
-    rotation_adjacent = torch.linalg.norm(camera_state.rotation_delta[1:] - camera_state.rotation_delta[:-1], dim=-1)
-    translation_adjacent = torch.linalg.norm(
-        camera_state.translation_delta[1:] - camera_state.translation_delta[:-1],
-        dim=-1,
-    )
-    rotation_to_first = torch.linalg.norm(camera_state.rotation_delta[1:] - camera_state.rotation_delta[:1], dim=-1)
-    translation_to_first = torch.linalg.norm(
-        camera_state.translation_delta[1:] - camera_state.translation_delta[:1],
-        dim=-1,
-    )
-    return {
-        "Camera/EvalAdjacentRotationDeltaDegrees": float(torch.rad2deg(rotation_adjacent).mean().item()),
-        "Camera/EvalAdjacentTranslationDelta": float(translation_adjacent.mean().item()),
-        "Camera/EvalToFirstRotationDeltaDegrees": float(torch.rad2deg(rotation_to_first).mean().item()),
-        "Camera/EvalToFirstTranslationDelta": float(translation_to_first.mean().item()),
-    }
 
 
 def build_model_from_config(config: dict[str, Any]) -> torch.nn.Module:
@@ -1112,85 +886,24 @@ class Trainer:
         clip_times: torch.Tensor,
         camera_state: CameraState,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        camera_motion_loss = (
-            torch.cat(
-                [
-                    camera_state.rotation_delta,
-                    camera_state.translation_delta / camera_state.radius.clamp_min(1e-6),
-                ],
-                dim=-1,
-            )
-            .pow(2)
-            .mean()
-        )
-
-        if clip_times.shape[1] > 1:
-            motion_features = camera_state.motion_features()
-            camera_temporal_loss = (motion_features[1:] - motion_features[:-1]).pow(2).mean()
-        else:
-            camera_temporal_loss = camera_motion_loss.new_tensor(0.0)
-
-        camera_global_loss = camera_state.global_residuals.pow(2).mean()
-        return camera_motion_loss, camera_temporal_loss, camera_global_loss
+        return _compute_camera_losses_impl(clip_times, camera_state)
 
     def build_camera_loss(
         self,
         clip_times: torch.Tensor,
         camera_state: CameraState,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        camera_motion_loss, camera_temporal_loss, camera_global_loss = self.compute_camera_losses(
-            clip_times,
-            camera_state,
-        )
-        camera_loss = (
-            self.loss_cfg["camera_motion_weight"] * camera_motion_loss
-            + self.loss_cfg["camera_temporal_weight"] * camera_temporal_loss
-            + self.loss_cfg["camera_global_weight"] * camera_global_loss
-        )
-        return camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss
+        return _build_camera_loss_impl(clip_times, camera_state, self.loss_cfg)
 
     def build_bank_rate_loss(self, decoded: GaussianSequence) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        zero = decoded.xyz.new_tensor(0.0)
-        terms = {
-            "static_alpha": zero,
-            "dynamic_alpha": zero,
-            "dynamic_motion": zero,
-            "dynamic_rotation": zero,
-            "dynamic_alpha_time": zero,
-        }
-        auxiliary = decoded.auxiliary
-        required_keys = {
-            "static_opacities",
-            "dynamic_opacities",
-            "dynamic_A_mu",
-            "dynamic_A_rot",
-            "dynamic_A_alpha",
-        }
-        if not required_keys.issubset(auxiliary.keys()):
-            return zero, terms
-
-        terms = {
-            "static_alpha": auxiliary["static_opacities"].mean(),
-            "dynamic_alpha": auxiliary["dynamic_opacities"].mean(),
-            "dynamic_motion": auxiliary["dynamic_A_mu"].abs().mean(),
-            "dynamic_rotation": auxiliary["dynamic_A_rot"].abs().mean(),
-            "dynamic_alpha_time": auxiliary["dynamic_A_alpha"].abs().mean(),
-        }
-        rate_loss = (
-            float(self.loss_cfg["static_alpha_rate_weight"]) * terms["static_alpha"]
-            + float(self.loss_cfg["dynamic_alpha_rate_weight"]) * terms["dynamic_alpha"]
-            + float(self.loss_cfg["dynamic_motion_rate_weight"]) * terms["dynamic_motion"]
-            + float(self.loss_cfg["dynamic_rotation_rate_weight"]) * terms["dynamic_rotation"]
-            + float(self.loss_cfg["dynamic_alpha_time_rate_weight"]) * terms["dynamic_alpha_time"]
-        )
-        return rate_loss, terms
+        return _build_bank_rate_loss_impl(decoded, self.loss_cfg)
 
     def temporal_recon_chunk_size(self, frame_count: int) -> int:
-        if self.recon_backward_strategy == "batched":
-            return frame_count
-        if self.recon_backward_strategy == "framewise":
-            return 1
-        return min(self.temporal_microbatch_size, frame_count)
+        return _temporal_recon_chunk_size_impl(
+            frame_count,
+            recon_backward_strategy=self.recon_backward_strategy,
+            temporal_microbatch_size=self.temporal_microbatch_size,
+        )
 
     def recon_backward(
         self,
@@ -1378,130 +1091,76 @@ class Trainer:
         )
 
     def scalar_payload(self, result: StepResult) -> dict[str, Any]:
-        payload = {
-            "Loss": result.loss.item(),
-            "Loss/Reconstruction": result.recon_loss.item(),
-            "Loss/CameraMotion": result.camera_motion_loss.item(),
-            "Loss/CameraTemporal": result.camera_temporal_loss.item(),
-            "Loss/CameraGlobal": result.camera_global_loss.item(),
-            "Loss/BankRate": result.bank_rate_loss.item(),
-            "TrainFrameCount": int(self.model_cfg["train_frame_count"]),
-            "SequenceFrames": result.sequence_frame_count,
-            "TrainSequenceCount": len(self.train_sequences),
-            "EvalSequenceCount": len(self.eval_sequences),
-            "InputSize": int(self.model_cfg["size"]),
-            "RenderSize": int(self.render_size),
-        }
-        if result.camera_state is not None:
-            metrics = self.camera_metrics(result.camera_state)
-            payload.update(
-                {
-                    "Camera/FOVDegrees": metrics["fov_degrees"],
-                    "Camera/Radius": metrics["radius"],
-                    "Camera/RotationDeltaMeanDegrees": metrics["rotation_delta_mean_degrees"],
-                    "Camera/TranslationDeltaMean": metrics["translation_delta_mean"],
-                }
-            )
-        for key, value in result.bank_rate_terms.items():
-            payload[f"BankRate/{key}"] = value.item()
-        return payload
+        return _scalar_payload_impl(
+            result,
+            train_frame_count=int(self.model_cfg["train_frame_count"]),
+            train_sequence_count=len(self.train_sequences),
+            eval_sequence_count=len(self.eval_sequences),
+            input_size=int(self.model_cfg["size"]),
+            render_size=int(self.render_size),
+        )
 
     def render_preview_image(self, result: StepResult, step: int) -> wandb.Image:
-        if result.preview_render is None:
-            raise ValueError("Preview render was requested for logging but was not retained during the training step.")
-        target = resize_images(result.clip_frames[0, 0], self.render_size)
-        return make_preview_image(target, result.preview_render, caption=f"Step {step}")
+        return _render_preview_image_impl(result, render_size=self.render_size, step=step)
+
+    def _full_sequence_deps(self) -> FullSequenceDeps:
+        def decode_clip(
+            sequence_data: SequenceData,
+            clip_indices: torch.Tensor,
+            clip_frames: torch.Tensor,
+            clip_times: torch.Tensor,
+        ) -> GaussianSequence:
+            del clip_indices
+            model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
+            return self.forward_clip(model_input, clip_times)
+
+        def render_clip(
+            decoded: GaussianSequence,
+            *,
+            clip_frames: torch.Tensor,
+            clip_indices: torch.Tensor,
+            clip_times: torch.Tensor,
+            view_id: str,
+        ) -> RenderedView:
+            return self.render_decoded_rgb_clip(
+                decoded,
+                frames=clip_frames,
+                frame_indices=clip_indices,
+                frame_times=clip_times,
+                phase="eval",
+                view_id=view_id,
+                role="debug",
+            )
+
+        return FullSequenceDeps(
+            decode_clip=decode_clip,
+            render_clip=render_clip,
+            prepare_clip=prepare_clip,
+            init_decoded_frame_buffers=init_decoded_frame_buffers,
+            fill_decoded_frame_buffers=fill_decoded_frame_buffers,
+            decoded_temporal_payload=decoded_temporal_payload,
+            stack_complete_frame_list=stack_complete_frame_list,
+        )
 
     @torch.no_grad()
     def render_full_sequence(
         self,
         sequence_data: SequenceData,
     ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
-        was_training = self.model.training
-        self.model.eval()
-        clip_length = self.model_cfg["train_frame_count"]
-        num_frames = sequence_data.frame_count
-        rendered_frames: list[torch.Tensor | None] = [None] * num_frames
-        # When feature_pca_log is on, accumulate the pre-colorize F-channel feature
-        # buffer per frame so the validation pass can render a PCA video across all
-        # frames. None entries stay None for frames that were skipped.
-        feature_frames: list[torch.Tensor | None] | None = (
-            [None] * num_frames if self.feature_pca_log else None
-        )
-        # alpha_frames is allocated lazily on the first chunk that produces a
-        # non-None alpha (the F!=3 fast_mac path). Stays None for F=3 / non-fast_mac.
-        alpha_frames: list[torch.Tensor | None] | None = None
-        decoded_buffers = init_decoded_frame_buffers(num_frames)
-        camera_states = []
-
-        for end in range(clip_length, num_frames + clip_length, clip_length):
-            clip_end = min(end, num_frames)
-            clip_start = max(0, clip_end - clip_length)
-            clip_indices = torch.arange(clip_start, clip_end, device=self.device)
-            clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
-            model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
-            decoded = self.forward_clip(model_input, clip_times)
-            if decoded.cameras is None:
-                raise ValueError("Implicit-camera video decode must include cameras.")
-            if decoded.camera_state is None:
-                raise ValueError("Implicit-camera video decode must include camera_state.")
-            camera_states.append(decoded.camera_state)
-            fill_decoded_frame_buffers(decoded_buffers, decoded, clip_indices)
-            rendered = self.render_decoded_rgb_clip(
-                decoded,
-                frames=clip_frames[0],
-                frame_indices=clip_indices,
-                frame_times=clip_times,
-                phase="eval",
-                view_id=f"eval_sequence_{clip_start}_{clip_end}",
-                role="debug",
-            )
-            rendered_features = rendered.features
-            alpha_clip = rendered.alpha
-            if feature_frames is not None:
-                features_cpu = rendered_features.detach().cpu()
-            if alpha_clip is not None:
-                if alpha_frames is None:
-                    alpha_frames = [None] * num_frames
-                alpha_cpu = alpha_clip.detach().cpu()
-            rendered_clip = rendered.rgb.cpu()
-
-            for local_index, frame_index in enumerate(clip_indices.tolist()):
-                if rendered_frames[frame_index] is not None:
-                    continue
-                rendered_frames[frame_index] = rendered_clip[local_index]
-                if feature_frames is not None:
-                    feature_frames[frame_index] = features_cpu[local_index]
-                if alpha_frames is not None and alpha_clip is not None:
-                    alpha_frames[frame_index] = alpha_cpu[local_index]
-
-        if was_training:
-            self.model.train()
-        merged_camera_state = CameraState(
-            fov_degrees=torch.stack([state.fov_degrees for state in camera_states]).mean(),
-            radius=torch.stack([state.radius for state in camera_states]).mean(),
-            global_residuals=torch.stack([state.global_residuals for state in camera_states]).mean(dim=0),
-            rotation_delta=torch.cat([state.rotation_delta for state in camera_states], dim=0),
-            translation_delta=torch.cat([state.translation_delta for state in camera_states], dim=0),
-            path_residuals=torch.cat([state.path_residuals for state in camera_states], dim=0),
-        )
-        rendered_sequence = stack_complete_frame_list(rendered_frames, name="validation render")
-        feature_sequence = (
-            stack_complete_frame_list(feature_frames, name="validation feature PCA")
-            if feature_frames is not None
-            else None
-        )
-        alpha_sequence = (
-            stack_complete_frame_list(alpha_frames, name="validation alpha mask")
-            if alpha_frames is not None
-            else None
+        clip = _render_full_sequence_impl(
+            model=self.model,
+            sequence_data=sequence_data,
+            train_frame_count=int(self.model_cfg["train_frame_count"]),
+            feature_pca_log=self.feature_pca_log,
+            device=self.device,
+            deps=self._full_sequence_deps(),
         )
         return (
-            rendered_sequence,
-            merged_camera_state,
-            decoded_temporal_payload(decoded_buffers),
-            feature_sequence,
-            alpha_sequence,
+            clip.rgb_sequence,
+            clip.camera_state,
+            clip.temporal_metrics,
+            clip.feature_sequence,
+            clip.alpha_sequence,
         )
 
     def validation_video_payload(self) -> dict[str, Any]:
@@ -1539,54 +1198,18 @@ class Trainer:
                 )
                 metrics.update(camera_temporal_payload(eval_camera_state))
             metric_payloads.append(metrics)
-            if sequence_index == 0:
-                payload.update(
-                    build_validation_video_payload(
-                        rendered_sequence,
-                        gt_sequence,
-                        sequence_data.video_fps,
-                    )
-                )
-                if not self.gt_video_logged:
-                    payload["GT_Video"] = make_wandb_video(gt_sequence, sequence_data.video_fps)
-                    self.gt_video_logged = True
-
-                # Build a list of video columns for the side-by-side composite.
-                # Always start with GT and predicted RGB; conditionally append
-                # Alpha mask and Feature PCA when available. Each entry is
-                # [T, 3, H, W], so torch.cat along dim=-1 produces [T, 3, H, K*W].
-                composite_columns: list[torch.Tensor] = [gt_sequence, rendered_sequence]
-
-                # Alpha mask video: [T, H, W] -> [T, 3, H, W] grayscale.
-                # alpha_sequence is None until v5_features exposes alpha; once
-                # the rasterizer change lands, this fires automatically.
-                if alpha_sequence is not None:
-                    alpha_grayscale = (
-                        alpha_sequence.unsqueeze(1).expand(-1, 3, -1, -1).contiguous()
-                    )
-                    payload["Alpha_Mask_Video"] = make_wandb_video(
-                        alpha_grayscale, sequence_data.video_fps
-                    )
-                    composite_columns.append(alpha_grayscale)
-
-                # PCA-of-features video: F-channel feature buffer projected to
-                # 3 components, normalized per-clip, encoded as a video. Detached
-                # at render-time; viz only.
-                if feature_sequence is not None:
-                    from feature_pca_viz import feature_pca_to_rgb
-                    pca_sequence = feature_pca_to_rgb(feature_sequence)
-                    payload["Feature_PCA_Video"] = make_wandb_video(
-                        pca_sequence, sequence_data.video_fps
-                    )
-                    composite_columns.append(pca_sequence)
-
-                # Side-by-side composite of every available column. Skip when
-                # only GT + Pred are present (Render_GT_Video already covers that).
-                if len(composite_columns) > 2:
-                    composite = torch.cat(composite_columns, dim=-1)
-                    payload["Render_Composite_Video"] = make_wandb_video(
-                        composite, sequence_data.video_fps
-                    )
+            sequence_payload, self.gt_video_logged = single_cam_validation_video_payload(
+                sequence_index=sequence_index,
+                rendered_sequence=rendered_sequence,
+                gt_sequence=gt_sequence,
+                feature_sequence=feature_sequence,
+                alpha_sequence=alpha_sequence,
+                eval_payload={},
+                feature_pca_log=self.feature_pca_log,
+                gt_video_logged=self.gt_video_logged,
+                fps=sequence_data.video_fps,
+            )
+            payload.update(sequence_payload)
 
         metric_keys = sorted({key for item in metric_payloads for key in item})
         for key in metric_keys:
@@ -1783,82 +1406,67 @@ class KnownCameraTrainer(Trainer):
             if was_training:
                 self.model.train()
 
+    def _full_sequence_deps(self) -> FullSequenceDeps:
+        def decode_clip(
+            sequence_data: SequenceData,
+            clip_indices: torch.Tensor,
+            clip_frames: torch.Tensor,
+            clip_times: torch.Tensor,
+        ) -> GaussianSequence:
+            if sequence_data.cameras is None:
+                raise ValueError(f"Known-camera sequence has no cameras: {sequence_data.source_path}")
+            clip_cameras = tuple(
+                sequence_data.cameras[index] for index in clip_indices.detach().cpu().tolist()
+            )
+            return self.forward_known_clip(clip_frames, clip_times, clip_cameras)
+
+        def render_clip(
+            decoded: GaussianSequence,
+            *,
+            clip_frames: torch.Tensor,
+            clip_indices: torch.Tensor,
+            clip_times: torch.Tensor,
+            view_id: str,
+        ) -> RenderedView:
+            return self.render_decoded_rgb_clip(
+                decoded,
+                frames=clip_frames,
+                frame_indices=clip_indices,
+                frame_times=clip_times,
+                phase="eval",
+                view_id=view_id,
+                role="debug",
+            )
+
+        return FullSequenceDeps(
+            decode_clip=decode_clip,
+            render_clip=render_clip,
+            prepare_clip=prepare_clip,
+            init_decoded_frame_buffers=init_decoded_frame_buffers,
+            fill_decoded_frame_buffers=fill_decoded_frame_buffers,
+            decoded_temporal_payload=decoded_temporal_payload,
+            stack_complete_frame_list=stack_complete_frame_list,
+        )
+
     @torch.no_grad()
     def render_full_sequence(
         self,
         sequence_data: SequenceData,
     ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
-        if sequence_data.cameras is None:
-            raise ValueError(f"Known-camera sequence has no cameras: {sequence_data.source_path}")
-        was_training = self.model.training
-        self.model.eval()
-        clip_length = self.model_cfg["train_frame_count"]
-        num_frames = sequence_data.frame_count
-        rendered_frames: list[torch.Tensor | None] = [None] * num_frames
-        feature_frames: list[torch.Tensor | None] | None = (
-            [None] * num_frames if self.feature_pca_log else None
-        )
-        # alpha_frames placeholder; populated once v5_features exposes alpha.
-        alpha_frames: list[torch.Tensor | None] | None = None
-        decoded_buffers = init_decoded_frame_buffers(num_frames)
-
-        for end in range(clip_length, num_frames + clip_length, clip_length):
-            clip_end = min(end, num_frames)
-            clip_start = max(0, clip_end - clip_length)
-            clip_indices = torch.arange(clip_start, clip_end, device=self.device)
-            clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
-            clip_cameras = tuple(sequence_data.cameras[index] for index in clip_indices.detach().cpu().tolist())
-            decoded = self.forward_known_clip(clip_frames, clip_times, clip_cameras)
-            if decoded.cameras is None:
-                raise ValueError("Known-camera video decode must include cameras.")
-            fill_decoded_frame_buffers(decoded_buffers, decoded, clip_indices)
-            rendered = self.render_decoded_rgb_clip(
-                decoded,
-                frames=clip_frames[0],
-                frame_indices=clip_indices,
-                frame_times=clip_times,
-                phase="eval",
-                view_id=f"known_eval_{clip_start}_{clip_end}",
-                role="debug",
-            )
-            rendered_features = rendered.features
-            alpha_clip = rendered.alpha
-            if feature_frames is not None:
-                features_cpu = rendered_features.detach().cpu()
-            if alpha_clip is not None:
-                if alpha_frames is None:
-                    alpha_frames = [None] * num_frames
-                alpha_cpu = alpha_clip.detach().cpu()
-            rendered_clip = rendered.rgb.cpu()
-
-            for local_index, frame_index in enumerate(clip_indices.tolist()):
-                if rendered_frames[frame_index] is not None:
-                    continue
-                rendered_frames[frame_index] = rendered_clip[local_index]
-                if feature_frames is not None:
-                    feature_frames[frame_index] = features_cpu[local_index]
-                if alpha_frames is not None and alpha_clip is not None:
-                    alpha_frames[frame_index] = alpha_cpu[local_index]
-
-        if was_training:
-            self.model.train()
-        rendered_sequence = stack_complete_frame_list(rendered_frames, name="validation render")
-        feature_sequence = (
-            stack_complete_frame_list(feature_frames, name="validation feature PCA")
-            if feature_frames is not None
-            else None
-        )
-        alpha_sequence = (
-            stack_complete_frame_list(alpha_frames, name="validation alpha mask")
-            if alpha_frames is not None
-            else None
+        clip = _render_full_sequence_known_cameras_impl(
+            model=self.model,
+            sequence_data=sequence_data,
+            train_frame_count=int(self.model_cfg["train_frame_count"]),
+            feature_pca_log=self.feature_pca_log,
+            device=self.device,
+            deps=self._full_sequence_deps(),
         )
         return (
-            rendered_sequence,
-            None,
-            decoded_temporal_payload(decoded_buffers),
-            feature_sequence,
-            alpha_sequence,
+            clip.rgb_sequence,
+            clip.camera_state,
+            clip.temporal_metrics,
+            clip.feature_sequence,
+            clip.alpha_sequence,
         )
 
     def run(self) -> None:

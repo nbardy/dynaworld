@@ -14,8 +14,12 @@ from multicam_video_data import (
     load_multicam_video_bundle,
 )
 from objective import BackgroundSample, RenderedView, RunPhase
+from pipeline.validation_media import (
+    alpha_to_grayscale_video,
+    multicam_validation_video_payload,
+    render_diagnostics_payload,
+)
 from rendering import resize_images
-from train_logging import make_wandb_video
 from train_precomputed_feature_implicit_dynamic import PrecomputedFeatureImplicitTrainer
 from train_video_token_implicit_dynamic import (
     StepResult,
@@ -67,10 +71,6 @@ def _prefix_eval_metrics(prefix: str, metrics: dict[str, float]) -> dict[str, fl
         else:
             payload[f"{prefix}/{key}"] = value
     return payload
-
-
-def _alpha_grayscale(alpha: torch.Tensor) -> torch.Tensor:
-    return alpha.unsqueeze(1).expand(-1, 3, -1, -1).contiguous()
 
 
 class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTrainer):
@@ -411,74 +411,48 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         rendered: RenderedView,
         target: torch.Tensor,
     ) -> None:
-        composite_columns = [target, rendered.rgb]
-        if rendered.alpha is not None:
-            alpha_video = _alpha_grayscale(rendered.alpha)
-            payload[f"{prefix}_Alpha_Mask_Video"] = make_wandb_video(alpha_video, self.sequence_data.video_fps)
-            composite_columns.append(alpha_video)
-        if self.feature_pca_log:
-            from feature_pca_viz import feature_pca_to_rgb
-
-            feature_pca = feature_pca_to_rgb(rendered.features)
-            payload[f"{prefix}_Feature_PCA_Video"] = make_wandb_video(feature_pca, self.sequence_data.video_fps)
-            composite_columns.append(feature_pca)
-        if len(composite_columns) > 2:
-            composite = torch.cat(composite_columns, dim=-1)
-            payload[f"{prefix}_Render_Composite_Video"] = make_wandb_video(composite, self.sequence_data.video_fps)
+        payload.update(
+            render_diagnostics_payload(
+                prefix=prefix,
+                target=target,
+                pred=rendered.rgb,
+                alpha=rendered.alpha,
+                features=rendered.features if self.feature_pca_log else None,
+                feature_pca_log=self.feature_pca_log,
+                fps=self.sequence_data.video_fps,
+            )
+        )
 
     def validation_video_payload(self) -> dict[str, Any]:
         train_rendered, heldout_rendered, decoded_metrics = self.render_full_external_views()
-        payload: dict[str, Any] = {
-            "Eval/SequenceCount": 1,
-            **self.camera_rig.metrics(),
-        }
-        for view, rendered in enumerate(train_rendered):
-            target = resize_images(self.multicam_bundle.train_frames[view], self.render_size).detach().cpu()
-            metrics = {
-                **eval_metric_payload(rendered.rgb, target, self.loss_cfg),
-                **temporal_similarity_payload(rendered.rgb, target, self.loss_cfg),
-            }
-            if view == 0:
-                metrics.update(decoded_metrics)
-            payload.update(_prefix_eval_metrics(f"TrainView{view}", metrics))
-            if view == 0:
-                payload["TrainView0_Rendered_Video"] = make_wandb_video(rendered.rgb, self.sequence_data.video_fps)
-                self.add_render_diagnostics(
-                    payload,
-                    prefix="TrainView0",
-                    rendered=rendered,
-                    target=target,
-                )
-                if not self.gt_video_logged:
-                    payload["TrainView0_GT_Video"] = make_wandb_video(target, self.sequence_data.video_fps)
+        train_targets = [
+            resize_images(self.multicam_bundle.train_frames[view], self.render_size).detach().cpu()
+            for view in range(len(train_rendered))
+        ]
+        heldout_targets: list[torch.Tensor] = []
         if heldout_rendered and self.multicam_bundle.heldout_frames is not None:
-            heldout_names = self.multicam_bundle.heldout_camera_names or []
-            for view, rendered in enumerate(heldout_rendered):
-                heldout_target = resize_images(self.multicam_bundle.heldout_frames[view], self.render_size).detach().cpu()
-                camera_name = heldout_names[view] if view < len(heldout_names) else f"view{view}"
-                prefix = f"Heldout{view}_{camera_name}"
-                heldout_metrics = {
-                    **eval_metric_payload(rendered.rgb, heldout_target, self.loss_cfg),
-                    **temporal_similarity_payload(rendered.rgb, heldout_target, self.loss_cfg),
-                }
-                payload.update(_prefix_eval_metrics(prefix, heldout_metrics))
-                payload[f"{prefix}_Rendered_Video"] = make_wandb_video(rendered.rgb, self.sequence_data.video_fps)
-                self.add_render_diagnostics(
-                    payload,
-                    prefix=prefix,
-                    rendered=rendered,
-                    target=heldout_target,
-                )
-                if not self.gt_video_logged:
-                    payload[f"{prefix}_GT_Video"] = make_wandb_video(heldout_target, self.sequence_data.video_fps)
-        self.gt_video_logged = True
-        summary = {
-            key: round(float(value), 4)
-            for key, value in payload.items()
-            if key.endswith("/Eval/PSNR") or key.endswith("/Eval/SSIM")
-        }
-        if summary:
-            print({"multicam_eval": summary})
+            heldout_targets = [
+                resize_images(self.multicam_bundle.heldout_frames[view], self.render_size).detach().cpu()
+                for view in range(len(heldout_rendered))
+            ]
+        payload, gt_video_logged_after = multicam_validation_video_payload(
+            train_rendered=train_rendered,
+            heldout_rendered=heldout_rendered,
+            train_targets=train_targets,
+            heldout_targets=heldout_targets,
+            train_camera_names=self.multicam_bundle.train_camera_names,
+            heldout_camera_names=self.multicam_bundle.heldout_camera_names or [],
+            decoded_metrics=decoded_metrics,
+            eval_metric_fn=eval_metric_payload,
+            temporal_metric_fn=temporal_similarity_payload,
+            prefix_eval_metrics_fn=_prefix_eval_metrics,
+            loss_cfg=self.loss_cfg,
+            camera_rig_metrics=self.camera_rig.metrics(),
+            feature_pca_log=self.feature_pca_log,
+            gt_video_logged=self.gt_video_logged,
+            fps=self.sequence_data.video_fps,
+        )
+        self.gt_video_logged = gt_video_logged_after
         return payload
 
     def export_browser_bundle(self) -> None:
