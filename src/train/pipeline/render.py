@@ -1,27 +1,45 @@
-"""Render orchestration helpers extracted from
-`src/train/train_video_token_implicit_dynamic.py`.
+"""Shared render orchestration for trainer validation paths.
 
-Wave 1 — additive only. Nothing in this module is wired up yet; another
-agent rewires the monolith to call these. The functions here are deliberate
-free functions that take their dependencies as explicit parameters instead
-of reaching through `self.*` on a `Trainer`.
-
-Imports follow the project convention: bare-module (the trainer launches
-with `PYTHONPATH=src/train`), so this file uses `from runtime_types import
-...`, `from camera import ...`, etc.
+The trainers own model state, optimizer state, and objective policy. This
+module owns clip slicing, rasterization dispatch, colorizer view-conditioning
+directions, and full-sequence render stitching. Trainer-specific decode/render
+policy enters through small typed callables.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping
 
 import torch
 
 from camera import build_camera_rays_batch
 from objective.types import RenderedView
+from pipeline.diagnostics import (
+    decoded_temporal_payload,
+    fill_decoded_frame_buffers,
+    init_decoded_frame_buffers,
+)
 from rendering import camera_for_viewport, render_gaussian_frames_alpha_aware
 from runtime_types import CameraState, GaussianSequence, SequenceData
+
+
+def prepare_clip(sequence_data: SequenceData, clip_indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    clip_frames = sequence_data.frames[clip_indices]
+    time_denominator = max(sequence_data.frame_count - 1, 1)
+    clip_times = (clip_indices.to(dtype=torch.float32) / float(time_denominator)).reshape(1, -1)
+    return clip_frames.unsqueeze(0), clip_times
+
+
+def stack_complete_frame_list(frames: list[torch.Tensor | None], *, name: str) -> torch.Tensor:
+    missing = [i for i, f in enumerate(frames) if f is None]
+    if missing:
+        preview = ", ".join(str(i) for i in missing[:8]) + (", ..." if len(missing) > 8 else "")
+        raise RuntimeError(f"{name} did not cover all frames; missing indices: {preview}")
+    complete = [f for f in frames if f is not None]
+    if not complete:
+        raise RuntimeError(f"{name} did not produce any frames.")
+    return torch.stack(complete, dim=0)
 
 
 # ---------------------------------------------------------------------------
@@ -60,68 +78,8 @@ class RenderedClip:
     alpha_sequence: torch.Tensor | None
 
 
-# ---------------------------------------------------------------------------
-# Dependency bundles for the full-sequence renderers
-# ---------------------------------------------------------------------------
-
-
-class _ClipDecoder(Protocol):
-    """Decodes a single clip from a sequence into a GaussianSequence.
-
-    Implementations: implicit-camera trainers wrap
-    `forward_clip(model_input_for_clip(sequence_data, clip_frames,
-    clip_times), clip_times)`. Known-camera trainers wrap
-    `forward_known_clip(clip_frames, clip_times, clip_cameras)`.
-    """
-
-    def __call__(
-        self,
-        sequence_data: SequenceData,
-        clip_indices: torch.Tensor,
-        clip_frames: torch.Tensor,
-        clip_times: torch.Tensor,
-    ) -> GaussianSequence: ...
-
-
-class _ClipRenderer(Protocol):
-    """Renders a decoded clip to a RenderedView. Implementations bind the
-    trainer's RGBReconObjective + TargetView construction.
-    """
-
-    def __call__(
-        self,
-        decoded: GaussianSequence,
-        *,
-        clip_frames: torch.Tensor,
-        clip_indices: torch.Tensor,
-        clip_times: torch.Tensor,
-        view_id: str,
-    ) -> RenderedView: ...
-
-
-@dataclass(frozen=True)
-class FullSequenceDeps:
-    """The per-trainer bindings `render_full_sequence` needs that are not
-    pure data: the decode callable, the render callable, and the four
-    small utility functions that still live in the monolith. Bundling
-    them as one frozen value keeps the call site short while making the
-    coupling honest.
-
-    The four utility callables (`prepare_clip`, `init_decoded_frame_buffers`,
-    `fill_decoded_frame_buffers`, `decoded_temporal_payload`,
-    `stack_complete_frame_list`) are passed in because the wave-1 rule
-    is "do not pull more than scoped"; those helpers stay in the monolith.
-    """
-
-    decode_clip: _ClipDecoder
-    render_clip: _ClipRenderer
-    prepare_clip: Callable[[SequenceData, torch.Tensor], tuple[torch.Tensor, torch.Tensor]]
-    init_decoded_frame_buffers: Callable[[int], dict[str, list[torch.Tensor | None]]]
-    fill_decoded_frame_buffers: Callable[
-        [dict[str, list[torch.Tensor | None]], GaussianSequence, torch.Tensor], None
-    ]
-    decoded_temporal_payload: Callable[[dict[str, list[torch.Tensor | None]]], dict[str, float]]
-    stack_complete_frame_list: Callable[..., torch.Tensor]
+DecodeClipFn = Callable[[SequenceData, torch.Tensor, torch.Tensor, torch.Tensor], GaussianSequence]
+RenderClipFn = Callable[..., RenderedView]
 
 
 # ---------------------------------------------------------------------------
@@ -149,10 +107,7 @@ def _viewport_cameras(
     input_size: int,
     render_size: int,
 ) -> tuple[Any, ...]:
-    """Local copy of the monolith's `viewport_cameras` (line 484). Kept
-    private so this module is self-sufficient; the monolith's copy stays
-    untouched in wave 1.
-    """
+    """Map source-resolution cameras onto the configured render viewport."""
     return tuple(
         camera_for_viewport(
             camera,
@@ -166,7 +121,7 @@ def _viewport_cameras(
 
 
 # ---------------------------------------------------------------------------
-# Extracted free functions (lines 513-596 of the monolith)
+# Public render helpers
 # ---------------------------------------------------------------------------
 
 
@@ -273,12 +228,12 @@ def _new_frame_buffer(num_frames: int) -> list[torch.Tensor | None]:
 
 
 def _render_full_sequence_chunked(
-    *,
+    cfg: Mapping[str, Any],
     sequence_data: SequenceData,
-    train_frame_count: int,
-    feature_pca_log: bool,
+    decode_clip: DecodeClipFn,
+    render_clip: RenderClipFn,
+    *,
     device: torch.device,
-    deps: FullSequenceDeps,
     view_id_prefix: str,
     require_camera_state: bool,
 ) -> tuple[
@@ -288,50 +243,40 @@ def _render_full_sequence_chunked(
     dict[str, list[torch.Tensor | None]],
     list[CameraState],
 ]:
-    """Shared chunking loop for the implicit and known-camera variants.
-
-    Both variants iterate the sequence in `train_frame_count`-sized clips,
-    call `decode_clip`, then `render_clip`, and accumulate per-frame
-    buffers. The only differences between the two top-level entry points
-    are: (a) whether camera_state is required and aggregated, and (b)
-    the view_id prefix used for the rendered TargetView.
-
-    Returns the buffers; the caller stacks them into the final
-    `RenderedClip`.
-    """
+    """Iterate the sequence in clips, decode + render each, accumulate buffers."""
+    train_frame_count = int(cfg["model"]["train_frame_count"])
+    feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
     num_frames = sequence_data.frame_count
     rendered_frames: list[torch.Tensor | None] = _new_frame_buffer(num_frames)
     feature_frames: list[torch.Tensor | None] | None = (
         _new_frame_buffer(num_frames) if feature_pca_log else None
     )
     alpha_frames: list[torch.Tensor | None] | None = None
-    decoded_buffers = deps.init_decoded_frame_buffers(num_frames)
+    decoded_buffers = init_decoded_frame_buffers(num_frames)
     camera_states: list[CameraState] = []
 
     for end in range(train_frame_count, num_frames + train_frame_count, train_frame_count):
         clip_end = min(end, num_frames)
         clip_start = max(0, clip_end - train_frame_count)
         clip_indices = torch.arange(clip_start, clip_end, device=device)
-        clip_frames, clip_times = deps.prepare_clip(sequence_data, clip_indices)
-        decoded = deps.decode_clip(sequence_data, clip_indices, clip_frames, clip_times)
+        clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
+        decoded = decode_clip(sequence_data, clip_indices, clip_frames, clip_times)
         if decoded.cameras is None:
             raise ValueError("Video decode must include cameras for full-sequence render.")
         if require_camera_state:
             if decoded.camera_state is None:
                 raise ValueError("Implicit-camera video decode must include camera_state.")
             camera_states.append(decoded.camera_state)
-        deps.fill_decoded_frame_buffers(decoded_buffers, decoded, clip_indices)
-        rendered = deps.render_clip(
+        fill_decoded_frame_buffers(decoded_buffers, decoded, clip_indices)
+        rendered = render_clip(
             decoded,
             clip_frames=clip_frames[0],
             clip_indices=clip_indices,
             clip_times=clip_times,
             view_id=f"{view_id_prefix}_{clip_start}_{clip_end}",
         )
-        rendered_features = rendered.features
-        alpha_clip = rendered.alpha
-        features_cpu = rendered_features.detach().cpu() if feature_frames is not None else None
-        alpha_cpu = alpha_clip.detach().cpu() if alpha_clip is not None else None
+        features_cpu = rendered.features.detach().cpu() if feature_frames is not None else None
+        alpha_cpu = rendered.alpha.detach().cpu() if rendered.alpha is not None else None
         if alpha_cpu is not None and alpha_frames is None:
             alpha_frames = _new_frame_buffer(num_frames)
         rendered_clip = rendered.rgb.cpu()
@@ -378,7 +323,8 @@ def render_full_sequence(
     cfg: Mapping[str, Any],
     model: torch.nn.Module,
     sequence_data: SequenceData,
-    deps: FullSequenceDeps,
+    decode_clip: DecodeClipFn,
+    render_clip: RenderClipFn,
 ) -> RenderedClip:
     """Render a sequence chunk-by-chunk and stitch.
 
@@ -392,11 +338,11 @@ def render_full_sequence(
     try:
         rendered_frames, feature_frames, alpha_frames, decoded_buffers, camera_states = (
             _render_full_sequence_chunked(
-                sequence_data=sequence_data,
-                train_frame_count=int(cfg["model"]["train_frame_count"]),
-                feature_pca_log=bool(cfg["logging"]["feature_pca_log"]),
+                cfg,
+                sequence_data,
+                decode_clip,
+                render_clip,
                 device=next(model.parameters()).device,
-                deps=deps,
                 view_id_prefix="eval_sequence" if is_implicit else "known_eval",
                 require_camera_state=is_implicit,
             )
@@ -406,15 +352,15 @@ def render_full_sequence(
             model.train()
 
     return RenderedClip(
-        rgb_sequence=deps.stack_complete_frame_list(rendered_frames, name="validation render"),
+        rgb_sequence=stack_complete_frame_list(rendered_frames, name="validation render"),
         camera_state=_aggregate_camera_state(camera_states) if is_implicit else None,
-        temporal_metrics=deps.decoded_temporal_payload(decoded_buffers),
+        temporal_metrics=decoded_temporal_payload(decoded_buffers),
         feature_sequence=(
-            deps.stack_complete_frame_list(feature_frames, name="validation feature PCA")
+            stack_complete_frame_list(feature_frames, name="validation feature PCA")
             if feature_frames is not None else None
         ),
         alpha_sequence=(
-            deps.stack_complete_frame_list(alpha_frames, name="validation alpha mask")
+            stack_complete_frame_list(alpha_frames, name="validation alpha mask")
             if alpha_frames is not None else None
         ),
     )
@@ -422,7 +368,10 @@ def render_full_sequence(
 
 __all__ = [
     "RenderedClip",
-    "FullSequenceDeps",
+    "DecodeClipFn",
+    "RenderClipFn",
+    "prepare_clip",
+    "stack_complete_frame_list",
     "colorize_view_dirs_for_features",
     "gaussian_sequence_slice",
     "render_clip_sequence",

@@ -46,11 +46,12 @@ from pipeline.losses import (
     temporal_recon_chunk_size as _temporal_recon_chunk_size_impl,
 )
 from pipeline.render import (
-    FullSequenceDeps,
     colorize_view_dirs_for_features,
     gaussian_sequence_slice,
+    prepare_clip,
     render_clip_sequence,
     render_full_sequence as _render_full_sequence_impl,
+    stack_complete_frame_list,
 )
 from pipeline.validation_media import (
     render_preview_image as _render_preview_image_impl,
@@ -432,13 +433,6 @@ def pick_renderer_mode_from_config(config: dict[str, Any]) -> tuple[str, int]:
     return renderer_mode, effective_gaussians
 
 
-def prepare_clip(sequence_data: SequenceData, clip_indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    clip_frames = sequence_data.frames[clip_indices]
-    time_denominator = max(sequence_data.frame_count - 1, 1)
-    clip_times = (clip_indices.to(dtype=torch.float32) / float(time_denominator)).reshape(1, -1)
-    return clip_frames.unsqueeze(0), clip_times
-
-
 def load_manifest_entries(manifest_path: Path, split: str | None = None) -> list[dict[str, Any]]:
     entries = []
     with manifest_path.open() as handle:
@@ -515,23 +509,6 @@ def load_manifest_sequences(
         )
         for entry in entries
     ]
-
-
-def stack_complete_frame_list(frames: list[torch.Tensor | None], *, name: str) -> torch.Tensor:
-    complete_frames = []
-    missing_indices = []
-    for index, frame in enumerate(frames):
-        if frame is None:
-            missing_indices.append(index)
-        else:
-            complete_frames.append(frame)
-    if missing_indices:
-        preview = ", ".join(str(index) for index in missing_indices[:8])
-        suffix = ", ..." if len(missing_indices) > 8 else ""
-        raise RuntimeError(f"{name} did not cover all frames; missing indices: {preview}{suffix}")
-    if not complete_frames:
-        raise RuntimeError(f"{name} did not produce any frames.")
-    return torch.stack(complete_frames, dim=0)
 
 
 def build_model_from_config(config: dict[str, Any]) -> torch.nn.Module:
@@ -662,7 +639,6 @@ class Trainer:
             metrics_prefix=metrics_prefix,
             log_media=log_media,
         )
-        return self.colorize(features, view_dirs=view_dirs)
 
     def rasterize_decoded_clip(
         self,
@@ -1090,43 +1066,33 @@ class Trainer:
     def render_preview_image(self, result: StepResult, step: int) -> wandb.Image:
         return _render_preview_image_impl(self.cfg, result, step)
 
-    def _full_sequence_deps(self) -> FullSequenceDeps:
-        def decode_clip(
-            sequence_data: SequenceData,
-            clip_indices: torch.Tensor,
-            clip_frames: torch.Tensor,
-            clip_times: torch.Tensor,
-        ) -> GaussianSequence:
-            del clip_indices
-            model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
-            return self.forward_clip(model_input, clip_times)
+    def _eval_decode_clip(
+        self,
+        sequence_data: SequenceData,
+        clip_indices: torch.Tensor,
+        clip_frames: torch.Tensor,
+        clip_times: torch.Tensor,
+    ) -> GaussianSequence:
+        del clip_indices
+        return self.forward_clip(self.model_input_for_clip(sequence_data, clip_frames, clip_times), clip_times)
 
-        def render_clip(
-            decoded: GaussianSequence,
-            *,
-            clip_frames: torch.Tensor,
-            clip_indices: torch.Tensor,
-            clip_times: torch.Tensor,
-            view_id: str,
-        ) -> RenderedView:
-            return self.render_decoded_rgb_clip(
-                decoded,
-                frames=clip_frames,
-                frame_indices=clip_indices,
-                frame_times=clip_times,
-                phase="eval",
-                view_id=view_id,
-                role="debug",
-            )
-
-        return FullSequenceDeps(
-            decode_clip=decode_clip,
-            render_clip=render_clip,
-            prepare_clip=prepare_clip,
-            init_decoded_frame_buffers=init_decoded_frame_buffers,
-            fill_decoded_frame_buffers=fill_decoded_frame_buffers,
-            decoded_temporal_payload=decoded_temporal_payload,
-            stack_complete_frame_list=stack_complete_frame_list,
+    def _eval_render_clip(
+        self,
+        decoded: GaussianSequence,
+        *,
+        clip_frames: torch.Tensor,
+        clip_indices: torch.Tensor,
+        clip_times: torch.Tensor,
+        view_id: str,
+    ) -> RenderedView:
+        return self.render_decoded_rgb_clip(
+            decoded,
+            frames=clip_frames,
+            frame_indices=clip_indices,
+            frame_times=clip_times,
+            phase="eval",
+            view_id=view_id,
+            role="debug",
         )
 
     @torch.no_grad()
@@ -1134,7 +1100,9 @@ class Trainer:
         self,
         sequence_data: SequenceData,
     ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
-        clip = _render_full_sequence_impl(self.cfg, self.model, sequence_data, self._full_sequence_deps())
+        clip = _render_full_sequence_impl(
+            self.cfg, self.model, sequence_data, self._eval_decode_clip, self._eval_render_clip
+        )
         return (
             clip.rgb_sequence,
             clip.camera_state,
@@ -1344,7 +1312,7 @@ class KnownCameraTrainer(Trainer):
         try:
             sequence_data = self.train_sequences[0]
             if sequence_data.cameras is None:
-                raise ValueError(f"Known-camera sequence has no cameras: {sequence_data.source_path}")
+                raise ValueError("Known-camera sequence has no cameras.")
             clip_length = int(self.model_cfg["train_frame_count"])
             clip_indices = torch.arange(0, clip_length, device=self.device)
             clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
@@ -1386,54 +1354,26 @@ class KnownCameraTrainer(Trainer):
             if was_training:
                 self.model.train()
 
-    def _full_sequence_deps(self) -> FullSequenceDeps:
-        def decode_clip(
-            sequence_data: SequenceData,
-            clip_indices: torch.Tensor,
-            clip_frames: torch.Tensor,
-            clip_times: torch.Tensor,
-        ) -> GaussianSequence:
-            if sequence_data.cameras is None:
-                raise ValueError(f"Known-camera sequence has no cameras: {sequence_data.source_path}")
-            clip_cameras = tuple(
-                sequence_data.cameras[index] for index in clip_indices.detach().cpu().tolist()
-            )
-            return self.forward_known_clip(clip_frames, clip_times, clip_cameras)
-
-        def render_clip(
-            decoded: GaussianSequence,
-            *,
-            clip_frames: torch.Tensor,
-            clip_indices: torch.Tensor,
-            clip_times: torch.Tensor,
-            view_id: str,
-        ) -> RenderedView:
-            return self.render_decoded_rgb_clip(
-                decoded,
-                frames=clip_frames,
-                frame_indices=clip_indices,
-                frame_times=clip_times,
-                phase="eval",
-                view_id=view_id,
-                role="debug",
-            )
-
-        return FullSequenceDeps(
-            decode_clip=decode_clip,
-            render_clip=render_clip,
-            prepare_clip=prepare_clip,
-            init_decoded_frame_buffers=init_decoded_frame_buffers,
-            fill_decoded_frame_buffers=fill_decoded_frame_buffers,
-            decoded_temporal_payload=decoded_temporal_payload,
-            stack_complete_frame_list=stack_complete_frame_list,
-        )
+    def _eval_decode_clip(
+        self,
+        sequence_data: SequenceData,
+        clip_indices: torch.Tensor,
+        clip_frames: torch.Tensor,
+        clip_times: torch.Tensor,
+    ) -> GaussianSequence:
+        if sequence_data.cameras is None:
+            raise ValueError("Known-camera sequence has no cameras.")
+        clip_cameras = tuple(sequence_data.cameras[i] for i in clip_indices.detach().cpu().tolist())
+        return self.forward_known_clip(clip_frames, clip_times, clip_cameras)
 
     @torch.no_grad()
     def render_full_sequence(
         self,
         sequence_data: SequenceData,
     ) -> tuple[torch.Tensor, CameraState | None, dict[str, float], torch.Tensor | None, torch.Tensor | None]:
-        clip = _render_full_sequence_impl(self.cfg, self.model, sequence_data, self._full_sequence_deps())
+        clip = _render_full_sequence_impl(
+            self.cfg, self.model, sequence_data, self._eval_decode_clip, self._eval_render_clip
+        )
         return (
             clip.rgb_sequence,
             clip.camera_state,

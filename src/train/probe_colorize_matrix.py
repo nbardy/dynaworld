@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import statistics
 from pathlib import Path
-from typing import Any
 
 import torch
 
@@ -88,12 +87,10 @@ def render_features_once(config_path: Path, seed: int, device: torch.device) -> 
         raise RuntimeError("Decoded output missing cameras; matrix probe expects implicit-camera models.")
     render_cfg = resolved["render"]
     rendered, _alpha_unused = render_clip_sequence(
+        resolved,
         decoded,
         decoded.cameras,
         renderer_mode=str(render_cfg["renderer"]).lower(),
-        render_cfg=render_cfg,
-        input_size=int(resolved["model"]["size"]),
-        render_size=int(render_cfg["render_size"]),
         dense_grid=None,  # type: ignore[arg-type]
     )
     return rendered.detach(), feature_dim

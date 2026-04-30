@@ -1,26 +1,10 @@
-"""Validation-time W&B media-logging helpers.
+"""Validation-time W&B scalar and media payload helpers.
 
-Extracted from `train_video_token_implicit_dynamic.py` (single-cam) and
-`train_multicam_precomputed_feature_implicit_dynamic.py` (multicam) so both
-trainers go through one set of free functions for:
-
-  - alpha-mask-to-grayscale-video conversion
-  - the GT|Pred|Alpha|FeaturePCA side-by-side grid
-  - scalar W&B payloads (per training step)
-  - validation video W&B payloads (per validation gate)
-
-Wave 1 — additive only. The trainer methods are not yet rewired to call into
-this module; that wiring lands in wave 2 alongside smoke tests. None of these
-helpers depend on `self`; everything is passed in explicitly so the same
-function can serve single-cam and multicam paths.
-
-Style notes (keep these in sync with `objective/objective.py`):
-  - free functions, no classes
-  - no `Optional[T]` for "didn't decide" — `T | None` only when None has
-    semantic meaning (e.g. "no precomputed PCA available")
-  - no silent fallbacks: if the caller asks for a column that requires data
-    we don't have, raise loud
-  - explicit deps as keyword-only args; no global state
+The single-cam and multicam trainers call this module for preview images,
+validation videos, alpha-mask videos, feature-PCA videos, and composite
+GT|Pred|Alpha|FeaturePCA grids. The helpers are pure payload builders: callers
+pass the rendered tensors, targets, metrics, and logging config explicitly, and
+missing required diagnostic inputs raise instead of silently dropping columns.
 """
 from __future__ import annotations
 
@@ -35,15 +19,6 @@ from train_logging import (
     make_preview_image,
     make_wandb_video,
 )
-
-# `RenderedClip` is the typed bundle being introduced in `pipeline/render.py`
-# by a parallel agent (see agent_notes/apr_30th_clean/FINAL_DESIGN.md). It is
-# not yet on disk at the time this file is added; the import is a TODO so the
-# wave-2 wiring agent can resolve it. Until then the public functions in this
-# module take the raw tensors (rendered RGB + alpha + features) directly so
-# they can be exercised without `RenderedClip`.
-# TODO(wave-2): from pipeline.render import RenderedClip
-
 
 __all__ = [
     "alpha_to_grayscale_video",
@@ -66,9 +41,6 @@ def alpha_to_grayscale_video(alpha: torch.Tensor) -> torch.Tensor:
     """Convert an alpha sequence [T, H, W] into a 3-channel grayscale clip
     [T, 3, H, W], suitable for direct W&B video logging or appending to a
     composite grid via :func:`compose_gt_pred_alpha_pca_grid`.
-
-    Both single-cam and multicam paths used to do this inline; this is the
-    one canonical implementation.
     """
     if alpha.dim() != 3:
         raise ValueError(
@@ -195,8 +167,10 @@ def render_diagnostics_payload(
     features: torch.Tensor | None,
     fps: float,
 ) -> dict[str, Any]:
-    """Per-view diagnostic W&B payload (alpha mask video, feature PCA video,
-    composite grid). PCA-video gating reads ``cfg["logging"]["feature_pca_log"]``.
+    """Per-view diagnostic W&B payload.
+
+    Emits alpha-mask, feature-PCA, and composite videos when their inputs are
+    available. PCA-video gating reads ``cfg["logging"]["feature_pca_log"]``.
     """
     feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
     payload: dict[str, Any] = {}
@@ -248,10 +222,11 @@ def single_cam_validation_video_payload(
     gt_video_logged: bool,
     fps: float,
 ) -> tuple[dict[str, Any], bool]:
-    """Per-sequence W&B media payload for a single-cam validator. Only the
-    first sequence (``sequence_index == 0``) gets media; later ones only
-    contribute their eval metrics. ``gt_video_logged`` is the one-shot flag
-    threaded in (and back out) so we don't touch ``self``.
+    """Per-sequence W&B media payload for a single-cam validator.
+
+    Only the first sequence (``sequence_index == 0``) gets media; later ones
+    only contribute eval metrics. ``gt_video_logged`` is threaded through so
+    the caller owns one-shot GT-video state.
     """
     payload: dict[str, Any] = dict(eval_payload)
 

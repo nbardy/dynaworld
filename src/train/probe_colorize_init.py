@@ -79,16 +79,11 @@ def _run_one_forward(
     if decoded.cameras is None:
         raise RuntimeError("Decoded output missing cameras; this probe expects implicit-camera models.")
 
-    render_cfg = resolved["render"]
-    input_size = int(resolved["model"]["size"])
-    render_size = int(render_cfg["render_size"])
     rendered_features, _alpha_unused = render_clip_sequence(
+        resolved,
         decoded,
         decoded.cameras,
-        renderer_mode=str(render_cfg["renderer"]).lower(),
-        render_cfg=render_cfg,
-        input_size=input_size,
-        render_size=render_size,
+        renderer_mode=str(resolved["render"]["renderer"]).lower(),
         dense_grid=None,
     )
 
@@ -96,14 +91,7 @@ def _run_one_forward(
         # F=3 path: rendered_features IS the RGB image, already in [0, 1].
         return rendered_features, None
 
-    view_dirs = colorize_view_dirs_for_features(
-        rendered_features,
-        decoded.cameras,
-        view_condition=colorize_module.view_condition,
-        input_size=input_size,
-        render_size=render_size,
-        detach=True,
-    )
+    view_dirs = colorize_view_dirs_for_features(resolved, colorize_module, rendered_features, decoded.cameras)
     rgb, pre_sigmoid_logits = colorize_module.forward_with_logits(rendered_features, view_dirs=view_dirs)
     return rgb, pre_sigmoid_logits
 

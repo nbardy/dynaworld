@@ -16,14 +16,13 @@ from multicam_video_data import (
 from objective import BackgroundSample, RenderedView, RunPhase
 from pipeline.validation_media import (
     multicam_validation_video_payload,
-    render_diagnostics_payload,
 )
 from rendering import resize_images
 from train_precomputed_feature_implicit_dynamic import PrecomputedFeatureImplicitTrainer
+from pipeline.render import prepare_clip
 from train_video_token_implicit_dynamic import (
     StepResult,
     decoded_temporal_payload,
-    prepare_clip,
     select_window_indices,
 )
 
@@ -388,26 +387,6 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
                 "opacities": [decoded.opacities[index].detach().cpu() for index in range(decoded.frame_count)],
                 "rgbs": [decoded.rgbs[index].detach().cpu() for index in range(decoded.frame_count)],
             }
-        )
-
-    def add_render_diagnostics(
-        self,
-        payload: dict[str, Any],
-        *,
-        prefix: str,
-        rendered: RenderedView,
-        target: torch.Tensor,
-    ) -> None:
-        payload.update(
-            render_diagnostics_payload(
-                self.cfg,
-                prefix=prefix,
-                target=target,
-                pred=rendered.rgb,
-                alpha=rendered.alpha,
-                features=rendered.features if self.feature_pca_log else None,
-                fps=self.sequence_data.video_fps,
-            )
         )
 
     def validation_video_payload(self) -> dict[str, Any]:
