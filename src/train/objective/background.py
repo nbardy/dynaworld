@@ -93,10 +93,9 @@ def _fixed_rgb_tensor(
 
 
 def sample_background_rgb(
+    spec: BackgroundSpec,
     mode: BackgroundMode,
     *,
-    fixed_rgb: tuple[float, float, float],
-    scope: BackgroundSampleScope,
     like: torch.Tensor,
     frame_count: int,
     generator: torch.Generator | None = None,
@@ -108,11 +107,14 @@ def sample_background_rgb(
     if mode == "black":
         return _fixed_rgb_tensor((0.0, 0.0, 0.0), like=like)
     if mode == "fixed_rgb":
-        return _fixed_rgb_tensor(fixed_rgb, like=like)
+        return _fixed_rgb_tensor(spec.fixed_rgb, like=like)
     if mode == "random_rgb":
-        height = int(like.shape[-2])
-        width = int(like.shape[-1])
-        shape = _sample_shape(scope, frame_count=frame_count, height=height, width=width)
+        shape = _sample_shape(
+            spec.sample_scope,
+            frame_count=frame_count,
+            height=int(like.shape[-2]),
+            width=int(like.shape[-1]),
+        )
         kwargs = {"device": like.device, "dtype": like.dtype}
         if generator is not None:
             kwargs["generator"] = generator
@@ -134,16 +136,10 @@ class BackgroundPolicy:
         step: int | None = None,
     ) -> BackgroundSample:
         mode = background_mode_for_phase(self.spec, phase)
-        rgb = sample_background_rgb(
-            mode,
-            fixed_rgb=self.spec.fixed_rgb,
-            scope=self.spec.sample_scope,
-            like=like,
-            frame_count=frame_count,
-            generator=generator,
-        )
         return BackgroundSample(
-            rgb=rgb,
+            rgb=sample_background_rgb(
+                self.spec, mode, like=like, frame_count=frame_count, generator=generator
+            ),
             mode=mode,
             phase=phase,
             scope=self.spec.sample_scope,

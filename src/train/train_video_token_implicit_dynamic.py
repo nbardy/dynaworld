@@ -405,6 +405,16 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     if export_cfg["window_start"] < 0:
         raise ValueError("export.window_start must be >= 0.")
     cfg["export"] = export_cfg
+
+    if cfg["train"]["recon_backward_strategy"] not in {"framewise", "microbatch", "batched"}:
+        raise ValueError(
+            f"Unsupported recon_backward_strategy={cfg['train']['recon_backward_strategy']!r}. "
+            "Expected one of: framewise, microbatch, batched."
+        )
+    if int(cfg["train"]["temporal_microbatch_size"]) < 1:
+        raise ValueError(f"temporal_microbatch_size must be >= 1, got {cfg['train']['temporal_microbatch_size']}.")
+    if int(cfg["render"]["render_size"]) < 1:
+        raise ValueError(f"render_size must be >= 1, got {cfg['render']['render_size']}.")
     return cfg
 
 
@@ -543,17 +553,8 @@ class Trainer:
         self.logging_cfg = self.cfg["logging"]
         self.export_cfg = self.cfg["export"]
         self.recon_backward_strategy = self.train_cfg["recon_backward_strategy"]
-        if self.recon_backward_strategy not in {"framewise", "microbatch", "batched"}:
-            raise ValueError(
-                f"Unsupported recon_backward_strategy={self.recon_backward_strategy!r}. "
-                "Expected one of: framewise, microbatch, batched."
-            )
         self.temporal_microbatch_size = int(self.train_cfg["temporal_microbatch_size"])
-        if self.temporal_microbatch_size < 1:
-            raise ValueError(f"temporal_microbatch_size must be >= 1, got {self.temporal_microbatch_size}.")
         self.render_size = int(self.render_cfg["render_size"])
-        if self.render_size < 1:
-            raise ValueError(f"render_size must be >= 1, got {self.render_size}.")
 
         self.device = pick_device()
         print(f"Using device: {self.device}")
@@ -1289,7 +1290,7 @@ class KnownCameraTrainer(Trainer):
         )
         clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
         if sequence_data.cameras is None:
-            raise ValueError(f"Known-camera sequence has no cameras: {sequence_data.source_path}")
+            raise ValueError("Known-camera sequence has no cameras.")
         clip_cameras = tuple(sequence_data.cameras[index] for index in clip_indices.detach().cpu().tolist())
         return sequence_data, clip_frames, clip_times, clip_cameras
 

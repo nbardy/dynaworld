@@ -15,7 +15,6 @@ from multicam_video_data import (
 )
 from objective import BackgroundSample, RenderedView, RunPhase
 from pipeline.validation_media import (
-    alpha_to_grayscale_video,
     multicam_validation_video_payload,
     render_diagnostics_payload,
 )
@@ -24,10 +23,8 @@ from train_precomputed_feature_implicit_dynamic import PrecomputedFeatureImplici
 from train_video_token_implicit_dynamic import (
     StepResult,
     decoded_temporal_payload,
-    eval_metric_payload,
     prepare_clip,
     select_window_indices,
-    temporal_similarity_payload,
 )
 
 
@@ -61,16 +58,6 @@ TRAIN_MULTICAM_DEFAULTS = {
     "train_views_per_step": 0,
     "camera_rig_lr": None,
 }
-
-
-def _prefix_eval_metrics(prefix: str, metrics: dict[str, float]) -> dict[str, float]:
-    payload = {}
-    for key, value in metrics.items():
-        if key.startswith("Eval/"):
-            payload[f"{prefix}/{key}"] = value
-        else:
-            payload[f"{prefix}/{key}"] = value
-    return payload
 
 
 class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTrainer):
@@ -443,9 +430,6 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
             heldout_targets=heldout_targets,
             heldout_camera_names=self.multicam_bundle.heldout_camera_names or [],
             decoded_metrics=decoded_metrics,
-            eval_metric_fn=eval_metric_payload,
-            temporal_metric_fn=temporal_similarity_payload,
-            prefix_eval_metrics_fn=_prefix_eval_metrics,
             camera_rig_metrics=self.camera_rig.metrics(),
             gt_video_logged=self.gt_video_logged,
             fps=self.sequence_data.video_fps,

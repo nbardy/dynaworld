@@ -29,6 +29,7 @@ from typing import Any, Mapping
 import torch
 import wandb
 
+from pipeline.diagnostics import eval_metric_payload, temporal_similarity_payload
 from train_logging import (
     build_validation_video_payload,
     make_preview_image,
@@ -281,18 +282,19 @@ def single_cam_validation_video_payload(
 # --------------------------------------------------------------------------- #
 
 
+def _prefixed(prefix: str, metrics: Mapping[str, float]) -> dict[str, float]:
+    return {f"{prefix}/{key}": value for key, value in metrics.items()}
+
+
 def multicam_validation_video_payload(
     cfg: Mapping[str, Any],
     *,
-    train_rendered: list,           # list[RenderedView] — one per training view
-    heldout_rendered: list,         # list[RenderedView] — one per held-out view (may be empty)
-    train_targets: list[torch.Tensor],          # [V_train] of [T, 3, H, W]
-    heldout_targets: list[torch.Tensor],        # [V_heldout] of [T, 3, H, W]
+    train_rendered: list,
+    heldout_rendered: list,
+    train_targets: list[torch.Tensor],
+    heldout_targets: list[torch.Tensor],
     heldout_camera_names: list[str] | tuple[str, ...],
     decoded_metrics: Mapping[str, float],
-    eval_metric_fn,                 # callable(pred, target, loss_cfg) -> dict
-    temporal_metric_fn,              # callable(pred, target, loss_cfg) -> dict
-    prefix_eval_metrics_fn,         # callable(prefix, metrics) -> dict
     camera_rig_metrics: Mapping[str, float],
     gt_video_logged: bool,
     fps: float,
@@ -301,20 +303,17 @@ def multicam_validation_video_payload(
     PSNR/SSIM, alpha mask, feature PCA, composite grids, and GT one-shots.
     """
     feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
-    payload: dict[str, Any] = {
-        "Eval/SequenceCount": 1,
-        **camera_rig_metrics,
-    }
+    payload: dict[str, Any] = {"Eval/SequenceCount": 1, **camera_rig_metrics}
 
     for view, rendered in enumerate(train_rendered):
         target = train_targets[view]
         metrics = {
-            **eval_metric_fn(rendered.rgb, target, cfg["losses"]),
-            **temporal_metric_fn(rendered.rgb, target, cfg["losses"]),
+            **eval_metric_payload(rendered.rgb, target, cfg["losses"]),
+            **temporal_similarity_payload(rendered.rgb, target, cfg["losses"]),
         }
         if view == 0:
             metrics.update(decoded_metrics)
-        payload.update(prefix_eval_metrics_fn(f"TrainView{view}", metrics))
+        payload.update(_prefixed(f"TrainView{view}", metrics))
         if view == 0:
             payload["TrainView0_Rendered_Video"] = make_wandb_video(rendered.rgb, fps)
             payload.update(
@@ -335,12 +334,10 @@ def multicam_validation_video_payload(
         heldout_target = heldout_targets[view]
         camera_name = heldout_camera_names[view] if view < len(heldout_camera_names) else f"view{view}"
         prefix = f"Heldout{view}_{camera_name}"
-        payload.update(
-            prefix_eval_metrics_fn(prefix, {
-                **eval_metric_fn(rendered.rgb, heldout_target, cfg["losses"]),
-                **temporal_metric_fn(rendered.rgb, heldout_target, cfg["losses"]),
-            })
-        )
+        payload.update(_prefixed(prefix, {
+            **eval_metric_payload(rendered.rgb, heldout_target, cfg["losses"]),
+            **temporal_similarity_payload(rendered.rgb, heldout_target, cfg["losses"]),
+        }))
         payload[f"{prefix}_Rendered_Video"] = make_wandb_video(rendered.rgb, fps)
         payload.update(
             render_diagnostics_payload(

@@ -227,3 +227,84 @@ Training hyperparameters should be defined once, in checked-in JSONC files under
 Keep code lean by passing config sections through warm paths instead of destructuring and rebuilding the same data repeatedly. When a boundary needs renamed constructor parameters, keep that mapping in one small factory function close to the boundary.
 
 Prefer JSONC (`*.jsonc`) for train configs so experimental notes can live next to the values they explain.
+
+### Anti-patterns to eliminate
+
+These five patterns repeatedly grow line count without adding clarity. They are mechanical to spot and mechanical to fix. When you find one, fix it; when you write new code, don't introduce one.
+
+The unifying rule: **never name an intermediate value just to thread it through a function boundary**. Pass the canonical container (`cfg`, the config-bearing object, the colorize module) down to the leaf, and read `container["key"]` or `container.attr` at the actual use site.
+
+**P1 — Local cfg destructure**
+```python
+# BAD: shuffle. Local alias used 1-2 times then thrown away.
+render_cfg = cfg["render"]
+render_size = int(render_cfg["render_size"])
+return render_gaussian_frames(..., height=render_size, tile_size=render_cfg["tile_size"], ...)
+
+# GOOD: leaf reads its own keys.
+return render_gaussian_frames(cfg, ...)        # leaf takes cfg, reads cfg["render"]["..."] inside
+```
+Detector: `^\s*\w+ = \w+\["[^"]+"\]\s*$` followed by ≤3 uses inside the same function.
+
+**P2 — `self.X` cfg alias used <3 times**
+```python
+# BAD: hoist into __init__, used in only one or two methods.
+self.render_cfg = self.cfg["render"]
+self.render_size = int(self.render_cfg["render_size"])
+```
+Detector: `self.X = self.cfg[...]` or `self.X = self.foo_cfg[...]` in `__init__`, then count `self.X` references across the class. ≤2 uses → kill the alias and read from `self.cfg["section"]["key"]` at the use site. (Heavily-used aliases — e.g. `self.model_cfg` with 30+ refs — are fine; the detector is the ratio of declarations to uses.)
+
+**P3 — Kwargs-forwarding pyramid**
+```python
+# BAD: every layer copies the same cfg-derived kwargs.
+def foo(*, render_size, feature_pca_log, fps, tile_size, ...):  # 8 kwargs
+    bar(render_size=render_size, feature_pca_log=feature_pca_log, ...)  # 6 forwarded
+```
+Detector: a function whose signature has ≥4 cfg-derived kwargs. Fix: take `cfg` (or the relevant subsection) as first positional; let the function read its own keys. Each layer drops the wall.
+
+**P4 — Wrapper-then-unwrap at the call site**
+```python
+# BAD: re-extract attributes that already live on the object you have.
+colorize_view_dirs(features, cameras,
+    view_condition=self.colorize.view_condition,
+    detach=self.colorize.detach_view_condition,
+)
+```
+Detector: a call site where `kwarg=obj.attr` AND the function only uses that attribute. Fix: pass `obj` itself, read `obj.attr` inside. If the attribute lives somewhere else (factory wrapper, sibling alias), move it onto the object that gets passed around.
+
+**P5 — Validation duplicated at the hoist site**
+```python
+# BAD: re-validate at __init__ what resolve_config should have validated once.
+self.recon_backward_strategy = self.train_cfg["recon_backward_strategy"]
+if self.recon_backward_strategy not in {"framewise", "microbatch", "batched"}:
+    raise ValueError(...)
+self.temporal_microbatch_size = int(self.train_cfg["temporal_microbatch_size"])
+if self.temporal_microbatch_size < 1:
+    raise ValueError(...)
+```
+Detector: `raise ValueError` immediately after a `self.X = ...` self-assign in `__init__`. Fix: move the `raise` into `resolve_config` (or whatever normalizes the config once at boot). Drop the hoist if it's also a P2.
+
+### Detectors as one-liners
+
+```bash
+# P1: function-scope cfg aliases
+grep -nE '^\s+\w+_cfg = \w+\["[^"]+"\]' src/train/
+
+# P2: self.X = ... cfg hoists in __init__ (then count usage manually)
+grep -nE '^        self\.[a-z_]+ = (self\.cfg|self\.[a-z_]+_cfg|int\(self\.|bool\(self\.|float\(self\.)' \
+    src/train/train_*.py
+
+# P3: kwargs walls (functions with ≥5 args)
+awk '/^def [a-z_]/ { in_def=1; nargs=0 }
+     in_def && /^[ ]+[a-z*]/ { nargs++ }
+     in_def && /\)\s*->/ { in_def=0; if (nargs>=5) print FILENAME":"NR" args="nargs" "$0 }' \
+    src/train/**/*.py
+
+# P4: kwarg=self.obj.attr at call sites
+grep -rnE '^\s+\w+=self\.\w+\.\w+,?$' src/train/
+
+# P5: raise immediately after a self-assign in __init__
+grep -B1 -A2 -nE '^        if self\.\w+' src/train/train_*.py | grep -A2 'raise'
+```
+
+When you fix one, run the smoke gate (1-step F=3 + F=32 + multicam-ult — see "Smoke-test rules") before declaring it done. The change must reduce LOC; if it doesn't, you've reshuffled rather than fixed.
