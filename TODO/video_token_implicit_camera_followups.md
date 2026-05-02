@@ -25,6 +25,16 @@ larger clip.
    render/loss only `K` sampled decode times per step.
 4. Benchmark the full config across render sizes `128`, `192`, and `384` with
    the same seed/run settings so render-size tradeoffs are visible in W&B.
+5. Design a shared conditioning contract for single images and videos. The
+   target shape is one renderer/API that can consume `image_or_video ->
+   world_tokens, source_camera_token` and render from a query camera, but this
+   requires architecture changes around `T=1` inputs, dynamic-token behavior, and
+   `query_time`; see `research_notes/training_ideas_for_novel_synthesis.md`.
+6. For mixed multi-camera pretraining, resolve the frame-of-reference problem
+   before wiring the camera-swap sampler: independent encodes can choose
+   different gauges, so the likely contract is `source -> W_source` plus
+   `relpose(source, target) -> Delta_source_to_target`; see
+   `research_notes/multiple_camera_pre_training_notes.md`.
 
 ## Guardrails
 
