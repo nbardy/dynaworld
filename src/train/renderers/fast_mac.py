@@ -19,6 +19,9 @@ FAST_MAC_V5_FEATURES_DIR = (
 FAST_MAC_V6_REFINED_DIR = (
     Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v6_refined"
 )
+FAST_MAC_V6_REFINED_FEATURES_DIR = (
+    Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v6_refined_features"
+)
 
 
 def _float_tuple(value: Any, *, field_name: str) -> tuple[float, ...]:
@@ -111,7 +114,7 @@ class FastMacRendererConfig:
             feature_variant=_normalize_choice(
                 values.get("feature_variant", cls.feature_variant),
                 field_name="fast_mac.feature_variant",
-                choices={"v5_features"},
+                choices={"v5_features", "v6_refined_features"},
             ),
             tile_size=int(values.get("tile_size", fallback_tile_size)),
             max_fast_pairs=int(values.get("max_fast_pairs", cls.max_fast_pairs)),
@@ -192,6 +195,14 @@ def _ensure_fast_mac_v6_refined_on_path() -> None:
     )
 
 
+def _ensure_fast_mac_v6_refined_features_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V6_REFINED_FEATURES_DIR,
+        package_name="torch_gsplat_bridge_v6_refined_features",
+        label="v6_refined_features",
+    )
+
+
 def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
     _ensure_fast_mac_v5_on_path()
     from torch_gsplat_bridge_v5 import RasterConfig
@@ -212,12 +223,22 @@ def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
     )
 
 
-def _make_v5_features_config(config: FastMacRendererConfig, height: int, width: int, feature_dim: int):
-    _ensure_fast_mac_v5_features_on_path()
-    from torch_gsplat_bridge_v5_features import RasterConfig as FeatureRasterConfig
+def _feature_raster_config_cls(config: FastMacRendererConfig):
+    if config.feature_variant == "v5_features":
+        _ensure_fast_mac_v5_features_on_path()
+        from torch_gsplat_bridge_v5_features import RasterConfig as FeatureRasterConfig
 
-    if config.feature_variant != "v5_features":
-        raise ValueError(f"Unsupported fast_mac.feature_variant={config.feature_variant!r}.")
+        return FeatureRasterConfig
+    if config.feature_variant == "v6_refined_features":
+        _ensure_fast_mac_v6_refined_features_on_path()
+        from torch_gsplat_bridge_v6_refined_features import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
+    raise ValueError(f"Unsupported fast_mac.feature_variant={config.feature_variant!r}.")
+
+
+def _make_feature_config(config: FastMacRendererConfig, height: int, width: int, feature_dim: int):
+    FeatureRasterConfig = _feature_raster_config_cls(config)
     if isinstance(config.feature_background, (int, float)):
         background = (config.feature_background,)
     elif len(config.feature_background) in (1, feature_dim):
@@ -241,6 +262,44 @@ def _make_v5_features_config(config: FastMacRendererConfig, height: int, width: 
         batch_launch_limit_tiles=config.batch_launch_limit_tiles,
         batch_launch_limit_gaussians=config.batch_launch_limit_gaussians,
     )
+
+
+def _rasterize_features_projected(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    colors: torch.Tensor,
+    projected_opacities: torch.Tensor,
+    depths: torch.Tensor,
+    config: FastMacRendererConfig,
+    height: int,
+    width: int,
+    feature_dim: int,
+):
+    if config.feature_variant == "v5_features":
+        _ensure_fast_mac_v5_features_on_path()
+        from torch_gsplat_bridge_v5_features import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v6_refined_features":
+        _ensure_fast_mac_v6_refined_features_on_path()
+        from torch_gsplat_bridge_v6_refined_features import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    raise ValueError(f"Unsupported fast_mac.feature_variant={config.feature_variant!r}.")
 
 
 def _make_v6_refined_config(config: FastMacRendererConfig, height: int, width: int):
@@ -490,16 +549,16 @@ def render_fast_mac_3dgs(
             width,
         )
         return image_hwc.clamp(0.0, 1.0).permute(2, 0, 1).contiguous(), None
-    _ensure_fast_mac_v5_features_on_path()
-    from torch_gsplat_bridge_v5_features import rasterize_projected_gaussians as rasterize_v5_features
-
-    rasterize_out = rasterize_v5_features(
+    rasterize_out = _rasterize_features_projected(
         means2d,
         conics,
         colors,
         projected_opacities,
         depths,
-        _make_v5_features_config(config, height, width, feature_dim),
+        config,
+        height,
+        width,
+        feature_dim,
     )
     if isinstance(rasterize_out, tuple):
         image_hwf, alpha_hw = rasterize_out
@@ -557,16 +616,16 @@ def render_fast_mac_3dgs_batch(
             width,
         )
         return image_bhwc.clamp(0.0, 1.0).permute(0, 3, 1, 2).contiguous(), None
-    _ensure_fast_mac_v5_features_on_path()
-    from torch_gsplat_bridge_v5_features import rasterize_projected_gaussians as rasterize_v5_features
-
-    rasterize_out = rasterize_v5_features(
+    rasterize_out = _rasterize_features_projected(
         means2d,
         conics,
         colors,
         projected_opacities,
         depths,
-        _make_v5_features_config(config, height, width, feature_dim),
+        config,
+        height,
+        width,
+        feature_dim,
     )
     if isinstance(rasterize_out, tuple):
         image_bhwf, alpha_bhw = rasterize_out

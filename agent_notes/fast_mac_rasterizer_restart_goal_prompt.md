@@ -16,6 +16,7 @@ Do not restart from scratch. First read:
 - `outputs/benchmarks/fast_mac_v5_trainer_unconditioned_tokens_128_512_1f_16f_8192_2026-05-02.jsonl`
 - `outputs/benchmarks/fast_mac_v6_refined_trainer_free_splats_single_frame_128_512_2k_4k_8192_2026-05-02.jsonl`
 - `outputs/benchmarks/fast_mac_v5_trainer_free_splats_single_frame_128_512_2k_4k_8192_2026-05-02.jsonl`
+- `agent_notes/loose_notes/2026-05-02_20-24-53_fast_mac_accuracy_and_feature_fork.md`
 
 Completed in the first pass:
 
@@ -30,6 +31,18 @@ Completed in the first pass:
 - added matched `v6_refined` free-splats and unconditioned-token configs
 - reran trainer throughput for free-splats and unconditioned TokenGS
 
+Completed in the follow-up pass:
+
+- added `research_experiments/vjepa_performance/compare_fast_mac_quality.py`
+- ran fixed-seed 20-step quality parity for RGB `v5` vs `v6_refined`
+- created `third_party/fast-mac-gsplat/variants/v6_refined_features/`
+- wired `render.fast_mac.feature_variant = "v6_refined_features"`
+- added
+  `src/train_configs/local_mac_unconditioned_tokens_features_F32_LN_kaiming_g4_v6_refined_features.jsonc`
+- ran feature/alpha/reference checks for the new feature namespace
+- ran a 1-step F32 trainer smoke with validation/media enabled
+- ran F32 feature throughput and quality checks versus `v5_features`
+
 Most important measured facts:
 
 - The user's memory is directionally right: newer forks hit `~26-31ms`
@@ -42,13 +55,26 @@ Most important measured facts:
   but free-splats 16f regressed.
 - Full 4k trainer timings are not pure raster timings; image resize/loss and
   full backward dominate once raster is faster.
+- Fixed-seed quality checks did not show v6_refined RGB degradation at 128px/16f:
+  TokenGS eval loss `0.180709 -> 0.179886`, PSNR `15.013 -> 15.058`; free-splats
+  eval loss `0.354953 -> 0.354633`, PSNR `8.157 -> 8.160`.
+- `v6_refined_features` is wired and passes F32/alpha/reference/trainer-smoke
+  gates, but it is currently a namespace fork derived from `v5_features`, not a
+  full v6_refined active/adaptive feature-speed port.
+- The clean F32 projected matrix says `v6_refined_features` is not a speed win
+  yet: at 512/8192/F32 it was `121.7ms` total vs `90.6ms` for `v5_features`;
+  at 2048/65536/F32 it was roughly parity/slightly slower (`859.5ms` vs
+  `866.8ms` total, but backward `783.8ms` vs `773.1ms`).
 
 Next goal for a fresh thread:
 
-1. Repeat the key trainer rows with more iterations and a fixed order to reduce
+1. Port v6_refined's active-tile/adaptive-stop RGB kernels to arbitrary feature
+   channels; do not confuse the current `v6_refined_features` namespace fork
+   with that speed port.
+2. Repeat the key trainer rows with more iterations and a fixed order to reduce
    MPS variance.
-2. Explain why `v6_refined` regresses free-splats 16f but helps TokenGS.
-3. Run a short quality parity smoke before promoting any variant default.
+3. Explain why `v6_refined` regresses free-splats 16f in the earlier throughput
+   harness but not in the fixed-seed quality harness.
 4. If more speed is needed, investigate a direct trainer integration for
    `v9_hw_tile_exact_probe` or `v9_project3d_train`; do not treat the current
    v9 probe wrapper as a finished backend.
@@ -57,6 +83,7 @@ Read `AGENTS.md`, `BASELINES.md`, and these notes first:
 
 - `agent_notes/loose_notes/2026-05-02_18-58-58_fast_mac_render_phase_precision_probe.md`
 - `agent_notes/loose_notes/2026-05-02_19-59-25_fast_mac_variant_audit.md`
+- `agent_notes/loose_notes/2026-05-02_20-24-53_fast_mac_accuracy_and_feature_fork.md`
 - `agent_notes/key_learnings.md` near the fast-mac bullets
 - `src/train/renderers/fast_mac.py`
 - `third_party/fast-mac-gsplat/variants/*/benchmarks/`

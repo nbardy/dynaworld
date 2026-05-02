@@ -19,12 +19,18 @@ class VariantSpec:
     name: str
     bench: str
     kind: str = "benchmark_mps"
+    feature_dim_arg: bool = False
     extra_args: tuple[str, ...] = ()
 
 
 VARIANTS: dict[str, VariantSpec] = {
     "v5": VariantSpec("v5", "benchmarks/benchmark_mps.py"),
-    "v5_features": VariantSpec("v5_features", "benchmarks/benchmark_mps.py", extra_args=("--feature-dim", "3")),
+    "v5_features": VariantSpec("v5_features", "benchmarks/benchmark_mps.py", feature_dim_arg=True),
+    "v6_refined_features": VariantSpec(
+        "v6_refined_features",
+        "benchmarks/benchmark_mps.py",
+        feature_dim_arg=True,
+    ),
     "v6": VariantSpec("v6", "benchmarks/benchmark_mps.py"),
     "v6_upgrade": VariantSpec("v6_upgrade", "benchmarks/benchmark_mps.py"),
     "v6_refined": VariantSpec("v6_refined", "benchmarks/benchmark_mps.py"),
@@ -78,6 +84,7 @@ def command_for_case(
     seed: int,
     warmup: int,
     iters: int,
+    feature_dim: int,
 ) -> list[str]:
     if spec.kind == "v9_full_backward":
         return [
@@ -98,7 +105,7 @@ def command_for_case(
             "--iters",
             str(iters),
         ]
-    return [
+    cmd = [
         sys.executable,
         spec.bench,
         "--height",
@@ -120,8 +127,11 @@ def command_for_case(
         "--backward",
         "--profile",
         "--json",
-        *spec.extra_args,
     ]
+    if spec.feature_dim_arg:
+        cmd.extend(["--feature-dim", str(feature_dim), "--alpha-loss"])
+    cmd.extend(spec.extra_args)
+    return cmd
 
 
 def run_case(
@@ -134,6 +144,7 @@ def run_case(
     seed: int,
     warmup: int,
     iters: int,
+    feature_dim: int,
     timeout: float,
 ) -> dict[str, Any]:
     variant_dir = VARIANTS_ROOT / spec.name
@@ -151,6 +162,7 @@ def run_case(
         seed=seed,
         warmup=warmup,
         iters=iters,
+        feature_dim=feature_dim,
     )
     base = {
         "variant": spec.name,
@@ -162,6 +174,7 @@ def run_case(
         "seed_requested": int(seed),
         "warmup_requested": int(warmup),
         "iters_requested": int(iters),
+        "feature_dim_requested": int(feature_dim),
         "cmd": " ".join(cmd),
     }
     try:
@@ -221,6 +234,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iters", type=int, default=5)
+    parser.add_argument("--feature-dim", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=420.0)
     parser.add_argument("--output-jsonl", type=Path, required=True)
     args = parser.parse_args()
@@ -240,6 +254,7 @@ def main() -> None:
                         seed=args.seed,
                         warmup=args.warmup,
                         iters=args.iters,
+                        feature_dim=args.feature_dim,
                         timeout=args.timeout,
                     )
                     handle.write(json.dumps(row, sort_keys=True) + "\n")
