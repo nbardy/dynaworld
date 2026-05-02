@@ -16,6 +16,9 @@ FAST_MAC_V5_DIR = Path(__file__).resolve().parents[3] / "third_party" / "fast-ma
 FAST_MAC_V5_FEATURES_DIR = (
     Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v5_features"
 )
+FAST_MAC_V6_REFINED_DIR = (
+    Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v6_refined"
+)
 
 
 def _float_tuple(value: Any, *, field_name: str) -> tuple[float, ...]:
@@ -43,8 +46,34 @@ def _normalize_feature_background(value: Any) -> FeatureBackground:
     return background
 
 
+def _normalize_optional_bool(value: Any, *, field_name: str) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"none", "null"}:
+            return None
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{field_name} must be a boolean or null, got {value!r}.")
+
+
+def _normalize_choice(value: Any, *, field_name: str, choices: set[str]) -> str:
+    normalized = str(value).strip().lower()
+    if normalized not in choices:
+        expected = ", ".join(sorted(choices))
+        raise ValueError(f"{field_name}={value!r} is not supported. Expected one of: {expected}.")
+    return normalized
+
+
 @dataclass(frozen=True)
 class FastMacRendererConfig:
+    rgb_variant: str = "v5"
+    feature_variant: str = "v5_features"
     tile_size: int = 16
     max_fast_pairs: int = 2048
     alpha_threshold: float = 1.0 / 255.0
@@ -56,6 +85,13 @@ class FastMacRendererConfig:
     batch_strategy: str = "flatten"
     batch_launch_limit_tiles: int = 262144
     batch_launch_limit_gaussians: int = 262144
+    use_active_tiles: bool | None = None
+    active_policy: str = "off"
+    sort_active_tiles_by_count: bool = True
+    active_sparse_fraction_threshold: float = 0.45
+    active_dense_multiplier: float = 2.0
+    stop_count_mode: str = "adaptive"
+    stop_count_dense_threshold: int = 64
 
     @classmethod
     def from_mapping(
@@ -67,6 +103,16 @@ class FastMacRendererConfig:
     ) -> "FastMacRendererConfig":
         values = values or {}
         return cls(
+            rgb_variant=_normalize_choice(
+                values.get("rgb_variant", values.get("variant", cls.rgb_variant)),
+                field_name="fast_mac.rgb_variant",
+                choices={"v5", "v6_refined"},
+            ),
+            feature_variant=_normalize_choice(
+                values.get("feature_variant", cls.feature_variant),
+                field_name="fast_mac.feature_variant",
+                choices={"v5_features"},
+            ),
             tile_size=int(values.get("tile_size", fallback_tile_size)),
             max_fast_pairs=int(values.get("max_fast_pairs", cls.max_fast_pairs)),
             alpha_threshold=float(values.get("alpha_threshold", fallback_alpha_threshold)),
@@ -82,21 +128,68 @@ class FastMacRendererConfig:
             batch_launch_limit_gaussians=int(
                 values.get("batch_launch_limit_gaussians", cls.batch_launch_limit_gaussians)
             ),
+            use_active_tiles=_normalize_optional_bool(
+                values.get("use_active_tiles", cls.use_active_tiles),
+                field_name="fast_mac.use_active_tiles",
+            ),
+            active_policy=_normalize_choice(
+                values.get("active_policy", cls.active_policy),
+                field_name="fast_mac.active_policy",
+                choices={"off", "on", "auto"},
+            ),
+            sort_active_tiles_by_count=bool(
+                values.get("sort_active_tiles_by_count", cls.sort_active_tiles_by_count)
+            ),
+            active_sparse_fraction_threshold=float(
+                values.get("active_sparse_fraction_threshold", cls.active_sparse_fraction_threshold)
+            ),
+            active_dense_multiplier=float(values.get("active_dense_multiplier", cls.active_dense_multiplier)),
+            stop_count_mode=_normalize_choice(
+                values.get("stop_count_mode", cls.stop_count_mode),
+                field_name="fast_mac.stop_count_mode",
+                choices={"always", "never", "adaptive"},
+            ),
+            stop_count_dense_threshold=int(
+                values.get("stop_count_dense_threshold", cls.stop_count_dense_threshold)
+            ),
         )
 
 
+def _ensure_variant_on_path(variant_dir: Path, *, package_name: str, label: str) -> None:
+    if not variant_dir.exists():
+        raise RuntimeError(f"fast-mac-gsplat {label} directory not found: {variant_dir}")
+    existing_module = sys.modules.get(package_name)
+    if existing_module is not None:
+        origin_raw = getattr(existing_module, "__file__", None)
+        if origin_raw is not None:
+            origin = Path(origin_raw).resolve()
+            if variant_dir.resolve() not in origin.parents:
+                raise RuntimeError(
+                    f"fast-mac package {package_name!r} is already imported from {origin}, "
+                    f"not requested {label} directory {variant_dir}."
+                )
+    if str(variant_dir) not in sys.path:
+        sys.path.insert(0, str(variant_dir))
+
+
 def _ensure_fast_mac_v5_on_path() -> None:
-    if not FAST_MAC_V5_DIR.exists():
-        raise RuntimeError(f"fast-mac-gsplat v5 directory not found: {FAST_MAC_V5_DIR}")
-    if str(FAST_MAC_V5_DIR) not in sys.path:
-        sys.path.insert(0, str(FAST_MAC_V5_DIR))
+    _ensure_variant_on_path(FAST_MAC_V5_DIR, package_name="torch_gsplat_bridge_v5", label="v5")
 
 
 def _ensure_fast_mac_v5_features_on_path() -> None:
-    if not FAST_MAC_V5_FEATURES_DIR.exists():
-        raise RuntimeError(f"fast-mac-gsplat v5_features directory not found: {FAST_MAC_V5_FEATURES_DIR}")
-    if str(FAST_MAC_V5_FEATURES_DIR) not in sys.path:
-        sys.path.insert(0, str(FAST_MAC_V5_FEATURES_DIR))
+    _ensure_variant_on_path(
+        FAST_MAC_V5_FEATURES_DIR,
+        package_name="torch_gsplat_bridge_v5_features",
+        label="v5_features",
+    )
+
+
+def _ensure_fast_mac_v6_refined_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V6_REFINED_DIR,
+        package_name="torch_gsplat_bridge_v6",
+        label="v6_refined",
+    )
 
 
 def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
@@ -123,6 +216,8 @@ def _make_v5_features_config(config: FastMacRendererConfig, height: int, width: 
     _ensure_fast_mac_v5_features_on_path()
     from torch_gsplat_bridge_v5_features import RasterConfig as FeatureRasterConfig
 
+    if config.feature_variant != "v5_features":
+        raise ValueError(f"Unsupported fast_mac.feature_variant={config.feature_variant!r}.")
     if isinstance(config.feature_background, (int, float)):
         background = (config.feature_background,)
     elif len(config.feature_background) in (1, feature_dim):
@@ -146,6 +241,69 @@ def _make_v5_features_config(config: FastMacRendererConfig, height: int, width: 
         batch_launch_limit_tiles=config.batch_launch_limit_tiles,
         batch_launch_limit_gaussians=config.batch_launch_limit_gaussians,
     )
+
+
+def _make_v6_refined_config(config: FastMacRendererConfig, height: int, width: int):
+    _ensure_fast_mac_v6_refined_on_path()
+    from torch_gsplat_bridge_v6 import RasterConfig
+
+    return RasterConfig(
+        height=height,
+        width=width,
+        tile_size=config.tile_size,
+        max_fast_pairs=config.max_fast_pairs,
+        alpha_threshold=config.alpha_threshold,
+        transmittance_threshold=config.transmittance_threshold,
+        background=config.background,
+        enable_overflow_fallback=config.enable_overflow_fallback,
+        batch_strategy=config.batch_strategy,
+        batch_launch_limit_tiles=config.batch_launch_limit_tiles,
+        batch_launch_limit_gaussians=config.batch_launch_limit_gaussians,
+        use_active_tiles=config.use_active_tiles,
+        active_policy=config.active_policy,
+        sort_active_tiles_by_count=config.sort_active_tiles_by_count,
+        active_sparse_fraction_threshold=config.active_sparse_fraction_threshold,
+        active_dense_multiplier=config.active_dense_multiplier,
+        stop_count_mode=config.stop_count_mode,
+        stop_count_dense_threshold=config.stop_count_dense_threshold,
+    )
+
+
+def _rasterize_rgb_projected(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    colors: torch.Tensor,
+    projected_opacities: torch.Tensor,
+    depths: torch.Tensor,
+    config: FastMacRendererConfig,
+    height: int,
+    width: int,
+) -> torch.Tensor:
+    if config.rgb_variant == "v5":
+        _ensure_fast_mac_v5_on_path()
+        from torch_gsplat_bridge_v5 import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_v5_config(config, height, width),
+        )
+    if config.rgb_variant == "v6_refined":
+        _ensure_fast_mac_v6_refined_on_path()
+        from torch_gsplat_bridge_v6 import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_v6_refined_config(config, height, width),
+        )
+    raise ValueError(f"Unsupported fast_mac.rgb_variant={config.rgb_variant!r}.")
 
 
 def _conics_from_inv_cov(inv_cov2d: torch.Tensor) -> torch.Tensor:
@@ -318,19 +476,18 @@ def render_fast_mac_3dgs(
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
     )
-    # F=3 -> v5 (legacy RGB, output clamped to [0,1] for direct loss). Returns (features, None).
+    # F=3 -> selected RGB variant, output clamped to [0,1] for direct loss. Returns (features, None).
     # F!=3 -> v5_features (raw F-channel feature map + accumulated alpha mask).
     if feature_dim == 3:
-        _ensure_fast_mac_v5_on_path()
-        from torch_gsplat_bridge_v5 import rasterize_projected_gaussians
-
-        image_hwc = rasterize_projected_gaussians(
+        image_hwc = _rasterize_rgb_projected(
             means2d,
             conics,
             colors,
             projected_opacities,
             depths,
-            _make_v5_config(config, height, width),
+            config,
+            height,
+            width,
         )
         return image_hwc.clamp(0.0, 1.0).permute(2, 0, 1).contiguous(), None
     _ensure_fast_mac_v5_features_on_path()
@@ -386,19 +543,18 @@ def render_fast_mac_3dgs_batch(
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
     )
-    # Returns (features, alpha_mask). Alpha is None for the F=3 v5 legacy path
+    # Returns (features, alpha_mask). Alpha is None for the F=3 RGB path
     # and a tensor of shape [B, H, W] for the F!=3 v5_features path.
     if feature_dim == 3:
-        _ensure_fast_mac_v5_on_path()
-        from torch_gsplat_bridge_v5 import rasterize_projected_gaussians
-
-        image_bhwc = rasterize_projected_gaussians(
+        image_bhwc = _rasterize_rgb_projected(
             means2d,
             conics,
             colors,
             projected_opacities,
             depths,
-            _make_v5_config(config, height, width),
+            config,
+            height,
+            width,
         )
         return image_bhwc.clamp(0.0, 1.0).permute(0, 3, 1, 2).contiguous(), None
     _ensure_fast_mac_v5_features_on_path()

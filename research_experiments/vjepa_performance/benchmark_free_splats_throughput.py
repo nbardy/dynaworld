@@ -253,6 +253,7 @@ def run_case(
     step_totals = [sum(row[key] for key in timing_keys) for row in rows]
     elapsed_total = float(sum(step_totals))
     frames = int(clip_length) * int(steps)
+    fast_mac_options = cfg["render"].get("fast_mac") or {}
     result = {
         "render_size": int(render_size),
         "clip_length": int(clip_length),
@@ -260,6 +261,11 @@ def run_case(
         "model_variant": str(trainer.model_cfg["variant"]),
         "device": str(trainer.device),
         "renderer": str(trainer.renderer_mode),
+        "fast_mac_rgb_variant": str(
+            fast_mac_options.get("rgb_variant", fast_mac_options.get("variant", "v5"))
+        ),
+        "fast_mac_feature_variant": str(fast_mac_options.get("feature_variant", "v5_features")),
+        "fast_mac_batch_strategy": str(fast_mac_options.get("batch_strategy", "flatten")),
         "gaussians": int(trainer.effective_gaussians),
         "warmup": int(warmup),
         "steps": int(steps),

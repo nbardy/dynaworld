@@ -6,9 +6,57 @@ We are restarting context. Work in:
 /Users/nicholasbardy/git/gsplats_browser/dynaworld
 ```
 
+## Status After 2026-05-02 Pass
+
+Do not restart from scratch. First read:
+
+- `agent_notes/loose_notes/2026-05-02_19-59-25_fast_mac_variant_audit.md`
+- `outputs/benchmarks/fast_mac_variant_matrix_rgb_f3_single_frame_512_2k_4k_8192_65536_2026-05-02.jsonl`
+- `outputs/benchmarks/fast_mac_v6_refined_trainer_unconditioned_tokens_128_512_1f_16f_8192_2026-05-02.jsonl`
+- `outputs/benchmarks/fast_mac_v5_trainer_unconditioned_tokens_128_512_1f_16f_8192_2026-05-02.jsonl`
+- `outputs/benchmarks/fast_mac_v6_refined_trainer_free_splats_single_frame_128_512_2k_4k_8192_2026-05-02.jsonl`
+- `outputs/benchmarks/fast_mac_v5_trainer_free_splats_single_frame_128_512_2k_4k_8192_2026-05-02.jsonl`
+
+Completed in the first pass:
+
+- built missing variants: `v6_refined`, `v8`, `v8_hw_eval`, `v8_hw_train`,
+  `v8_project3d`, `v9_project3d_train`, `v9_hw_tile_exact_probe`
+- after build, all target reference checks passed
+- added `research_experiments/vjepa_performance/benchmark_fast_mac_variants.py`
+- ran the RGB F=3 B=1 matrix for `512,2048,4096` x `8192,65536`
+- wired `fast_mac.rgb_variant="v6_refined"` into the trainer without changing
+  the default `v5` RGB path
+- kept `F!=3` feature splatting on `v5_features`
+- added matched `v6_refined` free-splats and unconditioned-token configs
+- reran trainer throughput for free-splats and unconditioned TokenGS
+
+Most important measured facts:
+
+- The user's memory is directionally right: newer forks hit `~26-31ms`
+  backward at `2048px/65536`, while v5 is `39.4ms`.
+- At `4096px/65536`, v5 is much worse: `160.7ms` total / `112.3ms`
+  backward versus `~59-62ms` total / `~48-49ms` backward for v6/v6_refined/
+  v9-hw-tile-class paths.
+- `v6_refined` is a good TokenGS swap but not a global default yet:
+  unconditioned TokenGS improved `1.69-1.80x` on 128/1f, 128/16f, and 512/1f,
+  but free-splats 16f regressed.
+- Full 4k trainer timings are not pure raster timings; image resize/loss and
+  full backward dominate once raster is faster.
+
+Next goal for a fresh thread:
+
+1. Repeat the key trainer rows with more iterations and a fixed order to reduce
+   MPS variance.
+2. Explain why `v6_refined` regresses free-splats 16f but helps TokenGS.
+3. Run a short quality parity smoke before promoting any variant default.
+4. If more speed is needed, investigate a direct trainer integration for
+   `v9_hw_tile_exact_probe` or `v9_project3d_train`; do not treat the current
+   v9 probe wrapper as a finished backend.
+
 Read `AGENTS.md`, `BASELINES.md`, and these notes first:
 
 - `agent_notes/loose_notes/2026-05-02_18-58-58_fast_mac_render_phase_precision_probe.md`
+- `agent_notes/loose_notes/2026-05-02_19-59-25_fast_mac_variant_audit.md`
 - `agent_notes/key_learnings.md` near the fast-mac bullets
 - `src/train/renderers/fast_mac.py`
 - `third_party/fast-mac-gsplat/variants/*/benchmarks/`
