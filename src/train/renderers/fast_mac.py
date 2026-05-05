@@ -248,20 +248,33 @@ def _make_feature_config(config: FastMacRendererConfig, height: int, width: int,
             "fast_mac.feature_background must be a scalar or contain "
             f"feature_dim={feature_dim} values; got {len(config.feature_background)}."
         )
-    return FeatureRasterConfig(
-        height=height,
-        width=width,
-        tile_size=config.tile_size,
-        max_fast_pairs=config.max_fast_pairs,
-        alpha_threshold=config.alpha_threshold,
-        transmittance_threshold=config.transmittance_threshold,
-        background=background,
-        enable_overflow_fallback=config.enable_overflow_fallback,
-        inputs_sorted_by_depth=config.inputs_sorted_by_depth,
-        batch_strategy=config.batch_strategy,
-        batch_launch_limit_tiles=config.batch_launch_limit_tiles,
-        batch_launch_limit_gaussians=config.batch_launch_limit_gaussians,
-    )
+    kwargs = {
+        "height": height,
+        "width": width,
+        "tile_size": config.tile_size,
+        "max_fast_pairs": config.max_fast_pairs,
+        "alpha_threshold": config.alpha_threshold,
+        "transmittance_threshold": config.transmittance_threshold,
+        "background": background,
+        "enable_overflow_fallback": config.enable_overflow_fallback,
+        "inputs_sorted_by_depth": config.inputs_sorted_by_depth,
+        "batch_strategy": config.batch_strategy,
+        "batch_launch_limit_tiles": config.batch_launch_limit_tiles,
+        "batch_launch_limit_gaussians": config.batch_launch_limit_gaussians,
+    }
+    if config.feature_variant == "v6_refined_features":
+        kwargs.update(
+            {
+                "use_active_tiles": config.use_active_tiles,
+                "active_policy": config.active_policy,
+                "sort_active_tiles_by_count": config.sort_active_tiles_by_count,
+                "active_sparse_fraction_threshold": config.active_sparse_fraction_threshold,
+                "active_dense_multiplier": config.active_dense_multiplier,
+                "stop_count_mode": config.stop_count_mode,
+                "stop_count_dense_threshold": config.stop_count_dense_threshold,
+            }
+        )
+    return FeatureRasterConfig(**kwargs)
 
 
 def _rasterize_features_projected(
