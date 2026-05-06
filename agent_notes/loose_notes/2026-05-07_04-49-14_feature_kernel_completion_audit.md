@@ -89,3 +89,26 @@ candidate, memory unproven." Lookup was faster in those bounded rows, but the
 sampled MPS allocation was mixed and is not a true peak-memory counter. The main
 promotion blockers remain real peak-memory evidence, trainer fixed-render
 evidence, and W&B heldout-quality parity.
+
+## Post-Audit Sampled-Memory Update
+
+`v6_feature_lookup_experiment/benchmarks/benchmark_lookup_basis.py` now includes
+a background sampler for `torch.mps.current_allocated_memory()` and
+`driver_allocated_memory()` during the measured forward/backward window. This is
+still not a Metal hardware capture, but it is stronger than only reading memory
+after synchronized backward.
+
+Saved artifacts:
+
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_sampled_peak_128_b16_g2048_f32_k4_8_16.jsonl`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_sampled_peak_128_b16_g8192_f32_k4_8_16.jsonl`
+
+Read:
+
+- At `128px/B16/G8192/F32`, lookup stayed faster for K=4/8/16 and lowered
+  sampled current allocation versus direct F32.
+- At `128px/B16/G2048/F32`, lookup was faster, but K=16 used more sampled
+  current allocation than direct.
+- This upgrades the lookup branch from "memory unproven" to "sampled-memory
+  promising at the larger synthetic row." It still does not clear trainer
+  integration, true peak-memory, or heldout-quality gates.
