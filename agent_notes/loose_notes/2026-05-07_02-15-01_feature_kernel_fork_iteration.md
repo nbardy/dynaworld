@@ -37,6 +37,14 @@ Forks created:
   - allocates a fixed `tile_count * max_fast_pairs` int32 ID buffer and raises
     on overflow instead of falling back
   - passed feature/alpha and trainer fixed-render parity gates; remains opt-in
+- `variants/v6_refined_features_f32_zero_bg`
+  - copied from `f32_reduce`; the stable `v6_refined_features` kernel remains
+    untouched
+  - marks exactly-zero feature backgrounds in metadata and skips only the final
+    background-tail add
+  - keeps explicit per-pixel zero/write behavior after an attempted
+    implicit-zero allocation shortcut failed repeated-call parity
+  - passed feature/alpha gates; remains opt-in
 
 Shared doc added:
 
@@ -98,6 +106,14 @@ Saved benchmark-runner artifacts:
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_b32_fixedbin_matrix.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_fixedbin_matrix.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f64_b16_fixedbin_matrix.jsonl`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_reduce_active_off.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_active_off.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_reduce_active_on.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_active_on.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_reduce_active_off.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_active_off.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_reduce_active_on.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_active_on.json`
 - `benchmark_outputs/trainer_phase/multicam256_v6_vs_f32_gradcache_fixed_render_parity_seed0.json`
 - `benchmark_outputs/trainer_phase/multicam256_heldout_v6_vs_f32_gradcache_fixed_render_parity_seed0.json`
 - `benchmark_outputs/trainer_phase/multicam128_train_v6_vs_f32_gradcache_fixed_render_grad_parity_seed0.json`
@@ -117,7 +133,7 @@ Saved benchmark-runner artifacts:
 
 ## Validation
 
-Both new forks passed:
+The forked variants passed their local feature/alpha gates:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
@@ -153,6 +169,11 @@ max_abs=1.1641532e-10`). It then passed exact fixed-render trainer parity
 against stable `v6_refined_features`: 256px train/heldout forward parity had
 zero feature/alpha/RGB/loss diff, and 128px train/heldout gradient parity
 matched decoded sequence grads within `1.14e-09`.
+
+The `f32_zero_bg` fork passed the same feature/alpha gates after reverting the
+unsafe implicit-zero allocation shortcut. A direct parent-vs-fork parity probe
+at `B4/G512/H64/W64/F32` showed zero feature/alpha output diff for active
+off/on and max gradient diffs no larger than `2.98e-08`.
 
 ## Benchmarks
 
@@ -550,10 +571,34 @@ already shows order-one parameter-gradient diffs there. Outside that caveat,
 loss/recon/bank-rate parity. This is a useful trainer-graph drift check, not
 heldout-quality parity.
 
+Zero-background tail-skip fork, copied from `f32_reduce`, with stable kernels
+unchanged:
+
+| Shape | Active policy | Variant | Total mean ms | Forward ms | Backward ms | Artifact |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| 256px B16/G8192/F32 | off | `f32_reduce` | 386.0 | 98.0 | 287.9 | `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_reduce_active_off.json` |
+| 256px B16/G8192/F32 | off | `f32_zero_bg` | 361.1 | 89.4 | 271.7 | `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_active_off.json` |
+| 256px B16/G8192/F32 | on | `f32_reduce` | 472.0 | 140.5 | 331.5 | `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_reduce_active_on.json` |
+| 256px B16/G8192/F32 | on | `f32_zero_bg` | 454.6 | 139.8 | 314.8 | `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_active_on.json` |
+| 512px B16/G8192/F32 | off | `f32_reduce` | 610.7 | 133.3 | 477.4 | `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_reduce_active_off.json` |
+| 512px B16/G8192/F32 | off | `f32_zero_bg` | 556.7 | 127.1 | 429.6 | `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_active_off.json` |
+| 512px B16/G8192/F32 | on | `f32_reduce` | 813.4 | 293.3 | 520.1 | `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_reduce_active_on.json` |
+| 512px B16/G8192/F32 | on | `f32_zero_bg` | 761.9 | 289.7 | 472.2 | `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_active_on.json` |
+
+Read: the zero-background fork is a bounded row win, not a promotion decision.
+The only retained shader behavior change is skipping `add_background_tail` when
+the configured feature background is exactly zero; explicit pixel zero/write
+remains in place. An attempted C++ `torch::zeros` allocation shortcut plus
+omitting explicit Metal initialization produced repeated-call parity failures
+and was removed.
+
 ## Interpretation
 
 - No fork should replace the stable baseline yet. Keep `v6_refined_features`
   untouched and choose forked variants explicitly in experiment configs.
+- The `f32_zero_bg` work follows that rule: it is a copied fork selected only
+  by `render.fast_mac.feature_variant`, while `v6_refined_features` and
+  `f32_reduce` remain stable reference points.
 - Atomic reduction remains the simplest proven train-path fork. `f32_gradcache`
   won one same-session 256px fixed-render window, while `f32_fixedbin` and
   `f32_accum` tied in the later same-session window. All need heldout-quality
@@ -635,7 +680,8 @@ heldout-quality parity.
   rather than a full F32 grad vector; a two-block F64 accumulator only if we
   revisit F64 local accumulation; and active/overflow local accumulation only
   if profiles show those paths matter. The fixed-cap fast-bin host/kernel path
-  has now been tried as `f32_fixedbin`.
+  has now been tried as `f32_fixedbin`; zero-background tail skipping has now
+  been tried as `f32_zero_bg`.
 
 ## Safety Notes
 

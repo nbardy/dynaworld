@@ -50,6 +50,13 @@ FAST_MAC_V6_REFINED_FEATURES_F32_FIXEDBIN_DIR = (
     / "variants"
     / "v6_refined_features_f32_fixedbin"
 )
+FAST_MAC_V6_REFINED_FEATURES_F32_ZERO_BG_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v6_refined_features_f32_zero_bg"
+)
 
 
 def _float_tuple(value: Any, *, field_name: str) -> tuple[float, ...]:
@@ -149,6 +156,7 @@ class FastMacRendererConfig:
                     "v6_refined_features_f32_accum",
                     "v6_refined_features_f32_gradcache",
                     "v6_refined_features_f32_fixedbin",
+                    "v6_refined_features_f32_zero_bg",
                 },
             ),
             tile_size=int(values.get("tile_size", fallback_tile_size)),
@@ -270,6 +278,14 @@ def _ensure_fast_mac_v6_refined_features_f32_fixedbin_on_path() -> None:
     )
 
 
+def _ensure_fast_mac_v6_refined_features_f32_zero_bg_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V6_REFINED_FEATURES_F32_ZERO_BG_DIR,
+        package_name="torch_gsplat_bridge_v6_refined_features_f32_zero_bg",
+        label="v6_refined_features_f32_zero_bg",
+    )
+
+
 def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
     _ensure_fast_mac_v5_on_path()
     from torch_gsplat_bridge_v5 import RasterConfig
@@ -321,6 +337,11 @@ def _feature_raster_config_cls(config: FastMacRendererConfig):
         from torch_gsplat_bridge_v6_refined_features_f32_fixedbin import RasterConfig as FeatureRasterConfig
 
         return FeatureRasterConfig
+    if config.feature_variant == "v6_refined_features_f32_zero_bg":
+        _ensure_fast_mac_v6_refined_features_f32_zero_bg_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_zero_bg import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
     raise ValueError(f"Unsupported fast_mac.feature_variant={config.feature_variant!r}.")
 
 
@@ -355,6 +376,7 @@ def _make_feature_config(config: FastMacRendererConfig, height: int, width: int,
         "v6_refined_features_f32_accum",
         "v6_refined_features_f32_gradcache",
         "v6_refined_features_f32_fixedbin",
+        "v6_refined_features_f32_zero_bg",
     }:
         kwargs.update(
             {
@@ -444,6 +466,18 @@ def _rasterize_features_projected(
     if config.feature_variant == "v6_refined_features_f32_fixedbin":
         _ensure_fast_mac_v6_refined_features_f32_fixedbin_on_path()
         from torch_gsplat_bridge_v6_refined_features_f32_fixedbin import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v6_refined_features_f32_zero_bg":
+        _ensure_fast_mac_v6_refined_features_f32_zero_bg_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_zero_bg import rasterize_projected_gaussians
 
         return rasterize_projected_gaussians(
             means2d,

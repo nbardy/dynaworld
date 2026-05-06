@@ -16,7 +16,7 @@ promoted.
 | Requirement | Evidence | Status |
 | --- | --- | --- |
 | Preserve the stable working kernel | `git -C third_party/fast-mac-gsplat diff --stat -- variants/v6_refined_features` and `diff --name-only` both returned empty output. | Covered |
-| Fork new kernel versions instead of mutating baseline | New untracked variant dirs exist for `v6_refined_features_f32_reduce`, `f32_accum`, `f32_gradcache`, `f32_fixedbin`, `f32_block4`, `f64_accum64`, `f32_stage`, and `v6_feature_lookup_experiment`; no diff under stable `v6_refined_features`. | Covered |
+| Fork new kernel versions instead of mutating baseline | New untracked variant dirs exist for `v6_refined_features_f32_reduce`, `f32_accum`, `f32_gradcache`, `f32_fixedbin`, `f32_zero_bg`, `f32_block4`, `f64_accum64`, `f32_stage`, and `v6_feature_lookup_experiment`; no diff under stable `v6_refined_features`. | Covered |
 | Keep experimental forks opt-in | `src/train/renderers/fast_mac.py` dispatches by explicit `render.fast_mac.feature_variant`; checked-in configs currently reference only `v5_features` or stable `v6_refined_features`. | Covered |
 | Benchmark bigger batches/features | `research_notes/fast_mac_feature_metal_performance.md` cites local artifacts for `B=16/B32`, `F=32/F64`, `128/256/512px`, plus trainer fixed-render paths. A cited-artifact existence check over that note and the loose note produced no `MISSING` lines. | Covered as local timing evidence |
 | Drive down speed | Measured wins exist: `f32_reduce` cuts stable `512px/B16/G8192/F32` raster total from `1001.9ms` to `449.2ms`; `f32_accum` reaches `388.1ms` in one corrected-cap row; `f32_fixedbin` reaches `501.8ms` in the later target row versus `855.4/706.5/716.4ms` same-window alternatives. | Partially covered; shape-dependent |
@@ -283,3 +283,41 @@ Read: the full learned-residual graph has a stable-vs-stable MPS LayerNorm
 caveat in the precomputed-feature input normalizer. The `f32_gradcache` row
 does not show extra non-input-norm drift versus that control, but this is still
 a smoke gate. Promotion still needs heldout-quality W&B parity.
+
+## Post-Audit Zero-Background Tail-Skip Fork
+
+`v6_refined_features_f32_zero_bg` was added as a copied fork from
+`f32_reduce`. The stable `v6_refined_features` kernel and the existing
+`f32_reduce` fork were not edited; root dispatch only exposes the new fork
+through `render.fast_mac.feature_variant = "v6_refined_features_f32_zero_bg"`.
+
+Implementation boundary:
+
+- Python marks exactly-zero feature backgrounds with metadata bit `2`.
+- Existing skip-color-gradient metadata remains bit `1`.
+- Metal keeps explicit per-pixel zero/write behavior and skips only
+  `add_background_tail(...)` when the feature background is exactly zero.
+- A more aggressive attempt to rely on `torch::zeros` and skip explicit Metal
+  initialization failed repeated-call parity, so it was removed.
+
+Validation:
+
+- `alpha_output_check.py` passed tests A-F.
+- `feature_contract_check.py` passed shape, F3 v5 parity, F3/F8/F32/F64
+  gradient parity, and no-NaN checks.
+- A direct parent-vs-fork MPS parity probe at `B4/G512/H64/W64/F32` reported
+  zero feature/alpha output diff for active off/on and gradient diffs no larger
+  than `2.98e-08`.
+
+Bounded `B16/G8192/F32` timing rows:
+
+| Shape | Active policy | `f32_reduce` total | `f32_zero_bg` total | Read |
+| --- | --- | ---: | ---: | --- |
+| 256px | off | `386.0ms` | `361.1ms` | win |
+| 256px | on | `472.0ms` | `454.6ms` | win |
+| 512px | off | `610.7ms` | `556.7ms` | win |
+| 512px | on | `813.4ms` | `761.9ms` | win |
+
+This is a useful bounded fork, not a promotion decision. It still needs
+trainer fixed-render timing, full camera-swap parity if wired into training,
+and W&B heldout-quality parity before any default config should point at it.

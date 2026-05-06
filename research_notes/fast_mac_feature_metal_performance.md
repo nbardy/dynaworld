@@ -20,6 +20,8 @@ Date: 2026-05-07
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_block4`
 - F32 fixed-cap binning no-overflow experiment / target-row timing candidate:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_fixedbin`
+- F32 zero-background tail-skip experiment / bounded timing candidate:
+  `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_zero_bg`
 - Compact-basis feature lookup prototype:
   `third_party/fast-mac-gsplat/variants/v6_feature_lookup_experiment`
 - Safe benchmark runner:
@@ -28,7 +30,8 @@ Date: 2026-05-07
   `render.fast_mac.feature_variant = "v6_refined_features_f32_reduce"`,
   `"v6_refined_features_f32_accum"`,
   `"v6_refined_features_f32_gradcache"`, or
-  `"v6_refined_features_f32_fixedbin"`
+  `"v6_refined_features_f32_fixedbin"`, or
+  `"v6_refined_features_f32_zero_bg"`
 
 No checked-in trainer config points at the new experimental forks yet. Keep it
 that way until a larger trainer phase trace and heldout-quality parity check
@@ -156,6 +159,32 @@ candidate: it removes the exact-size bin allocation sync and wins the target
 synthetic `512px/B16/F32` row, but the fixed ID buffer is large and the win is
 not monotonic across `256px` or trainer-fixed-render rows. Keep it opt-in and
 no-overflow-only.
+
+Zero-background tail-skip fork, `GSP_CHUNK=64`, `GSP_FAST_CAP=2048`,
+`B16/G8192/F32`, `case=medium_sigma_3_8`, copied from `f32_reduce` and
+selected only through
+`render.fast_mac.feature_variant = "v6_refined_features_f32_zero_bg"`:
+
+| Shape | Active policy | Variant | forward ms | backward ms | total mean ms | Artifact |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| 256px B16/G8192/F32 | off | `v6_refined_features_f32_reduce` | 98.0 | 287.9 | 386.0 | `2026-05-07_256_f32_b16_g8192_zero_bg_reduce_active_off.json` |
+| 256px B16/G8192/F32 | off | `v6_refined_features_f32_zero_bg` | 89.4 | 271.7 | 361.1 | `2026-05-07_256_f32_b16_g8192_zero_bg_active_off.json` |
+| 256px B16/G8192/F32 | on | `v6_refined_features_f32_reduce` | 140.5 | 331.5 | 472.0 | `2026-05-07_256_f32_b16_g8192_zero_bg_reduce_active_on.json` |
+| 256px B16/G8192/F32 | on | `v6_refined_features_f32_zero_bg` | 139.8 | 314.8 | 454.6 | `2026-05-07_256_f32_b16_g8192_zero_bg_active_on.json` |
+| 512px B16/G8192/F32 | off | `v6_refined_features_f32_reduce` | 133.3 | 477.4 | 610.7 | `2026-05-07_512_f32_b16_g8192_zero_bg_reduce_active_off.json` |
+| 512px B16/G8192/F32 | off | `v6_refined_features_f32_zero_bg` | 127.1 | 429.6 | 556.7 | `2026-05-07_512_f32_b16_g8192_zero_bg_active_off.json` |
+| 512px B16/G8192/F32 | on | `v6_refined_features_f32_reduce` | 293.3 | 520.1 | 813.4 | `2026-05-07_512_f32_b16_g8192_zero_bg_reduce_active_on.json` |
+| 512px B16/G8192/F32 | on | `v6_refined_features_f32_zero_bg` | 289.7 | 472.2 | 761.9 | `2026-05-07_512_f32_b16_g8192_zero_bg_active_on.json` |
+
+Read: the zero-background fork is a bounded win on these short rows, mostly in
+backward/total timing even though the intentional kernel change only skips the
+final background-tail add when the feature background is exactly zero. Treat
+that backward delta as session-local timing evidence, not a proven causal
+mechanism. The stable `v6_refined_features` and `f32_reduce` kernels were not
+edited. A more aggressive attempt to rely on `torch::zeros`/implicit Metal
+initialization instead of explicit per-pixel zero/write failed parity after
+repeated calls, so the committed fork keeps explicit zero/write behavior and
+only skips the tail add.
 
 Profile sanity check, 128px/B16/G8192/F32 forward-only with f32_reduce:
 
@@ -744,6 +773,14 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_b32_fixedbin_matrix.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_fixedbin_matrix.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f64_b16_fixedbin_matrix.jsonl`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_reduce_active_off.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_active_off.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_reduce_active_on.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_g8192_zero_bg_active_on.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_reduce_active_off.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_active_off.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_reduce_active_on.json`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_g8192_zero_bg_active_on.json`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_128_b4_g2048_f32_k4_8_16.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_128_b16_g2048_f32_k4_8_16.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_sampled_peak_128_b16_g2048_f32_k4_8_16.jsonl`
@@ -820,9 +857,15 @@ speedup.
    `f32_reduce`, so keep it as a synthetic/eval candidate rather than the
    primary trainer candidate.
 
-2. Zero-background active fill:
-   In active F32 mode, avoid repeated full-channel fills when background is all
-   zero. This should be isolated from direct fast mode.
+2. Zero-background active fill / tail skip:
+   Done as `v6_refined_features_f32_zero_bg`, copied from `f32_reduce` and
+   kept opt-in. The safe version preserves explicit per-pixel zero/write and
+   skips only the final background-tail add when feature background is exactly
+   zero. It wins bounded 256px/512px B16/G8192/F32 rows against `f32_reduce`,
+   but it is not a baseline replacement. Do not revive the rejected
+   implicit-zero allocation path without a repeated-call parity test; relying
+   on `torch::zeros` before custom Metal `+=` writes produced order-dependent
+   mismatches.
 
 3. No-color-gradient allocation cleanup:
    Done in `v6_refined_features_f32_reduce`: when Python marks color gradients
