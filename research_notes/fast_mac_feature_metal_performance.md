@@ -443,9 +443,49 @@ Relevant official docs:
 - https://developer.apple.com/documentation/metal/creating-threads-and-threadgroups
 - https://developer.apple.com/documentation/metal/calculating-threadgroup-and-grid-sizes
 - https://developer.apple.com/documentation/metal/mtlcomputepipelinestate/threadexecutionwidth
+- https://developer.apple.com/documentation/metal/mtlcomputepipelinestate/maxtotalthreadsperthreadgroup
 - https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/setthreadgroupmemorylength(_:index:)
+- https://developer.apple.com/documentation/metal/compute-passes
+- https://developer.apple.com/documentation/metal/setting-resource-storage-modes
+- https://developer.apple.com/metal/capabilities/
 - https://developer.apple.com/documentation/apple-silicon/porting-your-metal-code-to-apple-silicon
 - https://developer.apple.com/documentation/xcode/finding-your-metal-apps-gpu-occupancy
+
+Official-doc implications for these forks:
+
+- Treat `threadExecutionWidth` and `maxTotalThreadsPerThreadgroup` as runtime
+  pipeline facts, not constants from one machine. The feature tables report
+  theoretical limits, but Apple also documents that the actual threadgroup max
+  is pipeline-specific. The current kernels use 16x16 threadgroups and assume
+  `GSP_SIMD_WIDTH=32`; keep that assumption guarded by local validation before
+  generalizing to every Apple GPU family.
+- Divergence inside a SIMD group is expensive by construction because divergent
+  branches serialize the paths for that SIMD group. In this rasterizer, the
+  dangerous divergence is not just `if (contributes)`: it is branch structure
+  around barrier count, overflow/fallback paths, and per-feature loops. Any new
+  fork must keep barrier execution uniform across all threads in a threadgroup.
+- Threadgroup memory is a shared resource with alignment and per-pipeline
+  limits. The feature-table row for threadgroup-memory alignment is 16 bytes,
+  and the table notes that imageblock/threadgroup allocations share a total
+  budget on relevant families. That matches the measured staging result:
+  adding `[GSP_CHUNK,F]` scratch can reduce global reads while still losing
+  occupancy or resident threadgroups.
+- `dispatchThreads(..., threadsPerThreadgroup:)` supports arbitrary-sized grids
+  on devices with nonuniform threadgroups. That helps boundary handling, but it
+  does not solve the real pressure here because our hot path is one thread per
+  dense output pixel and the feature dimension lives inside each thread's loop
+  and private state.
+- Apple silicon defaults many resources to shared storage, while GPU-only
+  temporary resources should prefer private or memoryless storage when the app
+  owns allocation. In this PyTorch extension most hot inputs/outputs are tensor
+  buffers owned by PyTorch, so storage-mode tuning is mainly relevant for
+  fork-owned temporary buffers such as fixedbin IDs or future scratch buffers.
+- Compute encoders can encode multiple dispatches in one pass, but the encoder
+  itself is not the place to hide Python/PyTorch graph pressure. The measured
+  trainer bottleneck is mostly `autograd_backward_total`, dense feature
+  surfaces, and MPS allocations; a lower-level Metal command-encoding trick is
+  only useful if it removes an allocation, readback, or dispatch from that
+  graph.
 
 ## Bottlenecks
 
