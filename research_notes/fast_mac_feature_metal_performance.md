@@ -380,6 +380,22 @@ render/loss preflight gate. Real trainer wiring still needs a train-step smoke
 because camera-swap relpose, regularizers, optimizer order, and W&B validation
 are outside this fixed-render graph.
 
+Whole `trainer.step()` sampled-memory smoke, same 256px learned-residual
+camera-swap config, `seed=0`, `warmup=0`, `iters=1`, no preview logging:
+
+| Variant | elapsed ms | sampled peak current bytes | sampled peak driver bytes | loss | Artifact |
+| --- | ---: | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | 4822.1 | 2933897216 | 3670294528 | 0.331625 | `multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json` |
+| `v6_refined_features_f32_gradcache` | 3952.1 | 2933896192 | 3670294528 | 0.331625 | `multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json` |
+
+Read: this is the first artifact that exercises the actual
+`camera_swap_mode=learned_residual` step path rather than only fixed-render
+loss. It supports the full-batch `f32_gradcache` timing direction, but does not
+solve the memory problem: both variants peak around `2.93 GB` current allocation
+because the full camera-swap graph keeps multiple source/query renders and
+relpose losses live. Treat it as a smoke, not a stable throughput benchmark;
+next timing rows need warmup/iters inside one process or trainer-level chunking.
+
 Fixed-render output parity, same 256px seeded clip:
 
 | Baseline | Candidate | max feature diff | max alpha diff | max RGB diff | loss diff | Artifact |
@@ -733,6 +749,8 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
 - `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_chunk8_vs_batched_backward_parity_seed0.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_chunk8_vs_batched_backward_parity_seed0.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json`
 
 Small batch-strategy smoke, `128x128`, `G=1024`, `F=32`,
 `case=medium_sigma_3_8`, `warmup=1`, `iters=2`, fwd+bwd:

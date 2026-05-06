@@ -523,6 +523,13 @@ Chunk8 fixed-render backward-mode parity:
 | stable `v6_refined_features` | 7.45e-09 | 8.15e-10 | 4.05e-08 | `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_chunk8_vs_batched_backward_parity_seed0.json` |
 | `v6_refined_features_f32_gradcache` | 7.45e-09 | 8.44e-10 | 4.05e-08 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_chunk8_vs_batched_backward_parity_seed0.json` |
 
+Whole-step sampled-memory smoke, actual learned-residual trainer path:
+
+| Variant | Elapsed ms | Sampled peak current bytes | Sampled peak driver bytes | Loss | Artifact |
+| --- | ---: | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | 4822.1 | 2933897216 | 3670294528 | 0.3316246 | `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json` |
+| `v6_refined_features_f32_gradcache` | 3952.1 | 2933896192 | 3670294528 | 0.3316246 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json` |
+
 ## Interpretation
 
 - No fork should replace the stable baseline yet. Keep `v6_refined_features`
@@ -593,6 +600,11 @@ Chunk8 fixed-render backward-mode parity:
   evidence only until wired into the trainer with a parity/quality smoke. The
   new fixed-render parity gate proves chunk8 backward-order equivalence for
   render/loss gradients, but not camera-swap relpose or regularizer behavior.
+- The whole-step smoke exercises camera-swap learned-residual training and
+  supports the full-batch `f32_gradcache` timing direction, but peak current
+  stays around `2.93GB` for both variants. The memory problem has moved above
+  the isolated raster fork: the live camera-swap graph keeps multiple
+  source/query renders and relpose losses resident.
 - Next kernel forks worth trying: a lower-private-pressure `float4` block cache
   rather than a full F32 grad vector; a two-block F64 accumulator only if we
   revisit F64 local accumulation; and active/overflow local accumulation only

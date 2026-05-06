@@ -220,3 +220,28 @@ batched backward to MPS noise for both the stable path and the current batched
 timing candidate. This still does not clear real multicam trainer wiring,
 because camera-swap relpose, regularizers, optimizer order, and W&B heldout
 validation are outside the fixed-render graph.
+
+## Post-Audit Whole-Step Memory Smoke
+
+`src/benchmarks/train_step_memory_benchmark.py` now times and samples memory
+around the actual `trainer.step()` call. This is separate from fixed-render
+phase isolation and exercises the active `camera_swap_mode=learned_residual`
+path.
+
+Saved 256px train-step artifacts:
+
+- `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json`
+
+Read:
+
+- Stable `v6_refined_features`: `4822.1ms`, sampled current `2933897216`,
+  sampled driver `3670294528`, loss `0.3316246`.
+- `f32_gradcache`: `3952.1ms`, sampled current `2933896192`, sampled driver
+  `3670294528`, loss `0.3316246`.
+
+Updated interpretation: the real learned-residual step supports the full-batch
+`f32_gradcache` timing direction, but memory is unchanged and much higher than
+fixed-render because camera-swap renders multiple source/query pairs and keeps
+relpose/cycle graph pieces live. This is a one-step smoke, not a warmed
+throughput benchmark or promotion gate.
