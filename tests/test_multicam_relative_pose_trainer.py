@@ -26,6 +26,11 @@ F32_JOINT_CONFIG = (
     / "src/train_configs/"
     "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_128_16f_8192splats_goodset_train0006_0014_holdout0005.jsonc"
 )
+F32_256_JOINT_CONFIG = (
+    REPO_ROOT
+    / "src/train_configs/"
+    "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_256_16f_8192splats_goodset_train0006_0014_holdout0005.jsonc"
+)
 OFFSET_ONLY_CONFIG = (
     REPO_ROOT
     / "src/train_configs/"
@@ -69,11 +74,31 @@ def test_f32_joint_full_relpose_config_resolves_feature_splatting_path() -> None
     assert cfg["model"]["feature_dim"] == 32
     assert cfg["colorize"]["pre_norm"] is True
     assert cfg["colorize"]["weight_init"] == "kaiming"
+    assert cfg["render"]["fast_mac"]["feature_variant"] == "v5_features"
     assert cfg["render"]["fast_mac"]["feature_background"] == 0.0
     assert cfg["logging"]["feature_pca_log"] is True
     assert "feature-splatting" in cfg["logging"]["wandb_tags"]
     assert cfg["train"]["checkpoint_save_path"] == Path(
         "outputs/multicam_relative_pose/full_relpose_features_F32_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
+    )
+
+
+def test_f32_256_joint_full_relpose_config_keeps_modern_feature_settings() -> None:
+    cfg = MulticamRelativePoseImplicitTrainer.resolve_config(load_config_file(F32_256_JOINT_CONFIG))
+
+    assert cfg["model"]["size"] == 256
+    assert cfg["render"]["render_size"] == 256
+    assert cfg["model"]["feature_dim"] == 32
+    assert cfg["features"]["cache_dir"] == Path(
+        "data/feature_cache/multicam_deepview_static_dynamic_vjepa2_1_vitb_384_256px"
+    )
+    assert "256-16f" in cfg["features"]["sample_cache_key"]
+    assert cfg["render"]["fast_mac"]["feature_variant"] == "v5_features"
+    assert cfg["render"]["fast_mac"]["feature_background"] == 0.0
+    assert cfg["logging"]["feature_pca_log"] is True
+    assert "256px" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["checkpoint_save_path"] == Path(
+        "outputs/multicam_relative_pose/full_relpose_features_F32_256_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
     )
 
 

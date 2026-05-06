@@ -1,8 +1,8 @@
 {
-  // F32 feature-splatting sibling of the no-VGGT full relative-pose multicam
-  // goodset run. This keeps the same overlap split and first-frame relpose
-  // contract as the RGB run, but changes the splat payload from RGB-3 to
-  // F=32 features rendered through v5_features + FeatureToColor.
+  // 256px F32 feature-splatting sibling of the no-VGGT full relative-pose
+  // multicam goodset run. This keeps the same overlap split and first-frame
+  // relpose contract as the 128px F32 config, but increases the input/render
+  // size to match the most successful recent F32 multicam baseline resolution.
   "arch": "multicam_relative_pose_implicit_camera",
   "data": {
     "sequence_dir": "test_data",
@@ -23,8 +23,8 @@
   "features": {
     "extractor": "vjepa_torchhub",
     "model_id": "vjepa2_1_vit_base_384",
-    "cache_dir": "data/feature_cache/multicam_deepview_static_dynamic_vjepa2_1_vitb_384",
-    "sample_cache_key": "multicam-deepview-3cam-train2-test1-full-relpose-vjepa2-1-vitb-384-128-16f-v1",
+    "cache_dir": "data/feature_cache/multicam_deepview_static_dynamic_vjepa2_1_vitb_384_256px",
+    "sample_cache_key": "multicam-deepview-3cam-train2-test1-full-relpose-vjepa2-1-vitb-384-256-16f-v1",
     "cache_version": 1,
     "force_rebake": false,
     "keep_in_memory": true,
@@ -44,7 +44,7 @@
     "video_feature_token_stride": 9,
     "video_feature_output_dtype": "bf16",
     "camera_refine_with_decode_time": false,
-    "size": 128,
+    "size": 256,
     "train_frame_count": 16,
     "tokens": 128,
     "static_tokens": 96,
@@ -105,7 +105,7 @@
   },
   "render": {
     "renderer": "fast_mac",
-    "render_size": 128,
+    "render_size": 256,
     "auto_dense_limit": 400000,
     "tile_size": 16,
     "bound_scale": 3.0,
@@ -151,7 +151,7 @@
     "relpose_identity_loss_weight": 0.1,
     "relpose_cycle_loss_weight": 0.1,
     "checkpoint_load_path": null,
-    "checkpoint_save_path": "outputs/multicam_relative_pose/full_relpose_features_F32_goodset_train0006_0014_holdout0005/checkpoint_final.pt",
+    "checkpoint_save_path": "outputs/multicam_relative_pose/full_relpose_features_F32_256_goodset_train0006_0014_holdout0005/checkpoint_final.pt",
     "amp": false,
     "amp_dtype": "bf16",
     "recon_backward_strategy": "batched",
@@ -194,7 +194,7 @@
     "always_log_last_step": true,
     "feature_pca_log": true,
     "wandb_project": "dynaworld",
-    "wandb_run_name": "multicam-deepview-3cam-goodset-train0006-0014-holdout0005-vjepa-full-relpose-features-F32-128px",
+    "wandb_run_name": "multicam-deepview-3cam-goodset-train0006-0014-holdout0005-vjepa-full-relpose-features-F32-256px",
     "wandb_tags": [
       "feature-splatting",
       "feature-dim-32",
@@ -212,7 +212,7 @@
       "vjepa2-1",
       "torchhub",
       "vitb-384",
-      "128px",
+      "256px",
       "16f",
       "fast-mac",
       "8192splats",
