@@ -7,6 +7,7 @@ import torch
 
 from pipeline.render import gaussian_sequence_slice, prepare_clip, stack_complete_frame_list
 from pipeline.validation_media import (
+    compose_multicam_feature_gt_render_grid,
     compose_gt_pred_alpha_pca_grid,
     render_diagnostics_payload,
 )
@@ -34,6 +35,30 @@ def test_compose_gt_pred_alpha_pca_grid_returns_only_diagnostic_composites() -> 
     assert torch.equal(grid[..., 5:10], pred)
     assert torch.equal(grid[..., 10:15], alpha_video)
     assert torch.equal(grid[..., 15:20], pca_video)
+
+
+def test_compose_multicam_feature_gt_render_grid_uses_media_rows_and_camera_columns() -> None:
+    feature0 = torch.full((2, 3, 4, 5), 0.10)
+    feature1 = torch.full((2, 3, 4, 5), 0.20)
+    gt0 = torch.full((2, 3, 4, 5), 0.30)
+    gt1 = torch.full((2, 3, 4, 5), 0.40)
+    render0 = torch.full((2, 3, 4, 5), 0.50)
+    render1 = torch.full((2, 3, 4, 5), 0.60)
+
+    grid = compose_multicam_feature_gt_render_grid(
+        feature_videos=[feature0, feature1],
+        gt_videos=[gt0, gt1],
+        render_videos=[render0, render1],
+    )
+
+    assert grid is not None
+    assert grid.shape == (2, 3, 12, 10)
+    assert torch.equal(grid[..., 0:4, 0:5], feature0)
+    assert torch.equal(grid[..., 0:4, 5:10], feature1)
+    assert torch.equal(grid[..., 4:8, 0:5], gt0)
+    assert torch.equal(grid[..., 4:8, 5:10], gt1)
+    assert torch.equal(grid[..., 8:12, 0:5], render0)
+    assert torch.equal(grid[..., 8:12, 5:10], render1)
 
 
 def test_render_diagnostics_payload_requires_features_when_pca_enabled() -> None:

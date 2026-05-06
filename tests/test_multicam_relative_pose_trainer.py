@@ -21,6 +21,11 @@ JOINT_CONFIG = (
     / "src/train_configs/"
     "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_128_16f_8192splats_goodset_train0006_0014_holdout0005.jsonc"
 )
+F32_JOINT_CONFIG = (
+    REPO_ROOT
+    / "src/train_configs/"
+    "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_128_16f_8192splats_goodset_train0006_0014_holdout0005.jsonc"
+)
 OFFSET_ONLY_CONFIG = (
     REPO_ROOT
     / "src/train_configs/"
@@ -55,6 +60,20 @@ def test_joint_full_relpose_config_resolves_predicted_heldout_mode() -> None:
     assert cfg["data"]["multicam_heldout_camera"] == "camera_0005"
     assert cfg["train"]["checkpoint_save_path"] == Path(
         "outputs/multicam_relative_pose/full_relpose_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
+    )
+
+
+def test_f32_joint_full_relpose_config_resolves_feature_splatting_path() -> None:
+    cfg = MulticamRelativePoseImplicitTrainer.resolve_config(load_config_file(F32_JOINT_CONFIG))
+
+    assert cfg["model"]["feature_dim"] == 32
+    assert cfg["colorize"]["pre_norm"] is True
+    assert cfg["colorize"]["weight_init"] == "kaiming"
+    assert cfg["render"]["fast_mac"]["feature_background"] == 0.0
+    assert cfg["logging"]["feature_pca_log"] is True
+    assert "feature-splatting" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["checkpoint_save_path"] == Path(
+        "outputs/multicam_relative_pose/full_relpose_features_F32_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
     )
 
 

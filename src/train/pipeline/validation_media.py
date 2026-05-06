@@ -23,6 +23,7 @@ from train_logging import (
 __all__ = [
     "alpha_to_grayscale_video",
     "compose_gt_pred_alpha_pca_grid",
+    "compose_multicam_feature_gt_render_grid",
     "compose_multicam_diagnostic_grid",
     "scalar_payload",
     "render_preview_image",
@@ -94,6 +95,48 @@ def compose_multicam_diagnostic_grid(rows: list[torch.Tensor]) -> torch.Tensor |
                 f"row0={tuple(reference_shape)}, row{index}={tuple(row.shape)}."
             )
     return torch.cat(rows, dim=-2)
+
+
+def compose_multicam_feature_gt_render_grid(
+    *,
+    feature_videos: list[torch.Tensor],
+    gt_videos: list[torch.Tensor],
+    render_videos: list[torch.Tensor],
+) -> torch.Tensor | None:
+    """Build a camera-column grid with rows FeaturePCA / GT / Render.
+
+    Each input clip must be [T, 3, H, W]. The output is
+    [T, 3, 3*H, camera_count*W], with cameras concatenated left-to-right and
+    media types stacked top-to-bottom. Returns None when feature videos are not
+    available, since the GT/Render two-row case is already covered by the
+    existing per-view and GT|Pred media.
+    """
+    if not feature_videos:
+        return None
+    camera_count = len(gt_videos)
+    if camera_count == 0:
+        return None
+    if len(feature_videos) != camera_count or len(render_videos) != camera_count:
+        raise ValueError(
+            "Multicam Feature/GT/Render grid requires matching camera counts: "
+            f"features={len(feature_videos)}, gt={len(gt_videos)}, render={len(render_videos)}."
+        )
+    reference_shape = feature_videos[0].shape
+    for label, videos in (("feature", feature_videos), ("gt", gt_videos), ("render", render_videos)):
+        for index, video in enumerate(videos):
+            if video.shape != reference_shape:
+                raise ValueError(
+                    "Multicam Feature/GT/Render grid clips must have identical shape; "
+                    f"feature0={tuple(reference_shape)}, {label}{index}={tuple(video.shape)}."
+                )
+    return torch.cat(
+        [
+            torch.cat(feature_videos, dim=-1),
+            torch.cat(gt_videos, dim=-1),
+            torch.cat(render_videos, dim=-1),
+        ],
+        dim=-2,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -333,6 +376,9 @@ def multicam_validation_video_payload(
     feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
     payload: dict[str, Any] = {"Eval/SequenceCount": 1, **camera_rig_metrics}
     comparison_rows: list[torch.Tensor] = []
+    camera_grid_targets: list[torch.Tensor] = []
+    camera_grid_renders: list[torch.Tensor] = []
+    camera_grid_feature_sources: list[torch.Tensor] = []
 
     for view, rendered in enumerate(train_rendered):
         target = train_targets[view]
@@ -363,6 +409,10 @@ def multicam_validation_video_payload(
         )
         if composite is not None:
             comparison_rows.append(composite)
+        if pca_video is not None:
+            camera_grid_feature_sources.append(rendered.features)
+            camera_grid_targets.append(target)
+            camera_grid_renders.append(rendered.rgb)
         if not gt_video_logged:
             payload[f"{prefix}_GT_Video"] = make_wandb_video(target, fps)
 
@@ -393,12 +443,32 @@ def multicam_validation_video_payload(
         )
         if composite is not None:
             comparison_rows.append(composite)
+        if pca_video is not None:
+            camera_grid_feature_sources.append(rendered.features)
+            camera_grid_targets.append(heldout_target)
+            camera_grid_renders.append(rendered.rgb)
         if not gt_video_logged:
             payload[f"{prefix}_GT_Video"] = make_wandb_video(heldout_target, fps)
 
     comparison_grid = compose_multicam_diagnostic_grid(comparison_rows)
     if comparison_grid is not None:
         payload["Multicam_GT_Splat_Alpha_Feature_Grid_Video"] = make_wandb_video(comparison_grid, fps)
+    camera_grid_features: list[torch.Tensor] = []
+    if camera_grid_feature_sources:
+        from feature_pca_viz import feature_pca_to_rgb
+
+        pca_batch = feature_pca_to_rgb(torch.stack(camera_grid_feature_sources, dim=0))
+        camera_grid_features = [pca_batch[index] for index in range(pca_batch.shape[0])]
+    feature_gt_render_grid = compose_multicam_feature_gt_render_grid(
+        feature_videos=camera_grid_features,
+        gt_videos=camera_grid_targets,
+        render_videos=camera_grid_renders,
+    )
+    if feature_gt_render_grid is not None:
+        payload["Multicam_Feature_GT_Render_ByCamera_Grid_Video"] = make_wandb_video(
+            feature_gt_render_grid,
+            fps,
+        )
 
     summary = {
         key: round(float(value), 4)
