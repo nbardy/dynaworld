@@ -516,6 +516,13 @@ backward and sampled memory:
 | `v6_refined_features_f32_gradcache` | 8 | 4 | 1257.7 | 567056896 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
 | `v6_refined_features_f32_gradcache` | 4 | 8 | 1528.1 | 365686016 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
 
+Chunk8 fixed-render backward-mode parity:
+
+| Variant | Loss abs diff | Max sequence grad diff | Max colorize grad diff | Artifact |
+| --- | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | 7.45e-09 | 8.15e-10 | 4.05e-08 | `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_chunk8_vs_batched_backward_parity_seed0.json` |
+| `v6_refined_features_f32_gradcache` | 7.45e-09 | 8.44e-10 | 4.05e-08 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_chunk8_vs_batched_backward_parity_seed0.json` |
+
 ## Interpretation
 
 - No fork should replace the stable baseline yet. Keep `v6_refined_features`
@@ -583,7 +590,9 @@ backward and sampled memory:
   with chunked backward cut sampled current allocation by about `60%`; the
   stable row paid about `14%` fixed-render time, while the shared-background
   `f32_gradcache` rerun lost its batched-mode speed edge. It is benchmark
-  evidence only until wired into the trainer with a parity/quality smoke.
+  evidence only until wired into the trainer with a parity/quality smoke. The
+  new fixed-render parity gate proves chunk8 backward-order equivalence for
+  render/loss gradients, but not camera-swap relpose or regularizer behavior.
 - Next kernel forks worth trying: a lower-private-pressure `float4` block cache
   rather than a full F32 grad vector; a two-block F64 accumulator only if we
   revisit F64 local accumulation; and active/overflow local accumulation only

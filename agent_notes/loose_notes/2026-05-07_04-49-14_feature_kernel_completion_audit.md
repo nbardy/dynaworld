@@ -195,3 +195,28 @@ backward much slower, so chunking and kernel choice should be benchmarked
 together in the same session before promotion. Real trainer wiring still needs
 a parity/quality smoke because it changes backward accumulation order and must
 preserve shared train-background semantics.
+
+## Post-Audit Chunked-Backward Parity Gate
+
+`src/benchmarks/fixed_render_backward_mode_parity.py` now compares full-target
+batched backward against temporal chunked backward on the same fixed render/loss
+graph. It aggregates chunk gradients back into the full 16-frame layout before
+comparing.
+
+Saved 256px train artifacts:
+
+- `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_chunk8_vs_batched_backward_parity_seed0.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_chunk8_vs_batched_backward_parity_seed0.json`
+
+Read:
+
+- Stable `v6_refined_features`: loss abs diff `7.45e-09`, max sequence grad
+  diff `8.15e-10`, max colorize grad diff `4.05e-08`.
+- `f32_gradcache`: loss abs diff `7.45e-09`, max sequence grad diff
+  `8.44e-10`, max colorize grad diff `4.05e-08`.
+
+Updated interpretation: chunk8 fixed-render backward is gradient-equivalent to
+batched backward to MPS noise for both the stable path and the current batched
+timing candidate. This still does not clear real multicam trainer wiring,
+because camera-swap relpose, regularizers, optimizer order, and W&B heldout
+validation are outside the fixed-render graph.

@@ -367,6 +367,19 @@ smaller frame chunks reduce `[T,H,W,F]` graph residency more than any current
 kernel fork, but extra project/raster/loss/backward launches cost time and
 interact with kernel variant rankings.
 
+Chunked-backward fixed-render parity, same 256px train graph and chunk size 8:
+
+| Variant | loss abs diff | max sequence grad diff | max colorize grad diff | Artifact |
+| --- | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | 7.45e-09 | 8.15e-10 | 4.05e-08 | `multicam256_v6_refined_features_chunk8_vs_batched_backward_parity_seed0.json` |
+| `v6_refined_features_f32_gradcache` | 7.45e-09 | 8.44e-10 | 4.05e-08 | `multicam256_f32_gradcache_chunk8_vs_batched_backward_parity_seed0.json` |
+
+Read: fixed-render chunked backward matches batched backward to MPS noise for
+the stable kernel and the current full-batch timing candidate. This is only a
+render/loss preflight gate. Real trainer wiring still needs a train-step smoke
+because camera-swap relpose, regularizers, optimizer order, and W&B validation
+are outside this fixed-render graph.
+
 Fixed-render output parity, same 256px seeded clip:
 
 | Baseline | Candidate | max feature diff | max alpha diff | max RGB diff | loss diff | Artifact |
@@ -718,6 +731,8 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_chunk8_vs_batched_backward_parity_seed0.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_chunk8_vs_batched_backward_parity_seed0.json`
 
 Small batch-strategy smoke, `128x128`, `G=1024`, `F=32`,
 `case=medium_sigma_3_8`, `warmup=1`, `iters=2`, fwd+bwd:
@@ -773,9 +788,10 @@ speedup.
    `--fixed-render-backward-mode chunked`. At 256px, chunk size 8 reduced
    sampled current allocation by about `60%`. The stable row paid an `~14%`
    timing cost; `f32_gradcache` lost its batched-mode speed edge in the
-   shared-background chunked rerun. This should be wired into the real multicam
-   trainer only after a parity/quality smoke, because it changes backward
-   accumulation order and must preserve shared train-background semantics.
+   shared-background chunked rerun. `fixed_render_backward_mode_parity.py`
+   confirms chunk8 fixed-render gradients match batched gradients for stable
+   and `f32_gradcache`; the remaining gate before real trainer wiring is a
+   train-step smoke covering camera-swap relpose and regularizers.
 
 5. Better trainer-phase isolation:
    Done in `src/benchmarks/trainer_phase_benchmark.py` via

@@ -212,7 +212,7 @@ class FixedRenderChunk:
 @dataclass(frozen=True)
 class FixedRenderCase:
     chunks: tuple[FixedRenderChunk, ...]
-    background: torch.Tensor | None
+    background: BackgroundSample | None
     total_frames: int
     setup_phases_ms: dict[str, float]
     temporal_chunk_size: int | None = None
