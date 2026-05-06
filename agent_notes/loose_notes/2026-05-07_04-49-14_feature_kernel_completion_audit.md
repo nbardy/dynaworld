@@ -70,3 +70,22 @@ The current state is a strong local benchmark and documentation checkpoint, but
 the larger goal is not complete. The next decision should be either a scoped
 commit of this checkpoint or one real train/heldout-quality run using the best
 opt-in candidate.
+
+## Post-Audit Update
+
+After this audit, the checkpoint was committed and the lookup prototype received
+two additional gates:
+
+- `v6_feature_lookup_experiment/tests/feature_lookup_parity_check.py` now checks
+  compact-basis direct-vs-lookup parity for features, alpha, loss, and gradients
+  through means/conics/compact weights/lookup/opacities. It also verifies the
+  current ID skeleton matches densified compact coefficients.
+- `v6_feature_lookup_experiment/benchmarks/benchmark_lookup_basis.py` now
+  records bounded direct-F32 versus compact K lookup timings. Saved local
+  artifacts cover `128px/G2048/F32` for B4 and B16 with K=4/8/16.
+
+The result changes the lookup branch status from "math/API only" to "timing
+candidate, memory unproven." Lookup was faster in those bounded rows, but the
+sampled MPS allocation was mixed and is not a true peak-memory counter. The main
+promotion blockers remain real peak-memory evidence, trainer fixed-render
+evidence, and W&B heldout-quality parity.
