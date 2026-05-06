@@ -327,3 +327,85 @@ Interpretation: the implementation path is wired and no longer produces a flat
 green smoke artifact. It still needs the full 512px/56f/180-step run to learn
 whether the progressive schedule actually prevents the late camera spin seen in
 the earlier integrated-drone run.
+
+## Full Progressive-Clamped Run
+
+Run:
+
+```text
+PYTHONPATH=src/train .venv/bin/python \
+  src/train/train_dynamic_powerfoam_metal.py \
+  src/train_configs/local_mac_token_dynamic_powerfoam_features_F32_1024_128dyn_drone_camera_progressive_clamped_youtube_hlaZbH_center_crop_8fps_512_56f_180step.jsonc
+```
+
+W&B:
+
+```text
+https://wandb.ai/nbardy/dynaworld/runs/c4s320dh
+```
+
+Output:
+
+```text
+outputs/dynamic_powerfoam_metal/local_mac_token_dynamic_powerfoam_features_F32_1024_128dyn_drone_camera_progressive_clamped_youtube_hlaZbH_center_crop_8fps_512_56f_180step
+```
+
+Eval summary:
+
+```text
+step 0:   mean PSNR 11.0943, min PSNR 8.4796, L1 0.24636, active camera frames 1
+step 60:  mean PSNR  9.9114, min PSNR 5.4861, L1 0.26594, active camera frames 16
+step 120: mean PSNR 11.3746, min PSNR 6.0958, L1 0.21840, active camera frames 36
+step 180: mean PSNR 13.0775, min PSNR 6.2103, L1 0.16383, active camera frames 56
+```
+
+Final artifacts:
+
+```text
+outputs/dynamic_powerfoam_metal/local_mac_token_dynamic_powerfoam_features_F32_1024_128dyn_drone_camera_progressive_clamped_youtube_hlaZbH_center_crop_8fps_512_56f_180step/render_step_0180.mp4
+outputs/dynamic_powerfoam_metal/local_mac_token_dynamic_powerfoam_features_F32_1024_128dyn_drone_camera_progressive_clamped_youtube_hlaZbH_center_crop_8fps_512_56f_180step/side_by_side_step_0180.mp4
+outputs/dynamic_powerfoam_metal/local_mac_token_dynamic_powerfoam_features_F32_1024_128dyn_drone_camera_progressive_clamped_youtube_hlaZbH_center_crop_8fps_512_56f_180step/checkpoint_final.pt
+outputs/dynamic_powerfoam_metal/local_mac_token_dynamic_powerfoam_features_F32_1024_128dyn_drone_camera_progressive_clamped_youtube_hlaZbH_center_crop_8fps_512_56f_180step/dynamic_geometry_summary.json
+```
+
+Final first-frame render sanity:
+
+```text
+render_step_0180.mp4 signalstats:
+YMIN=7
+YAVG=158.83
+YMAX=230
+SATAVG=12.5381
+```
+
+Detailed camera path at final checkpoint:
+
+```text
+adjacent rotation mean 0.6579 deg/frame, median 0.7215, p95 1.3031, max 1.3551
+adjacent translation mean 0.01830, median 0.01987, p95 0.02616, max 0.03231
+summed adjacent rotation 36.18 deg
+translation path length 1.0065 units
+path length / base radius 0.3355
+first-to-last rotation 30.3079 deg
+first-to-last translation 0.9749 units
+mean rotation from base 10.7215 deg
+max rotation from base 31.4526 deg
+mean translation from base 0.4525 units
+max translation from base 0.9690 units
+max forward-axis change from first 22.7208 deg
+camera center bbox size [0.0722, 0.4334, 0.8703]
+```
+
+Interpretation: the progressive/clamped schedule fixed the pathological camera
+spin. The old integrated-drone final had `82.85deg` mean rotation from base and
+`864.75deg` summed adjacent rotation; this run ended at `10.72deg` mean
+rotation and `36.18deg` summed adjacent rotation. It also improved final
+quality over the old drone final (`13.08` PSNR / `0.1638` L1 vs `7.89` /
+`0.3471`), but it still does not approach the residual fixed-gauge PowerFoam
+branch around `18.08` PSNR / `0.0893` L1.
+
+The camera learned a smooth modest path, not the full apparent 180-degree scene
+motion. That may be correct for this single-view overfit if the foam/appearance
+can absorb too much, but it means unsupervised camera path learning still needs
+a stronger gauge or bootstrap before it can recover large camera arcs from this
+clip.
