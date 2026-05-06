@@ -31,6 +31,11 @@ F32_256_JOINT_CONFIG = (
     / "src/train_configs/"
     "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_256_16f_8192splats_goodset_train0006_0014_holdout0005.jsonc"
 )
+F32_512_V6_JOINT_CONFIG = (
+    REPO_ROOT
+    / "src/train_configs/"
+    "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_512_16f_8192splats_v6refined_goodset_train0006_0014_holdout0005.jsonc"
+)
 OFFSET_ONLY_CONFIG = (
     REPO_ROOT
     / "src/train_configs/"
@@ -99,6 +104,39 @@ def test_f32_256_joint_full_relpose_config_keeps_modern_feature_settings() -> No
     assert "256px" in cfg["logging"]["wandb_tags"]
     assert cfg["train"]["checkpoint_save_path"] == Path(
         "outputs/multicam_relative_pose/full_relpose_features_F32_256_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
+    )
+
+
+def test_f32_512_v6_joint_full_relpose_config_uses_refined_feature_rasterizer() -> None:
+    cfg = MulticamRelativePoseImplicitTrainer.resolve_config(load_config_file(F32_512_V6_JOINT_CONFIG))
+
+    assert cfg["model"]["size"] == 512
+    assert cfg["render"]["render_size"] == 512
+    assert cfg["model"]["feature_dim"] == 32
+    assert cfg["model"]["video_feature_token_stride"] == 12
+    assert cfg["model"]["video_feature_output_dtype"] == "bf16"
+    assert cfg["model"]["tokens"] == 256
+    assert cfg["model"]["static_tokens"] == 192
+    assert cfg["model"]["dynamic_tokens"] == 64
+    assert cfg["model"]["gaussians_per_token"] == 32
+    assert cfg["model"]["model_dim"] == 64
+    assert cfg["model"]["encoder_self_attn_layers"] == 2
+    assert cfg["model"]["bottleneck_self_attn_layers"] == 4
+    assert cfg["model"]["cross_attn_layers"] == 6
+    assert cfg["features"]["cache_dir"] == Path(
+        "data/feature_cache/multicam_deepview_static_dynamic_vjepa2_1_vitb_384_512px"
+    )
+    assert "512-16f" in cfg["features"]["sample_cache_key"]
+    assert cfg["render"]["fast_mac"]["feature_variant"] == "v6_refined_features"
+    assert cfg["render"]["fast_mac"]["use_active_tiles"] is False
+    assert cfg["render"]["fast_mac"]["active_policy"] == "off"
+    assert cfg["render"]["fast_mac"]["stop_count_mode"] == "adaptive"
+    assert cfg["train"]["temporal_microbatch_size"] == 2
+    assert "512px" in cfg["logging"]["wandb_tags"]
+    assert "v6-refined-features" in cfg["logging"]["wandb_tags"]
+    assert "feature-token-stride-12" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["checkpoint_save_path"] == Path(
+        "outputs/multicam_relative_pose/full_relpose_features_F32_512_v6refined_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
     )
 
 

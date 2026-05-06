@@ -55,6 +55,49 @@ Keep `v5_features` as the default feature-splatting rasterizer until a fresh
 same-config 256/512px matrix shows `v6_refined_features` winning on this
 multicam relpose workload.
 
+## 512px V6 refined feature config update
+
+User asked whether `v6_refined_features` exists and whether configs already use
+it. Current state:
+
+- `local_mac_unconditioned_tokens_features_F32_LN_kaiming_g4_v6_refined_features.jsonc`
+  is the only checked-in F32 config that already used
+  `render.fast_mac.feature_variant: "v6_refined_features"`.
+- `local_mac_compare_free_splats_16f_implicit_camera_128_fast_mac_v6_refined_8192splats.jsonc`
+  and `local_mac_compare_unconditioned_tokens_16f_implicit_camera_128_fast_mac_v6_refined_8192splats.jsonc`
+  use the RGB `v6_refined` rasterizer, not the F32 feature rasterizer.
+- The built `v6_refined_features` extension is present for Python 3.11:
+  `third_party/fast-mac-gsplat/variants/v6_refined_features/torch_gsplat_bridge_v6_refined_features/_C.cpython-311-darwin.so`.
+
+Added a separate 512px experimental config instead of mutating the 256px
+baseline:
+
+```text
+src/train_configs/local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_512_16f_8192splats_v6refined_goodset_train0006_0014_holdout0005.jsonc
+```
+
+Key deltas from the 256px config:
+
+- `model.size: 512`
+- `render.render_size: 512`
+- `render.fast_mac.feature_variant: "v6_refined_features"`
+- active-tile V6 knobs are explicit but defaulted conservative:
+  `use_active_tiles: false`, `active_policy: "off"`, and
+  `stop_count_mode: "adaptive"`; prior F32 measurements showed active mode was
+  not a global win, so A/B `active_policy: "auto"` separately before promoting.
+- V-JEPA conditioning already had a projector:
+  `PrecomputedVideoFeatureAdapter` does `LayerNorm(768)` +
+  `Linear(768 -> model_dim)` after token striding and before cross-attention.
+  This config keeps `model_dim: 64` and increases
+  `video_feature_token_stride` from `9` to `12` to lighten cross-attention.
+- Token capacity shifts to more, slimmer tokens while keeping 8192 splats:
+  `tokens: 256`, `static_tokens: 192`, `dynamic_tokens: 64`,
+  `gaussians_per_token: 32`.
+- Depth increases without widening channels:
+  `encoder_self_attn_layers: 2`, `bottleneck_self_attn_layers: 4`,
+  `cross_attn_layers: 6`.
+- 512px memory risk is handled by `temporal_microbatch_size: 2`.
+
 ## Verification
 
 Focused tests:
@@ -132,6 +175,51 @@ Smoke details:
 - `TrainView0`: PSNR `4.8759`, SSIM `0.0942`
 - `TrainView1`: PSNR `4.5864`, SSIM `0.0847`
 - `Heldout0_camera_0005`: PSNR `4.8283`, SSIM `0.0881`
+
+512px V6 refined config tests:
+
+```bash
+PYTHONPATH=src/train uv run --with pytest python -m pytest \
+  tests/test_multicam_relative_pose_trainer.py \
+  tests/test_fast_mac_feature_background.py -q
+```
+
+Result: `10 passed`.
+
+512px V6 refined smoke:
+
+```bash
+PYTHONPATH=src/train WANDB_MODE=offline uv run python \
+  src/train/train_multicam_relative_pose_implicit_dynamic.py \
+  /tmp/dynaworld_full_relpose_features_f32_512_v6_smoke.json
+```
+
+Smoke details:
+
+- offline W&B run:
+  `wandb/offline-run-20260506_195615-lfv2qd1u`
+- baked six 512px V-JEPA feature-cache files under
+  `data/feature_cache/multicam_deepview_static_dynamic_vjepa2_1_vitb_384_512px/`
+  for the three normal clips and three repeated frame-0 relpose clips
+- hit the `v6_refined_features` F32 raster path with 512px input/render size
+- model summary printed:
+  `1 global camera token + 1 path token + 192 static + 64 dynamic 3DGS tokens x 32 gaussians/token = 8192 explicit Gaussians`
+- first training step took `138.45s` wall-clock including 512px validation
+  media encoding
+- saved temp checkpoint:
+  `/tmp/dynaworld_full_relpose_features_f32_512_v6_smoke_checkpoint.pt`
+
+512px V6 smoke initial eval:
+
+- `TrainView0`: PSNR `4.7362`, SSIM `0.1584`
+- `TrainView1`: PSNR `4.4139`, SSIM `0.1476`
+- `Heldout0_camera_0005`: PSNR `4.7131`, SSIM `0.1696`
+
+512px V6 smoke final eval after one step:
+
+- `TrainView0`: PSNR `5.2769`, SSIM `0.1418`
+- `TrainView1`: PSNR `4.8494`, SSIM `0.1359`
+- `Heldout0_camera_0005`: PSNR `5.1676`, SSIM `0.1522`
 
 ## Caveats
 
