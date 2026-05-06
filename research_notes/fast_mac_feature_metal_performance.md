@@ -409,7 +409,9 @@ splat K channels with zero compact background and reconstruct
 parity check matched direct full-feature rendering and gradients to MPS noise.
 This is not yet the true sparse-ID kernel; the current ID-shaped helper
 densifies IDs to `[G,K]`, and the final `[H,W,F]` tensor still exists after the
-lookup.
+lookup. A bounded synthetic probe at `128px/G2048/F32` showed lookup timing wins
+for `K in {4,8,16}` at both `B=4` and `B=16`, but sampled MPS allocation was
+mixed and is not a true peak-memory measurement.
 
 Relevant official docs:
 
@@ -596,6 +598,8 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f32_b16_b32_fixedbin_matrix.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_512_f32_b16_fixedbin_matrix.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f64_b16_fixedbin_matrix.jsonl`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_128_b4_g2048_f32_k4_8_16.jsonl`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_128_b16_g2048_f32_k4_8_16.jsonl`
 - `benchmark_outputs/trainer_phase/multicam256_v6_vs_f32_gradcache_fixed_render_parity_seed0.json`
 - `benchmark_outputs/trainer_phase/multicam256_heldout_v6_vs_f32_gradcache_fixed_render_parity_seed0.json`
 - `benchmark_outputs/trainer_phase/multicam128_train_v6_vs_f32_gradcache_fixed_render_grad_parity_seed0.json`
@@ -713,7 +717,9 @@ speedup.
 11. Compact-basis feature lookup:
     Prototype built as `v6_feature_lookup_experiment`. It passes a tiny MPS
     direct-vs-lookup parity check for features, alpha, loss, and gradients
-    through means/conics/compact weights/lookup/opacities. The next gate is
-    bounded timing and peak-memory profiling for `K in {4,8,16}` versus direct
-    `F=32`; do not wire it into trainer dispatch until that profile shows a
-    real memory or time win.
+    through means/conics/compact weights/lookup/opacities. A bounded synthetic
+    benchmark at `128px/G2048/F32` showed timing wins for K=4/8/16 at B=4 and
+    B=16, but the sampled MPS allocation is mixed and the final `[B,H,W,F]`
+    tensor still exists. Do not wire it into trainer dispatch until a real
+    peak-memory or fixed-render trainer profile shows the branch solves the
+    actual F32 pressure.
