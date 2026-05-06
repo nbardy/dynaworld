@@ -557,9 +557,32 @@ Relevant official docs:
 - https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/setthreadgroupmemorylength(_:index:)
 - https://developer.apple.com/documentation/metal/compute-passes
 - https://developer.apple.com/documentation/metal/setting-resource-storage-modes
+- https://developer.apple.com/documentation/metal/improving-cpu-performance-by-using-argument-buffers
+- https://developer.apple.com/documentation/metal/memory-heaps
 - https://developer.apple.com/metal/capabilities/
 - https://developer.apple.com/documentation/apple-silicon/porting-your-metal-code-to-apple-silicon
 - https://developer.apple.com/documentation/xcode/finding-your-metal-apps-gpu-occupancy
+- https://developer.apple.com/documentation/xcode/measuring-the-gpus-use-of-memory-bandwidth
+- https://developer.apple.com/documentation/xcode/validating-your-apps-metal-shader-usage
+- https://developer.apple.com/documentation/xcode/analyzing-your-metal-workload
+
+Metal feature coverage for this rasterizer:
+
+| Metal feature / doc area | Current repo stance | Why it matters here |
+| --- | --- | --- |
+| Thread grid and threadgroups | Used directly: one tile maps to one threadgroup and one pixel maps to one thread. Keep tile sizes aligned with the pipeline's `threadExecutionWidth` and below `maxTotalThreadsPerThreadgroup`. | This is the core launch shape. Bad tile dimensions change occupancy, barrier cost, and boundary divergence. |
+| SIMD groups and divergence | Used in reductions; branch changes must preserve uniform barrier counts. Avoid data-dependent paths that make lanes execute both sides inside the same SIMD group unless the measured win is large. | The backward reduction fork wins by reducing atomics with SIMD/threadgroup reductions; divergence can erase that win. |
+| Static and dynamic threadgroup memory | Used for IDs, chunk parameters, and reduction scratch. Treat every extra `threadgroup` array as an occupancy tradeoff, not free cache. | The staging fork lost because `[GSP_CHUNK,F]` scratch raised resource pressure enough to outweigh saved global reads. |
+| Atomics and reductions | Used for binning and gradients. Prefer SIMD/threadgroup reduction before global atomics for F-channel gradients. | This is the largest measured kernel speedup: stable generic feature backward was dominated by per-channel `g_colors` atomics. |
+| Private/thread arrays | Used in accumulation and grad-cache forks. Keep caps explicit and benchmark across shape rows because private arrays can reduce resident threads. | F32 local accumulation and grad-cache wins were shape-dependent; F64 cap-64 accumulation became a negative result. |
+| Compute passes and command encoders | Used through PyTorch/C++ custom ops with direct `setArg` binding. Keep dispatch count and readback syncs visible in benchmarks. | Encoder-level changes only matter if they remove dispatches, syncs, or allocations from the trainer graph. |
+| Resource storage modes | Mostly controlled by PyTorch MPS tensors. Consider private/memoryless only for fork-owned temporary Metal resources, not for tensors PyTorch owns. | Fixedbin IDs and future scratch buffers are the realistic place for storage-mode experiments. |
+| Argument buffers | Not used. Direct `setArg` binding is simpler and stable for this small fixed ABI. Revisit only if resource-binding CPU overhead shows up in a profile. | Argument buffers reduce CPU binding overhead, but current bottlenecks are raster backward, dense tensors, and MPS allocation pressure. |
+| Heaps and residency | Not used in the extension. Revisit only for fork-owned temporary buffers that churn every dispatch. | Heaps could reduce allocation churn, but PyTorch owns the large tensors and their residency model. |
+| Feature-set limits | Used as guardrails, not constants. Runtime pipeline state still needs to decide real threadgroup limits. | Apple's tables list theoretical limits and alignment rows; shader complexity can lower the actual pipeline max. |
+| Occupancy counters | Required before promotion, but not sufficient alone. Pair Xcode/Instruments occupancy with memory bandwidth, limiter counters, and timing. | Low occupancy can mean scratch/private pressure; high occupancy can still thrash caches. |
+| Memory-bandwidth counters | Not captured yet. Use them for finalist rows before claiming a memory-layout fork solved the bottleneck. | The core F32 problem is dense `[B,H,W,F]` traffic plus per-channel gradient/write pressure. |
+| Shader validation / captures | Use for new unsafe shader paths, especially changes to barriers, atomics, or output initialization. | The rejected implicit-zero path passed simple thinking but failed repeated-call parity; captures/validation are the right escalation before reviving it. |
 
 Official-doc implications for these forks:
 
