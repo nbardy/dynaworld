@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import statistics
 import sys
 import time
@@ -57,6 +58,12 @@ BACKWARD_BREAKDOWN_PHASES = (
     "model_backward_probe",
     "regularizer_backward_probe",
 )
+FIXED_RENDER_PHASES = (
+    "project",
+    "raster_forward",
+    "loss",
+    "autograd_backward_total",
+)
 
 
 def sync_device(device: torch.device) -> None:
@@ -94,6 +101,20 @@ class RasterGraph:
 class ChunkRecord:
     loss: torch.Tensor
     raster: RasterGraph
+
+
+@dataclass(frozen=True)
+class FixedRenderChunk:
+    sequence: GaussianSequence
+    target: Any
+
+
+@dataclass(frozen=True)
+class FixedRenderCase:
+    chunks: tuple[FixedRenderChunk, ...]
+    background: torch.Tensor | None
+    total_frames: int
+    setup_phases_ms: dict[str, float]
 
 
 def trainer_for_config(config: dict[str, Any]):
@@ -348,6 +369,116 @@ def build_step_graph(trainer, *, multicam: bool, timer: PhaseTimer) -> tuple[lis
     return chunk_records, regularizer_loss
 
 
+def _detach_sequence_for_fixed_render(sequence: GaussianSequence) -> GaussianSequence:
+    return GaussianSequence(
+        xyz=sequence.xyz.detach(),
+        scales=sequence.scales.detach(),
+        quats=sequence.quats.detach(),
+        opacities=sequence.opacities.detach(),
+        rgbs=sequence.rgbs.detach(),
+        cameras=sequence.cameras,
+        camera_state=None,
+        auxiliary=sequence.auxiliary,
+    )
+
+
+def _clone_sequence_for_fixed_render(sequence: GaussianSequence, *, freeze_colors: bool) -> GaussianSequence:
+    def leaf(tensor: torch.Tensor, *, requires_grad: bool = True) -> torch.Tensor:
+        out = tensor.detach().clone()
+        return out.requires_grad_(requires_grad)
+
+    return GaussianSequence(
+        xyz=leaf(sequence.xyz),
+        scales=leaf(sequence.scales),
+        quats=leaf(sequence.quats),
+        opacities=leaf(sequence.opacities),
+        rgbs=leaf(sequence.rgbs, requires_grad=not freeze_colors),
+        cameras=sequence.cameras,
+        camera_state=None,
+        auxiliary=sequence.auxiliary,
+    )
+
+
+def prepare_fixed_render_case(trainer, *, multicam: bool) -> FixedRenderCase:
+    setup_timer = PhaseTimer(trainer.device)
+    if multicam:
+        _sequence_data, _clip_frames, _clip_times, decoded, targets = multicam_sample_and_encode(trainer, setup_timer)
+    else:
+        _sequence_data, _clip_frames, _clip_times, decoded, targets = singlecam_sample_and_encode(trainer, setup_timer)
+
+    use_microbatch = not multicam
+    total_frames = sum(target.frame_count for target in targets)
+    background = trainer.rgb_objective.sample_background(
+        phase="train",
+        like=targets[0].frames,
+        frame_count=targets[0].frame_count,
+    )
+    chunks = []
+    for target in targets:
+        for _chunk_start, _chunk_end, chunk_sequence, chunk_target in iter_target_chunks(
+            trainer,
+            decoded,
+            target,
+            use_microbatch=use_microbatch,
+        ):
+            chunks.append(
+                FixedRenderChunk(
+                    sequence=_detach_sequence_for_fixed_render(chunk_sequence),
+                    target=chunk_target,
+                )
+            )
+    return FixedRenderCase(
+        chunks=tuple(chunks),
+        background=background.detach() if torch.is_tensor(background) else background,
+        total_frames=total_frames,
+        setup_phases_ms={phase: float(setup_timer.elapsed_ms.get(phase, 0.0)) for phase in ("sample", "encode")},
+    )
+
+
+def benchmark_fixed_render_case(
+    trainer,
+    fixed_case: FixedRenderCase,
+    *,
+    freeze_colors: bool,
+) -> dict[str, float]:
+    if trainer.colorize is not None:
+        trainer.colorize.train()
+    trainer.optimizer.zero_grad(set_to_none=True)
+    timer = PhaseTimer(trainer.device)
+    losses: list[torch.Tensor] = []
+    for fixed_chunk in fixed_case.chunks:
+        chunk_sequence = _clone_sequence_for_fixed_render(fixed_chunk.sequence, freeze_colors=freeze_colors)
+        raster_graph = fast_mac_project_and_rasterize(
+            trainer,
+            chunk_sequence,
+            tuple(fixed_chunk.target.cameras),
+            timer,
+        )
+        with timer.measure("loss"):
+            rasterized = RasterizedView(
+                view=fixed_chunk.target,
+                features=raster_graph.features,
+                alpha=raster_graph.alpha,
+                cameras=fixed_chunk.target.cameras,
+                view_dirs=trainer.view_dirs_for_features(raster_graph.features, tuple(fixed_chunk.target.cameras)),
+            )
+            rendered = trainer.rgb_objective.compose_rasterized(
+                rasterized,
+                phase="train",
+                background=fixed_case.background,
+                retain_target=True,
+            )
+            losses.append(
+                trainer.rgb_objective.reconstruction_loss_per_image(rendered).sum()
+                / float(max(fixed_case.total_frames, 1))
+            )
+
+    with timer.measure("autograd_backward_total"):
+        sum(losses).backward()
+    trainer.optimizer.zero_grad(set_to_none=True)
+    return {phase: float(timer.elapsed_ms.get(phase, 0.0)) for phase in FIXED_RENDER_PHASES}
+
+
 def benchmark_one_step(trainer, *, multicam: bool) -> dict[str, float]:
     trainer.model.train()
     if trainer.colorize is not None:
@@ -489,6 +620,7 @@ def main() -> None:
     parser.add_argument("config", type=Path)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--iters", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=None, help="Optional seed for model init, sampling, and background.")
     parser.add_argument(
         "--backward-breakdown",
         action="store_true",
@@ -497,22 +629,59 @@ def main() -> None:
             "backward. These probes are a diagnostic breakdown, not one optimizer-step timing."
         ),
     )
+    parser.add_argument(
+        "--fixed-render-graph",
+        action="store_true",
+        help=(
+            "Sample/decode one clip once, then repeatedly time project/raster/loss/backward on detached "
+            "Gaussian leaves. This isolates renderer/loss timing from sample, encode, model, and optimizer jitter."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-render-freeze-colors",
+        action="store_true",
+        help="With --fixed-render-graph, keep decoded splat features/colors detached to isolate no-color-grad paths.",
+    )
     parser.add_argument("--json-output", type=Path, default=None)
     args = parser.parse_args()
+
+    if args.seed is not None:
+        random.seed(int(args.seed))
+        torch.manual_seed(int(args.seed))
 
     config = load_config_file(args.config)
     trainer = trainer_for_config(config)
     multicam = isinstance(trainer, MulticamPrecomputedFeatureImplicitTrainer)
     samples: list[dict[str, float]] = []
     try:
+        fixed_case = prepare_fixed_render_case(trainer, multicam=multicam) if args.fixed_render_graph else None
+        phases = FIXED_RENDER_PHASES if fixed_case is not None else TRAIN_STEP_PHASES
         for _ in range(max(0, args.warmup)):
-            benchmark_one_step(trainer, multicam=multicam)
+            if fixed_case is not None:
+                benchmark_fixed_render_case(
+                    trainer,
+                    fixed_case,
+                    freeze_colors=bool(args.fixed_render_freeze_colors),
+                )
+            else:
+                benchmark_one_step(trainer, multicam=multicam)
         for _ in range(max(1, args.iters)):
-            samples.append(benchmark_one_step(trainer, multicam=multicam))
-        summary = summarize(samples, TRAIN_STEP_PHASES)
+            if fixed_case is not None:
+                samples.append(
+                    benchmark_fixed_render_case(
+                        trainer,
+                        fixed_case,
+                        freeze_colors=bool(args.fixed_render_freeze_colors),
+                    )
+                )
+            else:
+                samples.append(benchmark_one_step(trainer, multicam=multicam))
+        summary = summarize(samples, phases)
         breakdown_samples: list[dict[str, float]] = []
         breakdown_summary = None
-        if args.backward_breakdown:
+        if args.backward_breakdown and fixed_case is not None:
+            print("Skipping --backward-breakdown because --fixed-render-graph already detaches the render graph.")
+        elif args.backward_breakdown:
             for _ in range(max(1, args.iters)):
                 breakdown_samples.append(benchmark_backward_breakdown(trainer, multicam=multicam))
             breakdown_summary = summarize(breakdown_samples, BACKWARD_BREAKDOWN_PHASES)
@@ -522,6 +691,16 @@ def main() -> None:
             "trainer": type(trainer).__name__,
             "warmup": int(args.warmup),
             "iters": int(args.iters),
+            "fixed_render_graph": bool(args.fixed_render_graph),
+            "fixed_render_freeze_colors": bool(args.fixed_render_freeze_colors),
+            "fixed_render_setup_phases_ms": fixed_case.setup_phases_ms if fixed_case is not None else None,
+            "fixed_render_chunk_count": len(fixed_case.chunks) if fixed_case is not None else None,
+            "fixed_render_note": (
+                "Fixed-render rows reuse one sampled clip and detached Gaussian leaves; they intentionally exclude "
+                "model backward, regularizers, optimizer, and sample/encode timing."
+                if fixed_case is not None
+                else None
+            ),
             "samples": samples,
             "summary": summary,
             "backward_breakdown_samples": breakdown_samples,
@@ -531,7 +710,14 @@ def main() -> None:
                 "to autograd_backward_total."
             ),
         }
-        print_table(summary, TRAIN_STEP_PHASES, title="Training step phases")
+        print_table(
+            summary,
+            phases,
+            title="Fixed render graph phases" if fixed_case is not None else "Training step phases",
+        )
+        if fixed_case is not None:
+            print(f"Fixed render setup phases: {fixed_case.setup_phases_ms}; chunks={len(fixed_case.chunks)}")
+            print("Note: fixed-render totals exclude sample/encode/model backward/regularizer/optimizer.")
         if breakdown_summary is not None:
             print()
             print_table(breakdown_summary, BACKWARD_BREAKDOWN_PHASES, title="Backward breakdown probes")

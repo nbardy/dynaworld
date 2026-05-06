@@ -22,6 +22,34 @@ FAST_MAC_V6_REFINED_DIR = (
 FAST_MAC_V6_REFINED_FEATURES_DIR = (
     Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v6_refined_features"
 )
+FAST_MAC_V6_REFINED_FEATURES_F32_REDUCE_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v6_refined_features_f32_reduce"
+)
+FAST_MAC_V6_REFINED_FEATURES_F32_ACCUM_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v6_refined_features_f32_accum"
+)
+FAST_MAC_V6_REFINED_FEATURES_F32_GRADCACHE_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v6_refined_features_f32_gradcache"
+)
+FAST_MAC_V6_REFINED_FEATURES_F32_FIXEDBIN_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v6_refined_features_f32_fixedbin"
+)
 
 
 def _float_tuple(value: Any, *, field_name: str) -> tuple[float, ...]:
@@ -114,7 +142,14 @@ class FastMacRendererConfig:
             feature_variant=_normalize_choice(
                 values.get("feature_variant", cls.feature_variant),
                 field_name="fast_mac.feature_variant",
-                choices={"v5_features", "v6_refined_features"},
+                choices={
+                    "v5_features",
+                    "v6_refined_features",
+                    "v6_refined_features_f32_reduce",
+                    "v6_refined_features_f32_accum",
+                    "v6_refined_features_f32_gradcache",
+                    "v6_refined_features_f32_fixedbin",
+                },
             ),
             tile_size=int(values.get("tile_size", fallback_tile_size)),
             max_fast_pairs=int(values.get("max_fast_pairs", cls.max_fast_pairs)),
@@ -203,6 +238,38 @@ def _ensure_fast_mac_v6_refined_features_on_path() -> None:
     )
 
 
+def _ensure_fast_mac_v6_refined_features_f32_reduce_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V6_REFINED_FEATURES_F32_REDUCE_DIR,
+        package_name="torch_gsplat_bridge_v6_refined_features_f32_reduce",
+        label="v6_refined_features_f32_reduce",
+    )
+
+
+def _ensure_fast_mac_v6_refined_features_f32_accum_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V6_REFINED_FEATURES_F32_ACCUM_DIR,
+        package_name="torch_gsplat_bridge_v6_refined_features_f32_accum",
+        label="v6_refined_features_f32_accum",
+    )
+
+
+def _ensure_fast_mac_v6_refined_features_f32_gradcache_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V6_REFINED_FEATURES_F32_GRADCACHE_DIR,
+        package_name="torch_gsplat_bridge_v6_refined_features_f32_gradcache",
+        label="v6_refined_features_f32_gradcache",
+    )
+
+
+def _ensure_fast_mac_v6_refined_features_f32_fixedbin_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V6_REFINED_FEATURES_F32_FIXEDBIN_DIR,
+        package_name="torch_gsplat_bridge_v6_refined_features_f32_fixedbin",
+        label="v6_refined_features_f32_fixedbin",
+    )
+
+
 def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
     _ensure_fast_mac_v5_on_path()
     from torch_gsplat_bridge_v5 import RasterConfig
@@ -234,6 +301,26 @@ def _feature_raster_config_cls(config: FastMacRendererConfig):
         from torch_gsplat_bridge_v6_refined_features import RasterConfig as FeatureRasterConfig
 
         return FeatureRasterConfig
+    if config.feature_variant == "v6_refined_features_f32_reduce":
+        _ensure_fast_mac_v6_refined_features_f32_reduce_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_reduce import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
+    if config.feature_variant == "v6_refined_features_f32_accum":
+        _ensure_fast_mac_v6_refined_features_f32_accum_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_accum import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
+    if config.feature_variant == "v6_refined_features_f32_gradcache":
+        _ensure_fast_mac_v6_refined_features_f32_gradcache_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_gradcache import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
+    if config.feature_variant == "v6_refined_features_f32_fixedbin":
+        _ensure_fast_mac_v6_refined_features_f32_fixedbin_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_fixedbin import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
     raise ValueError(f"Unsupported fast_mac.feature_variant={config.feature_variant!r}.")
 
 
@@ -262,7 +349,13 @@ def _make_feature_config(config: FastMacRendererConfig, height: int, width: int,
         "batch_launch_limit_tiles": config.batch_launch_limit_tiles,
         "batch_launch_limit_gaussians": config.batch_launch_limit_gaussians,
     }
-    if config.feature_variant == "v6_refined_features":
+    if config.feature_variant in {
+        "v6_refined_features",
+        "v6_refined_features_f32_reduce",
+        "v6_refined_features_f32_accum",
+        "v6_refined_features_f32_gradcache",
+        "v6_refined_features_f32_fixedbin",
+    }:
         kwargs.update(
             {
                 "use_active_tiles": config.use_active_tiles,
@@ -303,6 +396,54 @@ def _rasterize_features_projected(
     if config.feature_variant == "v6_refined_features":
         _ensure_fast_mac_v6_refined_features_on_path()
         from torch_gsplat_bridge_v6_refined_features import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v6_refined_features_f32_reduce":
+        _ensure_fast_mac_v6_refined_features_f32_reduce_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_reduce import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v6_refined_features_f32_accum":
+        _ensure_fast_mac_v6_refined_features_f32_accum_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_accum import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v6_refined_features_f32_gradcache":
+        _ensure_fast_mac_v6_refined_features_f32_gradcache_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_gradcache import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v6_refined_features_f32_fixedbin":
+        _ensure_fast_mac_v6_refined_features_f32_fixedbin_on_path()
+        from torch_gsplat_bridge_v6_refined_features_f32_fixedbin import rasterize_projected_gaussians
 
         return rasterize_projected_gaussians(
             means2d,
