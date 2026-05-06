@@ -60,6 +60,9 @@ MODEL_DEFAULTS: dict[str, Any] = {
     "vjepa_checkpoint_url": None,
     "video_feature_layers": None,
     "video_feature_channels": None,
+    "video_feature_token_stride": 1,
+    "video_feature_output_dtype": None,
+    "camera_refine_with_decode_time": True,
     "time_fourier_bands": 8,
     "time_max_frequency": 128.0,
     "ray_condition_grid_size": 16,
@@ -217,7 +220,10 @@ BASE_VIDEO_ARGS: dict[str, ArgSource] = {
     "vjepa_checkpoint_url": "vjepa_checkpoint_url",
     "video_feature_layers": "video_feature_layers",
     "video_feature_channels": "video_feature_channels",
+    "video_feature_token_stride": "video_feature_token_stride",
+    "video_feature_output_dtype": "video_feature_output_dtype",
     "cross_attn_layers": "cross_attn_layers",
+    "camera_refine_with_decode_time": "camera_refine_with_decode_time",
 }
 
 DYNAMIC_SPLIT_ARGS: dict[str, ArgSource] = {
@@ -366,6 +372,14 @@ def normalized_model_section(model_spec: Mapping[str, Any]) -> dict[str, Any]:
         values["video_feature_channels"] = {
             str(name): int(channels) for name, channels in values["video_feature_channels"].items()
         }
+    values["video_feature_token_stride"] = int(values["video_feature_token_stride"])
+    if values["video_feature_token_stride"] < 1:
+        raise ModelFactoryConfigError(
+            f"model.video_feature_token_stride must be >= 1, got {values['video_feature_token_stride']}."
+        )
+    if values["video_feature_output_dtype"] is not None:
+        values["video_feature_output_dtype"] = str(values["video_feature_output_dtype"]).lower()
+    values["camera_refine_with_decode_time"] = bool(values["camera_refine_with_decode_time"])
     if values["xy_extent"] is None:
         values["xy_extent"] = values["scene_extent"]
     if values["z_min"] is None:

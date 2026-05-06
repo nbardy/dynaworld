@@ -196,8 +196,8 @@ def load_video_sequence(
     finally:
         capture.release()
 
-    if len(frames) < 2:
-        raise ValueError(f"Need at least 2 frames in video {video_path}")
+    if not frames:
+        raise ValueError(f"Need at least 1 frame in video {video_path}")
 
     frame_times, video_fps = build_uniform_frame_times(len(frames), fps)
     return SequenceData(
@@ -223,8 +223,8 @@ def load_frame_sequence(
     frame_paths, resolved_frame_source = _resolve_frame_paths(frames_dir, metadata, frame_source)
     if max_frames > 0:
         frame_paths = frame_paths[:max_frames]
-    if len(frame_paths) < 2:
-        raise ValueError(f"Need at least 2 frames in {frames_dir}")
+    if not frame_paths:
+        raise ValueError(f"Need at least 1 frame in {frames_dir}")
 
     frames = [_load_frame(frame_path, target_size) for frame_path in frame_paths]
     frame_times, video_fps = _build_frame_times(frame_paths, metadata)

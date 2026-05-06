@@ -1,0 +1,68 @@
+{
+  "arch": "powerfoam_direct",
+  "data": {
+    "video_path": "test_data/test_video_small_128_4fps.mp4",
+    "frame_source": "explicit_video",
+    "max_frames": 16
+  },
+  "model": {
+    "cells": 128,
+    "neighbor_count": 24,
+    "init_from_video": true,
+    "image_init_depth": 2.0,
+    "image_init_jitter": 0.2,
+    "num_texel_sites": 8,
+    "sv_dof": 8,
+    "sv_axis_init": 8.0,
+    "radius_scale": 0.72,
+    "adjacency_mode": "overlap",
+    "rebuild_adjacency_every": 10,
+    "xy_extent": 1.25,
+    "z_min": 1.0,
+    "z_max": 3.25,
+    "radius_init": 0.12,
+    "radius_min": 0.03,
+    "density_init": 36.0
+  },
+  "render": {
+    "render_size": 128,
+    "fov_degrees": 55.0,
+    "near_plane": 0.05,
+    "alpha_threshold": 0.0,
+    "transmittance_threshold": 0.0001,
+    "max_alpha": 0.99,
+    "eps": 0.000001,
+    "texel_temperature": 10.0,
+    "background": [0.0, 0.0, 0.0]
+  },
+  "train": {
+    "steps": 100,
+    "frames_per_step": 1,
+    "lr": 0.02,
+    "seed": 17,
+    "device": "cpu"
+  },
+  "losses": {
+    "l1_weight": 1.0,
+    "mse_weight": 0.1,
+    "radius_l2_weight": 0.0001,
+    "density_l2_weight": 0.0
+  },
+  "logging": {
+    "log_every": 10,
+    "image_log_every": 50,
+    "video_log_every": 100,
+    "always_log_last_step": true,
+    "output_dir": "outputs/powerfoam_direct/local_mac_powerfoam_direct_128_smoke",
+    "wandb_enabled": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-powerfoam-direct-128-smoke",
+    "wandb_tags": [
+      "powerfoam",
+      "direct-fit",
+      "128px",
+      "torch-renderer",
+      "smoke"
+    ]
+  }
+}

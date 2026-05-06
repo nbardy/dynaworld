@@ -1,0 +1,113 @@
+{
+  "arch": "powerfoam_metal",
+  "data": {
+    "video_path": null,
+    "frame_source": "multicam_val",
+    "max_frames": 16,
+    "multicam_manifest": "data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/manifest.jsonl",
+    "multicam_split": "val",
+    "multicam_sample_id": "deepview_03_Dog_camera_0001_to_camera_0040",
+    "multicam_train_cameras": [
+      "camera_0001",
+      "camera_0012",
+      "camera_0002",
+      "camera_0003",
+      "camera_0015",
+      "camera_0021",
+      "camera_0013",
+      "camera_0010"
+    ],
+    "multicam_heldout_camera": "camera_0040",
+    "multicam_anchor_camera": "camera_0001"
+  },
+  "camera": {
+    "lens_model": "opencv_fisheye",
+    "rig_init": "deepview"
+  },
+  "model": {
+    "cells": 1024,
+    "neighbor_count": 16,
+    "adjacency_mode": "cech_aabb",
+    "init_from_video": true,
+    "xy_extent": 16.0,
+    "z_min": 0.05,
+    "z_max": 8.0,
+    "radius_min": 0.01,
+    "radius_init": 0.12,
+    "density_init": 64.0,
+    "feature_mode": "quaternion_height_sv_texel_surface",
+    "init_point_cloud_path": "research_experiments/dynamic_foam/artifacts/deepview_03_dog_8cam_multiview_plane_sweep_frame0_128px_opencv_fisheye_stride4_support4_8192pts.ply",
+    "init_point_cloud_normalize": "none",
+    "init_point_cloud_coordinate_frame": "model",
+    "init_point_cloud_visibility_filter": "train_visible",
+    "init_point_cloud_min_visible_train_views": 1,
+    "init_point_cloud_sample_mode": "first"
+  },
+  "render": {
+    "render_size": 128,
+    "use_tiled": false,
+    "use_raytrace": true
+  },
+  "train": {
+    "steps": 40,
+    "frames_per_step": 4,
+    "lr": 0.02,
+    "lr_schedule": "cosine",
+    "points_lr_init": 0.0002,
+    "points_lr_final": 1e-05,
+    "density_lr_init": 0.1,
+    "density_lr_final": 0.01,
+    "radii_lr_init": 1e-05,
+    "radii_lr_final": 1e-06,
+    "quaternions_lr_init": 0.005,
+    "quaternions_lr_final": 0.0005,
+    "texel_sites_lr_init": 0.002,
+    "texel_sites_lr_final": 0.0002,
+    "texel_sv_axis_lr_init": 0.002,
+    "texel_sv_axis_lr_final": 0.0002,
+    "texel_sv_rgb_lr_init": 0.01,
+    "texel_sv_rgb_lr_final": 0.001,
+    "texel_height_lr_init": 0.0005,
+    "texel_height_lr_final": 5e-05,
+    "seed": 17,
+    "device": "mps"
+  },
+  "losses": {
+    "l1_weight": 1.0,
+    "mse_weight": 0.1,
+    "radius_l2_weight": 0.0001,
+    "normal_weight": 0.0,
+    "contribution_weight": 0.0,
+    "interpenetration_weight": 0.0
+  },
+  "logging": {
+    "log_every": 10,
+    "image_log_every": 20,
+    "video_log_every": 40,
+    "always_log_last_step": true,
+    "output_dir": "outputs/powerfoam_metal/local_mac_powerfoam_metal_multicam_deepview_8cam_holdout1_multiview_plane_sweep_frame0_128px_opencv_fisheye_top1024_init_raytrace_128_16f_1024cells_40step_lowgeom_noaux",
+    "wandb_enabled": false,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-powerfoam-metal-multicam-deepview-8cam-holdout1-multiview-plane-sweep-frame0-128px-opencv-fisheye-top1024-init-raytrace-128-16f-1024cells-40step-lowgeom-noaux",
+    "wandb_tags": [
+      "powerfoam",
+      "metal",
+      "multicam-val",
+      "deepview",
+      "8cam",
+      "plane-sweep",
+      "multiview-consistency",
+      "opencv-fisheye",
+      "frame0",
+      "128px-init",
+      "top1024",
+      "quaternion-height-sv-texel-surface",
+      "raytrace",
+      "128px",
+      "16f",
+      "1024cells",
+      "lowgeom",
+      "noaux"
+    ]
+  }
+}

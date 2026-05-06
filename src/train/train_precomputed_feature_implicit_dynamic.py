@@ -62,7 +62,7 @@ class PrecomputedFeatureImplicitTrainer(VideoTokenImplicitTrainer):
         feature_cfg = cfg.setdefault("features", {})
         apply_defaults(feature_cfg, FEATURE_OPTION_DEFAULTS)
         feature_cfg["cache_dir"] = path_or_none(feature_cfg["cache_dir"])
-        if feature_cfg["cache_dir"] is None:
+        if feature_cfg["cache_dir"] is None and cfg["model"]["video_encoder_backend"] != "none":
             raise ValueError("features.cache_dir is required for precomputed feature training.")
         if feature_cfg["layers"] is not None:
             if isinstance(feature_cfg["layers"], str):
@@ -95,14 +95,17 @@ class PrecomputedFeatureImplicitTrainer(VideoTokenImplicitTrainer):
         feature_cfg["module_root"] = str(feature_cfg["module_root"])
         feature_cfg["extractor"] = str(feature_cfg["extractor"]).lower()
 
-        if cfg["model"]["video_encoder_backend"] not in {"precomputed", "precomputed_ltx"}:
+        if cfg["model"]["video_encoder_backend"] not in {"precomputed", "precomputed_ltx", "none"}:
             raise ValueError(
                 "The precomputed feature trainer requires model.video_encoder_backend='precomputed' "
-                "or 'precomputed_ltx'."
+                "or 'precomputed_ltx', or video_encoder_backend='none' for unconditioned controls."
             )
         return cfg
 
     def on_sequences_loaded(self) -> None:
+        if self.model_cfg["video_encoder_backend"] == "none":
+            print("Precomputed video features: disabled (video_encoder_backend=none)")
+            return
         self.feature_cache = VideoFeatureCache(self.cfg["features"], self.device)
         sequences = list(self.train_sequences)
         sequences.extend(self.eval_sequences)
@@ -131,17 +134,22 @@ class PrecomputedFeatureImplicitTrainer(VideoTokenImplicitTrainer):
         clip_frames: torch.Tensor,
         clip_times: torch.Tensor,
     ) -> Any:
-        del clip_frames, clip_times
+        del clip_times
+        if self.model_cfg["video_encoder_backend"] == "none":
+            return clip_frames
         return self.feature_cache.load_or_bake(sequence_data)
 
     def run(self) -> None:
-        print(
-            "Feature cache: "
-            f"extractor={self.cfg['features']['extractor']}, "
-            f"model_id={self.cfg['features']['model_id']}, "
-            f"sample_cache_key={self.cfg['features']['sample_cache_key']}, "
-            f"cache_dir={self.cfg['features']['cache_dir']}"
-        )
+        if self.model_cfg["video_encoder_backend"] == "none":
+            print("Feature cache: disabled (video_encoder_backend=none)")
+        else:
+            print(
+                "Feature cache: "
+                f"extractor={self.cfg['features']['extractor']}, "
+                f"model_id={self.cfg['features']['model_id']}, "
+                f"sample_cache_key={self.cfg['features']['sample_cache_key']}, "
+                f"cache_dir={self.cfg['features']['cache_dir']}"
+            )
         super().run()
 
 

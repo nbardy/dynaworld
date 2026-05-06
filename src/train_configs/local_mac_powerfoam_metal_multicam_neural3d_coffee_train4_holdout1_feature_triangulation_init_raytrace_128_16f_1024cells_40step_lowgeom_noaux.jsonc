@@ -1,0 +1,99 @@
+{
+  "arch": "powerfoam_metal",
+  "data": {
+    "video_path": null,
+    "frame_source": "multicam_val",
+    "max_frames": 16,
+    "multicam_manifest": "src/dataset_configs/multicam_train2_holdout1_5sample_128_4fps_16f_manifest.jsonl",
+    "multicam_split": "train2_holdout1",
+    "multicam_sample_id": "neural3d_coffee_martini_train_cam04_cam09_holdout_cam06",
+    "multicam_train_cameras": ["cam04", "cam09", "cam13", "cam20"],
+    "multicam_heldout_camera": "cam06",
+    "multicam_anchor_camera": "cam04"
+  },
+  "camera": {
+    "lens_model": "pinhole",
+    "rig_init": "neural_3d_video"
+  },
+  "model": {
+    "cells": 1024,
+    "neighbor_count": 16,
+    "adjacency_mode": "cech_aabb",
+    "init_from_video": true,
+    "xy_extent": 24.0,
+    "z_min": 4.0,
+    "z_max": 120.0,
+    "radius_min": 0.03,
+    "radius_scale": 0.72,
+    "density_init": 64.0,
+    "feature_mode": "quaternion_height_sv_texel_surface",
+    "init_point_cloud_path": "research_experiments/dynamic_foam/artifacts/neural3d_coffee_martini_train4_feature_triangulation_frames0_4_8_12_256px_orb_reproj8.ply",
+    "init_point_cloud_normalize": "none",
+    "init_point_cloud_coordinate_frame": "model",
+    "init_point_cloud_visibility_filter": "train_visible",
+    "init_point_cloud_min_visible_train_views": 1
+  },
+  "render": {
+    "render_size": 128,
+    "use_tiled": false,
+    "use_raytrace": true
+  },
+  "train": {
+    "steps": 40,
+    "frames_per_step": 4,
+    "lr": 0.02,
+    "lr_schedule": "cosine",
+    "points_lr_init": 0.0002,
+    "points_lr_final": 0.00001,
+    "density_lr_init": 0.1,
+    "density_lr_final": 0.01,
+    "radii_lr_init": 0.00001,
+    "radii_lr_final": 0.000001,
+    "quaternions_lr_init": 0.005,
+    "quaternions_lr_final": 0.0005,
+    "texel_sites_lr_init": 0.002,
+    "texel_sites_lr_final": 0.0002,
+    "texel_sv_axis_lr_init": 0.002,
+    "texel_sv_axis_lr_final": 0.0002,
+    "texel_sv_rgb_lr_init": 0.01,
+    "texel_sv_rgb_lr_final": 0.001,
+    "texel_height_lr_init": 0.0005,
+    "texel_height_lr_final": 0.00005,
+    "seed": 17,
+    "device": "mps"
+  },
+  "losses": {
+    "l1_weight": 1.0,
+    "mse_weight": 0.1,
+    "radius_l2_weight": 0.0001,
+    "normal_weight": 0.0,
+    "contribution_weight": 0.0,
+    "interpenetration_weight": 0.0
+  },
+  "logging": {
+    "log_every": 10,
+    "image_log_every": 20,
+    "video_log_every": 40,
+    "always_log_last_step": true,
+    "output_dir": "outputs/powerfoam_metal/local_mac_powerfoam_metal_multicam_neural3d_coffee_train4_holdout1_feature_triangulation_reproj8_init_raytrace_128_16f_1024cells_40step_lowgeom_noaux",
+    "wandb_enabled": false,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-powerfoam-metal-multicam-neural3d-coffee-train4-holdout1-feature-triangulation-reproj8-init-raytrace-128-16f-1024cells-40step-lowgeom-noaux",
+    "wandb_tags": [
+      "powerfoam",
+      "metal",
+      "multicam-train4-holdout1",
+      "neural3d",
+      "coffee_martini",
+      "feature-triangulation-init",
+      "reproj8",
+      "quaternion-height-sv-texel-surface",
+      "raytrace",
+      "128px",
+      "16f",
+      "1024cells",
+      "lowgeom",
+      "noaux"
+    ]
+  }
+}

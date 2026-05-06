@@ -22,6 +22,10 @@ TRAINER_BY_ARCH = {
     "precomputed_feature_implicit_camera": TrainerEntry("train_precomputed_feature_implicit_dynamic"),
     "ltx_feature_implicit_camera": TrainerEntry("train_precomputed_feature_implicit_dynamic"),
     "wan_vace_feature_implicit_camera": TrainerEntry("train_precomputed_feature_implicit_dynamic"),
+    "powerfoam_direct": TrainerEntry("train_powerfoam_direct"),
+    "powerfoam_metal": TrainerEntry("train_powerfoam_metal"),
+    "dynamic_powerfoam_metal": TrainerEntry("train_dynamic_powerfoam_metal"),
+    "dynamic_gauge_foam": TrainerEntry("train_dynamic_gauge_foam"),
     "multicam_precomputed_feature_implicit_camera": TrainerEntry(
         "train_multicam_precomputed_feature_implicit_dynamic"
     ),

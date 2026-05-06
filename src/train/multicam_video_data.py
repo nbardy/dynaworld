@@ -17,15 +17,22 @@ from sequence_data import normalize_frame_times
 @dataclass
 class MulticamVideoBundle:
     condition_sequence: SequenceData
+    train_sequences: tuple[SequenceData, ...]
     train_frames: torch.Tensor
     train_K: torch.Tensor
     train_w2c: torch.Tensor
     train_camera_names: list[str]
+    train_lens_models: list[str] | None = None
+    train_distortions: torch.Tensor | None = None
+    heldout_sequences: tuple[SequenceData, ...] = ()
     heldout_frames: torch.Tensor | None = None
     heldout_K: torch.Tensor | None = None
     heldout_w2c: torch.Tensor | None = None
     heldout_camera_names: list[str] | None = None
+    heldout_lens_models: list[str] | None = None
+    heldout_distortions: torch.Tensor | None = None
     pose_source: str | None = None
+    anchor_c2w: torch.Tensor | None = None
     metadata: dict[str, Any] | None = None
 
     @property
@@ -104,6 +111,61 @@ def rodrigues_matrix(axis_angle: list[float] | tuple[float, ...], device: torch.
     return eye + (torch.sin(theta) / theta) * skew + ((1.0 - torch.cos(theta)) / (theta * theta)) * (skew @ skew)
 
 
+def deepview_models_by_name(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    models_path = Path(record["models_path"])
+    models = json.loads(models_path.read_text(encoding="utf-8"))
+    return {str(model["name"]): model for model in models}
+
+
+def deepview_model_for_camera(record: dict[str, Any], camera_name: str) -> dict[str, Any]:
+    by_name = deepview_models_by_name(record)
+    if camera_name not in by_name:
+        raise KeyError(f"DeepView camera {camera_name!r} not found in {record['models_path']}.")
+    return by_name[camera_name]
+
+
+def deepview_lens_from_model(model: dict[str, Any], *, device: torch.device) -> tuple[str, torch.Tensor | None]:
+    projection_type = str(model.get("projection_type", "pinhole")).lower()
+    if projection_type == "fisheye":
+        coeffs = torch.zeros(4, dtype=torch.float32, device=device)
+        raw = torch.as_tensor(model.get("radial_distortion", []), dtype=torch.float32, device=device).flatten()
+        if raw.numel() > coeffs.numel():
+            raise ValueError(
+                f"DeepView fisheye camera {model.get('name')!r} has {raw.numel()} distortion coefficients; "
+                "expected at most 4 for CameraSpec(opencv_fisheye)."
+            )
+        coeffs[: raw.numel()] = raw
+        return "opencv_fisheye", coeffs
+    if projection_type in {"pinhole", "perspective"}:
+        return "pinhole", None
+    raise ValueError(
+        f"Unsupported DeepView projection_type={projection_type!r} for camera {model.get('name')!r}."
+    )
+
+
+def deepview_lens_metadata(
+    record: dict[str, Any],
+    camera_names: list[str],
+    *,
+    device: torch.device,
+) -> tuple[list[str], torch.Tensor | None]:
+    by_name = deepview_models_by_name(record)
+    missing = [camera_name for camera_name in camera_names if camera_name not in by_name]
+    if missing:
+        raise KeyError(f"DeepView cameras {missing!r} not found in {record['models_path']}.")
+    models = [by_name[camera_name] for camera_name in camera_names]
+    lens_pairs = [deepview_lens_from_model(model, device=device) for model in models]
+    lens_models = [lens_model for lens_model, _distortion in lens_pairs]
+    distortions = [distortion for _lens_model, distortion in lens_pairs]
+    if all(distortion is None for distortion in distortions):
+        return lens_models, None
+    padded = [
+        torch.zeros(4, dtype=torch.float32, device=device) if distortion is None else distortion
+        for distortion in distortions
+    ]
+    return lens_models, torch.stack(padded, dim=0)
+
+
 def deepview_camera_from_models(
     record: dict[str, Any],
     camera_name: str,
@@ -112,13 +174,7 @@ def deepview_camera_from_models(
     W: int,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    models_path = Path(record["models_path"])
-    models = json.loads(models_path.read_text(encoding="utf-8"))
-    by_name = {str(model["name"]): model for model in models}
-    if camera_name not in by_name:
-        raise KeyError(f"DeepView camera {camera_name!r} not found in {models_path}.")
-    model = by_name[camera_name]
-
+    model = deepview_model_for_camera(record, camera_name)
     focal = float(model["focal_length"])
     pixel_aspect = float(model.get("pixel_aspect_ratio", 1.0))
     principal = model["principal_point"]
@@ -187,12 +243,11 @@ def deepview_video_path_for_camera(record: dict[str, Any], camera_name: str) -> 
 # rather than silently rescaling.  If you want AIST poses at meter-scale to match
 # DeepView, set 0.001.
 #
-# Lens model: AIST++ cameras have a small radial-only distortion (k1 ~ -0.11) plus
-# zero tangential terms.  The current splat renderer treats CameraSpec as pinhole;
-# we keep that approximation here for parity with the DeepView path, and preserve
-# the raw distortion coefficients in metadata so a later pass can adopt the OpenCV
-# distortion model without touching ingestion.  Edge pixels in c01/c05/c09 carry
-# 1-2px of residual distortion at 1920x1080, which scales to <0.2px at 128x128.
+# Lens model: AIST++ cameras have a small radial-only distortion (k1 ~ -0.11)
+# plus zero tangential terms. The current AIST path keeps the pinhole
+# approximation and preserves raw distortion metadata for a later OpenCV path.
+# Edge pixels in c01/c05/c09 carry 1-2px of residual distortion at 1920x1080,
+# which scales to <0.2px at 128x128.
 #
 # Reference: https://google.github.io/aistplusplus_dataset/download.html and the
 # AIST++ loader at https://github.com/google/aistplusplus_api/blob/main/aist_plusplus/loader.py
@@ -783,6 +838,20 @@ def select_configured_multiview_frames(videos: torch.Tensor, frame_indices: Any)
     return videos.index_select(1, indices).contiguous()
 
 
+def requested_camera_frame_count(data_cfg: dict[str, Any], record: dict[str, Any]) -> int:
+    record_frame_count = int(record["frame_count"])
+    max_frames = int(data_cfg.get("max_frames") or 0)
+    if max_frames > 0:
+        return min(max_frames, record_frame_count)
+    frame_indices = data_cfg.get("frame_indices")
+    if frame_indices is None:
+        return record_frame_count
+    indices = [int(index) for index in frame_indices]
+    if not indices:
+        raise ValueError("data.frame_indices must contain at least one index when provided.")
+    return min(max(indices) + 1, record_frame_count)
+
+
 def camera_start_seconds(record: dict[str, Any], camera_name: str) -> float:
     if camera_name == str(record.get("source_camera")):
         return float(record.get("source_start_seconds", 0.0))
@@ -800,36 +869,93 @@ def camera_start_seconds(record: dict[str, Any], camera_name: str) -> float:
     return float(record.get("source_start_seconds", record.get("target_start_seconds", 0.0)))
 
 
-def load_camera_video(record: dict[str, Any], camera_name: str, *, target_size: int, device: torch.device) -> torch.Tensor:
+def video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
     dataset = str(record.get("dataset") or "")
     if dataset == "deepview_video":
-        video_path = deepview_video_path_for_camera(record, camera_name)
+        return deepview_video_path_for_camera(record, camera_name)
     elif dataset == "aist_dance_db":
-        video_path = aist_video_path_for_camera(record, camera_name)
+        return aist_video_path_for_camera(record, camera_name)
     elif dataset == "neural_3d_video":
-        video_path = neural_3d_video_path_for_camera(record, camera_name)
+        return neural_3d_video_path_for_camera(record, camera_name)
     elif dataset == "vivo":
-        video_path = vivo_video_path_for_camera(record, camera_name)
+        return vivo_video_path_for_camera(record, camera_name)
     elif camera_name == str(record.get("source_camera")):
-        video_path = Path(record["source_video_path"])
+        return Path(record["source_video_path"])
     elif camera_name == str(record.get("target_camera")):
-        video_path = Path(record["target_video_path"])
+        return Path(record["target_video_path"])
     else:
         raise ValueError(
             f"Arbitrary train camera {camera_name!r} requires a DeepView, AIST, Neural 3D Video, or ViVo record; "
             f"record dataset={dataset!r}."
         )
 
+
+def load_camera_video(
+    record: dict[str, Any],
+    camera_name: str,
+    *,
+    target_size: int,
+    device: torch.device,
+    frame_count: int | None = None,
+) -> torch.Tensor:
+    video_path = video_path_for_camera(record, camera_name)
     start_seconds = camera_start_seconds(record, camera_name)
     frames = load_multicam_val_camera_frames(
         video_path=video_path,
         start_seconds=start_seconds,
         fps=float(record["fps"]),
-        frame_count=int(record["frame_count"]),
+        frame_count=int(frame_count if frame_count is not None else record["frame_count"]),
         target_size=target_size,
         device=device,
     )
     return frames.contiguous()
+
+
+def sequence_source_path_for_camera(record: dict[str, Any], camera_name: str) -> Path | None:
+    try:
+        return video_path_for_camera(record, camera_name)
+    except ValueError:
+        if "source_video_path" in record:
+            return Path(record["source_video_path"])
+        return None
+
+
+def duplicate_camera_names(camera_names: list[str]) -> list[str]:
+    seen = set()
+    duplicates = []
+    for camera_name in camera_names:
+        if camera_name in seen and camera_name not in duplicates:
+            duplicates.append(camera_name)
+        seen.add(camera_name)
+    return duplicates
+
+
+def validate_multicam_camera_split(
+    *,
+    train_cameras: list[str],
+    heldout_cameras: list[str],
+    anchor_camera: str,
+    condition_camera: str,
+) -> None:
+    if not train_cameras:
+        raise ValueError("data.multicam_train_cameras must contain at least one camera.")
+    if not heldout_cameras:
+        raise ValueError("data.multicam_heldout_cameras/data.multicam_heldout_camera must contain at least one camera.")
+
+    duplicate_train = duplicate_camera_names(train_cameras)
+    if duplicate_train:
+        raise ValueError(f"data.multicam_train_cameras contains duplicates: {duplicate_train}.")
+    duplicate_heldout = duplicate_camera_names(heldout_cameras)
+    if duplicate_heldout:
+        raise ValueError(f"data.multicam_heldout_cameras contains duplicates: {duplicate_heldout}.")
+
+    overlap = sorted(set(train_cameras) & set(heldout_cameras))
+    if overlap:
+        raise ValueError(f"Multicam train/heldout camera split overlaps: {overlap}.")
+    if anchor_camera not in train_cameras:
+        raise ValueError("data.multicam_anchor_camera must be one of data.multicam_train_cameras.")
+    if condition_camera not in train_cameras:
+        raise ValueError("data.multicam_condition_camera must be one of data.multicam_train_cameras.")
 
 
 def make_deepview_multiview_cameras(
@@ -862,12 +988,18 @@ def make_deepview_multiview_cameras(
         rel_w2c = torch.linalg.inv(c2w) @ anchor_c2w
         heldout_K.append(K)
         heldout_w2c.append(rel_w2c.unsqueeze(0).repeat(T, 1, 1))
+    lens_models, _distortions = deepview_lens_metadata(record, train_cameras + heldout_cameras, device=device)
+    pose_source = (
+        "deepview_models_relative_opencv_fisheye"
+        if set(lens_models) == {"opencv_fisheye"}
+        else "deepview_models_relative_pinhole"
+    )
     return (
         torch.stack(train_K, dim=0),
         torch.stack(train_w2c, dim=0),
         torch.stack(heldout_K, dim=0),
         torch.stack(heldout_w2c, dim=0),
-        "deepview_models_relative_pinhole",
+        pose_source,
     )
 
 
@@ -912,7 +1044,13 @@ def make_orthogonal_origin_multiview_cameras(
     )
 
 
-def camera_from_K_w2c(K: torch.Tensor, w2c: torch.Tensor) -> CameraSpec:
+def camera_from_K_w2c(
+    K: torch.Tensor,
+    w2c: torch.Tensor,
+    *,
+    lens_model: str = "pinhole",
+    distortion: torch.Tensor | None = None,
+) -> CameraSpec:
     c2w = torch.linalg.inv(w2c)
     return CameraSpec(
         fx=K[0, 0],
@@ -920,29 +1058,102 @@ def camera_from_K_w2c(K: torch.Tensor, w2c: torch.Tensor) -> CameraSpec:
         cx=K[0, 2],
         cy=K[1, 2],
         camera_to_world=c2w,
-        lens_model="pinhole",
+        lens_model=lens_model,  # type: ignore[arg-type]
+        distortion=distortion,
     )
 
 
-def cameras_from_K_w2c(K: torch.Tensor, w2c: torch.Tensor) -> tuple[tuple[CameraSpec, ...], ...]:
+def source_relative_cameras_from_K_w2c(
+    *,
+    source_w2c: torch.Tensor,
+    target_K: torch.Tensor,
+    target_w2c: torch.Tensor,
+    frame_indices: torch.Tensor,
+    target_lens_model: str = "pinhole",
+    target_distortion: torch.Tensor | None = None,
+) -> tuple[CameraSpec, ...]:
+    """Return target cameras expressed in the source camera's local frame.
+
+    Stored multicam poses are relative to the configured anchor:
+    `w2c_view_anchor = inv(c2w_view) @ c2w_anchor`.  For a source-anchored
+    world, the target query is `inv(c2w_target) @ c2w_source`, which is:
+    `w2c_target_anchor @ inv(w2c_source_anchor)`.
+    """
+
+    if source_w2c.ndim != 3 or target_w2c.ndim != 3:
+        raise ValueError(
+            f"Expected source_w2c and target_w2c as [T,4,4], got {tuple(source_w2c.shape)} "
+            f"and {tuple(target_w2c.shape)}."
+        )
+    source = source_w2c.index_select(0, frame_indices)
+    target = target_w2c.index_select(0, frame_indices)
+    target_in_source_w2c = target @ torch.linalg.inv(source)
+    return tuple(
+        camera_from_K_w2c(
+            target_K,
+            target_in_source_w2c[index],
+            lens_model=target_lens_model,
+            distortion=target_distortion,
+        )
+        for index in range(len(frame_indices))
+    )
+
+
+def cameras_from_K_w2c(
+    K: torch.Tensor,
+    w2c: torch.Tensor,
+    *,
+    lens_models: list[str] | None = None,
+    distortions: torch.Tensor | None = None,
+) -> tuple[tuple[CameraSpec, ...], ...]:
     if K.ndim != 3 or w2c.ndim != 4:
         raise ValueError(f"Expected K [V,3,3] and w2c [V,T,4,4], got {tuple(K.shape)} and {tuple(w2c.shape)}.")
     view_count, frame_count = int(w2c.shape[0]), int(w2c.shape[1])
+    if lens_models is not None and len(lens_models) != view_count:
+        raise ValueError(f"Expected {view_count} lens models, got {len(lens_models)}.")
+    if distortions is not None and int(distortions.shape[0]) != view_count:
+        raise ValueError(f"Expected distortions first dim {view_count}, got {tuple(distortions.shape)}.")
     return tuple(
-        tuple(camera_from_K_w2c(K[view], w2c[view, frame]) for frame in range(frame_count))
+        tuple(
+            camera_from_K_w2c(
+                K[view],
+                w2c[view, frame],
+                lens_model="pinhole" if lens_models is None else lens_models[view],
+                distortion=None if distortions is None else distortions[view],
+            )
+            for frame in range(frame_count)
+        )
         for view in range(view_count)
     )
 
 
-def heldout_cameras_from_K_w2c(K: torch.Tensor, w2c: torch.Tensor) -> tuple[tuple[CameraSpec, ...], ...]:
+def heldout_cameras_from_K_w2c(
+    K: torch.Tensor,
+    w2c: torch.Tensor,
+    *,
+    lens_models: list[str] | None = None,
+    distortions: torch.Tensor | None = None,
+) -> tuple[tuple[CameraSpec, ...], ...]:
     if K.ndim == 2 and w2c.ndim == 3:
         K = K.unsqueeze(0)
         w2c = w2c.unsqueeze(0)
     if K.ndim != 3 or w2c.ndim != 4:
         raise ValueError(f"Expected heldout K [H,3,3] and w2c [H,T,4,4], got {tuple(K.shape)} and {tuple(w2c.shape)}.")
     heldout_count, frame_count = int(w2c.shape[0]), int(w2c.shape[1])
+    if lens_models is not None and len(lens_models) != heldout_count:
+        raise ValueError(f"Expected {heldout_count} lens models, got {len(lens_models)}.")
+    if distortions is not None and int(distortions.shape[0]) != heldout_count:
+        raise ValueError(f"Expected distortions first dim {heldout_count}, got {tuple(distortions.shape)}.")
     return tuple(
-        tuple(camera_from_K_w2c(K[view], w2c[view, frame]) for frame in range(frame_count))
+        tuple(
+            camera_from_K_w2c(
+                K[view],
+                w2c[view, frame],
+                lens_model="pinhole" if lens_models is None else lens_models[view],
+                distortion=None if distortions is None else distortions[view],
+            )
+            for frame in range(frame_count)
+        )
         for view in range(heldout_count)
     )
 
@@ -967,17 +1178,26 @@ def load_multicam_video_bundle(
         heldout_cameras = [str(data_cfg.get("multicam_heldout_camera") or record["target_camera"])]
     anchor_camera = str(data_cfg.get("multicam_anchor_camera") or train_cameras[0])
     condition_camera = str(data_cfg.get("multicam_condition_camera") or anchor_camera)
-    if anchor_camera not in train_cameras:
-        raise ValueError("data.multicam_anchor_camera must be one of data.multicam_train_cameras.")
-    if condition_camera not in train_cameras:
-        raise ValueError("data.multicam_condition_camera must be one of data.multicam_train_cameras.")
+    validate_multicam_camera_split(
+        train_cameras=train_cameras,
+        heldout_cameras=heldout_cameras,
+        anchor_camera=anchor_camera,
+        condition_camera=condition_camera,
+    )
 
+    camera_frame_count = requested_camera_frame_count(data_cfg, record)
     train_frames = torch.stack(
-        [load_camera_video(record, camera, target_size=target_size, device=device) for camera in train_cameras],
+        [
+            load_camera_video(record, camera, target_size=target_size, device=device, frame_count=camera_frame_count)
+            for camera in train_cameras
+        ],
         dim=0,
     )
     heldout_frames = torch.stack(
-        [load_camera_video(record, camera, target_size=target_size, device=device) for camera in heldout_cameras],
+        [
+            load_camera_video(record, camera, target_size=target_size, device=device, frame_count=camera_frame_count)
+            for camera in heldout_cameras
+        ],
         dim=0,
     )
     max_frames = int(data_cfg.get("max_frames") or 0)
@@ -989,11 +1209,16 @@ def load_multicam_video_bundle(
 
     _, T, _, H, W = train_frames.shape
     rig_init = str(camera_cfg.get("rig_init", "deepview")).lower()
+    train_lens_models = None
+    train_distortions = None
+    heldout_lens_models = None
+    heldout_distortions = None
     if rig_init == "deepview":
         if record.get("dataset") != "deepview_video":
             raise ValueError(
                 f"camera.rig_init=deepview requires a DeepView record; got dataset={record.get('dataset')!r}."
             )
+        _, anchor_c2w = deepview_camera_from_models(record, anchor_camera, H=H, W=W, device=device)
         train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_deepview_multiview_cameras(
             record,
             train_cameras=train_cameras,
@@ -1004,11 +1229,19 @@ def load_multicam_video_bundle(
             W=W,
             device=device,
         )
+        train_lens_models, train_distortions = deepview_lens_metadata(record, train_cameras, device=device)
+        heldout_lens_models, heldout_distortions = deepview_lens_metadata(record, heldout_cameras, device=device)
+        if set(train_lens_models + heldout_lens_models) == {"opencv_fisheye"}:
+            pose_source = "deepview_models_relative_opencv_fisheye"
     elif rig_init == "aist":
         if record.get("dataset") != "aist_dance_db":
             raise ValueError(
                 f"camera.rig_init=aist requires an AIST record; got dataset={record.get('dataset')!r}."
             )
+        translation_scale = float(camera_cfg.get("aist_translation_scale", 1.0))
+        _, anchor_c2w = aist_camera_from_setting(
+            record, anchor_camera, H=H, W=W, device=device, translation_scale=translation_scale
+        )
         train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_aist_multiview_cameras(
             record,
             train_cameras=train_cameras,
@@ -1018,7 +1251,7 @@ def load_multicam_video_bundle(
             H=H,
             W=W,
             device=device,
-            translation_scale=float(camera_cfg.get("aist_translation_scale", 1.0)),
+            translation_scale=translation_scale,
         )
     elif rig_init == "neural_3d_video":
         if record.get("dataset") != "neural_3d_video":
@@ -1026,6 +1259,10 @@ def load_multicam_video_bundle(
                 f"camera.rig_init=neural_3d_video requires a Neural 3D Video record; "
                 f"got dataset={record.get('dataset')!r}."
             )
+        translation_scale = float(camera_cfg.get("n3d_translation_scale", 1.0))
+        _, anchor_c2w = neural_3d_camera_from_poses_bounds(
+            record, anchor_camera, H=H, W=W, device=device, translation_scale=translation_scale
+        )
         train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_neural_3d_multiview_cameras(
             record,
             train_cameras=train_cameras,
@@ -1035,13 +1272,17 @@ def load_multicam_video_bundle(
             H=H,
             W=W,
             device=device,
-            translation_scale=float(camera_cfg.get("n3d_translation_scale", 1.0)),
+            translation_scale=translation_scale,
         )
     elif rig_init == "vivo":
         if record.get("dataset") != "vivo":
             raise ValueError(
                 f"camera.rig_init=vivo requires a ViVo record; got dataset={record.get('dataset')!r}."
             )
+        translation_scale = float(camera_cfg.get("vivo_translation_scale", 1.0))
+        _, anchor_c2w = vivo_camera_from_calibration(
+            record, anchor_camera, H=H, W=W, device=device, translation_scale=translation_scale
+        )
         train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_vivo_multiview_cameras(
             record,
             train_cameras=train_cameras,
@@ -1051,9 +1292,10 @@ def load_multicam_video_bundle(
             H=H,
             W=W,
             device=device,
-            translation_scale=float(camera_cfg.get("vivo_translation_scale", 1.0)),
+            translation_scale=translation_scale,
         )
     elif rig_init == "orthogonal_origin":
+        anchor_c2w = torch.eye(4, dtype=torch.float32, device=device)
         train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_orthogonal_origin_multiview_cameras(
             view_count=len(train_cameras),
             heldout_count=len(heldout_cameras),
@@ -1071,37 +1313,51 @@ def load_multicam_video_bundle(
 
     condition_index = train_cameras.index(condition_camera)
     frame_times = torch.arange(T, dtype=torch.float32, device=device).unsqueeze(-1) / float(record.get("fps", 4.0))
-    dataset = str(record.get("dataset") or "")
-    if dataset == "deepview_video":
-        condition_path = deepview_video_path_for_camera(record, condition_camera)
-    elif dataset == "aist_dance_db":
-        condition_path = aist_video_path_for_camera(record, condition_camera)
-    elif dataset == "neural_3d_video":
-        condition_path = neural_3d_video_path_for_camera(record, condition_camera)
-    elif dataset == "vivo":
-        condition_path = vivo_video_path_for_camera(record, condition_camera)
-    else:
-        condition_path = Path(record["source_video_path"])
-    condition_sequence = SequenceData(
-        frames=train_frames[condition_index],
-        frame_times=normalize_frame_times(frame_times),
-        video_fps=float(record.get("fps", 4.0)),
-        frame_source="explicit_video",
-        source_path=condition_path,
-        selected_frame_count=T,
-        all_frame_count=int(record.get("frame_count", T)),
+    normalized_times = normalize_frame_times(frame_times)
+    all_frame_count = int(record.get("frame_count", T))
+    train_sequences = tuple(
+        SequenceData(
+            frames=train_frames[index],
+            frame_times=normalized_times,
+            video_fps=float(record.get("fps", 4.0)),
+            frame_source="explicit_video",
+            source_path=sequence_source_path_for_camera(record, camera_name),
+            selected_frame_count=T,
+            all_frame_count=all_frame_count,
+        )
+        for index, camera_name in enumerate(train_cameras)
     )
+    heldout_sequences = tuple(
+        SequenceData(
+            frames=heldout_frames[index],
+            frame_times=normalized_times,
+            video_fps=float(record.get("fps", 4.0)),
+            frame_source="explicit_video",
+            source_path=sequence_source_path_for_camera(record, camera_name),
+            selected_frame_count=T,
+            all_frame_count=all_frame_count,
+        )
+        for index, camera_name in enumerate(heldout_cameras)
+    )
+    condition_sequence = train_sequences[condition_index]
     return MulticamVideoBundle(
         condition_sequence=condition_sequence,
+        train_sequences=train_sequences,
         train_frames=train_frames,
         train_K=train_K,
         train_w2c=train_w2c,
         train_camera_names=train_cameras,
+        train_lens_models=train_lens_models,
+        train_distortions=train_distortions,
+        heldout_sequences=heldout_sequences,
         heldout_frames=heldout_frames,
         heldout_K=heldout_K,
         heldout_w2c=heldout_w2c,
         heldout_camera_names=heldout_cameras,
+        heldout_lens_models=heldout_lens_models,
+        heldout_distortions=heldout_distortions,
         pose_source=pose_source,
+        anchor_c2w=anchor_c2w,
         metadata={
             **record,
             "train_cameras": train_cameras,

@@ -1,0 +1,101 @@
+{
+  "arch": "powerfoam_metal",
+  "data": {
+    "video_path": null,
+    "frame_source": "multicam_val",
+    "max_frames": 2,
+    "multicam_manifest": "data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/manifest.jsonl",
+    "multicam_split": "val",
+    "multicam_sample_id": "deepview_03_Dog_camera_0001_to_camera_0040",
+    "multicam_train_cameras": ["camera_0001", "camera_0015"],
+    "multicam_heldout_camera": "camera_0040",
+    "multicam_anchor_camera": "camera_0001"
+  },
+  "camera": {
+    "lens_model": "pinhole",
+    "rig_init": "deepview"
+  },
+  "model": {
+    "cells": 64,
+    "neighbor_count": 16,
+    "adjacency_mode": "cech_aabb",
+    "init_from_video": true,
+    "image_init_depth": 2.0,
+    "image_init_jitter": 0.2,
+    "xy_extent": 1.25,
+    "z_min": 1.0,
+    "z_max": 3.25,
+    "radius_init": 0.18,
+    "radius_min": 0.03,
+    "radius_scale": 0.72,
+    "density_init": 64.0,
+    "feature_mode": "quaternion_height_sv_texel_surface",
+    "linear_coeff_init": 0.0,
+    "linear_coeff_scale": 0.25,
+    "normal_init_jitter": 0.0,
+    "num_texel_sites": 4,
+    "texel_site_scale": 0.5,
+    "texel_height_scale": 0.25,
+    "sv_dof": 3,
+    "sv_axis_init": 1.0,
+    "sv_axis_init_jitter": 0.02,
+    "sv_rgb_init_jitter": 0.02
+  },
+  "render": {
+    "render_size": 32,
+    "fov_degrees": 55.0,
+    "near_plane": 0.05,
+    "alpha_threshold": 0.0,
+    "transmittance_threshold": 0.0001,
+    "max_alpha": 0.99,
+    "eps": 0.000001,
+    "texel_temperature": 10.0,
+    "use_tiled": true,
+    "tiled_builder": "auto",
+    "background": [0.0, 0.0, 0.0]
+  },
+  "train": {
+    "steps": 1,
+    "frames_per_step": 2,
+    "lr": 0.02,
+    "point_lr_multiplier": 0.1,
+    "radius_lr_multiplier": 0.05,
+    "density_lr_multiplier": 0.05,
+    "feature_lr_multiplier": 1.0,
+    "normal_lr_multiplier": 0.5,
+    "quaternion_lr_multiplier": 0.5,
+    "texel_site_lr_multiplier": 0.25,
+    "texel_height_lr_multiplier": 0.25,
+    "texel_sv_axis_lr_multiplier": 0.1,
+    "texel_sv_rgb_lr_multiplier": 1.0,
+    "seed": 17,
+    "device": "mps"
+  },
+  "losses": {
+    "l1_weight": 1.0,
+    "mse_weight": 0.1,
+    "radius_l2_weight": 0.0001,
+    "density_l2_weight": 0.0
+  },
+  "logging": {
+    "log_every": 1,
+    "image_log_every": 1,
+    "video_log_every": 1,
+    "always_log_last_step": true,
+    "output_dir": "outputs/powerfoam_metal/local_mac_powerfoam_metal_multicam_deepview_3cam_train2_test1_quaternion_height_sv_tiled_32_smoke",
+    "wandb_enabled": false,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-powerfoam-metal-multicam-deepview-3cam-train2-test1-quaternion-height-sv-tiled-32-smoke",
+    "wandb_tags": [
+      "powerfoam",
+      "metal",
+      "multicam-val",
+      "deepview",
+      "train2-test1",
+      "quaternion-height-sv-texel-surface",
+      "tiled",
+      "32px",
+      "64cells"
+    ]
+  }
+}

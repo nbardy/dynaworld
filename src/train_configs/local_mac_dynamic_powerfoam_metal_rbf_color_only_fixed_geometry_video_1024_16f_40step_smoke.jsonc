@@ -1,0 +1,91 @@
+{
+  "arch": "dynamic_powerfoam_metal",
+  "data": {
+    "video_path": "test_data/test_video_small_128_4fps.mp4",
+    "frame_source": "explicit_video",
+    "max_frames": 16
+  },
+  "model": {
+    "cells": 1024,
+    "neighbor_count": 32,
+    "adjacency_mode": "knn",
+    "dynamic_mode": "rbf",
+    "time_basis_count": 8,
+    "time_basis_sigma_scale": 0.75,
+    "temporal_init_mode": "mean",
+    "dynamic_centers": false,
+    "dynamic_radii": false,
+    "dynamic_densities": false,
+    "dynamic_features": true,
+    "dynamic_normals": false,
+    "dynamic_texel_sites": false,
+    "init_from_video": true,
+    "image_init_depth": 2.0,
+    "image_init_jitter": 0.2,
+    "xy_extent": 1.25,
+    "z_min": 1.0,
+    "z_max": 3.25,
+    "radius_init": 0.18,
+    "radius_min": 0.03,
+    "radius_scale": 0.72,
+    "density_init": 64.0,
+    "normal_init_jitter": 0.05,
+    "num_texel_sites": 4,
+    "texel_site_scale": 0.5
+  },
+  "render": {
+    "render_size": 64,
+    "fov_degrees": 55.0,
+    "near_plane": 0.05,
+    "alpha_threshold": 0.0,
+    "transmittance_threshold": 0.0001,
+    "max_alpha": 0.99,
+    "eps": 0.000001,
+    "texel_temperature": 10.0
+  },
+  "train": {
+    "steps": 40,
+    "frames_per_step": 1,
+    "lr": 0.02,
+    "point_lr_multiplier": 0.0,
+    "radius_lr_multiplier": 0.0,
+    "density_lr_multiplier": 0.0,
+    "feature_lr_multiplier": 1.0,
+    "normal_lr_multiplier": 0.0,
+    "texel_site_lr_multiplier": 0.0,
+    "temporal_lr_multiplier": 0.5,
+    "seed": 17,
+    "device": "mps"
+  },
+  "losses": {
+    "l1_weight": 1.0,
+    "mse_weight": 0.1,
+    "radius_l2_weight": 0.0001,
+    "density_l2_weight": 0.0,
+    "temporal_center_accel_weight": 0.0,
+    "temporal_radius_accel_weight": 0.0,
+    "temporal_density_accel_weight": 0.0,
+    "temporal_feature_accel_weight": 0.00002,
+    "temporal_coeff_l2_weight": 0.0000005
+  },
+  "logging": {
+    "log_every": 10,
+    "image_log_every": 40,
+    "video_log_every": 40,
+    "always_log_last_step": true,
+    "output_dir": "outputs/dynamic_powerfoam_metal/local_mac_dynamic_powerfoam_metal_rbf_color_only_fixed_geometry_video_1024_16f_40step_smoke",
+    "wandb_enabled": false,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-dynamic-powerfoam-metal-rbf-color-only-fixed-geometry-video-1024-16f-40step-smoke",
+    "wandb_tags": [
+      "dynamic-powerfoam",
+      "metal",
+      "rbf",
+      "color-only",
+      "fixed-geometry",
+      "motion-vs-repaint",
+      "64px",
+      "1024cells"
+    ]
+  }
+}

@@ -134,6 +134,9 @@ MODEL_OPTION_DEFAULTS = {
     "vjepa_checkpoint_url": None,
     "video_feature_layers": None,
     "video_feature_channels": None,
+    "video_feature_token_stride": 1,
+    "video_feature_output_dtype": None,
+    "camera_refine_with_decode_time": True,
     "time_fourier_bands": 8,
     "time_max_frequency": 128.0,
     "ray_condition_grid_size": 16,
@@ -184,6 +187,24 @@ EXPORT_OPTION_DEFAULTS = {
     "sequence_index": 0,
     "window_start": 0,
 }
+
+
+def _resolve_amp_dtype(device: torch.device, dtype_name: str) -> torch.dtype:
+    dtype_name = str(dtype_name).lower()
+    if dtype_name == "auto":
+        return torch.bfloat16 if device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16
+    dtype_by_name = {
+        "float16": torch.float16,
+        "fp16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+    }
+    if dtype_name not in dtype_by_name:
+        known = ", ".join(sorted(set(dtype_by_name) | {"auto"}))
+        raise ValueError(f"Unknown train.amp_dtype={dtype_name!r}. Expected one of: {known}.")
+    if device.type == "cuda" and dtype_by_name[dtype_name] == torch.bfloat16 and not torch.cuda.is_bf16_supported():
+        raise ValueError("train.amp_dtype='bfloat16' requested, but CUDA bf16 is not supported on this device.")
+    return dtype_by_name[dtype_name]
 
 
 def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -265,6 +286,15 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         cfg["model"]["video_feature_channels"] = {
             str(name): int(channels) for name, channels in cfg["model"]["video_feature_channels"].items()
         }
+    cfg["model"]["video_feature_token_stride"] = int(cfg["model"]["video_feature_token_stride"])
+    if cfg["model"]["video_feature_token_stride"] < 1:
+        raise ValueError(
+            "model.video_feature_token_stride must be >= 1, "
+            f"got {cfg['model']['video_feature_token_stride']}."
+        )
+    if cfg["model"]["video_feature_output_dtype"] is not None:
+        cfg["model"]["video_feature_output_dtype"] = str(cfg["model"]["video_feature_output_dtype"]).lower()
+    cfg["model"]["camera_refine_with_decode_time"] = bool(cfg["model"]["camera_refine_with_decode_time"])
     if cfg["model"]["xy_extent"] is None:
         cfg["model"]["xy_extent"] = cfg["model"]["scene_extent"]
     if cfg["model"]["z_min"] is None:
@@ -380,6 +410,9 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("export.window_start must be >= 0.")
     cfg["export"] = export_cfg
 
+    if "amp_dtype" not in cfg["train"]:
+        cfg["train"]["amp_dtype"] = "auto"
+    cfg["train"]["amp_dtype"] = str(cfg["train"]["amp_dtype"]).lower()
     if cfg["train"]["recon_backward_strategy"] not in {"framewise", "microbatch", "batched"}:
         raise ValueError(
             f"Unsupported recon_backward_strategy={cfg['train']['recon_backward_strategy']!r}. "
@@ -480,9 +513,7 @@ class Trainer:
         )
         if self.train_cfg["amp"] and not self.amp_available:
             print(f"AMP requested but not available on device {self.device.type}; continuing in fp32.")
-        self.amp_dtype = (
-            torch.bfloat16 if self.device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float16
-        )
+        self.amp_dtype = _resolve_amp_dtype(self.device, self.train_cfg["amp_dtype"])
         self.attn_dtype = self.amp_dtype if self.amp_available else self.sequence_data.frames.dtype
         self.attn_backend = configure_fast_attn(self.device, self.attn_dtype)
         self.renderer_mode, self.effective_gaussians = pick_renderer_mode_from_config(self.cfg)
@@ -977,7 +1008,8 @@ class Trainer:
             self.cfg, self.model, sequence_data, self._eval_decode_clip, self._eval_render_clip
         )
 
-    def validation_video_payload(self) -> dict[str, Any]:
+    def validation_video_payload(self, step: int | None = None) -> dict[str, Any]:
+        del step
         sequences = self.eval_sequences or [self.sequence_data]
         metric_payloads = []
         payload: dict[str, Any] = {
@@ -1049,7 +1081,7 @@ class Trainer:
                 ).to(torch.uint8).numpy()
                 payload["media/feature_pca_image"] = wandb.Image(pca_image, caption=f"Step {step}")
         if should_log_videos:
-            payload.update(self.validation_video_payload())
+            payload.update(self.validation_video_payload(step=step))
         wandb.log(payload, step=step)
 
     def run(self) -> None:

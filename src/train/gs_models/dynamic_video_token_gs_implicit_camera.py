@@ -460,6 +460,33 @@ def _flatten_precomputed_feature(value, channels):
     )
 
 
+def _stride_precomputed_tokens(tokens, stride):
+    stride = int(stride)
+    if stride <= 1:
+        return tokens
+    return tokens[:, ::stride, :].contiguous()
+
+
+def _resolve_feature_output_dtype(dtype_name):
+    if dtype_name is None:
+        return None
+    dtype_name = str(dtype_name).lower()
+    if dtype_name in {"none", "null"}:
+        return None
+    dtype_by_name = {
+        "float32": torch.float32,
+        "fp32": torch.float32,
+        "float16": torch.float16,
+        "fp16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+    }
+    if dtype_name not in dtype_by_name:
+        known = ", ".join(sorted(set(dtype_by_name) | {"none"}))
+        raise ValueError(f"Unknown video_feature_output_dtype={dtype_name!r}. Expected one of: {known}.")
+    return dtype_by_name[dtype_name]
+
+
 class PrecomputedVideoFeatureAdapter(nn.Module):
     """Project cached native feature tensors into the query decoder memory.
 
@@ -468,10 +495,14 @@ class PrecomputedVideoFeatureAdapter(nn.Module):
     query decoder attend across the resulting multi-scale feature set.
     """
 
-    def __init__(self, output_dim, feature_channels, feature_layers=None):
+    def __init__(self, output_dim, feature_channels, feature_layers=None, token_stride=1, output_dtype=None):
         super().__init__()
         if not isinstance(feature_channels, Mapping) or not feature_channels:
             raise ValueError("video_feature_channels must be a non-empty mapping for precomputed features.")
+        self.token_stride = int(token_stride)
+        if self.token_stride < 1:
+            raise ValueError(f"token_stride must be >= 1, got {token_stride}.")
+        self.output_dtype = _resolve_feature_output_dtype(output_dtype)
         self.feature_channels = {str(name): int(channels) for name, channels in feature_channels.items()}
         self.feature_layers = tuple(str(name) for name in (feature_layers or self.feature_channels.keys()))
         missing = [name for name in self.feature_layers if name not in self.feature_channels]
@@ -518,8 +549,11 @@ class PrecomputedVideoFeatureAdapter(nn.Module):
             tokens = _flatten_precomputed_feature(feature_payload[name], channels)
             proj = self.output_projs[safe_name]
             tokens = tokens.to(device=proj.weight.device, dtype=proj.weight.dtype)
+            tokens = _stride_precomputed_tokens(tokens, self.token_stride)
             tokens = proj(self.input_norms[safe_name](tokens))
             tokens = tokens + self.layer_embeddings[safe_name].view(1, 1, -1)
+            if self.output_dtype is not None:
+                tokens = tokens.to(dtype=self.output_dtype)
             projected.append(tokens)
 
         return torch.cat(projected, dim=1)
@@ -737,6 +771,8 @@ def build_video_encoder(
     vjepa_checkpoint_url,
     video_feature_layers=None,
     video_feature_channels=None,
+    video_feature_token_stride=1,
+    video_feature_output_dtype=None,
 ):
     backend = str(backend).lower()
     if backend == "local":
@@ -781,6 +817,8 @@ def build_video_encoder(
             output_dim=output_dim,
             feature_channels=video_feature_channels,
             feature_layers=video_feature_layers,
+            token_stride=video_feature_token_stride,
+            output_dtype=video_feature_output_dtype,
         )
     raise ValueError(
         f"Unknown video_encoder_backend={backend!r}. "
@@ -1783,7 +1821,10 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         vjepa_checkpoint_url=None,
         video_feature_layers=None,
         video_feature_channels=None,
+        video_feature_token_stride=1,
+        video_feature_output_dtype=None,
         cross_attn_layers=1,
+        camera_refine_with_decode_time=True,
         base_fov_degrees=60.0,
         base_radius=3.0,
         max_fov_delta_degrees=15.0,
@@ -1832,6 +1873,7 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         self.feature_dim = int(feature_dim)
         self.dynamic_time_basis_count = int(dynamic_time_basis_count)
         self.dynamic_time_max_frequency = float(dynamic_time_max_frequency)
+        self.camera_refine_with_decode_time = bool(camera_refine_with_decode_time)
         self.video_encoder_backend = str(video_encoder_backend).lower()
         self.video_encoder = build_video_encoder(
             self.video_encoder_backend,
@@ -1854,6 +1896,8 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
             vjepa_checkpoint_url=vjepa_checkpoint_url,
             video_feature_layers=video_feature_layers,
             video_feature_channels=video_feature_channels,
+            video_feature_token_stride=video_feature_token_stride,
+            video_feature_output_dtype=video_feature_output_dtype,
         )
         self.query_tokens = LearnedQueryTokenBank(
             total_tokens=self.total_tokens,
@@ -2060,8 +2104,13 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
                 decode_times[:, index],
             )
             dynamic_opacity_frames.append(dynamic_opacities.squeeze(0))
+            camera_queries = (
+                self.refine_queries(video_tokens, decode_times[:, index])
+                if self.camera_refine_with_decode_time
+                else fixed_queries
+            )
             camera, camera_state = self._decode_camera_single_time(
-                self.refine_queries(video_tokens, decode_times[:, index]),
+                camera_queries,
                 decode_times[:, index],
                 global_camera_token=fixed_global_camera_token,
             )
@@ -2242,6 +2291,8 @@ class DynamicVideoTokenGSKnownCamera(nn.Module):
         vjepa_checkpoint_url=None,
         video_feature_layers=None,
         video_feature_channels=None,
+        video_feature_token_stride=1,
+        video_feature_output_dtype=None,
         cross_attn_layers=1,
         feature_dim=3,
         **_unused_camera_kwargs,
@@ -2276,6 +2327,8 @@ class DynamicVideoTokenGSKnownCamera(nn.Module):
             vjepa_checkpoint_url=vjepa_checkpoint_url,
             video_feature_layers=video_feature_layers,
             video_feature_channels=video_feature_channels,
+            video_feature_token_stride=video_feature_token_stride,
+            video_feature_output_dtype=video_feature_output_dtype,
         )
         self.query_tokens = LearnedQueryTokenBank(
             total_tokens=self.total_tokens,

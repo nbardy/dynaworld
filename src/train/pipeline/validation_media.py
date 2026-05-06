@@ -23,6 +23,7 @@ from train_logging import (
 __all__ = [
     "alpha_to_grayscale_video",
     "compose_gt_pred_alpha_pca_grid",
+    "compose_multicam_diagnostic_grid",
     "scalar_payload",
     "render_preview_image",
     "render_diagnostics_payload",
@@ -74,6 +75,25 @@ def compose_gt_pred_alpha_pca_grid(
     if len(columns) <= 2:
         return None
     return torch.cat(columns, dim=-1)
+
+
+def compose_multicam_diagnostic_grid(rows: list[torch.Tensor]) -> torch.Tensor | None:
+    """Stack per-view GT|Pred|Alpha|Feature rows into one multicam video.
+
+    Each row is a [T, 3, H, W_total] tensor, normally produced by
+    :func:`compose_gt_pred_alpha_pca_grid`. The output stacks views vertically:
+    [T, 3, rows*H, W_total].
+    """
+    if not rows:
+        return None
+    reference_shape = rows[0].shape
+    for index, row in enumerate(rows):
+        if row.shape != reference_shape:
+            raise ValueError(
+                "Multicam diagnostic rows must have identical shape; "
+                f"row0={tuple(reference_shape)}, row{index}={tuple(row.shape)}."
+            )
+    return torch.cat(rows, dim=-2)
 
 
 # --------------------------------------------------------------------------- #
@@ -157,6 +177,56 @@ def render_preview_image(cfg: Mapping[str, Any], result, step: int) -> wandb.Ima
 # --------------------------------------------------------------------------- #
 
 
+def _diagnostic_media(
+    cfg: Mapping[str, Any],
+    *,
+    target: torch.Tensor,
+    pred: torch.Tensor,
+    alpha: torch.Tensor | None,
+    features: torch.Tensor | None,
+) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+    feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
+    alpha_video = alpha_to_grayscale_video(alpha) if alpha is not None else None
+    pca_video = None
+    if feature_pca_log:
+        if features is None:
+            raise ValueError("feature_pca_log=True requires F-channel features.")
+        # Lazy import: feature_pca_viz pulls in torch.linalg.svd which can
+        # be slow to import on test machines that don't need PCA.
+        from feature_pca_viz import feature_pca_to_rgb
+
+        pca_video = feature_pca_to_rgb(features)
+    composite = compose_gt_pred_alpha_pca_grid(
+        gt=target,
+        pred=pred,
+        alpha_video=alpha_video,
+        pca_video=pca_video,
+    )
+    return alpha_video, pca_video, composite
+
+
+def _diagnostics_payload_from_media(
+    *,
+    prefix: str,
+    alpha_video: torch.Tensor | None,
+    pca_video: torch.Tensor | None,
+    composite: torch.Tensor | None,
+    fps: float,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+
+    def _key(suffix: str) -> str:
+        return f"{prefix}_{suffix}" if prefix else suffix
+
+    if alpha_video is not None:
+        payload[_key("Alpha_Mask_Video")] = make_wandb_video(alpha_video, fps)
+    if pca_video is not None:
+        payload[_key("Feature_PCA_Video")] = make_wandb_video(pca_video, fps)
+    if composite is not None:
+        payload[_key("Render_Composite_Video")] = make_wandb_video(composite, fps)
+    return payload
+
+
 def render_diagnostics_payload(
     cfg: Mapping[str, Any],
     *,
@@ -172,37 +242,20 @@ def render_diagnostics_payload(
     Emits alpha-mask, feature-PCA, and composite videos when their inputs are
     available. PCA-video gating reads ``cfg["logging"]["feature_pca_log"]``.
     """
-    feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
-    payload: dict[str, Any] = {}
-    composite_columns: list[torch.Tensor] = [target, pred]
-
-    def _key(suffix: str) -> str:
-        return f"{prefix}_{suffix}" if prefix else suffix
-
-    if alpha is not None:
-        alpha_video = alpha_to_grayscale_video(alpha)
-        payload[_key("Alpha_Mask_Video")] = make_wandb_video(alpha_video, fps)
-        composite_columns.append(alpha_video)
-
-    if feature_pca_log:
-        if features is None:
-            raise ValueError(
-                "feature_pca_log=True requires F-channel features; got None. "
-                f"prefix={prefix!r}"
-            )
-        # Lazy import: feature_pca_viz pulls in torch.linalg.svd which can
-        # be slow to import on test machines that don't need PCA.
-        from feature_pca_viz import feature_pca_to_rgb
-
-        pca = feature_pca_to_rgb(features)
-        payload[_key("Feature_PCA_Video")] = make_wandb_video(pca, fps)
-        composite_columns.append(pca)
-
-    if len(composite_columns) > 2:
-        composite = torch.cat(composite_columns, dim=-1)
-        payload[_key("Render_Composite_Video")] = make_wandb_video(composite, fps)
-
-    return payload
+    alpha_video, pca_video, composite = _diagnostic_media(
+        cfg,
+        target=target,
+        pred=pred,
+        alpha=alpha,
+        features=features,
+    )
+    return _diagnostics_payload_from_media(
+        prefix=prefix,
+        alpha_video=alpha_video,
+        pca_video=pca_video,
+        composite=composite,
+        fps=fps,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -279,31 +332,39 @@ def multicam_validation_video_payload(
     """
     feature_pca_log = bool(cfg["logging"]["feature_pca_log"])
     payload: dict[str, Any] = {"Eval/SequenceCount": 1, **camera_rig_metrics}
+    comparison_rows: list[torch.Tensor] = []
 
     for view, rendered in enumerate(train_rendered):
         target = train_targets[view]
+        prefix = f"TrainView{view}"
         metrics = {
             **eval_metric_payload(rendered.rgb, target, cfg["losses"]),
             **temporal_similarity_payload(rendered.rgb, target, cfg["losses"]),
         }
         if view == 0:
             metrics.update(decoded_metrics)
-        payload.update(_prefixed(f"TrainView{view}", metrics))
-        if view == 0:
-            payload["TrainView0_Rendered_Video"] = make_wandb_video(rendered.rgb, fps)
-            payload.update(
-                render_diagnostics_payload(
-                    cfg,
-                    prefix="TrainView0",
-                    target=target,
-                    pred=rendered.rgb,
-                    alpha=rendered.alpha,
-                    features=rendered.features if feature_pca_log else None,
-                    fps=fps,
-                )
+        payload.update(_prefixed(prefix, metrics))
+        payload[f"{prefix}_Rendered_Video"] = make_wandb_video(rendered.rgb, fps)
+        alpha_video, pca_video, composite = _diagnostic_media(
+            cfg,
+            target=target,
+            pred=rendered.rgb,
+            alpha=rendered.alpha,
+            features=rendered.features if feature_pca_log else None,
+        )
+        payload.update(
+            _diagnostics_payload_from_media(
+                prefix=prefix,
+                alpha_video=alpha_video,
+                pca_video=pca_video,
+                composite=composite,
+                fps=fps,
             )
-            if not gt_video_logged:
-                payload["TrainView0_GT_Video"] = make_wandb_video(target, fps)
+        )
+        if composite is not None:
+            comparison_rows.append(composite)
+        if not gt_video_logged:
+            payload[f"{prefix}_GT_Video"] = make_wandb_video(target, fps)
 
     for view, rendered in enumerate(heldout_rendered):
         heldout_target = heldout_targets[view]
@@ -314,19 +375,30 @@ def multicam_validation_video_payload(
             **temporal_similarity_payload(rendered.rgb, heldout_target, cfg["losses"]),
         }))
         payload[f"{prefix}_Rendered_Video"] = make_wandb_video(rendered.rgb, fps)
+        alpha_video, pca_video, composite = _diagnostic_media(
+            cfg,
+            target=heldout_target,
+            pred=rendered.rgb,
+            alpha=rendered.alpha,
+            features=rendered.features if feature_pca_log else None,
+        )
         payload.update(
-            render_diagnostics_payload(
-                cfg,
+            _diagnostics_payload_from_media(
                 prefix=prefix,
-                target=heldout_target,
-                pred=rendered.rgb,
-                alpha=rendered.alpha,
-                features=rendered.features if feature_pca_log else None,
+                alpha_video=alpha_video,
+                pca_video=pca_video,
+                composite=composite,
                 fps=fps,
             )
         )
+        if composite is not None:
+            comparison_rows.append(composite)
         if not gt_video_logged:
             payload[f"{prefix}_GT_Video"] = make_wandb_video(heldout_target, fps)
+
+    comparison_grid = compose_multicam_diagnostic_grid(comparison_rows)
+    if comparison_grid is not None:
+        payload["Multicam_GT_Splat_Alpha_Feature_Grid_Video"] = make_wandb_video(comparison_grid, fps)
 
     summary = {
         key: round(float(value), 4)

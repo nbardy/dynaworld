@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -379,6 +380,7 @@ def main() -> None:
             f"pose_source={bundle.heldout_pose_source}"
         )
 
+    train_start = time.perf_counter()
     for step in range(steps):
         opt.zero_grad(set_to_none=True)
         frames = torch.randint(0, T, (batch_size,), device=device)
@@ -422,11 +424,13 @@ def main() -> None:
             }
             logs.append(log)
             print(log)
+    train_loop_elapsed_s = time.perf_counter() - train_start
 
     rendered = render_splat_sequence(model, source_cameras, render_cfg)
     metrics = {
         **video_metrics(rendered["rgb"], video),
         **model.metrics(),
+        "train_loop_elapsed_s": float(train_loop_elapsed_s),
     }
     if bundle.train_camera_names:
         metrics["train_camera_count"] = float(len(bundle.train_camera_names))

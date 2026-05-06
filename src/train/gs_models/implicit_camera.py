@@ -67,11 +67,13 @@ def axis_angle_to_matrix(axis_angle):
     rotation = eye + sin_term * skew + cos_term * (skew @ skew)
     if torch.any(small_angle):
         small_skew = skew_symmetric(axis_angle[small_angle])
-        rotation[small_angle] = eye[small_angle] + small_skew
+        rotation[small_angle] = (eye[small_angle] + small_skew).to(dtype=rotation.dtype)
     return rotation
 
 
 def compose_camera_with_se3_delta(base_camera, rotation_delta, translation_delta):
+    rotation_delta = rotation_delta.float()
+    translation_delta = translation_delta.float()
     delta_transform = (
         torch.eye(4, device=rotation_delta.device, dtype=rotation_delta.dtype)
         .unsqueeze(0)

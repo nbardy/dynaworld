@@ -1,0 +1,223 @@
+{
+  "acceptance_thresholds": {
+    "aliked_max_reproj_median": 4.0,
+    "aliked_max_reproj_p90": 8.0,
+    "aliked_min_point_count": 2000,
+    "aliked_min_track_mean": 2.5,
+    "aliked_min_track_p90": 3.0,
+    "aliked_min_verified_pairs": 28,
+    "heldout_min_psnr": 13.0,
+    "heldout_min_ssim": 0.15
+  },
+  "copy_back_to_mac": [
+    "research_experiments/dynamic_foam/fixtures/powerfoam_tiny_height_sv_official_camera_official_v1.json",
+    "research_experiments/dynamic_foam/artifacts/deepview_03_dog_8cam_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_aliked_lightglue_minucam2.ply",
+    "research_experiments/dynamic_foam/artifacts/deepview_03_dog_8cam_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_aliked_lightglue_minucam2.json"
+  ],
+  "external_commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python research_experiments/dynamic_foam/run_powerfoam_external_blockers.py check --matcher-type aliked_lightglue",
+      "expected": "exit code 0 on a CUDA/Warp/pycolmap host; current Mac is expected to fail this check",
+      "name": "host_prereq_check"
+    },
+    {
+      "command": "PYTHONPATH=src/train python research_experiments/dynamic_foam/make_powerfoam_official_parity_fixture.py --backend official --upstream-root /tmp/powerfoam_official --fixture research_experiments/dynamic_foam/fixtures/powerfoam_tiny_height_sv_origin_parity_v1.json --output research_experiments/dynamic_foam/fixtures/powerfoam_tiny_height_sv_official_camera_official_v1.json",
+      "name": "official_cuda_warp_fixture",
+      "validate": "PYTHONDONTWRITEBYTECODE=1 python research_experiments/dynamic_foam/run_powerfoam_external_blockers.py verify-official-fixture --matcher-type aliked_lightglue",
+      "writes": [
+        "research_experiments/dynamic_foam/fixtures/powerfoam_tiny_height_sv_official_camera_official_v1.json"
+      ]
+    },
+    {
+      "command": "PYTHONPATH=src/train uv run --with pycolmap==4.0.4 python research_experiments/dynamic_foam/build_pycolmap_known_pose_point_cloud.py src/train_configs/local_mac_powerfoam_metal_multicam_deepview_8cam_holdout1_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_init_raytrace_128_16f_1024cells_40step_lowgeom_noaux.jsonc --output research_experiments/dynamic_foam/artifacts/deepview_03_dog_8cam_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_aliked_lightglue_minucam2.ply --target-size 1024 --frame-indices 0 4 8 12 --camera-model opencv_fisheye --camera-mode per_image --feature-backend colmap_cli --feature-type aliked_n16rot --matcher-type aliked_lightglue --allow-onnx-models --pycolmap-use-gpu --pycolmap-device cuda --max-features 12000 --max-reproj-error 8.0 --xy-extent 100 --z-min -100 --z-max 100 --min-unique-cameras 2",
+      "name": "aliked_lightglue_point_cloud",
+      "validate": "PYTHONDONTWRITEBYTECODE=1 python research_experiments/dynamic_foam/run_powerfoam_external_blockers.py verify-aliked-artifact --matcher-type aliked_lightglue --min-point-count 2000 --min-track-mean 2.5 --min-track-p90 3.0 --max-reproj-median 4.0 --max-reproj-p90 8.0 --min-verified-pairs 28",
+      "writes": [
+        "research_experiments/dynamic_foam/artifacts/deepview_03_dog_8cam_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_aliked_lightglue_minucam2.ply",
+        "research_experiments/dynamic_foam/artifacts/deepview_03_dog_8cam_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_aliked_lightglue_minucam2.json"
+      ]
+    }
+  ],
+  "host_requirements": {
+    "aliked_host": [
+      "COLMAP CLI with CUDA and ONNX feature extraction",
+      "cuDNN runtime libraries for ONNX Runtime",
+      "pycolmap for known-pose triangulation",
+      "ALIKED/LightGlue model downloads allowed"
+    ],
+    "metal_training_host": [
+      "macOS",
+      "MPS",
+      "built third_party/powerfoam-metal extension"
+    ],
+    "official_fixture_host": [
+      "linux",
+      "cuda",
+      "torch cuda available",
+      "warp-lang",
+      "pinned upstream PowerFoam checkout"
+    ]
+  },
+  "mac_after_copy_commands": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python research_experiments/dynamic_foam/run_powerfoam_external_blockers.py verify-official-fixture --matcher-type aliked_lightglue",
+      "name": "validate_official_fixture_shape_and_keys"
+    },
+    {
+      "command": "PYTHONPATH=src/train:third_party/powerfoam-metal uv run --with pytest python -m pytest tests/test_powerfoam_direct.py::test_powerfoam_direct_matches_official_cuda_fixture_if_present tests/test_powerfoam_direct.py::test_powerfoam_metal_matches_official_cuda_fixture_shared_backward_if_present -q -rs",
+      "name": "run_official_fixture_parity_tests"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python research_experiments/dynamic_foam/run_powerfoam_external_blockers.py verify-aliked-artifact --matcher-type aliked_lightglue --min-point-count 2000 --min-track-mean 2.5 --min-track-p90 3.0 --max-reproj-median 4.0 --max-reproj-p90 8.0 --min-verified-pairs 28",
+      "name": "validate_aliked_artifact_quality"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python research_experiments/dynamic_foam/run_powerfoam_external_blockers.py write-train-config --matcher-type aliked_lightglue --overwrite-config",
+      "name": "write_matched_training_config",
+      "writes": [
+        "src/train_configs/local_mac_powerfoam_metal_multicam_deepview_8cam_holdout1_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_aliked_lightglue_init_raytrace_128_16f_1024cells_40step_lowgeom_noaux.jsonc"
+      ]
+    },
+    {
+      "command": "PYTHONPATH=src/train:third_party/powerfoam-metal .venv/bin/python src/train/train_powerfoam_metal.py src/train_configs/local_mac_powerfoam_metal_multicam_deepview_8cam_holdout1_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_aliked_lightglue_init_raytrace_128_16f_1024cells_40step_lowgeom_noaux.jsonc",
+      "name": "train_matched_metal_row",
+      "writes": [
+        "outputs/powerfoam_metal/local_mac_powerfoam_metal_multicam_deepview_8cam_holdout1_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_aliked_lightglue_init_raytrace_128_16f_1024cells_40step_lowgeom_noaux"
+      ]
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python research_experiments/dynamic_foam/run_powerfoam_external_blockers.py verify-aliked-run --matcher-type aliked_lightglue --min-point-count 2000 --min-track-mean 2.5 --min-track-p90 3.0 --max-reproj-median 4.0 --max-reproj-p90 8.0 --min-verified-pairs 28 --min-heldout-psnr 13.0 --min-heldout-ssim 0.15",
+      "name": "validate_matched_training_row"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src/train .venv/bin/python research_experiments/dynamic_foam/verify_powerfoam_completion_audit.py --run-local-tests",
+      "name": "final_completion_audit"
+    }
+  ],
+  "modal_cuda_smoke": {
+    "objective": "Run pinned official CUDA/Warp PowerFoam and a copied dynamic feature-foam fork on the same tiny clip/settings with one Modal L40S, then save comparable JSON results.",
+    "plan_command": "uv run --with modal modal run research_experiments/dynamic_foam/modal_powerfoam_cuda_smoke.py --preset micro_clip_64_4f_5step --run-id cuda_micro_blackbg_rerun --skip-official-fixture --fixed-black-background",
+    "execute_command": "uv run --with modal modal run research_experiments/dynamic_foam/modal_powerfoam_cuda_smoke.py --execute --preset micro_clip_64_4f_5step --run-id cuda_micro_blackbg_rerun --max-gpu-minutes 8 --skip-official-fixture --fixed-black-background",
+    "validate_command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python research_experiments/dynamic_foam/verify_powerfoam_cuda_smoke_results.py outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/summary.json",
+    "writes": [
+      "outputs/powerfoam_cuda_smokes/latest/summary.json",
+      "outputs/powerfoam_cuda_smokes/latest/modal_return.json",
+      "outputs/powerfoam_cuda_smokes/cuda_micro_time_causality_20260506/summary.json",
+      "outputs/powerfoam_cuda_smokes/cuda_micro_time_causality_20260506/cuda_vs_metal_summary.json",
+      "outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/summary.json",
+      "outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/cuda_vs_metal_summary.json",
+      "research_experiments/dynamic_foam/fixtures/powerfoam_tiny_height_sv_official_camera_official_v1.json"
+    ],
+    "fixed_black_micro_result": {
+      "summary": "outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/summary.json",
+      "status": "ok",
+      "official_static_cuda": {
+        "eval_l1": 0.4901425465941429,
+        "eval_psnr": 5.563989996910095,
+        "eval_ssim": 0.028372553177177906,
+        "warm_step_total_ms_mean_excluding_step0": 8.313082250001713
+      },
+      "dynamic_feature_foam_cuda": {
+        "eval_l1": 0.48872987926006317,
+        "eval_psnr": 5.583263397216797,
+        "eval_ssim": 0.028826349414885044,
+        "dynamic_time_rgb_delta_max": 0.0009796172380447388,
+        "dynamic_time_rgb_delta_mean": 0.00006899095023982227,
+        "warm_step_total_ms_mean_excluding_step0": 9.087487750001344
+      },
+      "comparison": {
+        "delta_eval_psnr_dynamic_minus_static": 0.01927340030670166,
+        "delta_eval_ssim_dynamic_minus_static": 0.00045379623770713806,
+        "warm_speed_ratio_dynamic_over_static": 1.0931550388545082
+      }
+    },
+    "strict_micro_result": {
+      "summary": "outputs/powerfoam_cuda_smokes/cuda_micro_time_causality_20260506/summary.json",
+      "status": "ok",
+      "official_static_cuda": {
+        "eval_l1": 0.49155180156230927,
+        "eval_psnr": 5.540467262268066,
+        "eval_ssim": 0.02179543999955058,
+        "warm_step_total_ms_mean_excluding_step0": 6.929788500000811
+      },
+      "dynamic_feature_foam_cuda": {
+        "eval_l1": 0.49108167737722397,
+        "eval_psnr": 5.548742294311523,
+        "eval_ssim": 0.022140285931527615,
+        "dynamic_time_rgb_delta_max": 0.002697303891181946,
+        "dynamic_time_rgb_delta_mean": 0.00019384862389415503,
+        "warm_step_total_ms_mean_excluding_step0": 7.170414499997335
+      },
+      "comparison": {
+        "delta_eval_psnr_dynamic_minus_static": 0.008275032043457031,
+        "delta_eval_ssim_dynamic_minus_static": 0.0003448459319770336,
+        "warm_speed_ratio_dynamic_over_static": 1.0347234262627922
+      }
+    },
+    "latest_result": {
+      "summary": "outputs/powerfoam_cuda_smokes/latest/summary.json",
+      "status": "ok",
+      "official_static_cuda": {
+        "eval_l1": 0.45511386170983315,
+        "eval_psnr": 6.028407990932465,
+        "eval_ssim": 0.057676492258906364,
+        "step_total_ms_mean": 314.83902074999975,
+        "warm_step_source": "outputs/powerfoam_cuda_smokes/latest/modal_return.json lane metrics, not summary.json",
+        "warm_step_total_ms_mean_excluding_step0": 8.228918578947031
+      },
+      "dynamic_feature_foam_cuda": {
+        "eval_l1": 0.45211347192525864,
+        "eval_psnr": 6.077250838279724,
+        "eval_ssim": 0.06102427188307047,
+        "step_total_ms_mean": 43.127620800001765,
+        "warm_step_source": "outputs/powerfoam_cuda_smokes/latest/modal_return.json lane metrics, not summary.json",
+        "warm_step_total_ms_mean_excluding_step0": 8.79030921052803
+      },
+      "comparison": {
+        "delta_eval_psnr_dynamic_minus_static": 0.04884284734725952,
+        "delta_eval_ssim_dynamic_minus_static": 0.0033477796241641045,
+        "speed_ratio_dynamic_over_static": 0.13698308645880197,
+        "warm_speed_ratio_dynamic_over_static": 1.0682228956329399
+      },
+      "remaining_local_parity_caveat": "Cleared after matching upstream's effective raster texture temperature and restricting official-backward comparison to stable shared channels; targeted Direct/Metal official fixture tests pass locally."
+    },
+    "cuda_vs_metal_smoke_result": {
+      "summary": "outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/cuda_vs_metal_summary.json",
+      "metal_config": "src/train_configs/local_mac_powerfoam_metal_cuda_micro_match_randominit_64_4f_256cells_5step.jsonc",
+      "metal_output": "outputs/powerfoam_metal/local_mac_powerfoam_metal_cuda_micro_match_randominit_64_4f_256cells_5step",
+      "matched_contract": "same source clip, frame count, render size, step count, point/cell count, texel-site count, SV DoF, Metal random init, and fixed black background",
+      "metal_eval_psnr": 5.1221818923950195,
+      "metal_eval_ssim": 0.010484609752893448,
+      "metal_eval_l1": 0.505668044090271,
+      "metal_minus_official_static_cuda_eval_psnr": -0.4418081045150757,
+      "metal_minus_official_static_cuda_eval_ssim": -0.017887943424284458,
+      "metal_minus_official_static_cuda_eval_l1": 0.015525497496128082
+    },
+    "notes": "The dynamic fork patch is a time-conditioned texel_sv_rgb residual. It is intentionally smaller than a true F32 Warp feature-accumulation fork."
+  },
+  "modal_aliked_onnx_preflight": {
+    "pycolmap_wheel": {
+      "command": "modal run research_experiments/dynamic_foam/modal_powerfoam_aliked_onnx_check.py --run-id onnx_check_fast_20260506",
+      "output": "outputs/powerfoam_aliked_geometry/onnx_check_fast_20260506/onnx_check.json",
+      "status": "failed",
+      "return_code": -6,
+      "error": "ALIKED feature extraction requires ONNX support",
+      "implication": "The ordinary Modal Linux pycolmap==4.0.4 pip wheel is not an ONNX-enabled pycolmap host."
+    },
+    "colmap_cli_cudnn": {
+      "command": "modal run research_experiments/dynamic_foam/modal_colmap_cli_onnx_check.py --run-id colmap_cli_onnx_cudnn_check_20260506",
+      "output": "outputs/powerfoam_aliked_geometry/colmap_cli_onnx_cudnn_check_20260506/colmap_cli_onnx_check.json",
+      "status": "ok",
+      "implication": "Official colmap/colmap:latest plus nvidia-cudnn-cu12 can run ALIKED_N16ROT and ALIKED_LIGHTGLUE ONNX on Modal L40S."
+    },
+    "real_data_probe_status": {
+      "status": "sparse_negative",
+      "wide2_128_bruteforce": "outputs/powerfoam_aliked_geometry/colmap_cli_probe_20260506_0458/probe.json point_count=0",
+      "near4_512_bruteforce": "outputs/powerfoam_aliked_geometry/colmap_cli_probe_near4_512_20260506/probe.json point_count=9",
+      "near4_512_lightglue": "outputs/powerfoam_aliked_geometry/colmap_cli_probe_near4_512_lightglue_20260506/probe.json point_count=27, track_p90=2, reproj_median=6.25",
+      "near4_512_lightglue_guided": "outputs/powerfoam_aliked_geometry/colmap_cli_probe_near4_512_lightglue_guided_fixed_20260506/probe.json point_count=0",
+      "implication": "Do not run the full 1024px ALIKED artifact until a cheap probe is much closer to the artifact-quality gate."
+    }
+  },
+  "objective": "Close the remaining PowerFoam completion blockers by producing the official CUDA/Warp parity fixture and ONNX-backed ALIKED/LightGlue clean geometry, then running the matched W&B-backed Metal training row."
+}

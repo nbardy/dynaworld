@@ -183,6 +183,120 @@ Rule of thumb: if the change spans more than one file, run the smoke after
 **all** files are edited, not after each one. Mid-cascade states are
 broken by construction.
 
+### W&B logging for training runs
+
+Benchmark and training configs should keep W&B on:
+
+```json
+"wandb_enabled": true
+```
+
+Do not launch benchmark runs with `WANDB_MODE=disabled`. If a run is worth
+measuring, it is worth logging with images, videos, metrics, resolved config,
+and tags. The acceptable exceptions are narrow mechanical tests, local unit
+tests, and intentionally offline smoke runs where network/auth is unavailable;
+if W&B is disabled for one of those, say why in the note or handoff.
+
+### PowerFoam Metal gates
+
+For PowerFoam Metal changes, run the focused unit/regression gate:
+
+```bash
+PYTHONPATH=src/train:third_party/powerfoam-metal uv run --with pytest python -m pytest \
+  tests/test_powerfoam_direct.py tests/test_multicam_video_data.py -q
+```
+
+For saved 4K performance claims, also run the artifact verifier:
+
+```bash
+PYTHONPATH=src/train .venv/bin/python research_experiments/dynamic_foam/verify_powerfoam_4k_benchmarks.py
+```
+
+For saved 4K trainability claims, verify the optimizer-step artifact too. This
+is separate from backward timing; it checks a real UHD optimizer step:
+
+```bash
+PYTHONPATH=src/train .venv/bin/python research_experiments/dynamic_foam/verify_powerfoam_4k_trainability.py
+```
+
+For full/paper PowerFoam acceptance claims, run the paper-acceptance verifier:
+
+```bash
+PYTHONPATH=src/train .venv/bin/python research_experiments/dynamic_foam/verify_powerfoam_paper_acceptance.py
+```
+
+Before claiming the user-facing objective "PowerFoam proper on Metal" is done,
+run the top-level completion audit. It ties the prompt requirements to the
+focused local test gate, a targeted local Metal fixture-backward node, the
+low-level raytrace parity script, official fixture, the two official
+Direct/Metal parity pytest nodes, 4K benchmark verifier, 4K optimizer-step
+trainability verifier, paper verifier, W&B backing, and heldout-quality
+thresholds:
+
+```bash
+PYTHONPATH=src/train .venv/bin/python research_experiments/dynamic_foam/verify_powerfoam_completion_audit.py --run-local-tests
+```
+
+When paper acceptance fails on a clean init, run the coverage verifier before
+starting another schedule sweep:
+
+```bash
+PYTHONPATH=src/train .venv/bin/python research_experiments/dynamic_foam/verify_powerfoam_clean_init_coverage.py --allow-incomplete
+```
+
+These gates prove local Metal/Torch regression coverage, saved synthetic 4K
+benchmark consistency, and saved synthetic 4K optimizer-step trainability. The
+clean-init coverage verifier explains train/heldout point support and
+checkpoint-selection failures; it is not a paper-acceptance substitute. These
+gates do not prove CUDA/Warp official parity unless the official CUDA fixture is
+present and the skip-until-present tests actually run. The paper-acceptance
+verifier is expected to fail until the official fixture and clean held-out
+quality gates are complete.
+
+### PowerFoam CUDA smoke gates
+
+For the cheap CUDA/Modal lane, keep the fast local contract in pytest and only
+spend L40S time when the plan validates:
+
+```bash
+PYTHONPATH=src/train uv run --with pytest python -m pytest tests/test_powerfoam_cuda_smoke.py -q
+```
+
+The no-GPU test checks that the CUDA smoke plan pins upstream PowerFoam,
+references the current dynamic feature-foam patch, and uses the strict micro
+settings. To run the actual Modal smoke on an L40S:
+
+```bash
+uv run --with modal modal run research_experiments/dynamic_foam/modal_powerfoam_cuda_smoke.py \
+  --execute \
+  --preset micro_clip_64_4f_5step \
+  --run-id cuda_micro_time_causality_rerun \
+  --max-gpu-minutes 8 \
+  --skip-official-fixture \
+  --fixed-black-background
+```
+
+Validate returned CUDA JSON before citing the result:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  research_experiments/dynamic_foam/verify_powerfoam_cuda_smoke_results.py \
+  outputs/powerfoam_cuda_smokes/{run_id}/summary.json
+```
+
+For the matched CUDA-vs-Metal smoke comparison, run the local random-init Metal
+micro config, then write the comparison JSON. The CUDA run should use
+`--fixed-black-background`; otherwise the comparison report will flag
+`same_fixed_black_background=false`.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src/train:third_party/powerfoam-metal \
+  WANDB_MODE=disabled .venv/bin/python src/train/train_powerfoam_metal.py \
+  src/train_configs/local_mac_powerfoam_metal_cuda_micro_match_randominit_64_4f_256cells_5step.jsonc
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  research_experiments/dynamic_foam/compare_powerfoam_cuda_metal_smoke.py
+```
+
 ### Test quality rules
 
 Do not add tests just to prove an implementation detail that is unlikely to
@@ -199,6 +313,28 @@ failure is "we might change the helper implementation" rather than "the logged
 video is missing frames", "F=32 no longer reaches the feature rasterizer", or
 "the configured smoke path crashes", prefer a runtime smoke, artifact check, or
 no test.
+
+### Dense functional helpers
+
+When code repeats the same operation across many fixture keys, config keys,
+metrics, tensors, or gradient names, prefer a small data table plus one helper
+loop over copy-pasted destructuring blocks.
+
+Good patterns:
+
+- define key maps such as `(("grad_points", "points"), ...)` once, then loop
+  through them in assertions or serialization
+- pass canonical containers (`inputs`, `expected`, `params`, `cfg`) to helpers
+  and let the helper read the needed keys
+- use focused helpers such as `_fixture_param(...)`, `_fixture_grad(...)`, or
+  `_assert_fixture_grads(...)` instead of hand-building large temporary dicts
+  at each call site
+- keep repeated numeric tolerances, shape handling, device moves, and frame
+  indexing in one helper when they are part of the same contract
+
+The goal is dense, functional code where the test body states the behavioral
+contract. Avoid sprawling local destructuring or long assertion walls that hide
+the actual invariant being tested.
 
 ### Renderer dispatch
 

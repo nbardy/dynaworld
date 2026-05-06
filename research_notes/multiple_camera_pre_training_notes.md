@@ -78,9 +78,48 @@ source-anchored world-token contract.
 
 ## Implementation Follow-Up
 
-Do not wire this into the current speed baseline yet. The next implementation
-step is a design pass for a source-anchored world-token API and relative-camera
-head:
+The first implementation step is now wired as an oracle baseline. The trainer
+can load both train-camera videos, decode a source camera into `W_source`, and
+render self/cross targets with calibrated source-relative cameras:
+
+```text
+train.camera_swap_mode = "oracle_relative"
+```
+
+The config entrypoint is:
+
+```text
+src/train_configs/local_mac_multicam_deepview_3cam_train2_test1_static_dynamic_96_32_precomputed_vjepa2_1_vitb_384_128_16f_8192splats_oracle_relative_camera.jsonc
+```
+
+The next implementation step is also available behind:
+
+```text
+train.camera_swap_mode = "learned_residual"
+```
+
+That mode adds a tiny cross-attention relative-pose head over projected
+source/target V-JEPA memories, predicts a bounded SE(3) residual around the
+calibrated delta, and keeps the world decoder source-only. Heldout validation
+still uses calibrated/query deltas rather than heldout RGB features.
+The trainer logs residual identity and cycle losses for the learned relpose
+path.
+
+First 250-step learned-residual baseline:
+
+```text
+wandb/offline-run-20260503_014531-woco72am
+TrainView0 PSNR/SSIM = 14.9334 / 0.1966
+TrainView1 PSNR/SSIM = 15.5946 / 0.2731
+Heldout camera_0040 PSNR/SSIM = 14.0453 / 0.1714
+```
+
+This is the best measured Tier-2a heldout row as of 2026-05-03, narrowly ahead
+of the 80-step free dynamic 3DGS row (`13.2940` heldout PSNR). Treat it as a
+baseline candidate rather than a settled result: it still needs leakage probes,
+seed checks, and a longer run.
+
+The intended API shape remains:
 
 ```text
 encoder(source) -> W_source
@@ -88,5 +127,5 @@ relative_camera_head(source, target or requested_delta) -> Delta_query
 renderer(W_source, Delta_query, query_time?) -> target
 ```
 
-Only after that contract is clear should the camera-swap sampler be connected to
-the trainer.
+For the learned version, keep the leak guard: target/reference features may
+condition only the relative-pose head, never `W_source`.

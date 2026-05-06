@@ -44,3 +44,57 @@ I am worried too much that the wrong task will force camera implicitly into imag
 Also I think if we relally look at this there is some sort of architecture / objective idea that is more trenscednant where we properly stop and reflect on the AR vs Diffusion and rolling vs forcing diffusion and the rolling window stuff. Like we need to more nativelt extend to parital/long context and rolling context. MAybe even AR on tokens per frame. In a way that ends up robust to noise at inference time via training on noisier data.
 
 And get away from the like single encoder => Decode paradgim here to somethig more elegant
+
+---
+
+## 2026-05-02 Update: Paired-Camera Token Swap Contract
+
+The multicam train2/heldout1 setup sharpened the original "swap the camera"
+idea. The stronger paired-camera contract is:
+
+```text
+encode(video_a) -> world_a, camera_a
+encode(video_b) -> world_b, camera_b
+
+render(world_a, camera_a) -> video_a
+render(world_b, camera_b) -> video_b
+
+render(world_a, camera_b) -> video_b
+render(world_b, camera_a) -> video_a
+```
+
+This makes sense if `video_a` and `video_b` are synchronized views of the same
+scene. The cross terms are the key: the world/video tokens from one camera must
+render correctly from the other camera token. That directly trains the behavior
+we need at inference time:
+
+```text
+encode(source_video) -> world_source, camera_source
+query_camera_token = requested new camera
+render(world_source, query_camera_token) -> novel view
+```
+
+Important caveat: the target camera token cannot be an arbitrary high-capacity
+latent from the target video. If it is, it can leak target appearance and make
+the swap fake. The camera token needs to decode to an explicit pose/intrinsics
+object, or be constrained as calibrated pose plus a small learned residual.
+
+For train2/heldout1:
+
+```text
+train:
+  W_A + C_A -> GT_A
+  W_A + C_B -> GT_B
+  W_B + C_B -> GT_B
+  W_B + C_A -> GT_A
+
+heldout eval:
+  W_A + C_H -> GT_H
+  W_B + C_H -> GT_H
+```
+
+`C_H` should come from the heldout calibrated pose, not from heldout RGB, if the
+goal is a true novel-camera test.
+
+See `research_notes/training_ideas_for_novel_synthesis.md` for the cleaner
+contract and falsification tests.

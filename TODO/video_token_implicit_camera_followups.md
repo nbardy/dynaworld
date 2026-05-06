@@ -30,11 +30,15 @@ larger clip.
    world_tokens, source_camera_token` and render from a query camera, but this
    requires architecture changes around `T=1` inputs, dynamic-token behavior, and
    `query_time`; see `research_notes/training_ideas_for_novel_synthesis.md`.
-6. For mixed multi-camera pretraining, resolve the frame-of-reference problem
-   before wiring the camera-swap sampler: independent encodes can choose
-   different gauges, so the likely contract is `source -> W_source` plus
-   `relpose(source, target) -> Delta_source_to_target`; see
-   `research_notes/multiple_camera_pre_training_notes.md`.
+6. For mixed multi-camera pretraining, continue from the source-anchored
+   camera-swap path. `train.camera_swap_mode="oracle_relative"` renders
+   `W_source + calibrated Delta_source_to_target -> target`, and
+   `train.camera_swap_mode="learned_residual"` adds the tiny
+   `relpose(F_source, F_target) -> residual SE(3)` head with target features
+   blocked from the world decoder. Residual identity and cycle losses are wired.
+   The first 250-step V-JEPA train/eval run is recorded in `BASELINES.md`.
+   Remaining work: leakage probes, a longer/seeded rerun, and a query-only
+   inference path for camera requests that do not have target RGB.
 
 ## Guardrails
 

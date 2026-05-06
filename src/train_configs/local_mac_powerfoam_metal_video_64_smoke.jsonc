@@ -1,0 +1,71 @@
+{
+  "arch": "powerfoam_metal",
+  "data": {
+    "video_path": "test_data/test_video_small_128_4fps.mp4",
+    "frame_source": "explicit_video",
+    "max_frames": 16
+  },
+  "model": {
+    "cells": 64,
+    // KNN is an approximate speed-ablation adjacency; use cech_aabb for correctness.
+    "neighbor_count": 16,
+    "adjacency_mode": "knn",
+    "init_from_video": true,
+    "image_init_depth": 2.0,
+    "image_init_jitter": 0.2,
+    "xy_extent": 1.25,
+    "z_min": 1.0,
+    "z_max": 3.25,
+    "radius_init": 0.18,
+    "radius_min": 0.03,
+    "radius_scale": 0.72,
+    "density_init": 16.0,
+    "feature_mode": "constant",
+    "linear_coeff_init": 0.0,
+    "linear_coeff_scale": 0.25
+  },
+  "render": {
+    "render_size": 64,
+    "fov_degrees": 55.0,
+    "near_plane": 0.05,
+    "alpha_threshold": 0.0,
+    "transmittance_threshold": 0.0001,
+    "max_alpha": 0.99,
+    "eps": 0.000001,
+    "background": [0.0, 0.0, 0.0]
+  },
+  "train": {
+    "steps": 50,
+    "frames_per_step": 1,
+    "lr": 0.02,
+    "point_lr_multiplier": 0.1,
+    "radius_lr_multiplier": 0.05,
+    "density_lr_multiplier": 0.05,
+    "feature_lr_multiplier": 1.0,
+    "seed": 17,
+    "device": "mps"
+  },
+  "losses": {
+    "l1_weight": 1.0,
+    "mse_weight": 0.1,
+    "radius_l2_weight": 0.0001,
+    "density_l2_weight": 0.0
+  },
+  "logging": {
+    "log_every": 10,
+    "image_log_every": 25,
+    "video_log_every": 50,
+    "always_log_last_step": true,
+    "output_dir": "outputs/powerfoam_metal/local_mac_powerfoam_metal_video_64_smoke",
+    "wandb_enabled": false,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "local-mac-powerfoam-metal-video-64-smoke",
+    "wandb_tags": [
+      "powerfoam",
+      "metal",
+      "direct-fit",
+      "video",
+      "64px"
+    ]
+  }
+}

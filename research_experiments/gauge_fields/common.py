@@ -13,6 +13,8 @@ TRAIN_SRC = DYNAWORLD_ROOT / "src" / "train"
 if str(TRAIN_SRC) not in sys.path:
     sys.path.insert(0, str(TRAIN_SRC))
 
+from losses import ssim_per_image  # noqa: E402
+
 def resolve_dynaworld_path(path: str | Path) -> Path:
     value = Path(path)
     if value.is_absolute():
@@ -39,10 +41,23 @@ def video_metrics(rendered: torch.Tensor, target: torch.Tensor) -> dict[str, flo
     l1 = diff.abs().mean()
     mse = (diff ** 2).mean().clamp_min(1e-12)
     psnr = -10.0 * torch.log10(mse)
+    rendered_nchw = rendered.permute(0, 3, 1, 2).contiguous()
+    target_nchw = target.permute(0, 3, 1, 2).contiguous()
+    window_size = min(11, int(rendered.shape[1]), int(rendered.shape[2]))
+    if window_size % 2 == 0:
+        window_size -= 1
+    ssim = ssim_per_image(
+        rendered_nchw,
+        target_nchw,
+        window_size=max(1, window_size),
+        c1=0.0001,
+        c2=0.0009,
+    ).mean()
     return {
         "eval_l1": float(l1.detach().cpu()),
         "eval_mse": float(mse.detach().cpu()),
         "eval_psnr": float(psnr.detach().cpu()),
+        "eval_ssim": float(ssim.detach().cpu()),
     }
 
 
