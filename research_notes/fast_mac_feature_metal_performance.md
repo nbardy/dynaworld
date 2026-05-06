@@ -381,20 +381,29 @@ because camera-swap relpose, regularizers, optimizer order, and W&B validation
 are outside this fixed-render graph.
 
 Whole `trainer.step()` sampled-memory smoke, same 256px learned-residual
-camera-swap config, `seed=0`, `warmup=0`, `iters=1`, no preview logging:
+camera-swap config, `seed=0`, `warmup=0`, `iters=1`, no preview logging.
+`camera_swap_pairs_per_step=0` means "use all eligible pairs" (`4` pairs for
+the current 2-train-camera split):
 
-| Variant | elapsed ms | sampled peak current bytes | sampled peak driver bytes | loss | Artifact |
-| --- | ---: | ---: | ---: | ---: | --- |
-| stable `v6_refined_features` | 4822.1 | 2933897216 | 3670294528 | 0.331625 | `multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json` |
-| `v6_refined_features_f32_gradcache` | 3952.1 | 2933896192 | 3670294528 | 0.331625 | `multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json` |
+| Variant | camera-swap pairs | elapsed ms | sampled peak current bytes | sampled peak driver bytes | loss | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | all / 4 | 4822.1 | 2933897216 | 3670294528 | 0.331625 | `multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json` |
+| stable `v6_refined_features` | 1 | 1290.9 | 903315200 | 2386739200 | 0.309686 | `multicam256_v6_refined_features_pairs1_train_step_sampled_memory_seed0_iters1.json` |
+| stable `v6_refined_features` | 2 | 1915.3 | 1601700608 | 2420293632 | 0.285014 | `multicam256_v6_refined_features_pairs2_train_step_sampled_memory_seed0_iters1.json` |
+| `v6_refined_features_f32_gradcache` | all / 4 | 3952.1 | 2933896192 | 3670294528 | 0.331625 | `multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json` |
+| `v6_refined_features_f32_gradcache` | 1 | 1513.2 | 903315200 | 2386739200 | 0.309686 | `multicam256_f32_gradcache_pairs1_train_step_sampled_memory_seed0_iters1.json` |
+| `v6_refined_features_f32_gradcache` | 2 | 1935.7 | 1601700608 | 2420293632 | 0.285014 | `multicam256_f32_gradcache_pairs2_train_step_sampled_memory_seed0_iters1.json` |
 
 Read: this is the first artifact that exercises the actual
 `camera_swap_mode=learned_residual` step path rather than only fixed-render
-loss. It supports the full-batch `f32_gradcache` timing direction, but does not
-solve the memory problem: both variants peak around `2.93 GB` current allocation
-because the full camera-swap graph keeps multiple source/query renders and
-relpose losses live. Treat it as a smoke, not a stable throughput benchmark;
-next timing rows need warmup/iters inside one process or trainer-level chunking.
+loss. It supports the full-batch `f32_gradcache` timing direction, but the
+dominant memory lever is camera-swap pair count, not kernel choice: sampled
+current allocation drops from `2.93 GB` with all four pairs to `1.60 GB` with
+two pairs and `0.90 GB` with one pair. The loss values are not comparable
+quality metrics because each row supervises a different sampled pair set. Treat
+this as a smoke, not a stable throughput benchmark; next timing rows need
+warmup/iters inside one process and a training-quality decision on stochastic
+pair sampling.
 
 Fixed-render output parity, same 256px seeded clip:
 
@@ -751,6 +760,10 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_chunk8_vs_batched_backward_parity_seed0.json`
 - `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_pairs1_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs1_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_pairs2_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs2_train_step_sampled_memory_seed0_iters1.json`
 
 Small batch-strategy smoke, `128x128`, `G=1024`, `F=32`,
 `case=medium_sigma_3_8`, `warmup=1`, `iters=2`, fwd+bwd:

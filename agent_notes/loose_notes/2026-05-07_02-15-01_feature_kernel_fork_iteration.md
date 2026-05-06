@@ -525,10 +525,14 @@ Chunk8 fixed-render backward-mode parity:
 
 Whole-step sampled-memory smoke, actual learned-residual trainer path:
 
-| Variant | Elapsed ms | Sampled peak current bytes | Sampled peak driver bytes | Loss | Artifact |
+| Variant | Camera-swap pairs | Elapsed ms | Sampled peak current bytes | Loss | Artifact |
 | --- | ---: | ---: | ---: | ---: | --- |
-| stable `v6_refined_features` | 4822.1 | 2933897216 | 3670294528 | 0.3316246 | `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json` |
-| `v6_refined_features_f32_gradcache` | 3952.1 | 2933896192 | 3670294528 | 0.3316246 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json` |
+| stable `v6_refined_features` | all / 4 | 4822.1 | 2933897216 | 0.3316246 | `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json` |
+| stable `v6_refined_features` | 1 | 1290.9 | 903315200 | 0.3096860 | `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_pairs1_train_step_sampled_memory_seed0_iters1.json` |
+| stable `v6_refined_features` | 2 | 1915.3 | 1601700608 | 0.2850145 | `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_pairs2_train_step_sampled_memory_seed0_iters1.json` |
+| `v6_refined_features_f32_gradcache` | all / 4 | 3952.1 | 2933896192 | 0.3316246 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json` |
+| `v6_refined_features_f32_gradcache` | 1 | 1513.2 | 903315200 | 0.3096860 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs1_train_step_sampled_memory_seed0_iters1.json` |
+| `v6_refined_features_f32_gradcache` | 2 | 1935.7 | 1601700608 | 0.2850145 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs2_train_step_sampled_memory_seed0_iters1.json` |
 
 ## Interpretation
 
@@ -604,7 +608,9 @@ Whole-step sampled-memory smoke, actual learned-residual trainer path:
   supports the full-batch `f32_gradcache` timing direction, but peak current
   stays around `2.93GB` for both variants. The memory problem has moved above
   the isolated raster fork: the live camera-swap graph keeps multiple
-  source/query renders and relpose losses resident.
+  source/query renders and relpose losses resident. Reducing
+  `camera_swap_pairs_per_step` is the strongest measured real-step memory
+  lever, but it changes per-step supervision and needs quality/W&B validation.
 - Next kernel forks worth trying: a lower-private-pressure `float4` block cache
   rather than a full F32 grad vector; a two-block F64 accumulator only if we
   revisit F64 local accumulation; and active/overflow local accumulation only

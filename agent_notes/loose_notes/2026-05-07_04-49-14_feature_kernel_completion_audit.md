@@ -232,6 +232,10 @@ Saved 256px train-step artifacts:
 
 - `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_train_step_sampled_memory_seed0_iters1.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_pairs1_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs1_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_pairs2_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs2_train_step_sampled_memory_seed0_iters1.json`
 
 Read:
 
@@ -239,9 +243,20 @@ Read:
   sampled driver `3670294528`, loss `0.3316246`.
 - `f32_gradcache`: `3952.1ms`, sampled current `2933896192`, sampled driver
   `3670294528`, loss `0.3316246`.
+- Stable with `camera_swap_pairs_per_step=1`: `1290.9ms`, sampled current
+  `903315200`, loss `0.3096860`.
+- `f32_gradcache` with `camera_swap_pairs_per_step=1`: `1513.2ms`, sampled
+  current `903315200`, loss `0.3096860`.
+- Stable with `camera_swap_pairs_per_step=2`: `1915.3ms`, sampled current
+  `1601700608`, loss `0.2850145`.
+- `f32_gradcache` with `camera_swap_pairs_per_step=2`: `1935.7ms`, sampled
+  current `1601700608`, loss `0.2850145`.
 
 Updated interpretation: the real learned-residual step supports the full-batch
 `f32_gradcache` timing direction, but memory is unchanged and much higher than
 fixed-render because camera-swap renders multiple source/query pairs and keeps
-relpose/cycle graph pieces live. This is a one-step smoke, not a warmed
-throughput benchmark or promotion gate.
+relpose/cycle graph pieces live. The strongest real-step memory lever is
+stochastic pair count: one sampled pair cuts current allocation to `0.90GB`, and
+two pairs to `1.60GB`, versus `2.93GB` for all four eligible pairs. This is a
+one-step smoke, not a warmed throughput benchmark or promotion gate; pair-count
+changes also change the supervised objective per step.
