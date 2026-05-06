@@ -221,6 +221,25 @@ Smoke details:
 - `TrainView1`: PSNR `4.8494`, SSIM `0.1359`
 - `Heldout0_camera_0005`: PSNR `5.1676`, SSIM `0.1522`
 
+Smoke W&B sync:
+
+```bash
+wandb sync /Users/nicholasbardy/git/gsplats_browser/dynaworld/wandb/offline-run-20260506_195615-lfv2qd1u
+```
+
+Synced smoke link:
+`https://wandb.ai/nbardy/dynaworld/runs/lfv2qd1u`
+
+After the smoke, the requested 3x3 diagnostic layout changed from media rows by
+camera columns to camera rows by media columns. The W&B key remains:
+`Multicam_Feature_GT_Render_ByCamera_Grid_Video`, but its layout is now:
+
+```text
+camera_0006 Feature PCA | camera_0006 GT | camera_0006 Render RGB
+camera_0014 Feature PCA | camera_0014 GT | camera_0014 Render RGB
+camera_0005 Feature PCA | camera_0005 GT | camera_0005 Render RGB
+```
+
 ## Caveats
 
 - This commit only adds the F32 config and smoke-verifies the path. It does not

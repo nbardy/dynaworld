@@ -37,7 +37,7 @@ def test_compose_gt_pred_alpha_pca_grid_returns_only_diagnostic_composites() -> 
     assert torch.equal(grid[..., 15:20], pca_video)
 
 
-def test_compose_multicam_feature_gt_render_grid_uses_media_rows_and_camera_columns() -> None:
+def test_compose_multicam_feature_gt_render_grid_uses_camera_rows_and_media_columns() -> None:
     feature0 = torch.full((2, 3, 4, 5), 0.10)
     feature1 = torch.full((2, 3, 4, 5), 0.20)
     gt0 = torch.full((2, 3, 4, 5), 0.30)
@@ -52,13 +52,13 @@ def test_compose_multicam_feature_gt_render_grid_uses_media_rows_and_camera_colu
     )
 
     assert grid is not None
-    assert grid.shape == (2, 3, 12, 10)
+    assert grid.shape == (2, 3, 8, 15)
     assert torch.equal(grid[..., 0:4, 0:5], feature0)
-    assert torch.equal(grid[..., 0:4, 5:10], feature1)
-    assert torch.equal(grid[..., 4:8, 0:5], gt0)
+    assert torch.equal(grid[..., 0:4, 5:10], gt0)
+    assert torch.equal(grid[..., 0:4, 10:15], render0)
+    assert torch.equal(grid[..., 4:8, 0:5], feature1)
     assert torch.equal(grid[..., 4:8, 5:10], gt1)
-    assert torch.equal(grid[..., 8:12, 0:5], render0)
-    assert torch.equal(grid[..., 8:12, 5:10], render1)
+    assert torch.equal(grid[..., 4:8, 10:15], render1)
 
 
 def test_render_diagnostics_payload_requires_features_when_pca_enabled() -> None:

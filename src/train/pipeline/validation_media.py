@@ -103,11 +103,11 @@ def compose_multicam_feature_gt_render_grid(
     gt_videos: list[torch.Tensor],
     render_videos: list[torch.Tensor],
 ) -> torch.Tensor | None:
-    """Build a camera-column grid with rows FeaturePCA / GT / Render.
+    """Build a camera-row grid with columns FeaturePCA / GT / Render.
 
     Each input clip must be [T, 3, H, W]. The output is
-    [T, 3, 3*H, camera_count*W], with cameras concatenated left-to-right and
-    media types stacked top-to-bottom. Returns None when feature videos are not
+    [T, 3, camera_count*H, 3*W], with each camera stacked top-to-bottom and
+    media types concatenated left-to-right. Returns None when feature videos are not
     available, since the GT/Render two-row case is already covered by the
     existing per-view and GT|Pred media.
     """
@@ -129,14 +129,11 @@ def compose_multicam_feature_gt_render_grid(
                     "Multicam Feature/GT/Render grid clips must have identical shape; "
                     f"feature0={tuple(reference_shape)}, {label}{index}={tuple(video.shape)}."
                 )
-    return torch.cat(
-        [
-            torch.cat(feature_videos, dim=-1),
-            torch.cat(gt_videos, dim=-1),
-            torch.cat(render_videos, dim=-1),
-        ],
-        dim=-2,
-    )
+    rows = [
+        torch.cat([feature_videos[index], gt_videos[index], render_videos[index]], dim=-1)
+        for index in range(camera_count)
+    ]
+    return torch.cat(rows, dim=-2)
 
 
 # --------------------------------------------------------------------------- #
