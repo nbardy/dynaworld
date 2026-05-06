@@ -95,6 +95,8 @@ def test_build_heldout_camera_swap_pairs_queries_heldout_from_each_train_world()
         "train_cross": 0,
         "heldout": 2,
     }
+    assert all(pair.is_heldout_query for pair in pairs)
+    assert all(not pair.is_train_cross_view for pair in pairs)
     assert pairs[0].source_name == "cam_a"
     assert pairs[0].query_name == "cam_h"
 

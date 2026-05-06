@@ -99,6 +99,27 @@ def compose_cameras_with_se3_residual(cameras, rotation: torch.Tensor, translati
     )
 
 
+def cameras_with_se3_transform(cameras, camera_to_world: torch.Tensor):
+    if camera_to_world.ndim == 2:
+        if camera_to_world.shape != (4, 4):
+            raise ValueError(f"Expected camera_to_world shape [4,4], got {tuple(camera_to_world.shape)}.")
+        transforms = camera_to_world.unsqueeze(0).expand(len(cameras), -1, -1)
+    elif camera_to_world.ndim == 3:
+        if camera_to_world.shape[-2:] != (4, 4):
+            raise ValueError(f"Expected camera_to_world shape [B,4,4], got {tuple(camera_to_world.shape)}.")
+        if camera_to_world.shape[0] == 1:
+            transforms = camera_to_world.expand(len(cameras), -1, -1)
+        elif camera_to_world.shape[0] == len(cameras):
+            transforms = camera_to_world
+        else:
+            raise ValueError(
+                f"Transform batch {camera_to_world.shape[0]} must be 1 or match camera count {len(cameras)}."
+            )
+    else:
+        raise ValueError(f"Expected camera_to_world as [4,4] or [B,4,4], got {tuple(camera_to_world.shape)}.")
+    return tuple(make_camera_like(camera, camera_to_world=transform) for camera, transform in zip(cameras, transforms))
+
+
 def se3_residual_matrix(rotation: torch.Tensor, translation: torch.Tensor) -> torch.Tensor:
     if rotation.ndim != 2 or translation.ndim != 2 or rotation.shape != translation.shape or rotation.shape[-1] != 3:
         raise ValueError(
@@ -148,15 +169,26 @@ def se3_cycle_loss(source_to_target_c2w: torch.Tensor, target_to_source_c2w: tor
     return (cycle - eye).square().mean()
 
 
+def se3_transform_l2_loss(predicted_c2w: torch.Tensor, target_c2w: torch.Tensor) -> torch.Tensor:
+    if predicted_c2w.shape != target_c2w.shape or predicted_c2w.shape[-2:] != (4, 4):
+        raise ValueError(
+            f"Expected matching [...,4,4] transforms, got {tuple(predicted_c2w.shape)} "
+            f"and {tuple(target_c2w.shape)}."
+        )
+    return (predicted_c2w - target_c2w.to(device=predicted_c2w.device, dtype=predicted_c2w.dtype)).square().mean()
+
+
 def se3_residual_identity_loss(rotation: torch.Tensor, translation: torch.Tensor) -> torch.Tensor:
     return rotation.square().mean() + translation.square().mean()
 
 
 __all__ = [
     "RelativePoseCrossAttentionHead",
+    "cameras_with_se3_transform",
     "compose_cameras_with_se3_residual",
     "compose_transform_with_se3_residual",
     "se3_cycle_loss",
     "se3_residual_matrix",
     "se3_residual_identity_loss",
+    "se3_transform_l2_loss",
 ]

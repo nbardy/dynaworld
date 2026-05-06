@@ -29,6 +29,7 @@ TRAINER_BY_ARCH = {
     "multicam_precomputed_feature_implicit_camera": TrainerEntry(
         "train_multicam_precomputed_feature_implicit_dynamic"
     ),
+    "multicam_relative_pose_implicit_camera": TrainerEntry("train_multicam_relative_pose_implicit_dynamic"),
 }
 
 
