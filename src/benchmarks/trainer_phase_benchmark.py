@@ -206,6 +206,7 @@ class ChunkRecord:
 class FixedRenderChunk:
     sequence: GaussianSequence
     target: Any
+    background: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,7 @@ class FixedRenderCase:
     background: torch.Tensor | None
     total_frames: int
     setup_phases_ms: dict[str, float]
+    temporal_chunk_size: int | None = None
 
 
 def trainer_for_config(config: dict[str, Any]):
@@ -397,9 +399,19 @@ def build_regularizer_loss(trainer, decoded: GaussianSequence, clip_times: torch
     return camera_loss + bank_rate_loss
 
 
-def iter_target_chunks(trainer, decoded: GaussianSequence, target, *, use_microbatch: bool):
+def iter_target_chunks(
+    trainer,
+    decoded: GaussianSequence,
+    target,
+    *,
+    use_microbatch: bool,
+    chunk_size_override: int | None = None,
+):
     frame_count = target.frame_count
-    chunk_size = trainer.temporal_recon_chunk_size(frame_count) if use_microbatch else frame_count
+    if chunk_size_override is not None:
+        chunk_size = min(max(1, int(chunk_size_override)), frame_count)
+    else:
+        chunk_size = trainer.temporal_recon_chunk_size(frame_count) if use_microbatch else frame_count
     for chunk_start in range(0, frame_count, chunk_size):
         chunk_end = min(chunk_start + chunk_size, frame_count)
         chunk_sequence = gaussian_sequence_slice(decoded, chunk_start, chunk_end)
@@ -498,7 +510,12 @@ def _clone_sequence_for_fixed_render(sequence: GaussianSequence, *, freeze_color
     )
 
 
-def prepare_fixed_render_case(trainer, *, multicam: bool) -> FixedRenderCase:
+def prepare_fixed_render_case(
+    trainer,
+    *,
+    multicam: bool,
+    temporal_chunk_size: int | None = None,
+) -> FixedRenderCase:
     setup_timer = PhaseTimer(trainer.device)
     if multicam:
         _sequence_data, _clip_frames, _clip_times, decoded, targets = multicam_sample_and_encode(trainer, setup_timer)
@@ -519,11 +536,20 @@ def prepare_fixed_render_case(trainer, *, multicam: bool) -> FixedRenderCase:
             decoded,
             target,
             use_microbatch=use_microbatch,
+            chunk_size_override=temporal_chunk_size,
         ):
+            chunk_background = background
+            if temporal_chunk_size is not None:
+                chunk_background = trainer.rgb_objective.sample_background(
+                    phase="train",
+                    like=chunk_target.frames,
+                    frame_count=chunk_target.frame_count,
+                )
             chunks.append(
                 FixedRenderChunk(
                     sequence=_detach_sequence_for_fixed_render(chunk_sequence),
                     target=chunk_target,
+                    background=chunk_background,
                 )
             )
     return FixedRenderCase(
@@ -531,6 +557,7 @@ def prepare_fixed_render_case(trainer, *, multicam: bool) -> FixedRenderCase:
         background=background.detach() if torch.is_tensor(background) else background,
         total_frames=total_frames,
         setup_phases_ms={phase: float(setup_timer.elapsed_ms.get(phase, 0.0)) for phase in ("sample", "encode")},
+        temporal_chunk_size=temporal_chunk_size,
     )
 
 
@@ -539,6 +566,7 @@ def benchmark_fixed_render_case(
     fixed_case: FixedRenderCase,
     *,
     freeze_colors: bool,
+    backward_mode: str = "batched",
 ) -> dict[str, float]:
     if trainer.colorize is not None:
         trainer.colorize.train()
@@ -546,6 +574,7 @@ def benchmark_fixed_render_case(
     timer = PhaseTimer(trainer.device)
     losses: list[torch.Tensor] = []
     for fixed_chunk in fixed_case.chunks:
+        chunk_background = fixed_chunk.background if fixed_chunk.background is not None else fixed_case.background
         chunk_sequence = _clone_sequence_for_fixed_render(fixed_chunk.sequence, freeze_colors=freeze_colors)
         raster_graph = fast_mac_project_and_rasterize(
             trainer,
@@ -564,16 +593,25 @@ def benchmark_fixed_render_case(
             rendered = trainer.rgb_objective.compose_rasterized(
                 rasterized,
                 phase="train",
-                background=fixed_case.background,
+                background=chunk_background,
                 retain_target=True,
             )
-            losses.append(
+            chunk_loss = (
                 trainer.rgb_objective.reconstruction_loss_per_image(rendered).sum()
                 / float(max(fixed_case.total_frames, 1))
             )
+        if backward_mode == "chunked":
+            with timer.measure("autograd_backward_total"):
+                chunk_loss.backward()
+            del chunk_loss, raster_graph, rasterized, rendered, chunk_sequence
+        else:
+            losses.append(chunk_loss)
 
-    with timer.measure("autograd_backward_total"):
-        sum(losses).backward()
+    if backward_mode == "batched":
+        with timer.measure("autograd_backward_total"):
+            sum(losses).backward()
+    elif backward_mode != "chunked":
+        raise ValueError(f"Unsupported fixed render backward mode: {backward_mode!r}.")
     trainer.optimizer.zero_grad(set_to_none=True)
     return {phase: float(timer.elapsed_ms.get(phase, 0.0)) for phase in FIXED_RENDER_PHASES}
 
@@ -759,6 +797,24 @@ def main() -> None:
         help="With --fixed-render-graph, keep decoded splat features/colors detached to isolate no-color-grad paths.",
     )
     parser.add_argument(
+        "--fixed-render-temporal-chunk-size",
+        type=int,
+        default=0,
+        help=(
+            "With --fixed-render-graph, split each render target into frame chunks of this size during the "
+            "fixed-render benchmark. Default 0 keeps the existing full-target chunks."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-render-backward-mode",
+        choices=("batched", "chunked"),
+        default="batched",
+        help=(
+            "With --fixed-render-graph, either accumulate all chunk losses and backprop once, or backprop each "
+            "chunk immediately to probe render/loss microbatch memory pressure."
+        ),
+    )
+    parser.add_argument(
         "--memory-sample-interval-ms",
         type=float,
         default=0.0,
@@ -778,13 +834,30 @@ def main() -> None:
     if args.seed is not None:
         random.seed(int(args.seed))
         torch.manual_seed(int(args.seed))
+    if int(args.fixed_render_temporal_chunk_size) < 0:
+        raise ValueError("--fixed-render-temporal-chunk-size must be >= 0.")
+    if not args.fixed_render_graph and (
+        int(args.fixed_render_temporal_chunk_size) > 0 or args.fixed_render_backward_mode != "batched"
+    ):
+        raise ValueError(
+            "--fixed-render-temporal-chunk-size and --fixed-render-backward-mode require --fixed-render-graph."
+        )
 
     config = load_config_file(args.config)
     trainer = trainer_for_config(config)
     multicam = isinstance(trainer, MulticamPrecomputedFeatureImplicitTrainer)
     samples: list[dict[str, float]] = []
     try:
-        fixed_case = prepare_fixed_render_case(trainer, multicam=multicam) if args.fixed_render_graph else None
+        temporal_chunk_size = int(args.fixed_render_temporal_chunk_size)
+        fixed_case = (
+            prepare_fixed_render_case(
+                trainer,
+                multicam=multicam,
+                temporal_chunk_size=temporal_chunk_size if temporal_chunk_size > 0 else None,
+            )
+            if args.fixed_render_graph
+            else None
+        )
         phases = FIXED_RENDER_PHASES if fixed_case is not None else TRAIN_STEP_PHASES
         for _ in range(max(0, args.warmup)):
             if fixed_case is not None:
@@ -792,6 +865,7 @@ def main() -> None:
                     trainer,
                     fixed_case,
                     freeze_colors=bool(args.fixed_render_freeze_colors),
+                    backward_mode=str(args.fixed_render_backward_mode),
                 )
             else:
                 benchmark_one_step(trainer, multicam=multicam)
@@ -802,6 +876,7 @@ def main() -> None:
                         trainer,
                         fixed_case,
                         freeze_colors=bool(args.fixed_render_freeze_colors),
+                        backward_mode=str(args.fixed_render_backward_mode),
                     )
                 return benchmark_one_step(trainer, multicam=multicam)
 
@@ -821,6 +896,7 @@ def main() -> None:
                         trainer,
                         fixed_case,
                         freeze_colors=bool(args.fixed_render_freeze_colors),
+                        backward_mode=str(args.fixed_render_backward_mode),
                     )
                 )
             else:
@@ -843,11 +919,16 @@ def main() -> None:
             "iters": int(args.iters),
             "fixed_render_graph": bool(args.fixed_render_graph),
             "fixed_render_freeze_colors": bool(args.fixed_render_freeze_colors),
+            "fixed_render_temporal_chunk_size": (
+                fixed_case.temporal_chunk_size if fixed_case is not None else None
+            ),
+            "fixed_render_backward_mode": str(args.fixed_render_backward_mode) if fixed_case is not None else None,
             "fixed_render_setup_phases_ms": fixed_case.setup_phases_ms if fixed_case is not None else None,
             "fixed_render_chunk_count": len(fixed_case.chunks) if fixed_case is not None else None,
             "fixed_render_note": (
                 "Fixed-render rows reuse one sampled clip and detached Gaussian leaves; they intentionally exclude "
-                "model backward, regularizers, optimizer, and sample/encode timing."
+                "model backward, regularizers, optimizer, and sample/encode timing. Chunked backward mode "
+                "backprops each fixed render chunk immediately as a benchmark-only microbatch probe."
                 if fixed_case is not None
                 else None
             ),
@@ -869,7 +950,11 @@ def main() -> None:
             title="Fixed render graph phases" if fixed_case is not None else "Training step phases",
         )
         if fixed_case is not None:
-            print(f"Fixed render setup phases: {fixed_case.setup_phases_ms}; chunks={len(fixed_case.chunks)}")
+            print(
+                f"Fixed render setup phases: {fixed_case.setup_phases_ms}; chunks={len(fixed_case.chunks)}; "
+                f"temporal_chunk_size={fixed_case.temporal_chunk_size}; "
+                f"backward_mode={args.fixed_render_backward_mode}"
+            )
             print("Note: fixed-render totals exclude sample/encode/model backward/regularizer/optimizer.")
         if memory_summary is not None:
             print(

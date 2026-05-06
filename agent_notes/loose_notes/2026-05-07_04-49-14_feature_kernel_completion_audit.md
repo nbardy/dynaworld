@@ -153,3 +153,43 @@ Updated interpretation: `f32_gradcache` is currently the cleanest trainer-path
 timing/memory candidate in the bounded 256px row. Fixedbin remains a useful
 host/binning experiment, but this trainer evidence weakens the idea that it is
 a memory-pressure fix.
+
+## Post-Audit Trainer Microbatch Probe
+
+`src/benchmarks/trainer_phase_benchmark.py` now has benchmark-only fixed-render
+microbatch knobs:
+
+```bash
+--fixed-render-temporal-chunk-size 8
+--fixed-render-backward-mode chunked
+```
+
+The probe splits each fixed 16-frame train view into temporal chunks and
+backprops each chunk immediately. It intentionally does not change the trainer
+yet.
+
+Saved 256px fixed-render artifacts:
+
+- `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
+
+Read:
+
+- Stable full-target batched backward: `673.9ms`, sampled current `1412745984`.
+- Stable chunk size 8 chunked backward: `767.5ms`, sampled current `567064064`.
+- Stable chunk size 4 chunked backward: `800.0ms`, sampled current `365766912`.
+- `f32_gradcache` full-target batched backward: `649.3ms`, sampled current
+  `1412745984`.
+- `f32_gradcache` chunk size 8 chunked backward: `723.2ms`, sampled current
+  `567065088`.
+- `f32_gradcache` chunk size 4 chunked backward: `851.0ms`, sampled current
+  `365769984`.
+
+Updated interpretation: temporal render/loss microbatching is a larger memory
+lever than the current kernel forks. Chunk size 8 looks like the best first
+tradeoff: about `60%` lower sampled current allocation for an `~11%` timing
+cost on the current `f32_gradcache` row. Real trainer wiring still needs a
+parity/quality smoke because it changes backward accumulation order and may
+interact with background sampling.

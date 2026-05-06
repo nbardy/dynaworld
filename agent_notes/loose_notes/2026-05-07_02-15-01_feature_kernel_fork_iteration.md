@@ -504,6 +504,18 @@ Sampled-memory trainer rerun, same 256px fixed-render setup,
 | `v6_refined_features_f32_reduce` | 667.4 | 75.8 | 510.5 | 1636237568 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_reduce_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
 | `v6_refined_features_f32_gradcache` | 649.3 | 67.0 | 502.3 | 1412745984 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
 
+Benchmark-only render/loss microbatch probe, same 256px setup, chunked
+backward and sampled memory:
+
+| Variant | Temporal chunk | Chunks | Total mean ms | Sampled peak current bytes | Artifact |
+| --- | ---: | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | full | 2 | 673.9 | 1412745984 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| stable `v6_refined_features` | 8 | 4 | 767.5 | 567064064 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| stable `v6_refined_features` | 4 | 8 | 800.0 | 365766912 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | full | 2 | 649.3 | 1412745984 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 8 | 4 | 723.2 | 567065088 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 4 | 8 | 851.0 | 365769984 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+
 ## Interpretation
 
 - No fork should replace the stable baseline yet. Keep `v6_refined_features`
@@ -566,8 +578,11 @@ Sampled-memory trainer rerun, same 256px fixed-render setup,
 - The current 256px timing/memory compromise points at `f32_gradcache`, not
   fixedbin: it tied fixedbin for total time while matching the stable sampled
   current allocation. Treat this as a bounded row, not promotion proof.
-- The next non-kernel lever is trainer microbatch/framewise backward, because
-  dense `[B,H,W,F]` surfaces are still structural batch pressure.
+- The render/loss microbatch probe confirms dense `[B,H,W,F]` surfaces are the
+  bigger structural memory pressure than the current kernel forks. Chunk size 8
+  with chunked backward cut sampled current allocation by about `60%` for
+  `f32_gradcache` while adding about `11%` fixed-render time. It is benchmark
+  evidence only until wired into the trainer with a parity/quality smoke.
 - Next kernel forks worth trying: a lower-private-pressure `float4` block cache
   rather than a full F32 grad vector; a two-block F64 accumulator only if we
   revisit F64 local accumulation; and active/overflow local accumulation only

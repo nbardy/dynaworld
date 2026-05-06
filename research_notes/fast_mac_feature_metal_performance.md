@@ -341,6 +341,29 @@ trainer graph. `f32_reduce` also costs extra sampled memory here. This weakens
 the case for fixedbin as a memory-pressure fix even though it remains useful as
 a host/binning timing experiment.
 
+Benchmark-only render/loss microbatch probe, same 256px multicam config,
+`seed=0`, `warmup=1`, `iters=2`, sampled memory enabled. This uses
+`--fixed-render-temporal-chunk-size` and `--fixed-render-backward-mode chunked`
+to split each 16-frame view into chunks and backprop each chunk immediately.
+It does not change trainer behavior yet:
+
+| Variant | temporal chunk | chunks | total mean ms | raster fwd ms | autograd backward total ms | sampled peak current bytes | sampled peak driver bytes | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | full | 2 | 673.9 | 68.0 | 525.8 | 1412745984 | 2529247232 | `multicam256_f32_v6_refined_features_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| stable `v6_refined_features` | 8 | 4 | 767.5 | 90.3 | 584.4 | 567064064 | 1300316160 | `multicam256_f32_v6_refined_features_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| stable `v6_refined_features` | 4 | 8 | 800.0 | 108.0 | 591.2 | 365766912 | 1216430080 | `multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | full | 2 | 649.3 | 67.0 | 502.3 | 1412745984 | 2529247232 | `multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 8 | 4 | 723.2 | 82.5 | 550.0 | 567065088 | 1300316160 | `multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 4 | 8 | 851.0 | 130.6 | 591.2 | 365769984 | 1216430080 | `multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+
+Read: chunked render/loss backward is the strongest memory lever measured so
+far. Chunk size 8 cuts sampled current allocation by about `60%` (`1.41 GB` to
+`0.57 GB`) while adding about `11%` wall time for `f32_gradcache`; chunk size 4
+cuts sampled current allocation by about `74%` but is a larger timing hit.
+This is exactly the dense-surface pathology: smaller frame chunks reduce
+`[T,H,W,F]` graph residency more than any current kernel fork, but extra
+project/raster/loss/backward launches cost time.
+
 Fixed-render output parity, same 256px seeded clip:
 
 | Baseline | Candidate | max feature diff | max alpha diff | max RGB diff | loss diff | Artifact |
@@ -688,6 +711,10 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/trainer_phase/multicam256_f32_f32_accum_fixed_render_sampled_memory_seed0_warm1_iters2.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_f32_reduce_fixed_render_sampled_memory_seed0_warm1_iters2.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json`
 
 Small batch-strategy smoke, `128x128`, `G=1024`, `F=32`,
 `case=medium_sigma_3_8`, `warmup=1`, `iters=2`, fwd+bwd:
@@ -738,9 +765,13 @@ speedup.
    stable benchmark script.
 
 4. Trainer microbatch/framewise backward:
-   Kernel work cannot remove the dense `[B,H,W,F]` autograd pressure by itself.
-   If B remains the dominant problem, split the trainer loss/backward over
-   smaller frame chunks.
+   Benchmark-only probe is now in `src/benchmarks/trainer_phase_benchmark.py`
+   via `--fixed-render-temporal-chunk-size` and
+   `--fixed-render-backward-mode chunked`. At 256px, chunk size 8 reduced
+   sampled current allocation by about `60%` with an `~11%` timing cost for
+   `f32_gradcache`. This should be wired into the real multicam trainer only
+   after a parity/quality smoke, because it changes backward accumulation order
+   and background sampling details.
 
 5. Better trainer-phase isolation:
    Done in `src/benchmarks/trainer_phase_benchmark.py` via
