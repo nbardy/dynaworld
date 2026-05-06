@@ -137,6 +137,52 @@ frame-0 train/heldout sequences before extractor release. Offline W&B runs:
   static DeepView split, not a moving-camera pose trajectory model.
 - The full-pose output is bounded at `45 deg` and `1.0 * rig_radius` in the
   checked-in configs. That is a starting range, not tuned.
-- No real V-JEPA training run was launched in this session; only a local
-  RGB-pyramid 1-step smoke was run. The checked-in benchmark configs keep W&B
-  enabled.
+
+## Real V-JEPA runs
+
+Joint full-relpose run:
+
+```bash
+PYTHONPATH=src/train uv run python \
+  src/train/train_multicam_relative_pose_implicit_dynamic.py \
+  src/train_configs/local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_128_16f_8192splats_goodset_train0006_0014_holdout0005.jsonc
+```
+
+- W&B: `0pdfypqe`
+  (`https://wandb.ai/nbardy/dynaworld/runs/0pdfypqe`)
+- completed: 250 steps
+- checkpoint:
+  `outputs/multicam_relative_pose/full_relpose_goodset_train0006_0014_holdout0005/checkpoint_final.pt`
+- final train view metrics:
+  - `camera_0006`: PSNR `18.6174`, SSIM `0.5511`
+  - `camera_0014`: PSNR `19.3146`, SSIM `0.5347`
+- final heldout `camera_0005`: PSNR `12.6225`, SSIM `0.1117`
+
+The run baked six V-JEPA caches: three normal clips and three repeated frame-0
+clips for first-frame relpose evidence.
+
+Relpose-only follow-up:
+
+```bash
+PYTHONPATH=src/train uv run python \
+  src/train/train_multicam_relative_pose_implicit_dynamic.py \
+  src/train_configs/local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_offsetonly_128_16f_8192splats_goodset_train0006_0014_holdout0005.jsonc
+```
+
+- W&B: `vrr1a8pg`
+  (`https://wandb.ai/nbardy/dynaworld/runs/vrr1a8pg`)
+- completed: 100 steps
+- loaded:
+  `outputs/multicam_relative_pose/full_relpose_goodset_train0006_0014_holdout0005/checkpoint_final.pt`
+- checkpoint:
+  `outputs/multicam_relative_pose/full_relpose_goodset_train0006_0014_holdout0005_relpose_only/checkpoint_final.pt`
+- printed: `Trainable scope: relpose_only (model/colorizer/camera_rig frozen).`
+- final train view metrics:
+  - `camera_0006`: PSNR `19.0169`, SSIM `0.5805`
+  - `camera_0014`: PSNR `19.3737`, SSIM `0.5373`
+- final heldout `camera_0005`: PSNR `12.1514`, SSIM `0.0767`
+
+The relpose-only follow-up is a negative result for this config: it improved the
+train views slightly but degraded heldout from the joint checkpoint. Use the
+joint checkpoint as the current artifact unless the objective or head-only loss
+is changed.
