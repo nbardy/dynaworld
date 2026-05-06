@@ -493,6 +493,17 @@ Latest 256px fixed-render trainer window after adding `f32_fixedbin`:
 | `v6_refined_features_f32_gradcache` | 814.7 | 828.0 | 79.3 | 638.4 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_seed0_warm2_iters4_rerun_after_fixedbin.json` |
 | `v6_refined_features_f32_fixedbin` | 696.1 | 687.7 | 68.8 | 544.4 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_fixedbin_fixed_render_seed0_warm2_iters4.json` |
 
+Sampled-memory trainer rerun, same 256px fixed-render setup,
+`seed=0`, `warmup=1`, `iters=2`, `--memory-sample-interval-ms 1.0`:
+
+| Variant | Total mean ms | Raster fwd ms | Autograd backward total ms | Sampled peak current bytes | Artifact |
+| --- | ---: | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | 673.9 | 68.0 | 525.8 | 1412745984 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_fixedbin` | 649.8 | 68.5 | 500.6 | 1700988160 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_fixedbin_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_accum` | 670.2 | 75.5 | 513.0 | 1412745984 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_accum_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_reduce` | 667.4 | 75.8 | 510.5 | 1636237568 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_reduce_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 649.3 | 67.0 | 502.3 | 1412745984 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+
 ## Interpretation
 
 - No fork should replace the stable baseline yet. Keep `v6_refined_features`
@@ -548,9 +559,13 @@ Latest 256px fixed-render trainer window after adding `f32_fixedbin`:
 - The `f32_fixedbin` fork is a useful but bounded host/binning result. Removing
   the exact-size bin allocation sync wins the target synthetic
   `512px/B16/F32` row and ties `f32_accum` on the latest 256px fixed-render
-  trainer graph, but it loses `256px/B16/F32` and costs a fixed ID buffer of
-  about `128 MiB` at `512px/B16/tile16/cap2048`. Keep it no-overflow and
-  opt-in until a heldout-quality run validates it over optimizer time.
+  trainer graph, but sampled trainer memory is worse than stable/gradcache and
+  it loses `256px/B16/F32`. It costs a fixed ID buffer of about `128 MiB` at
+  `512px/B16/tile16/cap2048`. Keep it no-overflow and opt-in until a
+  heldout-quality run validates it over optimizer time.
+- The current 256px timing/memory compromise points at `f32_gradcache`, not
+  fixedbin: it tied fixedbin for total time while matching the stable sampled
+  current allocation. Treat this as a bounded row, not promotion proof.
 - The next non-kernel lever is trainer microbatch/framewise backward, because
   dense `[B,H,W,F]` surfaces are still structural batch pressure.
 - Next kernel forks worth trying: a lower-private-pressure `float4` block cache

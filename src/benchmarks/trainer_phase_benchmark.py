@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import random
 import statistics
 import sys
+import threading
 import time
 from collections import defaultdict
 from contextlib import contextmanager
@@ -71,6 +73,103 @@ def sync_device(device: torch.device) -> None:
         torch.cuda.synchronize(device)
     elif device.type == "mps" and hasattr(torch, "mps"):
         torch.mps.synchronize()
+
+
+def device_memory_stats(device: torch.device) -> dict[str, int]:
+    if device.type == "mps" and hasattr(torch, "mps"):
+        return {
+            "current_allocated_bytes": int(torch.mps.current_allocated_memory()),
+            "driver_allocated_bytes": int(torch.mps.driver_allocated_memory()),
+        }
+    if device.type == "cuda":
+        return {
+            "current_allocated_bytes": int(torch.cuda.memory_allocated(device)),
+            "driver_allocated_bytes": int(torch.cuda.memory_reserved(device)),
+        }
+    return {}
+
+
+def clear_device_cache(device: torch.device) -> None:
+    gc.collect()
+    if device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
+    elif device.type == "cuda":
+        torch.cuda.empty_cache()
+    sync_device(device)
+
+
+class DeviceMemorySampler:
+    def __init__(self, device: torch.device, *, interval_ms: float) -> None:
+        self.device = device
+        self.interval_s = float(interval_ms) / 1000.0
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.max_current_allocated_bytes = 0
+        self.max_driver_allocated_bytes = 0
+        self.samples = 0
+        self.enabled = self.interval_s > 0.0 and bool(device_memory_stats(device))
+
+    def _sample_once(self) -> None:
+        stats = device_memory_stats(self.device)
+        if not stats:
+            return
+        self.max_current_allocated_bytes = max(
+            self.max_current_allocated_bytes,
+            int(stats["current_allocated_bytes"]),
+        )
+        self.max_driver_allocated_bytes = max(
+            self.max_driver_allocated_bytes,
+            int(stats["driver_allocated_bytes"]),
+        )
+        self.samples += 1
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            self._sample_once()
+            self.stop_event.wait(self.interval_s)
+        self._sample_once()
+
+    def __enter__(self) -> "DeviceMemorySampler":
+        if self.enabled:
+            self._sample_once()
+            self.thread = threading.Thread(target=self._run, name="device-memory-sampler", daemon=True)
+            self.thread.start()
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        if not self.enabled:
+            return
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join()
+        self._sample_once()
+
+    def stats(self) -> dict[str, int]:
+        if not self.enabled:
+            return {}
+        return {
+            "sampled_peak_current_allocated_bytes": int(self.max_current_allocated_bytes),
+            "sampled_peak_driver_allocated_bytes": int(self.max_driver_allocated_bytes),
+            "memory_sample_count": int(self.samples),
+        }
+
+
+def run_with_memory_sampling(
+    device: torch.device,
+    *,
+    interval_ms: float,
+    clear_cache: bool,
+    fn,
+) -> dict[str, float | int]:
+    if clear_cache:
+        clear_device_cache(device)
+    start_stats = device_memory_stats(device)
+    start_stats = {f"start_{key}": value for key, value in start_stats.items()}
+    with DeviceMemorySampler(device, interval_ms=interval_ms) as sampler:
+        sample = fn()
+    end_stats = device_memory_stats(device)
+    end_stats = {f"end_{key}": value for key, value in end_stats.items()}
+    return {**sample, **start_stats, **end_stats, **sampler.stats()}
 
 
 class PhaseTimer:
@@ -603,6 +702,23 @@ def summarize(samples: list[dict[str, float]], phases: tuple[str, ...]) -> dict[
     return out
 
 
+def summarize_sampled_memory(samples: list[dict[str, float | int]]) -> dict[str, int] | None:
+    sampled = [sample for sample in samples if int(sample.get("memory_sample_count", 0)) > 0]
+    if not sampled:
+        return None
+    return {
+        "sampled_peak_current_allocated_bytes": int(
+            max(sample["sampled_peak_current_allocated_bytes"] for sample in sampled)
+        ),
+        "sampled_peak_driver_allocated_bytes": int(
+            max(sample["sampled_peak_driver_allocated_bytes"] for sample in sampled)
+        ),
+        "memory_sample_count_total": int(sum(int(sample["memory_sample_count"]) for sample in sampled)),
+        "max_end_current_allocated_bytes": int(max(sample.get("end_current_allocated_bytes", 0) for sample in sampled)),
+        "max_end_driver_allocated_bytes": int(max(sample.get("end_driver_allocated_bytes", 0) for sample in sampled)),
+    }
+
+
 def print_table(summary: dict[str, dict[str, float]], phases: tuple[str, ...], *, title: str | None = None) -> None:
     total = summary["total"]["mean_ms"]
     if title is not None:
@@ -642,6 +758,20 @@ def main() -> None:
         action="store_true",
         help="With --fixed-render-graph, keep decoded splat features/colors detached to isolate no-color-grad paths.",
     )
+    parser.add_argument(
+        "--memory-sample-interval-ms",
+        type=float,
+        default=0.0,
+        help=(
+            "When >0, sample MPS/CUDA allocation counters in a background thread while each measured "
+            "iteration runs. Default off to preserve historical timing comparability."
+        ),
+    )
+    parser.add_argument(
+        "--memory-clear-cache",
+        action="store_true",
+        help="Clear Python and device caches before each measured iteration when memory sampling is enabled.",
+    )
     parser.add_argument("--json-output", type=Path, default=None)
     args = parser.parse_args()
 
@@ -666,6 +796,25 @@ def main() -> None:
             else:
                 benchmark_one_step(trainer, multicam=multicam)
         for _ in range(max(1, args.iters)):
+            def run_measured_iteration():
+                if fixed_case is not None:
+                    return benchmark_fixed_render_case(
+                        trainer,
+                        fixed_case,
+                        freeze_colors=bool(args.fixed_render_freeze_colors),
+                    )
+                return benchmark_one_step(trainer, multicam=multicam)
+
+            if float(args.memory_sample_interval_ms) > 0.0:
+                samples.append(
+                    run_with_memory_sampling(
+                        trainer.device,
+                        interval_ms=float(args.memory_sample_interval_ms),
+                        clear_cache=bool(args.memory_clear_cache),
+                        fn=run_measured_iteration,
+                    )
+                )
+                continue
             if fixed_case is not None:
                 samples.append(
                     benchmark_fixed_render_case(
@@ -677,6 +826,7 @@ def main() -> None:
             else:
                 samples.append(benchmark_one_step(trainer, multicam=multicam))
         summary = summarize(samples, phases)
+        memory_summary = summarize_sampled_memory(samples)
         breakdown_samples: list[dict[str, float]] = []
         breakdown_summary = None
         if args.backward_breakdown and fixed_case is not None:
@@ -701,6 +851,9 @@ def main() -> None:
                 if fixed_case is not None
                 else None
             ),
+            "memory_sample_interval_ms": float(args.memory_sample_interval_ms),
+            "memory_clear_cache": bool(args.memory_clear_cache),
+            "sampled_memory_summary": memory_summary,
             "samples": samples,
             "summary": summary,
             "backward_breakdown_samples": breakdown_samples,
@@ -718,6 +871,13 @@ def main() -> None:
         if fixed_case is not None:
             print(f"Fixed render setup phases: {fixed_case.setup_phases_ms}; chunks={len(fixed_case.chunks)}")
             print("Note: fixed-render totals exclude sample/encode/model backward/regularizer/optimizer.")
+        if memory_summary is not None:
+            print(
+                "Sampled memory: "
+                f"peak_current={memory_summary['sampled_peak_current_allocated_bytes']} bytes, "
+                f"peak_driver={memory_summary['sampled_peak_driver_allocated_bytes']} bytes, "
+                f"samples={memory_summary['memory_sample_count_total']}"
+            )
         if breakdown_summary is not None:
             print()
             print_table(breakdown_summary, BACKWARD_BREAKDOWN_PHASES, title="Backward breakdown probes")

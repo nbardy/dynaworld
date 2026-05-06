@@ -20,7 +20,7 @@ promoted.
 | Keep experimental forks opt-in | `src/train/renderers/fast_mac.py` dispatches by explicit `render.fast_mac.feature_variant`; checked-in configs currently reference only `v5_features` or stable `v6_refined_features`. | Covered |
 | Benchmark bigger batches/features | `research_notes/fast_mac_feature_metal_performance.md` cites local artifacts for `B=16/B32`, `F=32/F64`, `128/256/512px`, plus trainer fixed-render paths. A cited-artifact existence check over that note and the loose note produced no `MISSING` lines. | Covered as local timing evidence |
 | Drive down speed | Measured wins exist: `f32_reduce` cuts stable `512px/B16/G8192/F32` raster total from `1001.9ms` to `449.2ms`; `f32_accum` reaches `388.1ms` in one corrected-cap row; `f32_fixedbin` reaches `501.8ms` in the later target row versus `855.4/706.5/716.4ms` same-window alternatives. | Partially covered; shape-dependent |
-| Trainer-path timing isolation | `src/benchmarks/trainer_phase_benchmark.py` has `--seed`, `--fixed-render-graph`, and frozen-color fixed-render mode; artifacts under `benchmark_outputs/trainer_phase/` compare stable and forks. | Covered |
+| Trainer-path timing isolation | `src/benchmarks/trainer_phase_benchmark.py` has `--seed`, `--fixed-render-graph`, frozen-color fixed-render mode, and opt-in `--memory-sample-interval-ms`; the cited trainer-phase JSON artifacts compare stable and forks. | Covered |
 | Trainer-path correctness before long runs | `src/benchmarks/fixed_render_variant_parity.py` exists and artifacts show 256px train/heldout exact forward parity plus 128px train/heldout gradient parity for `f32_reduce`, `f32_accum`, `f32_gradcache`, and `f32_fixedbin`. | Covered as pre-flight parity |
 | Write shared Metal shader performance docs | `research_notes/fast_mac_feature_metal_performance.md` covers artifact map, timing tables, Metal performance model, bottlenecks, safe benchmark contract, profiling workflow, and next forks. | Covered |
 | Write raw agent notes | `agent_notes/loose_notes/2026-05-07_02-15-01_feature_kernel_fork_iteration.md` records forks, commands, validation, benchmarks, interpretation, and safety notes. | Covered |
@@ -112,3 +112,44 @@ Read:
 - This upgrades the lookup branch from "memory unproven" to "sampled-memory
   promising at the larger synthetic row." It still does not clear trainer
   integration, true peak-memory, or heldout-quality gates.
+
+## Post-Audit Trainer Sampled-Memory Update
+
+`src/benchmarks/trainer_phase_benchmark.py` now has opt-in sampled allocation
+tracking:
+
+```bash
+--memory-sample-interval-ms 1.0
+```
+
+The default remains off, so older timing artifacts stay comparable. With the
+sampler enabled, each measured iteration records start/end allocation counters,
+sampled peak current allocation, sampled peak driver allocation, and sample
+count. The row is still not a Metal hardware capture, but it is closer to the
+actual train loop than the synthetic lookup probe.
+
+Saved 256px fixed-render artifacts:
+
+- `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_fixedbin_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_accum_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_reduce_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+
+Read:
+
+- Stable `v6_refined_features`: `673.9ms` total, `525.8ms` backward,
+  sampled peak current `1412745984` bytes.
+- `f32_gradcache`: `649.3ms` total, `502.3ms` backward, sampled peak current
+  `1412745984` bytes.
+- `f32_fixedbin`: `649.8ms` total, `500.6ms` backward, sampled peak current
+  `1700988160` bytes.
+- `f32_accum`: `670.2ms` total, `513.0ms` backward, sampled peak current
+  `1412745984` bytes.
+- `f32_reduce`: `667.4ms` total, `510.5ms` backward, sampled peak current
+  `1636237568` bytes.
+
+Updated interpretation: `f32_gradcache` is currently the cleanest trainer-path
+timing/memory candidate in the bounded 256px row. Fixedbin remains a useful
+host/binning experiment, but this trainer evidence weakens the idea that it is
+a memory-pressure fix.

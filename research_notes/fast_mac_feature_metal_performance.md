@@ -319,6 +319,28 @@ Read: fixedbin ties `f32_accum` and modestly beats stable in this fixed-render
 trainer window, but it is not a clear replacement for all shapes. It remains a
 targeted no-overflow candidate until a train/heldout-quality run confirms it.
 
+Sampled-MPS-memory fixed-render rerun, same 256px multicam config,
+`seed=0`, `warmup=1`, `iters=2`, `--memory-sample-interval-ms 1.0`. This
+adds a background sampler around each measured iteration. It is still not a
+Metal hardware capture, but it catches transient `torch.mps` allocation
+pressure better than reading memory only after synchronized backward:
+
+| Variant | total mean ms | raster fwd ms | autograd backward total ms | sampled peak current bytes | sampled peak driver bytes | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | 673.9 | 68.0 | 525.8 | 1412745984 | 2529247232 | `multicam256_f32_v6_refined_features_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_fixedbin` | 649.8 | 68.5 | 500.6 | 1700988160 | 2529247232 | `multicam256_f32_f32_fixedbin_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_accum` | 670.2 | 75.5 | 513.0 | 1412745984 | 2529247232 | `multicam256_f32_f32_accum_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_reduce` | 667.4 | 75.8 | 510.5 | 1636237568 | 2529247232 | `multicam256_f32_f32_reduce_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 649.3 | 67.0 | 502.3 | 1412745984 | 2529247232 | `multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
+
+Read: `f32_gradcache` is the cleanest timing/memory candidate in this bounded
+trainer-path row: it ties fixedbin for speed while keeping sampled current
+allocation at the stable level. `f32_fixedbin` still has a real timing win, but
+the larger fixed ID buffer shows up as higher sampled current allocation in the
+trainer graph. `f32_reduce` also costs extra sampled memory here. This weakens
+the case for fixedbin as a memory-pressure fix even though it remains useful as
+a host/binning timing experiment.
+
 Fixed-render output parity, same 256px seeded clip:
 
 | Baseline | Candidate | max feature diff | max alpha diff | max RGB diff | loss diff | Artifact |
@@ -621,6 +643,11 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_seed0_warm2_iters4_rerun_after_fixedbin.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_f32_accum_fixed_render_seed0_warm2_iters4_rerun_after_fixedbin.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_seed0_warm2_iters4_rerun_after_fixedbin.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_fixedbin_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_accum_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_reduce_fixed_render_sampled_memory_seed0_warm1_iters2.json`
+- `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json`
 
 Small batch-strategy smoke, `128x128`, `G=1024`, `F=32`,
 `case=medium_sigma_3_8`, `warmup=1`, `iters=2`, fwd+bwd:
@@ -677,9 +704,10 @@ speedup.
 
 5. Better trainer-phase isolation:
    Done in `src/benchmarks/trainer_phase_benchmark.py` via
-   `--fixed-render-graph` and optional `--fixed-render-freeze-colors`. Use this
-   before comparing renderer variants in the trainer context; full-step timing
-   remains useful, but it includes sample/encode/model/optimizer noise.
+   `--fixed-render-graph`, optional `--fixed-render-freeze-colors`, and
+   opt-in `--memory-sample-interval-ms`. Use this before comparing renderer
+   variants in the trainer context; full-step timing remains useful, but it
+   includes sample/encode/model/optimizer noise.
 
 6. Fixed-render parity gate:
    Done in `src/benchmarks/fixed_render_variant_parity.py`. Run it before long
@@ -714,8 +742,9 @@ speedup.
     It trades an exact-size `binned_ids` sync/allocation for a fixed
     `[tile_count, max_fast_pairs]` int32 buffer and raises on overflow rather
     than falling back. It wins the target synthetic `512px/B16/F32` row and
-    ties `f32_accum` on the latest 256px trainer fixed-render graph, but loses
-    some `256px` rows and costs about `128 MiB` for IDs at
+    ties `f32_accum` on one 256px trainer fixed-render graph, but the sampled
+    memory rerun shows higher current allocation than stable/gradcache. It also
+    loses some `256px` rows and costs about `128 MiB` for IDs at
     `512px/B16/tile16/cap2048`. Keep it opt-in until heldout-quality training
     proves the no-overflow path is safe over optimizer time.
 
