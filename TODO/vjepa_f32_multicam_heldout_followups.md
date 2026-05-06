@@ -52,6 +52,28 @@ probe. It trains cleanly on `camera_0001` and `camera_0015`, but held-out
    low-overlap once that is known. Heldout PSNR is still the selector, but the
    overlap caveat matters for interpreting failures.
 
+## Implementation Status
+
+- Done: validation now logs explicit media for every train view and every
+  heldout view (`TrainView0`, `TrainView1`, `Heldout0_camera_0040`, etc.).
+- Done: validation now logs one stacked multicam diagnostic video:
+  `Multicam_GT_Splat_Alpha_Feature_Grid_Video`, with rows per view and columns
+  `GT | Splat/Pred | Alpha | Feature PCA`.
+- Done: multicam validation now tracks `Heldout/Eval/PSNRMean`,
+  `Heldout/Eval/SSIMMean`, `Heldout/BestEvalPSNR`,
+  `Heldout/BestEvalSSIMAtBestPSNR`, and `Heldout/BestEvalStep`.
+- Done: selected a higher-overlap DeepView `03_Dog` split. Use train
+  `camera_0006` + `camera_0014`, heldout `camera_0005`, anchor/condition
+  `camera_0006`. See
+  `agent_notes/loose_notes/2026-05-05_14-02-06_deepview_03_dog_overlap_camera_selection.md`.
+- Still open: run the higher-overlap good-set configs to completion and record
+  best/final heldout metrics.
+- Still open: add overlap classification and best-heldout metrics to
+  `BASELINES.md` after the next real baseline run.
+- Still open: checkpoint artifact preservation is not implemented yet; the
+  current fix preserves best-heldout evidence as W&B scalars at validation-video
+  cadence only.
+
 ## Definition Of Done
 
 - W&B has one obvious 3-row x 4-column panel:

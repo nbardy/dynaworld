@@ -15,6 +15,7 @@ data/feature_cache/
 test_data/dust3r_outputs/
 
 # Large local datasets and downloaded media. Keep configs/docs/scripts tracked.
+*.iso
 data/clip_sets/
 data/youtube_motion/raw/
 data/youtube_motion/segments/
@@ -27,6 +28,7 @@ data/youtube_scene_distinct/logs/
 data/youtube_curated_spans/raw/
 data/youtube_curated_spans/clip_sets/
 data/youtube_curated_spans/logs/
+data/youtube_curated_spans/high_motion_smokes/
 data/youtube_multiview_comms/raw/
 data/youtube_multiview_comms/segments/
 data/youtube_multiview_comms/tile_crops/
@@ -39,6 +41,7 @@ data/multicam_val/clip_sets/
 data/multicam_val/logs/
 data/multicam_val/manifests/
 data/multicam_val/metadata/
+data/external/*/
 data/external/aist_dance_db/raw/
 data/external/aist_dance_db/extracted/
 data/external/aist_dance_db/cameras/
@@ -75,5 +78,17 @@ outputs/
 # Large local research corpora. Keep curated notes and indexes tracked.
 research_notes/blur_dof_motion_papers/pdfs/
 research_notes/blur_dof_motion_papers/text/
+research_notes/foam_papers/pdfs/
+research_notes/foam_papers/text/
 
 third_party/dust3r/croco/
+
+# Generated PowerFoam experiment payloads. Keep source, configs, fixtures, and
+# curated notes tracked; regenerate these from scripts/configs.
+research_experiments/dynamic_foam/artifacts/
+third_party/powerfoam-metal/build/
+third_party/powerfoam-metal/outputs/
+third_party/powerfoam-metal/torch_powerfoam_metal/_C*.so
+third_party/dynamic-powerfoam-metal/build/
+third_party/dynamic-powerfoam-metal/outputs/
+third_party/dynamic-powerfoam-metal/torch_dynamic_powerfoam_metal/_C*.so
