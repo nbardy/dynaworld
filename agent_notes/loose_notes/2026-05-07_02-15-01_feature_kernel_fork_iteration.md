@@ -534,6 +534,22 @@ Whole-step sampled-memory smoke, actual learned-residual trainer path:
 | `v6_refined_features_f32_gradcache` | 1 | 1513.2 | 903315200 | 0.3096860 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs1_train_step_sampled_memory_seed0_iters1.json` |
 | `v6_refined_features_f32_gradcache` | 2 | 1935.7 | 1601700608 | 0.2850145 | `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs2_train_step_sampled_memory_seed0_iters1.json` |
 
+Full camera-swap variant parity:
+
+| Baseline | Candidate | Loss diff | Max grad diff | Max grad diff excluding video input norms | Artifact |
+| --- | --- | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | stable `v6_refined_features` | 0.0 | 4.91 | 1.71e-06 | `benchmark_outputs/trainer_phase/multicam256_v6_vs_v6_camera_swap_grad_parity_seed0.json` |
+| stable `v6_refined_features` | `v6_refined_features_f32_gradcache` | 0.0 | 4.91 | 1.05e-06 | `benchmark_outputs/trainer_phase/multicam256_v6_vs_f32_gradcache_camera_swap_grad_parity_seed0.json` |
+
+Read: `src/benchmarks/camera_swap_variant_parity.py` now uses one trainer
+instance and switches only `render.fast_mac.feature_variant`, so the stable
+kernel remains untouched. The full camera-swap graph has a repeatable MPS
+LayerNorm caveat in `model.video_encoder.input_norms.*`: stable-vs-stable
+already shows order-one parameter-gradient diffs there. Outside that caveat,
+`f32_gradcache` stays within the stable control envelope and has exact
+loss/recon/bank-rate parity. This is a useful trainer-graph drift check, not
+heldout-quality parity.
+
 ## Interpretation
 
 - No fork should replace the stable baseline yet. Keep `v6_refined_features`
@@ -611,6 +627,10 @@ Whole-step sampled-memory smoke, actual learned-residual trainer path:
   source/query renders and relpose losses resident. Reducing
   `camera_swap_pairs_per_step` is the strongest measured real-step memory
   lever, but it changes per-step supervision and needs quality/W&B validation.
+- The full camera-swap parity gate must be read with its stable-vs-stable
+  control. MPS produces order-one `video_encoder.input_norms` parameter-gradient
+  diffs even without switching kernels; the renderer-specific read should use
+  the excluding-input-norm field plus fixed-render sequence-gradient parity.
 - Next kernel forks worth trying: a lower-private-pressure `float4` block cache
   rather than a full F32 grad vector; a two-block F64 accumulator only if we
   revisit F64 local accumulation; and active/overflow local accumulation only

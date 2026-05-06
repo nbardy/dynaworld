@@ -405,6 +405,23 @@ this as a smoke, not a stable throughput benchmark; next timing rows need
 warmup/iters inside one process and a training-quality decision on stochastic
 pair sampling.
 
+Full camera-swap graph gradient parity, same one-trainer seeded 256px
+learned-residual graph:
+
+| Baseline | Candidate | loss diff | max param grad diff | max grad diff excluding video input norms | Artifact |
+| --- | --- | ---: | ---: | ---: | --- |
+| stable `v6_refined_features` | stable `v6_refined_features` | 0.0 | 4.91 | 1.71e-06 | `multicam256_v6_vs_v6_camera_swap_grad_parity_seed0.json` |
+| stable `v6_refined_features` | `v6_refined_features_f32_gradcache` | 0.0 | 4.91 | 1.05e-06 | `multicam256_v6_vs_f32_gradcache_camera_swap_grad_parity_seed0.json` |
+
+Read: `camera_swap_variant_parity.py` now keeps one trainer instance and
+switches only `render.fast_mac.feature_variant`, so the stable kernel is not
+mutated or replaced. The full graph has a known MPS caveat: LayerNorm parameter
+gradients under `model.video_encoder.input_norms.*` differ by order-one values
+even in the stable-vs-stable control. Outside that noisy precomputed-feature
+adapter input-normalizer row, `f32_gradcache` is within the stable control
+envelope and has exact loss/recon/bank-rate parity. Treat this as a useful
+trainer-graph drift check, not a substitute for heldout-quality W&B training.
+
 Fixed-render output parity, same 256px seeded clip:
 
 | Baseline | Candidate | max feature diff | max alpha diff | max RGB diff | loss diff | Artifact |
@@ -764,6 +781,8 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs1_train_step_sampled_memory_seed0_iters1.json`
 - `benchmark_outputs/trainer_phase/multicam256_v6_refined_features_pairs2_train_step_sampled_memory_seed0_iters1.json`
 - `benchmark_outputs/trainer_phase/multicam256_f32_gradcache_pairs2_train_step_sampled_memory_seed0_iters1.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_vs_v6_camera_swap_grad_parity_seed0.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_vs_f32_gradcache_camera_swap_grad_parity_seed0.json`
 
 Small batch-strategy smoke, `128x128`, `G=1024`, `F=32`,
 `case=medium_sigma_3_8`, `warmup=1`, `iters=2`, fwd+bwd:
@@ -821,8 +840,9 @@ speedup.
    timing cost; `f32_gradcache` lost its batched-mode speed edge in the
    shared-background chunked rerun. `fixed_render_backward_mode_parity.py`
    confirms chunk8 fixed-render gradients match batched gradients for stable
-   and `f32_gradcache`; the remaining gate before real trainer wiring is a
-   train-step smoke covering camera-swap relpose and regularizers.
+   and `f32_gradcache`. The real train-step memory smoke and
+   `camera_swap_variant_parity.py` now cover the learned-residual camera-swap
+   graph, with a documented MPS `video_encoder.input_norms` gradient caveat.
 
 5. Better trainer-phase isolation:
    Done in `src/benchmarks/trainer_phase_benchmark.py` via

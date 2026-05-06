@@ -260,3 +260,26 @@ stochastic pair count: one sampled pair cuts current allocation to `0.90GB`, and
 two pairs to `1.60GB`, versus `2.93GB` for all four eligible pairs. This is a
 one-step smoke, not a warmed throughput benchmark or promotion gate; pair-count
 changes also change the supervised objective per step.
+
+## Full Camera-Swap Variant Parity Caveat
+
+Saved artifacts:
+
+- `benchmark_outputs/trainer_phase/multicam256_v6_vs_v6_camera_swap_grad_parity_seed0.json`
+- `benchmark_outputs/trainer_phase/multicam256_v6_vs_f32_gradcache_camera_swap_grad_parity_seed0.json`
+
+`src/benchmarks/camera_swap_variant_parity.py` now keeps one trainer instance
+and switches only `render.fast_mac.feature_variant`; it does not edit or
+replace the stable `v6_refined_features` kernel.
+
+Results:
+
+- Stable vs stable: loss diff `0.0`, max param grad diff `4.91`, max grad diff
+  excluding `model.video_encoder.input_norms.*` `1.71e-06`.
+- Stable vs `f32_gradcache`: loss diff `0.0`, max param grad diff `4.91`, max
+  grad diff excluding `model.video_encoder.input_norms.*` `1.05e-06`.
+
+Read: the full learned-residual graph has a stable-vs-stable MPS LayerNorm
+caveat in the precomputed-feature input normalizer. The `f32_gradcache` row
+does not show extra non-input-norm drift versus that control, but this is still
+a smoke gate. Promotion still needs heldout-quality W&B parity.
