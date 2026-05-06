@@ -135,6 +135,7 @@
     "relpose_output_mode": "full",
     "heldout_eval_camera_mode": "predicted_relpose",
     "trainable_scope": "relpose_only",
+    "relpose_feature_frame_mode": "first_frame",
     "relpose_layers": 1,
     "relpose_query_count": 1,
     "relpose_mlp_ratio": 2.0,

@@ -17,6 +17,7 @@ from objective.types import BackgroundSample, RenderedView, RunPhase
 from pipeline.diagnostics import decoded_temporal_payload
 from pipeline.losses import build_bank_rate_loss as _build_bank_rate_loss_impl
 from pipeline.render import prepare_clip
+from pipeline.validation_media import multicam_validation_video_payload
 from relative_pose import (
     cameras_with_se3_transform,
     se3_cycle_loss,
@@ -24,6 +25,8 @@ from relative_pose import (
     se3_residual_matrix,
     se3_transform_l2_loss,
 )
+from rendering import resize_images
+from runtime_types import SequenceData
 from train_multicam_precomputed_feature_implicit_dynamic import MulticamPrecomputedFeatureImplicitTrainer
 
 
@@ -31,6 +34,7 @@ RELATIVE_POSE_TRAIN_DEFAULTS = {
     "relpose_output_mode": "full",
     "heldout_eval_camera_mode": "predicted_relpose",
     "trainable_scope": "all",
+    "relpose_feature_frame_mode": "first_frame",
     "relpose_pose_loss_weight": 1.0,
     "checkpoint_load_path": None,
     "checkpoint_save_path": None,
@@ -45,6 +49,35 @@ class FullRelativePosePrediction:
     camera_to_world_per_frame: torch.Tensor
     oracle_camera_to_world: torch.Tensor
     target_template_cameras: tuple[Any, ...]
+
+
+def first_frame_repeated_sequence(sequence_data: SequenceData, *, repeat_count: int, cache_tag: str) -> SequenceData:
+    if int(repeat_count) < 1:
+        raise ValueError(f"repeat_count must be >= 1, got {repeat_count}.")
+    if sequence_data.frame_count < 1:
+        raise ValueError("Cannot build first-frame relpose features from an empty sequence.")
+    frames = sequence_data.frames[:1].expand(int(repeat_count), -1, -1, -1).contiguous()
+    frame_times = sequence_data.frame_times[:1].expand(int(repeat_count), *sequence_data.frame_times.shape[1:]).contiguous()
+    cameras = None
+    if sequence_data.cameras is not None:
+        cameras = tuple(sequence_data.cameras[0] for _ in range(int(repeat_count)))
+    records = ()
+    if sequence_data.records:
+        records = tuple(sequence_data.records[0] for _ in range(int(repeat_count)))
+    source_prefix = str(sequence_data.source_path or "unknown_source")
+    return SequenceData(
+        frames=frames,
+        frame_times=frame_times,
+        video_fps=sequence_data.video_fps,
+        frame_source=sequence_data.frame_source,
+        frame_paths=(),
+        cameras=cameras,
+        records=records,
+        intrinsics_summary=sequence_data.intrinsics_summary,
+        source_path=Path(f"{source_prefix}#relpose_first_frame_{cache_tag}_{int(repeat_count)}f"),
+        selected_frame_count=int(repeat_count),
+        all_frame_count=sequence_data.all_frame_count,
+    )
 
 
 class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrainer):
@@ -75,6 +108,9 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         cfg["train"]["trainable_scope"] = str(cfg["train"]["trainable_scope"]).lower()
         if cfg["train"]["trainable_scope"] not in {"all", "relpose_only"}:
             raise ValueError("train.trainable_scope must be one of: all, relpose_only.")
+        cfg["train"]["relpose_feature_frame_mode"] = str(cfg["train"]["relpose_feature_frame_mode"]).lower()
+        if cfg["train"]["relpose_feature_frame_mode"] not in {"first_frame", "clip"}:
+            raise ValueError("train.relpose_feature_frame_mode must be one of: first_frame, clip.")
         cfg["train"]["relpose_pose_loss_weight"] = float(cfg["train"]["relpose_pose_loss_weight"])
         cfg["train"]["checkpoint_load_path"] = path_or_none(cfg["train"]["checkpoint_load_path"])
         cfg["train"]["checkpoint_save_path"] = path_or_none(cfg["train"]["checkpoint_save_path"])
@@ -86,6 +122,7 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         return cfg
 
     def __init__(self, config: dict[str, Any]) -> None:
+        self.relpose_first_frame_sequences: dict[tuple[str, int], SequenceData] = {}
         super().__init__(config)
         if self.relpose_head is None:
             raise ValueError("MulticamRelativePoseImplicitTrainer requires a constructed relpose_head.")
@@ -94,6 +131,40 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
 
     def load_eval_sequences(self):
         return list(self.multicam_bundle.heldout_sequences)
+
+    def on_sequences_loaded(self) -> None:
+        release_after_prebake = bool(self.cfg["features"]["release_extractor_after_prebake"])
+        if self.train_cfg["relpose_feature_frame_mode"] == "first_frame":
+            self.cfg["features"]["release_extractor_after_prebake"] = False
+        super().on_sequences_loaded()
+        if self.train_cfg["relpose_feature_frame_mode"] != "first_frame":
+            return
+        self._prepare_relpose_first_frame_sequences()
+        if self.model_cfg["video_encoder_backend"] != "none":
+            self.feature_cache.prebake(self.relpose_first_frame_sequences.values())
+            if release_after_prebake:
+                if self.feature_cache.force_rebake:
+                    print("[features] disabling force_rebake after relpose first-frame prebake before releasing extractor")
+                    self.feature_cache.force_rebake = False
+                self.feature_cache.release_extractor()
+        self.cfg["features"]["release_extractor_after_prebake"] = release_after_prebake
+
+    def _prepare_relpose_first_frame_sequences(self) -> None:
+        repeat_count = int(self.model_cfg["train_frame_count"])
+        sequences: dict[tuple[str, int], SequenceData] = {}
+        for view, sequence_data in enumerate(self.multicam_bundle.train_sequences):
+            sequences[("train", int(view))] = first_frame_repeated_sequence(
+                sequence_data,
+                repeat_count=repeat_count,
+                cache_tag=f"train_{int(view)}",
+            )
+        for view, sequence_data in enumerate(self.multicam_bundle.heldout_sequences):
+            sequences[("heldout", int(view))] = first_frame_repeated_sequence(
+                sequence_data,
+                repeat_count=repeat_count,
+                cache_tag=f"heldout_{int(view)}",
+            )
+        self.relpose_first_frame_sequences = sequences
 
     def _load_checkpoint_if_configured(self) -> None:
         checkpoint_path = self.train_cfg["checkpoint_load_path"]
@@ -157,19 +228,22 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         self.save_checkpoint_if_configured()
 
     def sequence_for_camera_set(self, camera_set: str, view: int):
+        key = (str(camera_set), int(view))
+        if self.train_cfg["relpose_feature_frame_mode"] == "first_frame" and key in self.relpose_first_frame_sequences:
+            return self.relpose_first_frame_sequences[key]
         if camera_set == "train":
             return self.multicam_bundle.train_sequences[int(view)]
         if camera_set == "heldout":
             return self.multicam_bundle.heldout_sequences[int(view)]
         raise ValueError(f"Unsupported camera set {camera_set!r}.")
 
-    def projected_feature_memory_for_view(
+    def projected_feature_memory_for_relpose_view(
         self,
         camera_set: str,
         view: int,
-        clip_indices: torch.Tensor,
     ) -> torch.Tensor:
         sequence_data = self.sequence_for_camera_set(camera_set, view)
+        clip_indices = torch.arange(0, sequence_data.frame_count, device=self.device)
         clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
         model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
         with self.autocast_context():
@@ -187,9 +261,9 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         source_key = ("train", int(pair.source_view))
         query_key = (pair.query_set, int(pair.query_view))
         if source_key not in memory_cache:
-            memory_cache[source_key] = self.projected_feature_memory_for_view("train", int(pair.source_view), clip_indices)
+            memory_cache[source_key] = self.projected_feature_memory_for_relpose_view("train", int(pair.source_view))
         if query_key not in memory_cache:
-            memory_cache[query_key] = self.projected_feature_memory_for_view(pair.query_set, int(pair.query_view), clip_indices)
+            memory_cache[query_key] = self.projected_feature_memory_for_relpose_view(pair.query_set, int(pair.query_view))
         rotation, translation = self.relpose_head(memory_cache[source_key], memory_cache[query_key])
         camera_to_world = se3_residual_matrix(rotation, translation)
         target_template_cameras = self.source_relative_cameras_for_pair(pair, clip_indices)
@@ -417,7 +491,7 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         )
 
     @torch.no_grad()
-    def render_full_oracle_relative_views(self):
+    def render_full_predicted_relative_views(self):
         source_view = 0
         sequence_data = self.multicam_bundle.train_sequences[source_view]
         frame_indices = torch.arange(0, sequence_data.frame_count, device=self.device)
@@ -502,6 +576,33 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
                 "rgbs": [decoded.rgbs[index].detach().cpu() for index in range(decoded.frame_count)],
             }
         )
+
+    def validation_video_payload(self, step: int | None = None) -> dict[str, Any]:
+        train_rendered, heldout_rendered, decoded_metrics = self.render_full_predicted_relative_views()
+        train_targets = [
+            resize_images(self.multicam_bundle.train_frames[view], self.render_size).detach().cpu()
+            for view in range(len(train_rendered))
+        ]
+        heldout_targets: list[torch.Tensor] = []
+        if heldout_rendered and self.multicam_bundle.heldout_frames is not None:
+            heldout_targets = [
+                resize_images(self.multicam_bundle.heldout_frames[view], self.render_size).detach().cpu()
+                for view in range(len(heldout_rendered))
+            ]
+        payload, self.gt_video_logged = multicam_validation_video_payload(
+            self.cfg,
+            train_rendered=train_rendered,
+            heldout_rendered=heldout_rendered,
+            train_targets=train_targets,
+            heldout_targets=heldout_targets,
+            heldout_camera_names=self.multicam_bundle.heldout_camera_names or [],
+            decoded_metrics=decoded_metrics,
+            camera_rig_metrics=self.camera_rig.metrics(),
+            gt_video_logged=self.gt_video_logged,
+            fps=self.sequence_data.video_fps,
+        )
+        self.update_best_heldout_payload(payload, step)
+        return payload
 
     def scalar_payload(self, result) -> dict[str, Any]:
         payload = super().scalar_payload(result)

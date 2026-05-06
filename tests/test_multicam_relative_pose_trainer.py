@@ -5,9 +5,14 @@ import sys
 from pathlib import Path
 
 import pytest
+import torch
 
 from config_utils import load_config_file
-from train_multicam_relative_pose_implicit_dynamic import MulticamRelativePoseImplicitTrainer
+from runtime_types import SequenceData
+from train_multicam_relative_pose_implicit_dynamic import (
+    MulticamRelativePoseImplicitTrainer,
+    first_frame_repeated_sequence,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +50,7 @@ def test_joint_full_relpose_config_resolves_predicted_heldout_mode() -> None:
     assert cfg["train"]["relpose_output_mode"] == "full"
     assert cfg["train"]["heldout_eval_camera_mode"] == "predicted_relpose"
     assert cfg["train"]["trainable_scope"] == "all"
+    assert cfg["train"]["relpose_feature_frame_mode"] == "first_frame"
     assert cfg["data"]["multicam_train_cameras"] == ["camera_0006", "camera_0014"]
     assert cfg["data"]["multicam_heldout_camera"] == "camera_0005"
     assert cfg["train"]["checkpoint_save_path"] == Path(
@@ -64,3 +70,27 @@ def test_relpose_only_config_requires_cross_pairs_and_checkpoint() -> None:
 
     with pytest.raises(ValueError, match="checkpoint_load_path"):
         MulticamRelativePoseImplicitTrainer.resolve_config(cfg)
+
+
+def test_first_frame_repeated_sequence_uses_only_initial_frame() -> None:
+    frames = torch.arange(4 * 3 * 2 * 2, dtype=torch.float32).reshape(4, 3, 2, 2)
+    frame_times = torch.arange(4, dtype=torch.float32).view(4, 1)
+    sequence = SequenceData(
+        frames=frames,
+        frame_times=frame_times,
+        video_fps=4.0,
+        frame_source="explicit_video",
+        source_path=Path("/tmp/camera_0006.mp4"),
+        selected_frame_count=4,
+        all_frame_count=16,
+    )
+
+    relpose_sequence = first_frame_repeated_sequence(sequence, repeat_count=3, cache_tag="train_0")
+
+    assert relpose_sequence.frame_count == 3
+    assert torch.equal(relpose_sequence.frames[0], frames[0])
+    assert torch.equal(relpose_sequence.frames[1], frames[0])
+    assert torch.equal(relpose_sequence.frames[2], frames[0])
+    assert torch.equal(relpose_sequence.frame_times, frame_times[:1].expand(3, 1))
+    assert relpose_sequence.source_path is not None
+    assert "relpose_first_frame_train_0_3f" in str(relpose_sequence.source_path)

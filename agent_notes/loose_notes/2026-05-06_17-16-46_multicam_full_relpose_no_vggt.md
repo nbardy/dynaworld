@@ -11,6 +11,10 @@
 - Added full-pose helpers in `src/train/relative_pose.py`:
   - `cameras_with_se3_transform(...)`
   - `se3_transform_l2_loss(...)`
+- Added `train.relpose_feature_frame_mode`. The checked-in configs use
+  `first_frame`, which repeats each camera's global frame 0 before feature
+  extraction so the pose head gets initial-frame query evidence rather than
+  full-clip query evidence.
 - Added focused tests for full-pose helpers, heldout pair semantics, dispatch,
   and config validation.
 
@@ -46,7 +50,10 @@ Delta_source_to_query = relpose(projected features(source), projected features(q
 render(W_source, Delta_source_to_query) -> GT(query)
 ```
 
-The head outputs one clip-level source-relative `camera_to_world` transform.
+With `relpose_feature_frame_mode: "first_frame"`, the head consumes features
+from frame 0 repeated to the configured feature clip length for the source and
+query cameras. The head outputs one static source-relative `camera_to_world`
+transform for the rendered clip.
 Train supervision uses only train cameras, via:
 
 - reconstruction loss through the predicted query camera
@@ -114,12 +121,20 @@ and ran the same predicted heldout validation path. Offline W&B runs:
 - `wandb/offline-run-20260506_171826-shx5zqn6`
 - `wandb/offline-run-20260506_171850-uyyzu0a8`
 
+After adding `relpose_feature_frame_mode: "first_frame"`, the focused tests
+passed again (`14 passed`) and the same three local smokes passed again. The
+first-frame smoke showed three extra feature-cache bakes for the repeated
+frame-0 train/heldout sequences before extractor release. Offline W&B runs:
+
+- `wandb/offline-run-20260506_174254-gq16otu2`
+- `wandb/offline-run-20260506_174351-22uys8vj`
+- `wandb/offline-run-20260506_174429-i74kb187`
+
 ## Caveats / next checks
 
-- The relpose head currently consumes the configured precomputed feature memory
-  for the clip/sequence. It is not yet explicitly restricted to first-frame
-  tokens. If the experiment needs "initial frame only" semantics, add a
-  first-frame feature selection path in the precomputed feature adapter/cache.
+- `first_frame` mode still predicts one static source-relative camera transform
+  per source/query pair. That is the intended rig-offset contract for this
+  static DeepView split, not a moving-camera pose trajectory model.
 - The full-pose output is bounded at `45 deg` and `1.0 * rig_radius` in the
   checked-in configs. That is a starting range, not tuned.
 - No real V-JEPA training run was launched in this session; only a local
