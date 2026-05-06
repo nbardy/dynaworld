@@ -26,7 +26,7 @@ if str(TRAIN_ROOT) not in sys.path:
     sys.path.insert(0, str(TRAIN_ROOT))
 
 from config_utils import load_config_file  # noqa: E402
-from objective.types import RasterizedView  # noqa: E402
+from objective.types import BackgroundSample, RasterizedView  # noqa: E402
 from pipeline.losses import build_bank_rate_loss, build_camera_loss  # noqa: E402
 from pipeline.render import _viewport_cameras, gaussian_sequence_slice  # noqa: E402
 from renderers.fast_mac import (  # noqa: E402
@@ -510,6 +510,20 @@ def _clone_sequence_for_fixed_render(sequence: GaussianSequence, *, freeze_color
     )
 
 
+def _background_for_chunk(background: BackgroundSample, *, chunk_start: int, chunk_end: int) -> BackgroundSample:
+    if background.rgb is None:
+        return background
+    rgb = background.rgb
+    chunk_len = int(chunk_end - chunk_start)
+    if int(rgb.shape[0]) not in {1, chunk_len}:
+        if int(rgb.shape[0]) < chunk_end:
+            raise ValueError(
+                f"Cannot slice background with shape {tuple(rgb.shape)} for chunk [{chunk_start}, {chunk_end})."
+            )
+        rgb = rgb[chunk_start:chunk_end]
+    return BackgroundSample(rgb=rgb, mode=background.mode, phase=background.phase, step=background.step)
+
+
 def prepare_fixed_render_case(
     trainer,
     *,
@@ -531,20 +545,14 @@ def prepare_fixed_render_case(
     )
     chunks = []
     for target in targets:
-        for _chunk_start, _chunk_end, chunk_sequence, chunk_target in iter_target_chunks(
+        for chunk_start, chunk_end, chunk_sequence, chunk_target in iter_target_chunks(
             trainer,
             decoded,
             target,
             use_microbatch=use_microbatch,
             chunk_size_override=temporal_chunk_size,
         ):
-            chunk_background = background
-            if temporal_chunk_size is not None:
-                chunk_background = trainer.rgb_objective.sample_background(
-                    phase="train",
-                    like=chunk_target.frames,
-                    frame_count=chunk_target.frame_count,
-                )
+            chunk_background = _background_for_chunk(background, chunk_start=chunk_start, chunk_end=chunk_end)
             chunks.append(
                 FixedRenderChunk(
                     sequence=_detach_sequence_for_fixed_render(chunk_sequence),

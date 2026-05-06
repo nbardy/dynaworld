@@ -350,19 +350,22 @@ It does not change trainer behavior yet:
 | Variant | temporal chunk | chunks | total mean ms | raster fwd ms | autograd backward total ms | sampled peak current bytes | sampled peak driver bytes | Artifact |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | stable `v6_refined_features` | full | 2 | 673.9 | 68.0 | 525.8 | 1412745984 | 2529247232 | `multicam256_f32_v6_refined_features_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
-| stable `v6_refined_features` | 8 | 4 | 767.5 | 90.3 | 584.4 | 567064064 | 1300316160 | `multicam256_f32_v6_refined_features_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
-| stable `v6_refined_features` | 4 | 8 | 800.0 | 108.0 | 591.2 | 365766912 | 1216430080 | `multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| stable `v6_refined_features` | 8 | 4 | 770.9 | 93.7 | 579.4 | 567055872 | 1300316160 | `multicam256_f32_v6_refined_features_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| stable `v6_refined_features` | 4 | 8 | 910.1 | 147.3 | 628.8 | 365686016 | 1216430080 | `multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
 | `v6_refined_features_f32_gradcache` | full | 2 | 649.3 | 67.0 | 502.3 | 1412745984 | 2529247232 | `multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
-| `v6_refined_features_f32_gradcache` | 8 | 4 | 723.2 | 82.5 | 550.0 | 567065088 | 1300316160 | `multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
-| `v6_refined_features_f32_gradcache` | 4 | 8 | 851.0 | 130.6 | 591.2 | 365769984 | 1216430080 | `multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 8 | 4 | 1257.7 | 149.2 | 930.4 | 567056896 | 1300316160 | `multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 4 | 8 | 1528.1 | 170.3 | 1090.7 | 365686016 | 1216446464 | `multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
 
 Read: chunked render/loss backward is the strongest memory lever measured so
 far. Chunk size 8 cuts sampled current allocation by about `60%` (`1.41 GB` to
-`0.57 GB`) while adding about `11%` wall time for `f32_gradcache`; chunk size 4
-cuts sampled current allocation by about `74%` but is a larger timing hit.
-This is exactly the dense-surface pathology: smaller frame chunks reduce
-`[T,H,W,F]` graph residency more than any current kernel fork, but extra
-project/raster/loss/backward launches cost time.
+`0.57 GB`). The stable row pays about `14%` wall time at chunk size 8 and a
+larger hit at chunk size 4. The shared-background rerun made `f32_gradcache`
+chunked backward much slower even though memory fell by the same amount, so do
+not combine "gradcache is best batched" with "chunked is best memory" without a
+fresh same-session trainer run. This is exactly the dense-surface pathology:
+smaller frame chunks reduce `[T,H,W,F]` graph residency more than any current
+kernel fork, but extra project/raster/loss/backward launches cost time and
+interact with kernel variant rankings.
 
 Fixed-render output parity, same 256px seeded clip:
 
@@ -768,10 +771,11 @@ speedup.
    Benchmark-only probe is now in `src/benchmarks/trainer_phase_benchmark.py`
    via `--fixed-render-temporal-chunk-size` and
    `--fixed-render-backward-mode chunked`. At 256px, chunk size 8 reduced
-   sampled current allocation by about `60%` with an `~11%` timing cost for
-   `f32_gradcache`. This should be wired into the real multicam trainer only
-   after a parity/quality smoke, because it changes backward accumulation order
-   and background sampling details.
+   sampled current allocation by about `60%`. The stable row paid an `~14%`
+   timing cost; `f32_gradcache` lost its batched-mode speed edge in the
+   shared-background chunked rerun. This should be wired into the real multicam
+   trainer only after a parity/quality smoke, because it changes backward
+   accumulation order and must preserve shared train-background semantics.
 
 5. Better trainer-phase isolation:
    Done in `src/benchmarks/trainer_phase_benchmark.py` via

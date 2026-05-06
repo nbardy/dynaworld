@@ -510,11 +510,11 @@ backward and sampled memory:
 | Variant | Temporal chunk | Chunks | Total mean ms | Sampled peak current bytes | Artifact |
 | --- | ---: | ---: | ---: | ---: | --- |
 | stable `v6_refined_features` | full | 2 | 673.9 | 1412745984 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
-| stable `v6_refined_features` | 8 | 4 | 767.5 | 567064064 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
-| stable `v6_refined_features` | 4 | 8 | 800.0 | 365766912 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| stable `v6_refined_features` | 8 | 4 | 770.9 | 567055872 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| stable `v6_refined_features` | 4 | 8 | 910.1 | 365686016 | `benchmark_outputs/trainer_phase/multicam256_f32_v6_refined_features_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
 | `v6_refined_features_f32_gradcache` | full | 2 | 649.3 | 1412745984 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_sampled_memory_seed0_warm1_iters2.json` |
-| `v6_refined_features_f32_gradcache` | 8 | 4 | 723.2 | 567065088 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
-| `v6_refined_features_f32_gradcache` | 4 | 8 | 851.0 | 365769984 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 8 | 4 | 1257.7 | 567056896 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk8_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
+| `v6_refined_features_f32_gradcache` | 4 | 8 | 1528.1 | 365686016 | `benchmark_outputs/trainer_phase/multicam256_f32_f32_gradcache_fixed_render_chunk4_chunked_backward_sampled_memory_seed0_warm1_iters2.json` |
 
 ## Interpretation
 
@@ -580,8 +580,9 @@ backward and sampled memory:
   current allocation. Treat this as a bounded row, not promotion proof.
 - The render/loss microbatch probe confirms dense `[B,H,W,F]` surfaces are the
   bigger structural memory pressure than the current kernel forks. Chunk size 8
-  with chunked backward cut sampled current allocation by about `60%` for
-  `f32_gradcache` while adding about `11%` fixed-render time. It is benchmark
+  with chunked backward cut sampled current allocation by about `60%`; the
+  stable row paid about `14%` fixed-render time, while the shared-background
+  `f32_gradcache` rerun lost its batched-mode speed edge. It is benchmark
   evidence only until wired into the trainer with a parity/quality smoke.
 - Next kernel forks worth trying: a lower-private-pressure `float4` block cache
   rather than a full F32 grad vector; a two-block F64 accumulator only if we

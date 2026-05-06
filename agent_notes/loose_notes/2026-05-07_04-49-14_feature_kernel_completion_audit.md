@@ -178,18 +178,20 @@ Saved 256px fixed-render artifacts:
 Read:
 
 - Stable full-target batched backward: `673.9ms`, sampled current `1412745984`.
-- Stable chunk size 8 chunked backward: `767.5ms`, sampled current `567064064`.
-- Stable chunk size 4 chunked backward: `800.0ms`, sampled current `365766912`.
+- Stable chunk size 8 chunked backward: `770.9ms`, sampled current `567055872`.
+- Stable chunk size 4 chunked backward: `910.1ms`, sampled current `365686016`.
 - `f32_gradcache` full-target batched backward: `649.3ms`, sampled current
   `1412745984`.
-- `f32_gradcache` chunk size 8 chunked backward: `723.2ms`, sampled current
-  `567065088`.
-- `f32_gradcache` chunk size 4 chunked backward: `851.0ms`, sampled current
-  `365769984`.
+- `f32_gradcache` chunk size 8 chunked backward: `1257.7ms`, sampled current
+  `567056896`.
+- `f32_gradcache` chunk size 4 chunked backward: `1528.1ms`, sampled current
+  `365686016`.
 
 Updated interpretation: temporal render/loss microbatching is a larger memory
 lever than the current kernel forks. Chunk size 8 looks like the best first
-tradeoff: about `60%` lower sampled current allocation for an `~11%` timing
-cost on the current `f32_gradcache` row. Real trainer wiring still needs a
-parity/quality smoke because it changes backward accumulation order and may
-interact with background sampling.
+tradeoff on the stable row: about `60%` lower sampled current allocation for an
+`~14%` timing cost. The shared-background rerun made `f32_gradcache` chunked
+backward much slower, so chunking and kernel choice should be benchmarked
+together in the same session before promotion. Real trainer wiring still needs
+a parity/quality smoke because it changes backward accumulation order and must
+preserve shared train-background semantics.
