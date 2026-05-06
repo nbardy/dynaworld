@@ -14,6 +14,7 @@ from train_dynamic_powerfoam_metal import (
     LOSS_DEFAULTS,
     TokenDynamicPowerFoamFeatures,
     apply_training_stage,
+    camera_curriculum_active_frames,
     camera_regularization,
     init_colorizer_rgb_identity,
     load_teacher_camera_to_world,
@@ -322,7 +323,11 @@ def test_token_dynamic_powerfoam_training_controls_disable_repaint_temporarily()
 def test_apply_training_stage_defaults_keep_temporal_controls_on() -> None:
     model = _make_token_model(static_dynamic_split=True, dynamic_cells=4)
     controls = apply_training_stage(model, {"train": {"static_only_steps": 0, "no_repaint_steps": 0}}, 0)
-    assert controls == {"stage_temporal_geometry_scale": 1.0, "stage_temporal_feature_scale": 1.0}
+    assert controls == {
+        "stage_temporal_geometry_scale": 1.0,
+        "stage_temporal_feature_scale": 1.0,
+        "stage_camera_active_frames": 4.0,
+    }
     assert model.temporal_geometry_runtime_scale == 1.0
     assert model.temporal_feature_runtime_scale == 1.0
 
@@ -333,15 +338,48 @@ def test_apply_training_stage_positive_warmup_disables_then_reenables() -> None:
     assert apply_training_stage(model, cfg, 2) == {
         "stage_temporal_geometry_scale": 0.0,
         "stage_temporal_feature_scale": 0.0,
+        "stage_camera_active_frames": 4.0,
     }
     assert apply_training_stage(model, cfg, 3) == {
         "stage_temporal_geometry_scale": 1.0,
         "stage_temporal_feature_scale": 0.0,
+        "stage_camera_active_frames": 4.0,
     }
     assert apply_training_stage(model, cfg, 4) == {
         "stage_temporal_geometry_scale": 1.0,
         "stage_temporal_feature_scale": 1.0,
+        "stage_camera_active_frames": 4.0,
     }
+
+
+def test_camera_curriculum_active_frames_follows_prefix_schedule() -> None:
+    cfg = {
+        "train": {
+            "camera_curriculum_enabled": True,
+            "camera_curriculum_schedule": [[0, 1], [5, 3], [10, 7]],
+        }
+    }
+    assert camera_curriculum_active_frames(cfg, 0, 4) == 1
+    assert camera_curriculum_active_frames(cfg, 4, 4) == 1
+    assert camera_curriculum_active_frames(cfg, 5, 4) == 3
+    assert camera_curriculum_active_frames(cfg, 10, 4) == 4
+
+
+def test_apply_training_stage_sets_camera_decoder_active_prefix() -> None:
+    decoder = _make_camera_decoder()
+    model = _make_token_model(camera_decoder=decoder, static_dynamic_split=True, dynamic_cells=4)
+    cfg = {
+        "train": {
+            "static_only_steps": 0,
+            "no_repaint_steps": 0,
+            "camera_curriculum_enabled": True,
+            "camera_curriculum_schedule": [[0, 1], [3, 3]],
+        }
+    }
+    assert apply_training_stage(model, cfg, 0)["stage_camera_active_frames"] == 1.0
+    assert decoder.active_frame_count == 1
+    assert apply_training_stage(model, cfg, 3)["stage_camera_active_frames"] == 3.0
+    assert decoder.active_frame_count == 3
 
 
 def test_token_dynamic_powerfoam_orbit_video_init_builds_world_space_support() -> None:

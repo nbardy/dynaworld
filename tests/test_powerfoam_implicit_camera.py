@@ -113,6 +113,55 @@ def test_powerfoam_integrated_drone_zero_init_matches_static_base() -> None:
     assert decoder.regularization_terms()["camera_acceleration_l2"].item() == 0.0
 
 
+def test_powerfoam_initial_zoom_delta_is_smooth_and_holds() -> None:
+    decoder = PowerFoamImplicitCameraDecoder(
+        frame_count=5,
+        image_size=8,
+        fov_degrees=60.0,
+        base_radius=2.0,
+        token_dim=8,
+        hidden_dim=16,
+        time_basis_count=2,
+        path_parameterization="integrated_drone",
+        initial_zoom_steps=3,
+        initial_zoom_translation=0.2,
+    )
+
+    state = decoder.camera_state()
+    z_delta = state.translation_delta[:, 2]
+
+    assert torch.allclose(z_delta, torch.tensor([0.0, 0.1, 0.2, 0.2, 0.2]), atol=1.0e-6)
+    assert torch.allclose(decoder.camera_to_world_matrices(torch.tensor([2]))[0], decoder.camera_to_world_matrices()[2])
+
+
+def test_powerfoam_active_frame_count_detaches_future_camera_path() -> None:
+    decoder = PowerFoamImplicitCameraDecoder(
+        frame_count=4,
+        image_size=8,
+        fov_degrees=60.0,
+        base_radius=2.0,
+        token_dim=8,
+        hidden_dim=16,
+        time_basis_count=2,
+        path_parameterization="integrated_drone",
+        drone_max_linear_acceleration_ratio=0.5,
+    )
+    with torch.no_grad():
+        decoder.acceleration_head[-1].bias[3] = 0.5
+
+    decoder.set_active_frame_count(2)
+    active_loss = decoder.camera_to_world_matrices()[1, :3, 3].sum()
+    future_loss = decoder.camera_to_world_matrices()[3, :3, 3].sum()
+    active_grad = torch.autograd.grad(active_loss, decoder.acceleration_head[-1].bias, retain_graph=True)[0]
+    future_grad = torch.autograd.grad(
+        future_loss + 0.0 * decoder.acceleration_head[-1].bias.sum(),
+        decoder.acceleration_head[-1].bias,
+    )[0]
+
+    assert active_grad.abs().sum().item() > 0.0
+    assert future_grad.abs().sum().item() == 0.0
+
+
 def test_powerfoam_integrated_drone_velocity_and_acceleration_move_path() -> None:
     decoder = PowerFoamImplicitCameraDecoder(
         frame_count=5,

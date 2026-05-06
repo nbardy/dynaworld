@@ -135,6 +135,8 @@ CAMERA_DEFAULTS = {
     "drone_max_angular_acceleration_degrees": 90.0,
     "drone_gimbal_max_rotation_degrees": 5.0,
     "drone_body_frame_translation": True,
+    "initial_zoom_steps": 0,
+    "initial_zoom_translation": 0.0,
     "init_teacher_path": None,
     "init_teacher_steps": 0,
     "init_teacher_lr": 0.01,
@@ -177,6 +179,8 @@ TRAIN_DEFAULTS = {
     "temporal_lr_multiplier": 0.35,
     "static_only_steps": 0,
     "no_repaint_steps": 0,
+    "camera_curriculum_enabled": False,
+    "camera_curriculum_schedule": [],
     "seed": 17,
     "device": "mps",
 }
@@ -315,6 +319,7 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         "drone_max_angular_velocity_degrees",
         "drone_max_angular_acceleration_degrees",
         "drone_gimbal_max_rotation_degrees",
+        "initial_zoom_steps",
     ):
         if float(cfg["camera"][key]) < 0.0:
             raise ValueError(f"camera.{key} must be non-negative")
@@ -349,6 +354,28 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("train.static_only_steps must be non-negative")
     if int(cfg["train"]["no_repaint_steps"]) < 0:
         raise ValueError("train.no_repaint_steps must be non-negative")
+    if bool(cfg["train"]["camera_curriculum_enabled"]):
+        schedule = cfg["train"]["camera_curriculum_schedule"]
+        if not isinstance(schedule, list) or len(schedule) == 0:
+            raise ValueError("train.camera_curriculum_schedule must be a non-empty list when enabled")
+        normalized_schedule: list[list[int]] = []
+        previous_step = -1
+        for entry in schedule:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                raise ValueError("train.camera_curriculum_schedule entries must be [step, active_frames]")
+            start_step = int(entry[0])
+            active_frames = int(entry[1])
+            if start_step < 0:
+                raise ValueError("train.camera_curriculum_schedule steps must be non-negative")
+            if active_frames < 1:
+                raise ValueError("train.camera_curriculum_schedule active frame counts must be positive")
+            if start_step <= previous_step:
+                raise ValueError("train.camera_curriculum_schedule steps must be strictly increasing")
+            normalized_schedule.append([start_step, active_frames])
+            previous_step = start_step
+        if normalized_schedule[0][0] != 0:
+            raise ValueError("train.camera_curriculum_schedule must start at step 0")
+        cfg["train"]["camera_curriculum_schedule"] = normalized_schedule
     if str(cfg["colorize"]["view_condition"]) != "none":
         raise ValueError("dynamic_powerfoam_metal colorizer currently supports colorize.view_condition='none' only")
     return cfg
@@ -417,6 +444,8 @@ def build_camera_decoder(cfg: dict[str, Any], *, frame_count: int) -> PowerFoamI
         drone_max_angular_acceleration_degrees=float(camera_cfg["drone_max_angular_acceleration_degrees"]),
         drone_gimbal_max_rotation_degrees=float(camera_cfg["drone_gimbal_max_rotation_degrees"]),
         drone_body_frame_translation=bool(camera_cfg["drone_body_frame_translation"]),
+        initial_zoom_steps=int(camera_cfg["initial_zoom_steps"]),
+        initial_zoom_translation=float(camera_cfg["initial_zoom_translation"]),
         lens_model=str(camera_cfg["lens_model"]),  # type: ignore[arg-type]
         distortion=camera_cfg["distortion"],
     )
@@ -478,6 +507,7 @@ def compact_camera_metrics(camera_decoder: PowerFoamImplicitCameraDecoder | None
         "state_camera_origin_delta_mean": float(origin_delta.mean().detach().cpu()),
         "state_camera_forward_delta_mean": float(forward_delta.mean().detach().cpu()),
         "state_camera_global_residual_l2": float(state.global_residuals.square().mean().detach().cpu()),
+        "state_camera_active_frames": float(camera_decoder.active_frame_count or camera_decoder.frame_count),
     }
     terms = camera_decoder.regularization_terms()
     for key in ("camera_velocity_l2", "camera_acceleration_l2", "camera_gimbal_l2"):
@@ -977,6 +1007,7 @@ class DynamicMetalPowerFoamVideo(nn.Module):
         raw_features = logit_clamped(texel_colors_init.clamp(0.0, 1.0))
         raw_texel_sites = atanh_clamped(texel_sites_init / float(texel_site_scale))
 
+        self.frame_count = int(frame_count)
         self.dynamic_mode = str(dynamic_mode)
         self.dynamic_centers = bool(dynamic_centers)
         self.dynamic_radii = bool(dynamic_radii)
@@ -1505,6 +1536,7 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
         )
         raw_texel_sites = atanh_clamped(texel_sites_init / float(texel_site_scale))
 
+        self.frame_count = int(frame_count)
         self.dynamic_mode = TOKEN_RBF_FEATURE_MODE
         self.dynamic_centers = bool(dynamic_centers)
         self.dynamic_radii = bool(dynamic_radii)
@@ -1986,20 +2018,37 @@ def render_features_to_rgb(
     return alpha.unsqueeze(1).to(device=rgb.device, dtype=rgb.dtype) * rgb + (1.0 - alpha.unsqueeze(1)) * background
 
 
+def camera_curriculum_active_frames(cfg: dict[str, Any], step: int, frame_count: int) -> int:
+    train_cfg = cfg["train"]
+    if not bool(train_cfg.get("camera_curriculum_enabled", False)):
+        return int(frame_count)
+    active_frames = 1
+    for start_step, schedule_frames in train_cfg.get("camera_curriculum_schedule", []):
+        if int(step) < int(start_step):
+            break
+        active_frames = int(schedule_frames)
+    return max(1, min(int(active_frames), int(frame_count)))
+
+
 def apply_training_stage(model: FoamModel, cfg: dict[str, Any], step: int) -> dict[str, float]:
     static_only_steps = int(cfg["train"]["static_only_steps"])
     no_repaint_steps = int(cfg["train"]["no_repaint_steps"])
     static_only = static_only_steps > 0 and int(step) <= static_only_steps
     no_repaint = no_repaint_steps > 0 and int(step) <= no_repaint_steps
+    active_frame_count = camera_curriculum_active_frames(cfg, step, int(getattr(model, "frame_count", 1)))
     controls = {
         "stage_temporal_geometry_scale": 0.0 if static_only else 1.0,
         "stage_temporal_feature_scale": 0.0 if no_repaint else 1.0,
+        "stage_camera_active_frames": float(active_frame_count),
     }
     if hasattr(model, "set_training_controls"):
         model.set_training_controls(
             temporal_geometry_scale=controls["stage_temporal_geometry_scale"],
             temporal_feature_scale=controls["stage_temporal_feature_scale"],
         )
+    camera_decoder = getattr(model, "camera_decoder", None)
+    if camera_decoder is not None and hasattr(camera_decoder, "set_active_frame_count"):
+        camera_decoder.set_active_frame_count(active_frame_count)
     return controls
 
 
@@ -2120,6 +2169,7 @@ def log_artifacts(
             "state_camera_origin_delta_mean": "Camera/OriginDeltaMean",
             "state_camera_forward_delta_mean": "Camera/ForwardDeltaMean",
             "state_camera_global_residual_l2": "Camera/GlobalResidualL2",
+            "state_camera_active_frames": "Camera/ActiveFrames",
             "state_camera_velocity_l2": "Camera/VelocityL2",
             "state_camera_acceleration_l2": "Camera/AccelerationL2",
             "state_camera_gimbal_l2": "Camera/GimbalL2",
@@ -2230,8 +2280,12 @@ def dynamic_geometry_summary(
             "camera_base_path_mode": str(cfg["camera"]["base_path_mode"]),
             "camera_path_parameterization": str(cfg["camera"]["path_parameterization"]),
             "camera_init_teacher_steps": int(cfg["camera"]["init_teacher_steps"]),
+            "camera_initial_zoom_steps": int(cfg["camera"]["initial_zoom_steps"]),
+            "camera_initial_zoom_translation": float(cfg["camera"]["initial_zoom_translation"]),
             "static_only_steps": int(cfg["train"]["static_only_steps"]),
             "no_repaint_steps": int(cfg["train"]["no_repaint_steps"]),
+            "camera_curriculum_enabled": bool(cfg["train"]["camera_curriculum_enabled"]),
+            "camera_curriculum_schedule": cfg["train"]["camera_curriculum_schedule"],
         },
         "initial_eval": initial,
         "final_eval": final,
@@ -2407,7 +2461,12 @@ def run_training(config: dict[str, Any]) -> None:
     progress = trange(1, int(cfg["train"]["steps"]) + 1, desc=f"dynamic_powerfoam_{cfg['model']['dynamic_mode']}")
     for step in progress:
         stage_controls = apply_training_stage(model, cfg, step)
-        frame_indices = torch.randint(0, targets.size(0), (int(cfg["train"]["frames_per_step"]),), device=device)
+        frame_indices = torch.randint(
+            0,
+            int(stage_controls["stage_camera_active_frames"]),
+            (int(cfg["train"]["frames_per_step"]),),
+            device=device,
+        )
         target = targets[frame_indices]
         features, alpha = model(frame_indices)
         background = sample_background(
@@ -2480,6 +2539,7 @@ def run_training(config: dict[str, Any]) -> None:
                     "Timing/ElapsedSeconds": elapsed,
                     "Stage/TemporalGeometryScale": stage_controls["stage_temporal_geometry_scale"],
                     "Stage/TemporalFeatureScale": stage_controls["stage_temporal_feature_scale"],
+                    "Stage/CameraActiveFrames": stage_controls["stage_camera_active_frames"],
                 }
                 if "camera_rotation_l2" in temporal_terms:
                     payload.update(

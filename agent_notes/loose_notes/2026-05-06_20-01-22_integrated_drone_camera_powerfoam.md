@@ -256,3 +256,74 @@ the horizon/caps/LR rather than returning to hardcoded `orbit_yaw`.
    - Keep the main training loop renderer-only.
    - If teacher init helps early PSNR without locking the final path, keep it as
      the Phase 0 bootstrap.
+
+## Progressive Camera-Curriculum Follow-Up
+
+Motivation: the final integrated-drone run proved the head can move the camera,
+but it released the whole 56-frame path at once and collapsed into high-energy
+rotation. The next implementation should make the optimizer solve an easier
+path problem first: frame 0 only, then a short prefix, then the next chunk.
+
+Code changes made:
+
+- `PowerFoamImplicitCameraDecoder` now supports `initial_zoom_steps` and
+  `initial_zoom_translation`. This is a deterministic smoothstep dolly along
+  local camera +z, so zero learned dynamics can begin with a gentle zoom rather
+  than a perfectly static camera.
+- The camera decoder now has `set_active_frame_count()`. During curriculum,
+  suffix camera deltas are detached so camera loss and eval calls do not leak
+  gradients into future frames before their stage opens.
+- `train_dynamic_powerfoam_metal.py` now supports
+  `train.camera_curriculum_enabled` plus
+  `train.camera_curriculum_schedule: [[step, active_frames], ...]`.
+  Training samples frames only from `[0, active_frames)`, and W&B/history log
+  `Stage/CameraActiveFrames` / `Camera/ActiveFrames`.
+- New config:
+  `src/train_configs/local_mac_token_dynamic_powerfoam_features_F32_1024_128dyn_drone_camera_progressive_clamped_youtube_hlaZbH_center_crop_8fps_512_56f_180step.jsonc`
+  with schedule `1 -> 3 -> 7 -> 11 -> 16 -> 24 -> 36 -> 48 -> 56`, a
+  `0.12` local-z zoom over 8 frames, lower camera LR, and tighter drone caps.
+
+Validation:
+
+```text
+/Users/nicholasbardy/git/gsplats_browser/dynaworld/.venv/bin/python -m py_compile \
+  src/train/powerfoam_implicit_camera.py \
+  src/train/train_dynamic_powerfoam_metal.py \
+  tests/test_dynamic_powerfoam_metal.py \
+  tests/test_powerfoam_implicit_camera.py
+
+PYTHONPATH=src/train uv run --with pytest python -m pytest \
+  tests/test_powerfoam_implicit_camera.py \
+  tests/test_dynamic_powerfoam_metal.py -q
+# 39 passed in 9.79s
+```
+
+Trainer smoke:
+
+```text
+PYTHONPATH=src/train WANDB_MODE=disabled .venv/bin/python \
+  src/train/train_dynamic_powerfoam_metal.py /tmp/dynaworld_progressive_camera_smoke.jsonc
+```
+
+The smoke used a patched 4-frame/64px/1-step copy of the progressive config.
+It exercised config resolution, frame-prefix sampling, MPS forward/backward,
+validation render, MP4 save, and summary writing. Step 0 logged
+`state_camera_active_frames=1.0` and the expected zoom-only camera displacement
+(`state_camera_translation_delta_mean=0.06` for the 4-frame subset). Step 1
+completed with `eval_l1=0.04352`, mean PSNR `23.145`, and active frames still
+`1.0`.
+
+First-frame render sanity on the smoke MP4:
+
+```text
+render_step_0001.mp4 signalstats:
+YMIN=14
+YAVG=143.062
+YMAX=216
+SATAVG=11.7725
+```
+
+Interpretation: the implementation path is wired and no longer produces a flat
+green smoke artifact. It still needs the full 512px/56f/180-step run to learn
+whether the progressive schedule actually prevents the late camera spin seen in
+the earlier integrated-drone run.

@@ -51,6 +51,24 @@ def _make_gaussian_time_basis(frame_count: int, basis_count: int, sigma_scale: f
     return basis / basis.sum(dim=-1, keepdim=True).clamp_min(1.0e-8)
 
 
+def _make_initial_zoom_delta(
+    *,
+    frame_count: int,
+    initial_zoom_steps: int,
+    initial_zoom_translation: float,
+) -> torch.Tensor:
+    delta = torch.zeros(int(frame_count), 3, dtype=torch.float32)
+    if initial_zoom_steps <= 0 or initial_zoom_translation == 0.0:
+        return delta
+    count = min(max(int(initial_zoom_steps), 2), int(frame_count))
+    ramp = torch.linspace(0.0, 1.0, count, dtype=torch.float32)
+    smooth = ramp.square() * (3.0 - 2.0 * ramp)
+    delta[:count, 2] = smooth * float(initial_zoom_translation)
+    if count < int(frame_count):
+        delta[count:, 2] = float(initial_zoom_translation)
+    return delta
+
+
 def _as_vector3(value: Sequence[float] | torch.Tensor, *, name: str) -> torch.Tensor:
     tensor = torch.as_tensor(value, dtype=torch.float32).flatten()
     if tensor.numel() != 3:
@@ -158,6 +176,8 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         drone_max_angular_acceleration_degrees: float = 90.0,
         drone_gimbal_max_rotation_degrees: float = 5.0,
         drone_body_frame_translation: bool = True,
+        initial_zoom_steps: int = 0,
+        initial_zoom_translation: float = 0.0,
         lens_model: LensModel = "pinhole",
         distortion: Sequence[float] | torch.Tensor | None = None,
     ) -> None:
@@ -188,6 +208,8 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
             raise ValueError("drone_max_angular_acceleration_degrees must be non-negative.")
         if drone_gimbal_max_rotation_degrees < 0.0:
             raise ValueError("drone_gimbal_max_rotation_degrees must be non-negative.")
+        if initial_zoom_steps < 0:
+            raise ValueError("initial_zoom_steps must be non-negative.")
 
         self.frame_count = int(frame_count)
         self.image_size = int(image_size)
@@ -206,6 +228,9 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         self.drone_max_angular_acceleration_radians = math.radians(float(drone_max_angular_acceleration_degrees))
         self.drone_gimbal_max_rotation_radians = math.radians(float(drone_gimbal_max_rotation_degrees))
         self.drone_body_frame_translation = bool(drone_body_frame_translation)
+        self.initial_zoom_steps = int(initial_zoom_steps)
+        self.initial_zoom_translation = float(initial_zoom_translation)
+        self.active_frame_count: int | None = None
         if self.path_parameterization not in {"pose_delta", "integrated_drone"}:
             raise ValueError("path_parameterization must be 'pose_delta' or 'integrated_drone'.")
 
@@ -247,6 +272,15 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
             else torch.as_tensor(distortion, dtype=torch.float32).flatten(),
             persistent=False,
         )
+        self.register_buffer(
+            "initial_zoom_delta",
+            _make_initial_zoom_delta(
+                frame_count=int(frame_count),
+                initial_zoom_steps=int(initial_zoom_steps),
+                initial_zoom_translation=float(initial_zoom_translation),
+            ),
+            persistent=False,
+        )
 
         image_extent = torch.tensor(float(image_size), dtype=torch.float32)
         fov = torch.tensor(math.radians(float(fov_degrees)), dtype=torch.float32)
@@ -260,6 +294,36 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         self.velocity_head = _zero_init_mlp(int(token_dim), int(hidden_dim), 6)
         self.acceleration_head = _zero_init_mlp(int(token_dim), int(hidden_dim), 6)
         self.gimbal_head = _zero_init_mlp(int(token_dim), int(hidden_dim), 3)
+
+    def set_active_frame_count(self, active_frame_count: int | None) -> None:
+        if active_frame_count is None:
+            self.active_frame_count = None
+            return
+        self.active_frame_count = max(1, min(int(active_frame_count), self.frame_count))
+
+    def _apply_active_frame_count(self, delta: torch.Tensor) -> torch.Tensor:
+        if self.active_frame_count is None or int(self.active_frame_count) >= self.frame_count:
+            return delta
+        active_count = max(1, min(int(self.active_frame_count), int(delta.shape[0])))
+        return torch.cat([delta[:active_count], delta[active_count:].detach()], dim=0)
+
+    def _apply_active_frame_count_to_path(self, path: torch.Tensor) -> torch.Tensor:
+        if self.active_frame_count is None or int(self.active_frame_count) >= self.frame_count:
+            return path
+        active_count = max(1, min(int(self.active_frame_count), int(path.shape[0])))
+        return torch.cat([path[:active_count], path[active_count:].detach()], dim=0)
+
+    def _selected_initial_zoom_delta(
+        self,
+        frame_indices: torch.Tensor | None = None,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        zoom = self.initial_zoom_delta
+        if frame_indices is not None:
+            zoom = zoom[frame_indices.to(device=zoom.device, dtype=torch.long)]
+        return zoom.to(device=device, dtype=dtype)
 
     def _bounded_pose(self, raw: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         rotation = torch.tanh(raw[..., :3]) * self.max_rotation_radians
@@ -283,7 +347,18 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         path_rotation, path_translation = self._bounded_pose(path_raw)
         rotation = global_rotation + path_rotation
         translation = global_translation + path_translation
-        return global_raw, rotation, translation, _pose_delta_matrix(rotation, translation)
+        translation = translation + self._selected_initial_zoom_delta(
+            frame_indices,
+            device=translation.device,
+            dtype=translation.dtype,
+        )
+        if frame_indices is None:
+            rotation = self._apply_active_frame_count_to_path(rotation)
+            translation = self._apply_active_frame_count_to_path(translation)
+        delta = _pose_delta_matrix(rotation, translation)
+        if frame_indices is None:
+            delta = self._apply_active_frame_count(delta)
+        return global_raw, rotation, translation, delta
 
     def _bounded_drone_dynamics(self) -> dict[str, torch.Tensor]:
         global_raw = self.global_head(self.start_camera_token.view(1, -1))
@@ -311,6 +386,7 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         dynamics = self._bounded_drone_dynamics()
         full_delta = self._integrate_drone_delta_matrices(dynamics)
+        full_delta = self._apply_active_frame_count(full_delta)
         if frame_indices is not None:
             full_delta = full_delta[frame_indices.to(device=full_delta.device, dtype=torch.long)]
         rotation = _matrix_to_axis_angle(full_delta[:, :3, :3])
@@ -339,7 +415,12 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
             linear_velocity = damping * linear_velocity + dt * dynamics["linear_acceleration"][frame]
             step_velocity = rotation @ linear_velocity if self.drone_body_frame_translation else linear_velocity
             translation = translation + dt * step_velocity
-        return _transform_from_rotation_matrix(torch.stack(rotations, dim=0), torch.stack(translations, dim=0))
+        translations_tensor = torch.stack(translations, dim=0)
+        translations_tensor = translations_tensor + self.initial_zoom_delta.to(
+            device=translations_tensor.device,
+            dtype=translations_tensor.dtype,
+        )
+        return _transform_from_rotation_matrix(torch.stack(rotations, dim=0), translations_tensor)
 
     def pose_deltas(self, frame_indices: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         global_raw, rotation, translation, _delta = self._delta_components(frame_indices)
