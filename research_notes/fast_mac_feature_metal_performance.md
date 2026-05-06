@@ -411,7 +411,10 @@ This is not yet the true sparse-ID kernel; the current ID-shaped helper
 densifies IDs to `[G,K]`, and the final `[H,W,F]` tensor still exists after the
 lookup. A bounded synthetic probe at `128px/G2048/F32` showed lookup timing wins
 for `K in {4,8,16}` at both `B=4` and `B=16`, but sampled MPS allocation was
-mixed and is not a true peak-memory measurement.
+mixed. A follow-up background-sampled run at `128px/B16/G8192/F32` showed lookup
+still faster and lower sampled current allocation for K=4/8/16; this is better
+evidence than the after-backward allocation read, but still not a Metal hardware
+memory capture.
 
 Relevant official docs:
 
@@ -600,6 +603,8 @@ Useful saved smoke artifacts:
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_256_f64_b16_fixedbin_matrix.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_128_b4_g2048_f32_k4_8_16.jsonl`
 - `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_128_b16_g2048_f32_k4_8_16.jsonl`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_sampled_peak_128_b16_g2048_f32_k4_8_16.jsonl`
+- `benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_sampled_peak_128_b16_g8192_f32_k4_8_16.jsonl`
 - `benchmark_outputs/trainer_phase/multicam256_v6_vs_f32_gradcache_fixed_render_parity_seed0.json`
 - `benchmark_outputs/trainer_phase/multicam256_heldout_v6_vs_f32_gradcache_fixed_render_parity_seed0.json`
 - `benchmark_outputs/trainer_phase/multicam128_train_v6_vs_f32_gradcache_fixed_render_grad_parity_seed0.json`
@@ -719,7 +724,8 @@ speedup.
     direct-vs-lookup parity check for features, alpha, loss, and gradients
     through means/conics/compact weights/lookup/opacities. A bounded synthetic
     benchmark at `128px/G2048/F32` showed timing wins for K=4/8/16 at B=4 and
-    B=16, but the sampled MPS allocation is mixed and the final `[B,H,W,F]`
-    tensor still exists. Do not wire it into trainer dispatch until a real
-    peak-memory or fixed-render trainer profile shows the branch solves the
-    actual F32 pressure.
+    B=16. A sampled-peak follow-up at `128px/B16/G8192/F32` showed timing wins
+    and lower sampled current allocation for K=4/8/16, but the final
+    `[B,H,W,F]` tensor still exists and this is not an Xcode/Metal memory
+    capture. Do not wire it into trainer dispatch until a fixed-render trainer
+    profile shows the branch solves the actual F32 pressure.

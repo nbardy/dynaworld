@@ -107,6 +107,45 @@ Memory read:
 - The final dense `[B,H,W,F]` reconstruction remains live, so this prototype is
   a timing candidate first and not yet proof of the sparse-ID memory thesis.
 
+Sampled-peak update:
+
+The benchmark now also starts a background memory sampler during the measured
+forward/backward window. This is not as authoritative as Xcode/Metal counters,
+but it is better than only reading memory after synchronized backward.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  third_party/fast-mac-gsplat/variants/v6_feature_lookup_experiment/benchmarks/benchmark_lookup_basis.py \
+  --height 128 --width 128 --batch-size 16 --gaussians 2048 \
+  --feature-dim 32 --compact-dims 4,8,16 --warmup 1 --iters 2 \
+  --seed 13 --no-overflow-fallback --memory-sample-interval-ms 0.25 \
+  --jsonl-output benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_sampled_peak_128_b16_g2048_f32_k4_8_16.jsonl
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  third_party/fast-mac-gsplat/variants/v6_feature_lookup_experiment/benchmarks/benchmark_lookup_basis.py \
+  --height 128 --width 128 --batch-size 16 --gaussians 8192 \
+  --feature-dim 32 --compact-dims 4,8,16 --warmup 1 --iters 2 \
+  --seed 14 --no-overflow-fallback --memory-sample-interval-ms 0.25 \
+  --jsonl-output benchmark_outputs/fast_mac_feature_kernels/2026-05-07_lookup_basis_sampled_peak_128_b16_g8192_f32_k4_8_16.jsonl
+```
+
+| Shape | K | Direct mean ms | Lookup mean ms | Direct sampled peak | Lookup sampled peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 128px B16/G2048/F32 | 4 | 158.8 | 81.0 | 152014080 | 117284096 |
+| 128px B16/G2048/F32 | 8 | 159.8 | 96.5 | 154112256 | 124100864 |
+| 128px B16/G2048/F32 | 16 | 112.6 | 75.4 | 151361024 | 167093504 |
+| 128px B16/G8192/F32 | 4 | 225.9 | 96.9 | 244678400 | 166563584 |
+| 128px B16/G8192/F32 | 8 | 179.6 | 117.9 | 278758400 | 210605056 |
+| 128px B16/G8192/F32 | 16 | 184.1 | 155.6 | 282427392 | 198021120 |
+
+Interpretation:
+
+- Lookup stays faster on the larger `G=8192` pressure row.
+- At `G=8192`, sampled current allocation is lower for K=4/8/16.
+- At `G=2048`, K=16 is faster but has higher sampled current allocation than
+  direct, so the memory win is shape-dependent.
+- The driver allocation is still dominated by allocator/page behavior and should
+  not be used as the promotion metric.
+
 Next decisive test:
 
 Use a real peak-memory profiler or trainer fixed-render harness before doing
