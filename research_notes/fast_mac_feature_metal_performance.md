@@ -20,6 +20,8 @@ Date: 2026-05-07
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_block4`
 - F32 fixed-cap binning no-overflow experiment / target-row timing candidate:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_fixedbin`
+- Compact-basis feature lookup prototype:
+  `third_party/fast-mac-gsplat/variants/v6_feature_lookup_experiment`
 - Safe benchmark runner:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/benchmarks/benchmark_matrix.py`
 - Opt-in trainer dispatch:
@@ -399,6 +401,16 @@ gradients". The bridge uses direct `setArg` calls for each buffer rather than
 Metal argument buffers, so shader variants should keep argument lists stable
 unless the host binding is updated in the same fork.
 
+The feature lookup prototype validates one algebraic escape hatch without new
+compositing math: if per-splat F-dimensional features can be represented as
+`feature_weights @ lookup` with compact dimension K, then the rasterizer can
+splat K channels with zero compact background and reconstruct
+`features = compact @ lookup + (1 - alpha) * background` afterward. A tiny MPS
+parity check matched direct full-feature rendering and gradients to MPS noise.
+This is not yet the true sparse-ID kernel; the current ID-shaped helper
+densifies IDs to `[G,K]`, and the final `[H,W,F]` tensor still exists after the
+lookup.
+
 Relevant official docs:
 
 - https://developer.apple.com/documentation/metal/creating-threads-and-threadgroups
@@ -697,3 +709,11 @@ speedup.
     some `256px` rows and costs about `128 MiB` for IDs at
     `512px/B16/tile16/cap2048`. Keep it opt-in until heldout-quality training
     proves the no-overflow path is safe over optimizer time.
+
+11. Compact-basis feature lookup:
+    Prototype built as `v6_feature_lookup_experiment`. It passes a tiny MPS
+    direct-vs-lookup parity check for features, alpha, loss, and gradients
+    through means/conics/compact weights/lookup/opacities. The next gate is
+    bounded timing and peak-memory profiling for `K in {4,8,16}` versus direct
+    `F=32`; do not wire it into trainer dispatch until that profile shows a
+    real memory or time win.
