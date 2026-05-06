@@ -65,6 +65,33 @@ def _pose_delta_matrix(rotation: torch.Tensor, translation: torch.Tensor) -> tor
     return transform
 
 
+def _make_orbit_camera_to_world_path(
+    *,
+    frame_count: int,
+    radius: float,
+    look_at: torch.Tensor,
+    up: torch.Tensor,
+    yaw_start_degrees: float,
+    yaw_end_degrees: float,
+    pitch_degrees: float,
+) -> torch.Tensor:
+    yaw = torch.linspace(math.radians(float(yaw_start_degrees)), math.radians(float(yaw_end_degrees)), int(frame_count))
+    pitch = math.radians(float(pitch_degrees))
+    cos_pitch = math.cos(pitch)
+    offsets = torch.stack(
+        [
+            torch.sin(yaw) * float(radius) * cos_pitch,
+            torch.full_like(yaw, math.sin(pitch) * float(radius)),
+            -torch.cos(yaw) * float(radius) * cos_pitch,
+        ],
+        dim=-1,
+    )
+    return torch.stack(
+        [build_look_at_camera_to_world(look_at + offset, target=look_at, up=up) for offset in offsets],
+        dim=0,
+    )
+
+
 class PowerFoamImplicitCameraDecoder(nn.Module):
     """Lean object-centric implicit camera decoder for dynamic PowerFoam.
 
@@ -91,6 +118,10 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         base_position: Sequence[float] | torch.Tensor | None = None,
         look_at: Sequence[float] | torch.Tensor = (0.0, 0.0, 0.0),
         up: Sequence[float] | torch.Tensor = (0.0, 1.0, 0.0),
+        base_path_mode: str = "static",
+        orbit_yaw_start_degrees: float = 0.0,
+        orbit_yaw_end_degrees: float = 0.0,
+        orbit_pitch_degrees: float = 0.0,
         lens_model: LensModel = "pinhole",
         distortion: Sequence[float] | torch.Tensor | None = None,
     ) -> None:
@@ -115,6 +146,7 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         self.max_rotation_radians = math.radians(float(max_rotation_degrees))
         self.max_translation = float(max_translation)
         self.lens_model = lens_model
+        self.base_path_mode = str(base_path_mode)
 
         position = (
             _as_vector3(base_position, name="base_position")
@@ -123,9 +155,23 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         )
         target = _as_vector3(look_at, name="look_at")
         base_up = _as_vector3(up, name="up")
+        if self.base_path_mode == "static":
+            base_camera_to_world = build_look_at_camera_to_world(position, target=target, up=base_up)
+        elif self.base_path_mode == "orbit_yaw":
+            base_camera_to_world = _make_orbit_camera_to_world_path(
+                frame_count=int(frame_count),
+                radius=float(base_radius),
+                look_at=target,
+                up=base_up,
+                yaw_start_degrees=float(orbit_yaw_start_degrees),
+                yaw_end_degrees=float(orbit_yaw_end_degrees),
+                pitch_degrees=float(orbit_pitch_degrees),
+            )
+        else:
+            raise ValueError("base_path_mode must be 'static' or 'orbit_yaw'.")
         self.register_buffer(
             "base_camera_to_world",
-            build_look_at_camera_to_world(position, target=target, up=base_up),
+            base_camera_to_world,
             persistent=False,
         )
         self.register_buffer(
@@ -171,8 +217,24 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
     def camera_to_world_matrices(self, frame_indices: torch.Tensor | None = None) -> torch.Tensor:
         _global_raw, rotation, translation = self.pose_deltas(frame_indices)
         delta = _pose_delta_matrix(rotation, translation)
-        base = self.base_camera_to_world.to(device=delta.device, dtype=delta.dtype)
-        return base.unsqueeze(0) @ delta
+        return self.base_camera_to_world_matrices(frame_indices, device=delta.device, dtype=delta.dtype) @ delta
+
+    def base_camera_to_world_matrices(
+        self,
+        frame_indices: torch.Tensor | None = None,
+        *,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> torch.Tensor:
+        base = self.base_camera_to_world
+        if base.dim() == 2:
+            count = self.frame_count if frame_indices is None else int(frame_indices.numel())
+            base = base.unsqueeze(0).expand(count, -1, -1)
+        elif frame_indices is not None:
+            base = base[frame_indices.to(device=base.device, dtype=torch.long)]
+        if device is not None or dtype is not None:
+            base = base.to(device=device or base.device, dtype=dtype or base.dtype)
+        return base
 
     def _make_camera(self, camera_to_world: torch.Tensor) -> CameraSpec:
         intrinsics = self.base_intrinsics.to(device=camera_to_world.device, dtype=camera_to_world.dtype)

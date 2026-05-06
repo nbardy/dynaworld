@@ -66,3 +66,28 @@ def test_powerfoam_implicit_camera_nonzero_offset_changes_pose_and_rays() -> Non
     assert terms["camera_translation_l2"].item() > 0.0
     assert metrics["Camera/RotationDeltaMeanDegrees"] > 0.0
     assert metrics["Camera/TranslationDeltaMean"] > 0.0
+
+
+def test_powerfoam_implicit_camera_orbit_base_path_spans_half_turn() -> None:
+    decoder = PowerFoamImplicitCameraDecoder(
+        frame_count=5,
+        image_size=8,
+        fov_degrees=60.0,
+        base_radius=2.0,
+        token_dim=8,
+        hidden_dim=16,
+        time_basis_count=2,
+        base_path_mode="orbit_yaw",
+        orbit_yaw_start_degrees=0.0,
+        orbit_yaw_end_degrees=180.0,
+    )
+
+    camera_to_world = decoder.camera_to_world_matrices()
+    assert torch.allclose(camera_to_world[0, :3, 3], torch.tensor([0.0, 0.0, -2.0]), atol=1.0e-5)
+    assert torch.allclose(camera_to_world[-1, :3, 3], torch.tensor([0.0, 0.0, 2.0]), atol=1.0e-5)
+    assert torch.allclose(camera_to_world[0, :3, 2], torch.tensor([0.0, 0.0, 1.0]), atol=1.0e-5)
+    assert torch.allclose(camera_to_world[-1, :3, 2], torch.tensor([0.0, 0.0, -1.0]), atol=1.0e-5)
+
+    subset = decoder.camera_to_world_matrices(torch.tensor([0, 4]))
+    assert subset.shape == (2, 4, 4)
+    assert torch.allclose(subset[1], camera_to_world[-1], atol=1.0e-6)

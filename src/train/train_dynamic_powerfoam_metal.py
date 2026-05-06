@@ -16,10 +16,14 @@ from colorize import FeatureToColor
 from config_utils import apply_defaults, load_config_file, resolved_config, serialize_config_value
 from powerfoam_direct import (
     POWERFOAM_SOFTPLUS_BETA,
+    PowerFoamInitialization,
+    camera_facing_quaternion,
+    estimate_knn_radii,
     initialize_full_powerfoam_from_video,
     initialize_random_full_powerfoam,
     inverse_softplus,
     logit_clamped,
+    make_image_init_uv,
 )
 from powerfoam_implicit_camera import PowerFoamImplicitCameraDecoder
 from sequence_data import load_video_sequence
@@ -83,9 +87,13 @@ MODEL_DEFAULTS = {
     "token_texel_site_residual_scale": 0.08,
     "token_temporal_residual_scale": 0.2,
     "init_from_video": True,
+    "video_init_mode": "fixed_camera",
     "color_init_mode": "image",
     "image_init_depth": 2.0,
     "image_init_jitter": 0.2,
+    "static_dynamic_split": False,
+    "dynamic_cells": None,
+    "dynamic_cell_fraction": 0.125,
     "xy_extent": 1.25,
     "z_min": 1.0,
     "z_max": 3.25,
@@ -114,6 +122,10 @@ CAMERA_DEFAULTS = {
     "base_position": None,
     "look_at": [0.0, 0.0, 0.0],
     "up": [0.0, 1.0, 0.0],
+    "base_path_mode": "static",
+    "orbit_yaw_start_degrees": 0.0,
+    "orbit_yaw_end_degrees": 0.0,
+    "orbit_pitch_degrees": 0.0,
     "distortion": None,
 }
 RENDER_DEFAULTS = {
@@ -147,6 +159,8 @@ TRAIN_DEFAULTS = {
     "texel_site_lr_multiplier": 0.25,
     "camera_lr_multiplier": 0.25,
     "temporal_lr_multiplier": 0.35,
+    "static_only_steps": 0,
+    "no_repaint_steps": 0,
     "seed": 17,
     "device": "mps",
 }
@@ -214,6 +228,8 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"model.dynamic_mode must be 'per_frame_smooth', 'rbf', or '{TOKEN_RBF_FEATURE_MODE}'")
     if str(cfg["model"]["temporal_init_mode"]) not in {"fit", "mean"}:
         raise ValueError("model.temporal_init_mode must be 'fit' or 'mean'")
+    if str(cfg["model"]["video_init_mode"]) not in {"fixed_camera", "orbit_camera"}:
+        raise ValueError("model.video_init_mode must be 'fixed_camera' or 'orbit_camera'")
     if int(cfg["model"]["time_basis_count"]) < 1:
         raise ValueError("model.time_basis_count must be positive")
     if float(cfg["model"]["time_basis_sigma_scale"]) <= 0.0:
@@ -234,6 +250,10 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("model.num_texel_sites must be positive")
     if float(cfg["model"]["texel_site_scale"]) <= 0.0:
         raise ValueError("model.texel_site_scale must be positive")
+    if cfg["model"]["dynamic_cells"] is not None and int(cfg["model"]["dynamic_cells"]) < 1:
+        raise ValueError("model.dynamic_cells must be positive when set")
+    if not (0.0 < float(cfg["model"]["dynamic_cell_fraction"]) <= 1.0):
+        raise ValueError("model.dynamic_cell_fraction must be in (0, 1]")
     cfg["camera"]["mode"] = str(cfg["camera"]["mode"]).lower()
     cfg["camera"]["enabled"] = bool(cfg["camera"]["enabled"]) or cfg["camera"]["mode"] in {
         "learned_implicit",
@@ -260,6 +280,12 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("camera.max_translation must be non-negative")
     if float(cfg["camera"]["max_translation_ratio"]) < 0.0:
         raise ValueError("camera.max_translation_ratio must be non-negative")
+    if str(cfg["camera"]["base_path_mode"]) not in {"static", "orbit_yaw"}:
+        raise ValueError("camera.base_path_mode must be 'static' or 'orbit_yaw'")
+    if str(cfg["model"]["video_init_mode"]) == "orbit_camera" and str(cfg["camera"]["base_path_mode"]) != "orbit_yaw":
+        raise ValueError("model.video_init_mode='orbit_camera' requires camera.base_path_mode='orbit_yaw'")
+    if str(cfg["model"]["video_init_mode"]) == "orbit_camera" and not bool(cfg["camera"]["enabled"]):
+        raise ValueError("model.video_init_mode='orbit_camera' requires camera.enabled=true")
     background_modes = {"none", "black", "white", "fixed_rgb", "random_rgb"}
     cfg["render"]["train_background_mode"] = str(cfg["render"]["train_background_mode"]).lower()
     cfg["render"]["eval_background_mode"] = str(cfg["render"]["eval_background_mode"]).lower()
@@ -277,6 +303,10 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("train.frames_per_step must be positive")
     if int(cfg["train"]["steps"]) < 1:
         raise ValueError("train.steps must be positive")
+    if int(cfg["train"]["static_only_steps"]) < 0:
+        raise ValueError("train.static_only_steps must be non-negative")
+    if int(cfg["train"]["no_repaint_steps"]) < 0:
+        raise ValueError("train.no_repaint_steps must be non-negative")
     if str(cfg["colorize"]["view_condition"]) != "none":
         raise ValueError("dynamic_powerfoam_metal colorizer currently supports colorize.view_condition='none' only")
     return cfg
@@ -332,6 +362,10 @@ def build_camera_decoder(cfg: dict[str, Any], *, frame_count: int) -> PowerFoamI
         base_position=camera_cfg["base_position"],
         look_at=camera_cfg["look_at"],
         up=camera_cfg["up"],
+        base_path_mode=str(camera_cfg["base_path_mode"]),
+        orbit_yaw_start_degrees=float(camera_cfg["orbit_yaw_start_degrees"]),
+        orbit_yaw_end_degrees=float(camera_cfg["orbit_yaw_end_degrees"]),
+        orbit_pitch_degrees=float(camera_cfg["orbit_pitch_degrees"]),
         lens_model=str(camera_cfg["lens_model"]),  # type: ignore[arg-type]
         distortion=camera_cfg["distortion"],
     )
@@ -371,9 +405,9 @@ def compact_camera_metrics(camera_decoder: PowerFoamImplicitCameraDecoder | None
         return {}
     state = camera_decoder.camera_state()
     c2w = camera_decoder.camera_to_world_matrices()
-    base = camera_decoder.base_camera_to_world.to(device=c2w.device, dtype=c2w.dtype)
-    origin_delta = torch.linalg.vector_norm(c2w[:, :3, 3] - base[:3, 3], dim=-1)
-    forward_delta = torch.linalg.vector_norm(c2w[:, :3, 2] - base[:3, 2], dim=-1)
+    base = camera_decoder.base_camera_to_world_matrices(device=c2w.device, dtype=c2w.dtype)
+    origin_delta = torch.linalg.vector_norm(c2w[:, :3, 3] - base[:, :3, 3], dim=-1)
+    forward_delta = torch.linalg.vector_norm(c2w[:, :3, 2] - base[:, :3, 2], dim=-1)
     return {
         "state_camera_fov_degrees": float(state.fov_degrees.detach().cpu()),
         "state_camera_radius": float(state.radius.detach().cpu()),
@@ -427,6 +461,132 @@ def transform_powerfoam_frame_to_camera(
     return points_camera, normals_camera, tangents_camera, bitangents_camera
 
 
+def transform_points_camera_to_world(points_camera: torch.Tensor, camera_to_world: torch.Tensor) -> torch.Tensor:
+    rotation = camera_to_world[:, :3, :3]
+    translation = camera_to_world[:, :3, 3]
+    return torch.bmm(rotation, points_camera.unsqueeze(-1)).squeeze(-1) + translation
+
+
+def initialize_powerfoam_normals(
+    *,
+    frame_count: int,
+    cell_count: int,
+    dtype: torch.dtype,
+    normal_init_jitter: float,
+    video_init_mode: str,
+    camera_decoder: PowerFoamImplicitCameraDecoder | None,
+    generator: torch.Generator,
+) -> torch.Tensor:
+    if str(video_init_mode) == "orbit_camera":
+        if camera_decoder is None:
+            raise ValueError("model.video_init_mode='orbit_camera' requires camera.enabled=true")
+        source_frame = torch.remainder(torch.arange(int(cell_count), dtype=torch.long), int(frame_count))
+        c2w = camera_decoder.base_camera_to_world_matrices(
+            torch.arange(int(frame_count)),
+            device=torch.device("cpu"),
+            dtype=dtype,
+        )
+        camera_facing = torch.tensor([0.0, 0.0, -1.0], dtype=dtype)
+        init_normals = torch.matmul(c2w[source_frame, :3, :3], camera_facing)
+        init_normals = init_normals.unsqueeze(0).repeat(int(frame_count), 1, 1).contiguous()
+    else:
+        init_normals = torch.zeros(int(frame_count), int(cell_count), 3, dtype=dtype)
+        init_normals[..., 2] = -1.0
+    if float(normal_init_jitter) != 0.0:
+        init_normals = init_normals + float(normal_init_jitter) * torch.randn(
+            int(frame_count),
+            int(cell_count),
+            3,
+            generator=generator,
+            dtype=dtype,
+        )
+    return F.normalize(init_normals, dim=-1, eps=1.0e-6)
+
+
+def initialize_full_powerfoam_from_orbit_video(
+    init_frames: torch.Tensor,
+    *,
+    cell_count: int,
+    xy_extent: float,
+    z_min: float,
+    z_max: float,
+    fov_degrees: float,
+    image_init_depth: float | None,
+    radius_min: float,
+    radius_scale: float,
+    num_texel_sites: int,
+    image_init_jitter: float,
+    texel_site_scale: float,
+    camera_decoder: PowerFoamImplicitCameraDecoder,
+    generator: torch.Generator,
+) -> PowerFoamInitialization:
+    if init_frames.dim() != 4 or init_frames.size(1) != 3:
+        raise ValueError("init_frames must be [T,3,H,W]")
+    frame_count, _channels, height, width = init_frames.shape
+    x01, y01, _rows, _cols = make_image_init_uv(
+        cell_count,
+        jitter_fraction=float(image_init_jitter),
+        generator=generator,
+    )
+    source_frame = torch.remainder(torch.arange(cell_count, dtype=torch.long), int(frame_count))
+    depth = float(camera_decoder.base_radius) if image_init_depth is None else float(image_init_depth)
+    tan_half_fov = math.tan(math.radians(float(fov_degrees)) * 0.5)
+    dirs = torch.stack(
+        [
+            (2.0 * x01 - 1.0) * tan_half_fov,
+            -(2.0 * y01 - 1.0) * tan_half_fov * (float(height) / float(width)),
+            torch.ones_like(x01),
+        ],
+        dim=-1,
+    )
+    dirs = F.normalize(dirs, dim=-1)
+    points_camera = dirs * depth
+    c2w = camera_decoder.base_camera_to_world_matrices(
+        torch.arange(int(frame_count)),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    points = transform_points_camera_to_world(points_camera, c2w[source_frame])
+    points = points.clone()
+    points[:, :2] = points[:, :2].clamp(-0.95 * float(xy_extent), 0.95 * float(xy_extent))
+    points[:, 2] = points[:, 2].clamp(float(z_min) + 1.0e-4, float(z_max) - 1.0e-4)
+    points = points.unsqueeze(0).repeat(int(frame_count), 1, 1).contiguous()
+
+    sample_grid = torch.stack([2.0 * x01 - 1.0, 2.0 * y01 - 1.0], dim=-1).view(1, cell_count, 1, 2)
+    sampled_colors = F.grid_sample(
+        init_frames.detach().cpu().float().clamp(0.0, 1.0),
+        sample_grid.repeat(int(frame_count), 1, 1, 1),
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=False,
+    ).squeeze(-1).permute(0, 2, 1)
+    cell_colors = sampled_colors[source_frame, torch.arange(cell_count)]
+
+    radii = estimate_knn_radii(points, radius_scale=float(radius_scale), radius_min=float(radius_min))
+    quaternions = camera_facing_quaternion(int(frame_count), int(cell_count))
+    site_cols = math.ceil(math.sqrt(float(num_texel_sites)))
+    site_rows = math.ceil(float(num_texel_sites) / float(site_cols))
+    site_x = (torch.arange(site_cols, dtype=torch.float32) + 0.5) / float(site_cols) - 0.5
+    site_y = (torch.arange(site_rows, dtype=torch.float32) + 0.5) / float(site_rows) - 0.5
+    sy, sx = torch.meshgrid(site_y, site_x, indexing="ij")
+    site_offsets = torch.stack([sx.reshape(-1), sy.reshape(-1)], dim=-1)[: int(num_texel_sites)]
+    texel_sites = (0.5 * float(texel_site_scale) * site_offsets).view(1, 1, int(num_texel_sites), 2)
+    texel_sites = texel_sites.repeat(int(frame_count), int(cell_count), 1, 1).contiguous()
+    texel_sv_axis = torch.zeros(int(frame_count), int(cell_count), int(num_texel_sites), 1, 3, dtype=torch.float32)
+    texel_sv_axis[..., 2] = 1.0
+    texel_sv_rgb = (cell_colors.view(1, cell_count, 1, 1, 3).repeat(int(frame_count), 1, int(num_texel_sites), 1, 1) - 0.5)
+    texel_height = torch.zeros(int(frame_count), int(cell_count), int(num_texel_sites), dtype=torch.float32)
+    return PowerFoamInitialization(
+        points=points,
+        radii=radii,
+        quaternions=quaternions,
+        texel_sites=texel_sites,
+        texel_sv_axis=texel_sv_axis,
+        texel_sv_rgb=texel_sv_rgb.contiguous(),
+        texel_height=texel_height,
+    )
+
+
 def make_gaussian_time_basis(frame_count: int, basis_count: int, sigma_scale: float) -> torch.Tensor:
     if frame_count < 1:
         raise ValueError("frame_count must be positive")
@@ -458,7 +618,14 @@ def atanh_clamped(values: torch.Tensor) -> torch.Tensor:
     return torch.atanh(values.clamp(-0.9999, 0.9999))
 
 
-def temporal_motion_metrics(points: torch.Tensor, features: torch.Tensor, *, render_size: int, fov_degrees: float) -> dict[str, float]:
+def temporal_motion_metrics(
+    points: torch.Tensor,
+    features: torch.Tensor,
+    *,
+    render_size: int,
+    fov_degrees: float,
+    camera_to_world: torch.Tensor | None = None,
+) -> dict[str, float]:
     if points.shape[0] < 2:
         return {
             "state_mean_temporal_xy_delta": 0.0,
@@ -466,27 +633,41 @@ def temporal_motion_metrics(points: torch.Tensor, features: torch.Tensor, *, ren
             "state_mean_temporal_z_delta": 0.0,
             "state_mean_temporal_screen_delta_px": 0.0,
             "state_p95_temporal_screen_delta_px": 0.0,
+            "state_temporal_screen_valid_fraction": 0.0,
             "state_mean_temporal_feature_abs_delta": 0.0,
         }
     dxy = torch.linalg.vector_norm(points[1:, :, :2] - points[:-1, :, :2], dim=-1)
     dz = (points[1:, :, 2] - points[:-1, :, 2]).abs()
+    screen_points = points
+    if camera_to_world is not None:
+        world_to_camera = torch.linalg.inv(camera_to_world.to(device=points.device, dtype=points.dtype))
+        screen_points = torch.bmm(points, world_to_camera[:, :3, :3].transpose(1, 2)) + world_to_camera[:, None, :3, 3]
     tan_half_fov = math.tan(math.radians(float(fov_degrees)) * 0.5)
-    z = points[..., 2].clamp_min(1.0e-6)
+    z = screen_points[..., 2]
     screen = torch.stack(
         [
-            0.5 * (points[..., 0] / (z * tan_half_fov) + 1.0) * float(int(render_size) - 1),
-            0.5 * (-points[..., 1] / (z * tan_half_fov) + 1.0) * float(int(render_size) - 1),
+            0.5 * (screen_points[..., 0] / (z.clamp_min(1.0e-6) * tan_half_fov) + 1.0) * float(int(render_size) - 1),
+            0.5 * (-screen_points[..., 1] / (z.clamp_min(1.0e-6) * tan_half_fov) + 1.0) * float(int(render_size) - 1),
         ],
         dim=-1,
     )
     dscreen = torch.linalg.vector_norm(screen[1:] - screen[:-1], dim=-1)
+    valid_screen = (z[1:] > 1.0e-4) & (z[:-1] > 1.0e-4)
+    valid_dscreen = dscreen[valid_screen]
+    if valid_dscreen.numel() == 0:
+        mean_screen_delta = points.new_zeros(())
+        p95_screen_delta = points.new_zeros(())
+    else:
+        mean_screen_delta = valid_dscreen.mean()
+        p95_screen_delta = valid_dscreen.flatten().quantile(0.95)
     feature_delta = (features[1:] - features[:-1]).abs()
     return {
         "state_mean_temporal_xy_delta": float(dxy.mean().cpu()),
         "state_p95_temporal_xy_delta": float(dxy.flatten().quantile(0.95).cpu()),
         "state_mean_temporal_z_delta": float(dz.mean().cpu()),
-        "state_mean_temporal_screen_delta_px": float(dscreen.mean().cpu()),
-        "state_p95_temporal_screen_delta_px": float(dscreen.flatten().quantile(0.95).cpu()),
+        "state_mean_temporal_screen_delta_px": float(mean_screen_delta.cpu()),
+        "state_p95_temporal_screen_delta_px": float(p95_screen_delta.cpu()),
+        "state_temporal_screen_valid_fraction": float(valid_screen.float().mean().cpu()),
         "state_mean_temporal_feature_abs_delta": float(feature_delta.mean().cpu()),
     }
 
@@ -522,6 +703,7 @@ class DynamicMetalPowerFoamVideo(nn.Module):
         num_texel_sites: int,
         texel_site_scale: float,
         color_init_mode: str,
+        video_init_mode: str,
         seed: int,
         init_frames: torch.Tensor | None,
         image_init_depth: float | None,
@@ -545,6 +727,29 @@ class DynamicMetalPowerFoamVideo(nn.Module):
                 num_texel_sites=int(num_texel_sites),
                 sv_dof=1,
                 sv_axis_init=1.0,
+                generator=generator,
+            )
+            init_points = init.points
+            init_radii = init.radii
+            texel_sites_init = init.texel_sites.clamp(-float(texel_site_scale) * 0.999, float(texel_site_scale) * 0.999)
+            texel_colors_init = (init.texel_sv_rgb[..., 0, :] + 0.5).clamp(0.0, 1.0)
+        elif str(video_init_mode) == "orbit_camera":
+            if camera_decoder is None:
+                raise ValueError("model.video_init_mode='orbit_camera' requires camera.enabled=true")
+            init = initialize_full_powerfoam_from_orbit_video(
+                init_frames,
+                cell_count=cell_count,
+                xy_extent=xy_extent,
+                z_min=z_min,
+                z_max=z_max,
+                fov_degrees=fov_degrees,
+                image_init_depth=image_init_depth,
+                radius_min=radius_min,
+                radius_scale=radius_scale,
+                num_texel_sites=int(num_texel_sites),
+                image_init_jitter=image_init_jitter,
+                texel_site_scale=texel_site_scale,
+                camera_decoder=camera_decoder,
                 generator=generator,
             )
             init_points = init.points
@@ -583,17 +788,15 @@ class DynamicMetalPowerFoamVideo(nn.Module):
             )
 
         init_density = torch.full((frame_count, cell_count), max(float(density_init), 1.0e-4))
-        init_normals = torch.zeros(frame_count, cell_count, 3, dtype=init_points.dtype)
-        init_normals[..., 2] = -1.0
-        if float(normal_init_jitter) != 0.0:
-            init_normals = init_normals + float(normal_init_jitter) * torch.randn(
-                frame_count,
-                cell_count,
-                3,
-                generator=generator,
-                dtype=init_points.dtype,
-            )
-        init_normals = F.normalize(init_normals, dim=-1, eps=1.0e-6)
+        init_normals = initialize_powerfoam_normals(
+            frame_count=frame_count,
+            cell_count=cell_count,
+            dtype=init_points.dtype,
+            normal_init_jitter=normal_init_jitter,
+            video_init_mode=video_init_mode,
+            camera_decoder=camera_decoder,
+            generator=generator,
+        )
         init_tangents = stable_tangent_from_normals(init_normals)
 
         raw_xy = atanh_clamped(init_points[..., :2] / float(xy_extent))
@@ -852,7 +1055,16 @@ class DynamicMetalPowerFoamVideo(nn.Module):
                 (texel_sites - self.initial_texel_sites.to(texel_sites.device)).norm(dim=-1).mean().cpu()
             ),
         }
-        metrics.update(temporal_motion_metrics(points, features, render_size=self.render_size, fov_degrees=self.fov_degrees))
+        camera_to_world = None if self.camera_decoder is None else self.camera_decoder.camera_to_world_matrices()
+        metrics.update(
+            temporal_motion_metrics(
+                points,
+                features,
+                render_size=self.render_size,
+                fov_degrees=self.fov_degrees,
+                camera_to_world=camera_to_world,
+            )
+        )
         if self.dynamic_mode == "rbf":
             coeff_abs = [
                 c.abs().mean()
@@ -997,6 +1209,9 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
         token_normal_residual_scale: float,
         token_texel_site_residual_scale: float,
         token_temporal_residual_scale: float,
+        static_dynamic_split: bool,
+        dynamic_cells: int | None,
+        dynamic_cell_fraction: float,
         xy_extent: float,
         z_min: float,
         z_max: float,
@@ -1008,6 +1223,7 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
         num_texel_sites: int,
         texel_site_scale: float,
         color_init_mode: str,
+        video_init_mode: str,
         seed: int,
         init_frames: torch.Tensor | None,
         image_init_depth: float | None,
@@ -1033,6 +1249,29 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
                 num_texel_sites=int(num_texel_sites),
                 sv_dof=1,
                 sv_axis_init=1.0,
+                generator=generator,
+            )
+            init_points = init.points
+            init_radii = init.radii
+            texel_sites_init = init.texel_sites.clamp(-float(texel_site_scale) * 0.999, float(texel_site_scale) * 0.999)
+            texel_colors_init = (init.texel_sv_rgb[..., 0, :] + 0.5).clamp(0.0, 1.0)
+        elif str(video_init_mode) == "orbit_camera":
+            if camera_decoder is None:
+                raise ValueError("model.video_init_mode='orbit_camera' requires camera.enabled=true")
+            init = initialize_full_powerfoam_from_orbit_video(
+                init_frames,
+                cell_count=cell_count,
+                xy_extent=xy_extent,
+                z_min=z_min,
+                z_max=z_max,
+                fov_degrees=fov_degrees,
+                image_init_depth=image_init_depth,
+                radius_min=radius_min,
+                radius_scale=radius_scale,
+                num_texel_sites=int(num_texel_sites),
+                image_init_jitter=image_init_jitter,
+                texel_site_scale=texel_site_scale,
+                camera_decoder=camera_decoder,
                 generator=generator,
             )
             init_points = init.points
@@ -1071,17 +1310,15 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
             )
 
         init_density = torch.full((frame_count, cell_count), max(float(density_init), 1.0e-4))
-        init_normals = torch.zeros(frame_count, cell_count, 3, dtype=init_points.dtype)
-        init_normals[..., 2] = -1.0
-        if float(normal_init_jitter) != 0.0:
-            init_normals = init_normals + float(normal_init_jitter) * torch.randn(
-                frame_count,
-                cell_count,
-                3,
-                generator=generator,
-                dtype=init_points.dtype,
-            )
-        init_normals = F.normalize(init_normals, dim=-1, eps=1.0e-6)
+        init_normals = initialize_powerfoam_normals(
+            frame_count=frame_count,
+            cell_count=cell_count,
+            dtype=init_points.dtype,
+            normal_init_jitter=normal_init_jitter,
+            video_init_mode=video_init_mode,
+            camera_decoder=camera_decoder,
+            generator=generator,
+        )
         init_tangents = stable_tangent_from_normals(init_normals)
 
         raw_xy = atanh_clamped(init_points[..., :2] / float(xy_extent))
@@ -1107,6 +1344,13 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
         self.cell_count = int(cell_count)
         self.feature_dim = int(feature_dim)
         self.num_texel_sites = int(num_texel_sites)
+        self.static_dynamic_split = bool(static_dynamic_split)
+        if dynamic_cells is None:
+            dynamic_cell_count = max(1, int(round(self.cell_count * float(dynamic_cell_fraction))))
+        else:
+            dynamic_cell_count = int(dynamic_cells)
+        self.dynamic_cell_count = min(self.cell_count, max(1, dynamic_cell_count))
+        self.static_cell_count = self.cell_count - self.dynamic_cell_count if self.static_dynamic_split else 0
         self.xy_extent = float(xy_extent)
         self.z_min = float(z_min)
         self.z_max = float(z_max)
@@ -1121,6 +1365,14 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
         self.register_buffer("rays", make_pinhole_rays(render_size, render_size, fov_degrees, torch.device("cpu")), persistent=False)
         basis = make_gaussian_time_basis(frame_count, int(time_basis_count), float(time_basis_sigma_scale))
         self.register_buffer("frame_basis", basis, persistent=False)
+        dynamic_mask = torch.zeros(self.cell_count, dtype=torch.float32)
+        if self.static_dynamic_split:
+            dynamic_mask[self.static_cell_count :] = 1.0
+        else:
+            dynamic_mask[:] = 1.0
+        self.register_buffer("dynamic_cell_mask", dynamic_mask, persistent=False)
+        self.temporal_geometry_runtime_scale = 1.0
+        self.temporal_feature_runtime_scale = 1.0
 
         def fit_init(values: torch.Tensor, *, dynamic: bool) -> tuple[torch.Tensor, torch.Tensor]:
             base, coeff = fit_temporal_basis(values, basis, mode=str(temporal_init_mode))
@@ -1236,6 +1488,17 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
             residuals[name] = value
         return residuals
 
+    def _mask_temporal_coeff(self, name: str, value: torch.Tensor) -> torch.Tensor:
+        if not name.endswith("_coeff"):
+            return value
+        mask = self.dynamic_cell_mask.to(device=value.device, dtype=value.dtype).view(1, self.cell_count, *([1] * (value.dim() - 2)))
+        scale = self.temporal_feature_runtime_scale if name == "raw_features_coeff" else self.temporal_geometry_runtime_scale
+        return value * mask * float(scale)
+
+    def set_training_controls(self, *, temporal_geometry_scale: float, temporal_feature_scale: float) -> None:
+        self.temporal_geometry_runtime_scale = float(temporal_geometry_scale)
+        self.temporal_feature_runtime_scale = float(temporal_feature_scale)
+
     def _raw_state(self) -> dict[str, torch.Tensor]:
         residuals = self._token_residuals()
         names = (
@@ -1256,10 +1519,11 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
             "raw_texel_sites0",
             "raw_texel_sites_coeff",
         )
-        return {
-            name: getattr(self, f"init_{name}") + residuals.get(name, getattr(self, f"init_{name}").new_zeros(()))
-            for name in names
-        }
+        state = {}
+        for name in names:
+            init = getattr(self, f"init_{name}")
+            state[name] = self._mask_temporal_coeff(name, init + residuals.get(name, init.new_zeros(())))
+        return state
 
     def _decode_temporal(self, base: torch.Tensor, coeff: torch.Tensor, frame_indices: torch.Tensor | None) -> torch.Tensor:
         if frame_indices is None:
@@ -1378,8 +1642,22 @@ class TokenDynamicPowerFoamFeatures(nn.Module):
                 (texel_sites - self.initial_texel_sites.to(texel_sites.device)).norm(dim=-1).mean().cpu()
             ),
             "state_token_rms": float(self.tokens.detach().square().mean().sqrt().cpu()),
+            "state_static_cell_count": float(self.static_cell_count),
+            "state_dynamic_cell_count": float(self.dynamic_cell_count if self.static_dynamic_split else self.cell_count),
+            "state_dynamic_cell_fraction": float(
+                (self.dynamic_cell_count if self.static_dynamic_split else self.cell_count) / self.cell_count
+            ),
         }
-        metrics.update(temporal_motion_metrics(points, features, render_size=self.render_size, fov_degrees=self.fov_degrees))
+        camera_to_world = None if self.camera_decoder is None else self.camera_decoder.camera_to_world_matrices()
+        metrics.update(
+            temporal_motion_metrics(
+                points,
+                features,
+                render_size=self.render_size,
+                fov_degrees=self.fov_degrees,
+                camera_to_world=camera_to_world,
+            )
+        )
         state = self._raw_state()
         coeff_abs = [
             state["raw_xy_coeff"].abs().mean(),
@@ -1537,6 +1815,23 @@ def render_features_to_rgb(
     return alpha.unsqueeze(1).to(device=rgb.device, dtype=rgb.dtype) * rgb + (1.0 - alpha.unsqueeze(1)) * background
 
 
+def apply_training_stage(model: FoamModel, cfg: dict[str, Any], step: int) -> dict[str, float]:
+    static_only_steps = int(cfg["train"]["static_only_steps"])
+    no_repaint_steps = int(cfg["train"]["no_repaint_steps"])
+    static_only = static_only_steps > 0 and int(step) <= static_only_steps
+    no_repaint = no_repaint_steps > 0 and int(step) <= no_repaint_steps
+    controls = {
+        "stage_temporal_geometry_scale": 0.0 if static_only else 1.0,
+        "stage_temporal_feature_scale": 0.0 if no_repaint else 1.0,
+    }
+    if hasattr(model, "set_training_controls"):
+        model.set_training_controls(
+            temporal_geometry_scale=controls["stage_temporal_geometry_scale"],
+            temporal_feature_scale=controls["stage_temporal_feature_scale"],
+        )
+    return controls
+
+
 @torch.no_grad()
 def render_all(
     model: FoamModel,
@@ -1640,6 +1935,7 @@ def log_artifacts(
             "State/MeanTemporalZDelta": metrics["state_mean_temporal_z_delta"],
             "State/MeanTemporalScreenDeltaPx": metrics["state_mean_temporal_screen_delta_px"],
             "State/P95TemporalScreenDeltaPx": metrics["state_p95_temporal_screen_delta_px"],
+            "State/TemporalScreenValidFraction": metrics["state_temporal_screen_valid_fraction"],
             "State/MeanTemporalFeatureAbsDelta": metrics["state_mean_temporal_feature_abs_delta"],
             "Preview": make_preview_image(targets[0].cpu(), renders[0], caption=f"step {step}: GT | render"),
         }
@@ -1751,8 +2047,15 @@ def dynamic_geometry_summary(
             "dynamic_features": bool(cfg["model"]["dynamic_features"]),
             "dynamic_normals": bool(cfg["model"]["dynamic_normals"]),
             "dynamic_texel_sites": bool(cfg["model"]["dynamic_texel_sites"]),
+            "static_dynamic_split": bool(cfg["model"]["static_dynamic_split"]),
+            "dynamic_cells": cfg["model"]["dynamic_cells"],
+            "dynamic_cell_fraction": float(cfg["model"]["dynamic_cell_fraction"]),
+            "video_init_mode": str(cfg["model"]["video_init_mode"]),
             "camera_enabled": bool(cfg["camera"]["enabled"]),
             "camera_mode": str(cfg["camera"]["mode"]),
+            "camera_base_path_mode": str(cfg["camera"]["base_path_mode"]),
+            "static_only_steps": int(cfg["train"]["static_only_steps"]),
+            "no_repaint_steps": int(cfg["train"]["no_repaint_steps"]),
         },
         "initial_eval": initial,
         "final_eval": final,
@@ -1761,6 +2064,7 @@ def dynamic_geometry_summary(
         "motion_vs_repaint": {
             "state_mean_temporal_screen_delta_px": float(final.get("state_mean_temporal_screen_delta_px", 0.0)),
             "state_p95_temporal_screen_delta_px": float(final.get("state_p95_temporal_screen_delta_px", 0.0)),
+            "state_temporal_screen_valid_fraction": float(final.get("state_temporal_screen_valid_fraction", 0.0)),
             "state_mean_temporal_feature_abs_delta": float(final.get("state_mean_temporal_feature_abs_delta", 0.0)),
             "eval_mean_temporal_alpha_delta": float(final.get("eval_mean_temporal_alpha_delta", 0.0)),
             "eval_mean_temporal_support_delta": float(final.get("eval_mean_temporal_support_delta", 0.0)),
@@ -1836,6 +2140,7 @@ def run_training(config: dict[str, Any]) -> None:
         "num_texel_sites": int(cfg["model"]["num_texel_sites"]),
         "texel_site_scale": float(cfg["model"]["texel_site_scale"]),
         "color_init_mode": str(cfg["model"]["color_init_mode"]),
+        "video_init_mode": str(cfg["model"]["video_init_mode"]),
         "seed": int(cfg["train"]["seed"]),
         "init_frames": targets.detach().cpu() if bool(cfg["model"]["init_from_video"]) else None,
         "image_init_depth": None if cfg["model"]["image_init_depth"] is None else float(cfg["model"]["image_init_depth"]),
@@ -1862,6 +2167,9 @@ def run_training(config: dict[str, Any]) -> None:
             token_normal_residual_scale=float(cfg["model"]["token_normal_residual_scale"]),
             token_texel_site_residual_scale=float(cfg["model"]["token_texel_site_residual_scale"]),
             token_temporal_residual_scale=float(cfg["model"]["token_temporal_residual_scale"]),
+            static_dynamic_split=bool(cfg["model"]["static_dynamic_split"]),
+            dynamic_cells=None if cfg["model"]["dynamic_cells"] is None else int(cfg["model"]["dynamic_cells"]),
+            dynamic_cell_fraction=float(cfg["model"]["dynamic_cell_fraction"]),
         ).to(device)
     else:
         model = DynamicMetalPowerFoamVideo(
@@ -1898,6 +2206,7 @@ def run_training(config: dict[str, Any]) -> None:
             "steps": int(cfg["train"]["steps"]),
         }
     )
+    apply_training_stage(model, cfg, 0)
     initial_metrics = log_artifacts(model, colorizer, targets, cfg, 0, output_dir, wandb_run)
     initial_record = {"kind": "eval", "step": 0, **initial_metrics}
     metrics_history.append(initial_record)
@@ -1907,6 +2216,7 @@ def run_training(config: dict[str, Any]) -> None:
     start_time = time.perf_counter()
     progress = trange(1, int(cfg["train"]["steps"]) + 1, desc=f"dynamic_powerfoam_{cfg['model']['dynamic_mode']}")
     for step in progress:
+        stage_controls = apply_training_stage(model, cfg, step)
         frame_indices = torch.randint(0, targets.size(0), (int(cfg["train"]["frames_per_step"]),), device=device)
         target = targets[frame_indices]
         features, alpha = model(frame_indices)
@@ -1950,6 +2260,7 @@ def run_training(config: dict[str, Any]) -> None:
                 "mse": float(mse.detach().cpu()),
                 "temporal": float(temporal_loss.detach().cpu()),
                 "elapsed_s": elapsed,
+                **stage_controls,
             }
             for key in (
                 "camera_rotation_l2",
@@ -1974,6 +2285,8 @@ def run_training(config: dict[str, Any]) -> None:
                     "Train/TemporalCenterAccel": float(temporal_terms["temporal_center_accel"].detach().cpu()),
                     "Train/TemporalCoeffL2": float(temporal_terms["temporal_coeff_l2"].detach().cpu()),
                     "Timing/ElapsedSeconds": elapsed,
+                    "Stage/TemporalGeometryScale": stage_controls["stage_temporal_geometry_scale"],
+                    "Stage/TemporalFeatureScale": stage_controls["stage_temporal_feature_scale"],
                 }
                 if "camera_rotation_l2" in temporal_terms:
                     payload.update(

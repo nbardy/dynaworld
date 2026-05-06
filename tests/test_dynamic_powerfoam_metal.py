@@ -12,9 +12,11 @@ from train_dynamic_powerfoam_metal import (
     DynamicMetalPowerFoamVideo,
     LOSS_DEFAULTS,
     TokenDynamicPowerFoamFeatures,
+    apply_training_stage,
     init_colorizer_rgb_identity,
     make_raster_config,
     render_features_to_rgb,
+    resolve_config,
     sample_background,
     temporal_motion_metrics,
 )
@@ -31,6 +33,21 @@ def _make_camera_decoder() -> PowerFoamImplicitCameraDecoder:
         token_dim=8,
         hidden_dim=16,
         time_basis_count=3,
+    )
+
+
+def _make_orbit_camera_decoder() -> PowerFoamImplicitCameraDecoder:
+    return PowerFoamImplicitCameraDecoder(
+        frame_count=4,
+        image_size=8,
+        fov_degrees=55.0,
+        base_radius=3.0,
+        token_dim=8,
+        hidden_dim=16,
+        time_basis_count=3,
+        base_path_mode="orbit_yaw",
+        orbit_yaw_start_degrees=0.0,
+        orbit_yaw_end_degrees=180.0,
     )
 
 
@@ -68,6 +85,7 @@ def _make_model(
         num_texel_sites=4,
         texel_site_scale=0.5,
         color_init_mode="image",
+        video_init_mode="fixed_camera",
         seed=17,
         init_frames=frames,
         image_init_depth=2.0,
@@ -89,6 +107,12 @@ def _make_model(
 def _make_token_model(
     *,
     camera_decoder: PowerFoamImplicitCameraDecoder | None = None,
+    static_dynamic_split: bool = False,
+    dynamic_cells: int | None = None,
+    video_init_mode: str = "fixed_camera",
+    z_min: float = 1.0,
+    z_max: float = 3.25,
+    image_init_depth: float = 2.0,
 ) -> TokenDynamicPowerFoamFeatures:
     frames = torch.rand(4, 3, 8, 8)
     return TokenDynamicPowerFoamFeatures(
@@ -123,9 +147,12 @@ def _make_token_model(
         token_normal_residual_scale=0.08,
         token_texel_site_residual_scale=0.08,
         token_temporal_residual_scale=0.2,
+        static_dynamic_split=static_dynamic_split,
+        dynamic_cells=dynamic_cells,
+        dynamic_cell_fraction=0.125,
         xy_extent=1.25,
-        z_min=1.0,
-        z_max=3.25,
+        z_min=z_min,
+        z_max=z_max,
         radius_init=0.18,
         radius_min=0.03,
         radius_scale=0.72,
@@ -134,9 +161,10 @@ def _make_token_model(
         num_texel_sites=4,
         texel_site_scale=0.5,
         color_init_mode="image",
+        video_init_mode=video_init_mode,
         seed=17,
         init_frames=frames,
-        image_init_depth=2.0,
+        image_init_depth=image_init_depth,
         image_init_jitter=0.1,
         raster_config=make_raster_config(
             {
@@ -263,6 +291,106 @@ def test_token_dynamic_powerfoam_features_decode_has_token_grads() -> None:
     assert model.tokens.grad is not None
     assert any(param.grad is not None for param in model.decoder.parameters())
     assert terms["temporal_coeff_l2"].item() >= 0.0
+
+
+def test_token_dynamic_powerfoam_static_dynamic_split_masks_static_temporal_coefficients() -> None:
+    model = _make_token_model(static_dynamic_split=True, dynamic_cells=4)
+    assert model.static_cell_count == 12
+    frame_indices = torch.tensor([0, 1])
+    points, _radii, _densities, features, _normals = model.decoded_parameters(frame_indices)
+    assert torch.allclose(points[0, : model.static_cell_count], points[1, : model.static_cell_count], atol=1.0e-6)
+    assert torch.allclose(features[0, : model.static_cell_count], features[1, : model.static_cell_count], atol=1.0e-6)
+
+
+def test_token_dynamic_powerfoam_training_controls_disable_repaint_temporarily() -> None:
+    model = _make_token_model(static_dynamic_split=True, dynamic_cells=4)
+    with torch.no_grad():
+        model.init_raw_xy_coeff[0, model.static_cell_count :, 0] = 0.25
+        model.init_raw_features_coeff[0, model.static_cell_count :, :, :] = 0.25
+    model.set_training_controls(temporal_geometry_scale=1.0, temporal_feature_scale=0.0)
+    frame_indices = torch.tensor([0, 1])
+    points, _radii, _densities, features, _normals = model.decoded_parameters(frame_indices)
+    dynamic_slice = slice(model.static_cell_count, None)
+    assert not torch.allclose(points[0, dynamic_slice], points[1, dynamic_slice])
+    assert torch.allclose(features[0, dynamic_slice], features[1, dynamic_slice], atol=1.0e-6)
+
+
+def test_apply_training_stage_defaults_keep_temporal_controls_on() -> None:
+    model = _make_token_model(static_dynamic_split=True, dynamic_cells=4)
+    controls = apply_training_stage(model, {"train": {"static_only_steps": 0, "no_repaint_steps": 0}}, 0)
+    assert controls == {"stage_temporal_geometry_scale": 1.0, "stage_temporal_feature_scale": 1.0}
+    assert model.temporal_geometry_runtime_scale == 1.0
+    assert model.temporal_feature_runtime_scale == 1.0
+
+
+def test_apply_training_stage_positive_warmup_disables_then_reenables() -> None:
+    model = _make_token_model(static_dynamic_split=True, dynamic_cells=4)
+    cfg = {"train": {"static_only_steps": 2, "no_repaint_steps": 3}}
+    assert apply_training_stage(model, cfg, 2) == {
+        "stage_temporal_geometry_scale": 0.0,
+        "stage_temporal_feature_scale": 0.0,
+    }
+    assert apply_training_stage(model, cfg, 3) == {
+        "stage_temporal_geometry_scale": 1.0,
+        "stage_temporal_feature_scale": 0.0,
+    }
+    assert apply_training_stage(model, cfg, 4) == {
+        "stage_temporal_geometry_scale": 1.0,
+        "stage_temporal_feature_scale": 1.0,
+    }
+
+
+def test_token_dynamic_powerfoam_orbit_video_init_builds_world_space_support() -> None:
+    decoder = _make_orbit_camera_decoder()
+    model = _make_token_model(
+        camera_decoder=decoder,
+        static_dynamic_split=True,
+        dynamic_cells=4,
+        video_init_mode="orbit_camera",
+        z_min=-1.6,
+        z_max=1.6,
+        image_init_depth=3.0,
+    )
+    points, _radii, _densities, features, _normals = model.decoded_parameters(torch.tensor([0, 3]))
+    assert points.shape == (2, 16, 3)
+    assert features.shape == (2, 16, 4, 8)
+    assert float(points[..., 2].detach().min()) >= -1.6
+    assert float(points[..., 2].detach().max()) <= 1.6
+    assert torch.allclose(points[0, : model.static_cell_count], points[1, : model.static_cell_count], atol=1.0e-6)
+
+
+def test_token_dynamic_powerfoam_orbit_normals_face_source_camera() -> None:
+    decoder = _make_orbit_camera_decoder()
+    model = _make_token_model(
+        camera_decoder=decoder,
+        static_dynamic_split=True,
+        dynamic_cells=4,
+        video_init_mode="orbit_camera",
+        z_min=-1.6,
+        z_max=1.6,
+        image_init_depth=3.0,
+    )
+    source_frame = torch.remainder(torch.arange(model.cell_count, dtype=torch.long), 4)
+    c2w = decoder.base_camera_to_world_matrices(torch.arange(4))
+    w2c = torch.linalg.inv(c2w[source_frame])
+    camera_normals = torch.bmm(w2c[:, :3, :3], model.initial_normals[0].unsqueeze(-1)).squeeze(-1)
+    expected = torch.tensor([0.0, 0.0, -1.0], dtype=camera_normals.dtype).expand_as(camera_normals)
+    assert torch.allclose(camera_normals, expected, atol=1.0e-5)
+
+
+def test_resolve_config_requires_orbit_camera_init_to_use_orbit_base_path() -> None:
+    with pytest.raises(ValueError, match="base_path_mode='orbit_yaw'"):
+        resolve_config(
+            {
+                "data": {},
+                "model": {"video_init_mode": "orbit_camera"},
+                "camera": {"enabled": True, "mode": "learned_implicit", "base_path_mode": "static"},
+                "render": {},
+                "train": {},
+                "losses": {},
+                "logging": {},
+            }
+        )
 
 
 def test_token_dynamic_powerfoam_features_optimizer_groups_are_lean() -> None:
@@ -416,6 +544,26 @@ def test_temporal_motion_metrics_report_screen_motion() -> None:
     assert metrics["state_mean_temporal_xy_delta"] > 0.0
     assert metrics["state_mean_temporal_screen_delta_px"] > 0.0
     assert metrics["state_mean_temporal_feature_abs_delta"] == 0.25
+
+
+def test_temporal_motion_metrics_projects_through_camera_path() -> None:
+    points = torch.tensor([[[0.0, 0.0, 2.0]], [[0.0, 0.0, 2.0]]], dtype=torch.float32)
+    features = torch.zeros(2, 1, 1, 3)
+    camera_to_world = torch.eye(4).repeat(2, 1, 1)
+    camera_to_world[1, 0, 3] = 0.25
+
+    fixed_metrics = temporal_motion_metrics(points, features, render_size=64, fov_degrees=55.0)
+    camera_metrics = temporal_motion_metrics(
+        points,
+        features,
+        render_size=64,
+        fov_degrees=55.0,
+        camera_to_world=camera_to_world,
+    )
+
+    assert fixed_metrics["state_mean_temporal_screen_delta_px"] == 0.0
+    assert camera_metrics["state_mean_temporal_screen_delta_px"] > 0.0
+    assert camera_metrics["state_temporal_screen_valid_fraction"] == 1.0
 
 
 def test_token_dynamic_powerfoam_features_mps_raster_backward_smoke() -> None:
