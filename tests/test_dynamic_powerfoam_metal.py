@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -13,8 +14,11 @@ from train_dynamic_powerfoam_metal import (
     LOSS_DEFAULTS,
     TokenDynamicPowerFoamFeatures,
     apply_training_stage,
+    camera_regularization,
     init_colorizer_rgb_identity,
+    load_teacher_camera_to_world,
     make_raster_config,
+    prefit_camera_decoder_from_teacher,
     render_features_to_rgb,
     resolve_config,
     sample_background,
@@ -391,6 +395,120 @@ def test_resolve_config_requires_orbit_camera_init_to_use_orbit_base_path() -> N
                 "logging": {},
             }
         )
+
+
+def test_resolve_config_accepts_integrated_drone_camera() -> None:
+    cfg = resolve_config(
+        {
+            "data": {},
+            "model": {},
+            "camera": {
+                "enabled": True,
+                "mode": "learned_implicit",
+                "path_parameterization": "integrated_drone",
+                "drone_integration_horizon": 2.0,
+            },
+            "render": {},
+            "train": {},
+            "losses": {},
+            "logging": {},
+        }
+    )
+    assert cfg["camera"]["path_parameterization"] == "integrated_drone"
+    assert cfg["camera"]["drone_integration_horizon"] == 2.0
+
+
+def test_integrated_drone_camera_regularization_exposes_dynamics_terms() -> None:
+    decoder = PowerFoamImplicitCameraDecoder(
+        frame_count=4,
+        image_size=8,
+        fov_degrees=55.0,
+        base_radius=3.0,
+        token_dim=8,
+        hidden_dim=16,
+        time_basis_count=3,
+        path_parameterization="integrated_drone",
+    )
+    with torch.no_grad():
+        decoder.velocity_head[-1].bias[3] = 0.5
+        decoder.acceleration_head[-1].bias[4] = 0.5
+        decoder.gimbal_head[-1].bias[2] = 0.5
+
+    loss, terms = camera_regularization(
+        decoder,
+        {
+            **LOSS_DEFAULTS,
+            "camera_velocity_weight": 1.0,
+            "camera_acceleration_weight": 1.0,
+            "camera_gimbal_weight": 1.0,
+        },
+    )
+
+    assert loss is not None
+    assert terms["camera_velocity_l2"].item() > 0.0
+    assert terms["camera_acceleration_l2"].item() > 0.0
+    assert terms["camera_gimbal_l2"].item() > 0.0
+    assert loss.item() > 0.0
+
+
+def test_load_teacher_camera_to_world_normalizes_first_pose(tmp_path: Path) -> None:
+    first = torch.eye(4)
+    first[0, 3] = 2.0
+    second = first.clone()
+    second[1, 3] = 3.0
+    teacher_path = tmp_path / "teacher_cameras.json"
+    teacher_path.write_text(
+        json.dumps([{"camera_to_world": first.tolist()}, {"camera_to_world": second.tolist()}]),
+        encoding="utf-8",
+    )
+
+    teacher = load_teacher_camera_to_world(
+        {"init_teacher_path": teacher_path, "init_teacher_normalize_to_first": True},
+        frame_count=2,
+    )
+
+    assert teacher is not None
+    assert torch.allclose(teacher[0], torch.eye(4), atol=1.0e-6)
+    assert torch.allclose(teacher[1, :3, 3], torch.tensor([0.0, 3.0, 0.0]), atol=1.0e-6)
+
+
+def test_prefit_camera_decoder_from_teacher_writes_metrics(tmp_path: Path) -> None:
+    decoder = PowerFoamImplicitCameraDecoder(
+        frame_count=3,
+        image_size=8,
+        fov_degrees=55.0,
+        base_radius=3.0,
+        token_dim=8,
+        hidden_dim=16,
+        time_basis_count=3,
+        path_parameterization="integrated_drone",
+    )
+    teacher_path = tmp_path / "teacher_cameras.json"
+    teacher_path.write_text(
+        json.dumps([{"camera_to_world": matrix.tolist()} for matrix in decoder.camera_to_world_matrices()]),
+        encoding="utf-8",
+    )
+
+    metrics = prefit_camera_decoder_from_teacher(
+        decoder,
+        {
+            "camera": {
+                "init_teacher_path": teacher_path,
+                "init_teacher_steps": 1,
+                "init_teacher_lr": 0.01,
+                "init_teacher_rotation_weight": 1.0,
+                "init_teacher_translation_weight": 1.0,
+                "init_teacher_velocity_weight": 0.25,
+                "init_teacher_normalize_to_first": False,
+            }
+        },
+        frame_count=3,
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+    )
+
+    assert metrics["teacher_camera_init_steps"] == 1.0
+    assert (tmp_path / "camera_teacher_init_metrics.json").exists()
 
 
 def test_token_dynamic_powerfoam_features_optimizer_groups_are_lean() -> None:

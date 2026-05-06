@@ -65,6 +65,33 @@ def _pose_delta_matrix(rotation: torch.Tensor, translation: torch.Tensor) -> tor
     return transform
 
 
+def _transform_from_rotation_matrix(rotation: torch.Tensor, translation: torch.Tensor) -> torch.Tensor:
+    transform = torch.eye(4, device=rotation.device, dtype=rotation.dtype).unsqueeze(0).repeat(rotation.shape[0], 1, 1)
+    transform[:, :3, :3] = rotation
+    transform[:, :3, 3] = translation
+    return transform
+
+
+def _matrix_to_axis_angle(rotation: torch.Tensor) -> torch.Tensor:
+    trace = rotation.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+    cos_angle = ((trace - 1.0) * 0.5).clamp(-1.0 + 1.0e-6, 1.0 - 1.0e-6)
+    angle = torch.acos(cos_angle)
+    vee = torch.stack(
+        [
+            rotation[:, 2, 1] - rotation[:, 1, 2],
+            rotation[:, 0, 2] - rotation[:, 2, 0],
+            rotation[:, 1, 0] - rotation[:, 0, 1],
+        ],
+        dim=-1,
+    )
+    scale = angle / (2.0 * torch.sin(angle).clamp_min(1.0e-6))
+    axis_angle = vee * scale.unsqueeze(-1)
+    small = angle < 1.0e-4
+    if torch.any(small):
+        axis_angle[small] = 0.5 * vee[small]
+    return axis_angle
+
+
 def _make_orbit_camera_to_world_path(
     *,
     frame_count: int,
@@ -119,9 +146,18 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         look_at: Sequence[float] | torch.Tensor = (0.0, 0.0, 0.0),
         up: Sequence[float] | torch.Tensor = (0.0, 1.0, 0.0),
         base_path_mode: str = "static",
+        path_parameterization: str = "pose_delta",
         orbit_yaw_start_degrees: float = 0.0,
         orbit_yaw_end_degrees: float = 0.0,
         orbit_pitch_degrees: float = 0.0,
+        drone_integration_horizon: float = 1.0,
+        drone_damping: float = 0.98,
+        drone_max_linear_velocity_ratio: float = 0.35,
+        drone_max_linear_acceleration_ratio: float = 0.7,
+        drone_max_angular_velocity_degrees: float = 45.0,
+        drone_max_angular_acceleration_degrees: float = 90.0,
+        drone_gimbal_max_rotation_degrees: float = 5.0,
+        drone_body_frame_translation: bool = True,
         lens_model: LensModel = "pinhole",
         distortion: Sequence[float] | torch.Tensor | None = None,
     ) -> None:
@@ -138,6 +174,20 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
             raise ValueError("max_rotation_degrees must be non-negative.")
         if max_translation < 0.0:
             raise ValueError("max_translation must be non-negative.")
+        if drone_integration_horizon <= 0.0:
+            raise ValueError("drone_integration_horizon must be positive.")
+        if not (0.0 <= drone_damping <= 1.0):
+            raise ValueError("drone_damping must be in [0, 1].")
+        if drone_max_linear_velocity_ratio < 0.0:
+            raise ValueError("drone_max_linear_velocity_ratio must be non-negative.")
+        if drone_max_linear_acceleration_ratio < 0.0:
+            raise ValueError("drone_max_linear_acceleration_ratio must be non-negative.")
+        if drone_max_angular_velocity_degrees < 0.0:
+            raise ValueError("drone_max_angular_velocity_degrees must be non-negative.")
+        if drone_max_angular_acceleration_degrees < 0.0:
+            raise ValueError("drone_max_angular_acceleration_degrees must be non-negative.")
+        if drone_gimbal_max_rotation_degrees < 0.0:
+            raise ValueError("drone_gimbal_max_rotation_degrees must be non-negative.")
 
         self.frame_count = int(frame_count)
         self.image_size = int(image_size)
@@ -147,6 +197,17 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         self.max_translation = float(max_translation)
         self.lens_model = lens_model
         self.base_path_mode = str(base_path_mode)
+        self.path_parameterization = str(path_parameterization)
+        self.drone_integration_horizon = float(drone_integration_horizon)
+        self.drone_damping = float(drone_damping)
+        self.drone_max_linear_velocity = float(base_radius) * float(drone_max_linear_velocity_ratio)
+        self.drone_max_linear_acceleration = float(base_radius) * float(drone_max_linear_acceleration_ratio)
+        self.drone_max_angular_velocity_radians = math.radians(float(drone_max_angular_velocity_degrees))
+        self.drone_max_angular_acceleration_radians = math.radians(float(drone_max_angular_acceleration_degrees))
+        self.drone_gimbal_max_rotation_radians = math.radians(float(drone_gimbal_max_rotation_degrees))
+        self.drone_body_frame_translation = bool(drone_body_frame_translation)
+        if self.path_parameterization not in {"pose_delta", "integrated_drone"}:
+            raise ValueError("path_parameterization must be 'pose_delta' or 'integrated_drone'.")
 
         position = (
             _as_vector3(base_position, name="base_position")
@@ -196,27 +257,104 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
         self.time_basis_tokens = nn.Parameter(torch.randn(int(time_basis_count), int(token_dim)) * float(token_init_std))
         self.global_head = _zero_init_mlp(int(token_dim), int(hidden_dim), 6)
         self.offset_head = _zero_init_mlp(int(token_dim), int(hidden_dim), 6)
+        self.velocity_head = _zero_init_mlp(int(token_dim), int(hidden_dim), 6)
+        self.acceleration_head = _zero_init_mlp(int(token_dim), int(hidden_dim), 6)
+        self.gimbal_head = _zero_init_mlp(int(token_dim), int(hidden_dim), 3)
 
     def _bounded_pose(self, raw: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         rotation = torch.tanh(raw[..., :3]) * self.max_rotation_radians
         translation = torch.tanh(raw[..., 3:6]) * self.max_translation
         return rotation, translation
 
-    def pose_deltas(self, frame_indices: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _temporal_tokens(self, frame_indices: torch.Tensor | None = None) -> torch.Tensor:
         basis = self.time_basis
         if frame_indices is not None:
             basis = basis[frame_indices.to(device=basis.device, dtype=torch.long)]
         temporal_token = basis.to(dtype=self.time_basis_tokens.dtype) @ self.time_basis_tokens
-        temporal_token = temporal_token + self.start_camera_token.view(1, -1)
-        path_raw = self.offset_head(temporal_token)
+        return temporal_token + self.start_camera_token.view(1, -1)
+
+    def _pose_delta_components(
+        self,
+        frame_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        path_raw = self.offset_head(self._temporal_tokens(frame_indices))
         global_raw = self.global_head(self.start_camera_token.view(1, -1))
         global_rotation, global_translation = self._bounded_pose(global_raw)
         path_rotation, path_translation = self._bounded_pose(path_raw)
-        return global_raw, global_rotation + path_rotation, global_translation + path_translation
+        rotation = global_rotation + path_rotation
+        translation = global_translation + path_translation
+        return global_raw, rotation, translation, _pose_delta_matrix(rotation, translation)
+
+    def _bounded_drone_dynamics(self) -> dict[str, torch.Tensor]:
+        global_raw = self.global_head(self.start_camera_token.view(1, -1))
+        start_rotation, start_translation = self._bounded_pose(global_raw)
+        velocity_raw = self.velocity_head(self.start_camera_token.view(1, -1))
+        temporal_tokens = self._temporal_tokens()
+        acceleration_raw = self.acceleration_head(temporal_tokens)
+        gimbal_raw = self.gimbal_head(temporal_tokens)
+        return {
+            "global_raw": global_raw,
+            "start_rotation": start_rotation,
+            "start_translation": start_translation,
+            "velocity_raw": velocity_raw,
+            "angular_velocity": torch.tanh(velocity_raw[..., :3]) * self.drone_max_angular_velocity_radians,
+            "linear_velocity": torch.tanh(velocity_raw[..., 3:6]) * self.drone_max_linear_velocity,
+            "acceleration_raw": acceleration_raw,
+            "angular_acceleration": torch.tanh(acceleration_raw[..., :3]) * self.drone_max_angular_acceleration_radians,
+            "linear_acceleration": torch.tanh(acceleration_raw[..., 3:6]) * self.drone_max_linear_acceleration,
+            "gimbal_rotation": torch.tanh(gimbal_raw) * self.drone_gimbal_max_rotation_radians,
+        }
+
+    def _drone_delta_components(
+        self,
+        frame_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        dynamics = self._bounded_drone_dynamics()
+        full_delta = self._integrate_drone_delta_matrices(dynamics)
+        if frame_indices is not None:
+            full_delta = full_delta[frame_indices.to(device=full_delta.device, dtype=torch.long)]
+        rotation = _matrix_to_axis_angle(full_delta[:, :3, :3])
+        translation = full_delta[:, :3, 3]
+        return dynamics["global_raw"], rotation, translation, full_delta
+
+    def _integrate_drone_delta_matrices(self, dynamics: dict[str, torch.Tensor]) -> torch.Tensor:
+        step_count = max(self.frame_count - 1, 1)
+        dt = float(self.drone_integration_horizon) / float(step_count)
+        damping = float(self.drone_damping)
+
+        rotation = axis_angle_to_matrix(dynamics["start_rotation"])[0]
+        translation = dynamics["start_translation"].squeeze(0)
+        angular_velocity = dynamics["angular_velocity"].squeeze(0)
+        linear_velocity = dynamics["linear_velocity"].squeeze(0)
+        rotations = []
+        translations = []
+        for frame in range(self.frame_count):
+            gimbal = axis_angle_to_matrix(dynamics["gimbal_rotation"][frame : frame + 1])[0]
+            rotations.append(rotation @ gimbal)
+            translations.append(translation)
+            if frame == self.frame_count - 1:
+                continue
+            angular_velocity = damping * angular_velocity + dt * dynamics["angular_acceleration"][frame]
+            rotation = rotation @ axis_angle_to_matrix((dt * angular_velocity).view(1, 3))[0]
+            linear_velocity = damping * linear_velocity + dt * dynamics["linear_acceleration"][frame]
+            step_velocity = rotation @ linear_velocity if self.drone_body_frame_translation else linear_velocity
+            translation = translation + dt * step_velocity
+        return _transform_from_rotation_matrix(torch.stack(rotations, dim=0), torch.stack(translations, dim=0))
+
+    def pose_deltas(self, frame_indices: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        global_raw, rotation, translation, _delta = self._delta_components(frame_indices)
+        return global_raw, rotation, translation
+
+    def _delta_components(
+        self,
+        frame_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.path_parameterization == "integrated_drone":
+            return self._drone_delta_components(frame_indices)
+        return self._pose_delta_components(frame_indices)
 
     def camera_to_world_matrices(self, frame_indices: torch.Tensor | None = None) -> torch.Tensor:
-        _global_raw, rotation, translation = self.pose_deltas(frame_indices)
-        delta = _pose_delta_matrix(rotation, translation)
+        _global_raw, _rotation, _translation, delta = self._delta_components(frame_indices)
         return self.base_camera_to_world_matrices(frame_indices, device=delta.device, dtype=delta.dtype) @ delta
 
     def base_camera_to_world_matrices(
@@ -307,12 +445,24 @@ class PowerFoamImplicitCameraDecoder(nn.Module):
             temporal_l2 = (motion[1:] - motion[:-1]).square().mean()
         else:
             temporal_l2 = rotation_l2.new_tensor(0.0)
-        return {
+        terms = {
             "camera_rotation_l2": rotation_l2,
             "camera_translation_l2": translation_l2,
             "camera_temporal_l2": temporal_l2,
             "camera_global_l2": state.global_residuals.square().mean(),
         }
+        if self.path_parameterization == "integrated_drone":
+            dynamics = self._bounded_drone_dynamics()
+            terms.update(
+                {
+                    "camera_velocity_l2": dynamics["angular_velocity"].square().mean()
+                    + dynamics["linear_velocity"].square().mean(),
+                    "camera_acceleration_l2": dynamics["angular_acceleration"].square().mean()
+                    + dynamics["linear_acceleration"].square().mean(),
+                    "camera_gimbal_l2": dynamics["gimbal_rotation"].square().mean(),
+                }
+            )
+        return terms
 
     def regularization_loss(
         self,

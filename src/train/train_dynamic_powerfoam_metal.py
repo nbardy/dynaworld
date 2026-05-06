@@ -123,9 +123,25 @@ CAMERA_DEFAULTS = {
     "look_at": [0.0, 0.0, 0.0],
     "up": [0.0, 1.0, 0.0],
     "base_path_mode": "static",
+    "path_parameterization": "pose_delta",
     "orbit_yaw_start_degrees": 0.0,
     "orbit_yaw_end_degrees": 0.0,
     "orbit_pitch_degrees": 0.0,
+    "drone_integration_horizon": 1.0,
+    "drone_damping": 0.98,
+    "drone_max_linear_velocity_ratio": 0.35,
+    "drone_max_linear_acceleration_ratio": 0.7,
+    "drone_max_angular_velocity_degrees": 45.0,
+    "drone_max_angular_acceleration_degrees": 90.0,
+    "drone_gimbal_max_rotation_degrees": 5.0,
+    "drone_body_frame_translation": True,
+    "init_teacher_path": None,
+    "init_teacher_steps": 0,
+    "init_teacher_lr": 0.01,
+    "init_teacher_rotation_weight": 1.0,
+    "init_teacher_translation_weight": 1.0,
+    "init_teacher_velocity_weight": 0.25,
+    "init_teacher_normalize_to_first": True,
     "distortion": None,
 }
 RENDER_DEFAULTS = {
@@ -177,6 +193,9 @@ LOSS_DEFAULTS = {
     "camera_motion_weight": 0.0,
     "camera_temporal_weight": 0.0,
     "camera_global_weight": 0.0,
+    "camera_velocity_weight": 0.0,
+    "camera_acceleration_weight": 0.0,
+    "camera_gimbal_weight": 0.0,
 }
 LOGGING_DEFAULTS = {
     "log_every": 10,
@@ -218,6 +237,8 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     apply_defaults(cfg["colorize"], COLORIZE_DEFAULTS)
     cfg["data"]["video_path"] = Path(cfg["data"]["video_path"])
     cfg["logging"]["output_dir"] = Path(cfg["logging"]["output_dir"])
+    if cfg["camera"]["init_teacher_path"] is not None:
+        cfg["camera"]["init_teacher_path"] = Path(cfg["camera"]["init_teacher_path"])
     if int(cfg["model"]["cells"]) < 1:
         raise ValueError("model.cells must be positive")
     if int(cfg["model"]["neighbor_count"]) >= int(cfg["model"]["cells"]):
@@ -282,6 +303,27 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("camera.max_translation_ratio must be non-negative")
     if str(cfg["camera"]["base_path_mode"]) not in {"static", "orbit_yaw"}:
         raise ValueError("camera.base_path_mode must be 'static' or 'orbit_yaw'")
+    if str(cfg["camera"]["path_parameterization"]) not in {"pose_delta", "integrated_drone"}:
+        raise ValueError("camera.path_parameterization must be 'pose_delta' or 'integrated_drone'")
+    if float(cfg["camera"]["drone_integration_horizon"]) <= 0.0:
+        raise ValueError("camera.drone_integration_horizon must be positive")
+    if not (0.0 <= float(cfg["camera"]["drone_damping"]) <= 1.0):
+        raise ValueError("camera.drone_damping must be in [0, 1]")
+    for key in (
+        "drone_max_linear_velocity_ratio",
+        "drone_max_linear_acceleration_ratio",
+        "drone_max_angular_velocity_degrees",
+        "drone_max_angular_acceleration_degrees",
+        "drone_gimbal_max_rotation_degrees",
+    ):
+        if float(cfg["camera"][key]) < 0.0:
+            raise ValueError(f"camera.{key} must be non-negative")
+    if int(cfg["camera"]["init_teacher_steps"]) < 0:
+        raise ValueError("camera.init_teacher_steps must be non-negative")
+    if int(cfg["camera"]["init_teacher_steps"]) > 0 and cfg["camera"]["init_teacher_path"] is None:
+        raise ValueError("camera.init_teacher_steps > 0 requires camera.init_teacher_path")
+    if float(cfg["camera"]["init_teacher_lr"]) <= 0.0:
+        raise ValueError("camera.init_teacher_lr must be positive")
     if str(cfg["model"]["video_init_mode"]) == "orbit_camera" and str(cfg["camera"]["base_path_mode"]) != "orbit_yaw":
         raise ValueError("model.video_init_mode='orbit_camera' requires camera.base_path_mode='orbit_yaw'")
     if str(cfg["model"]["video_init_mode"]) == "orbit_camera" and not bool(cfg["camera"]["enabled"]):
@@ -363,9 +405,18 @@ def build_camera_decoder(cfg: dict[str, Any], *, frame_count: int) -> PowerFoamI
         look_at=camera_cfg["look_at"],
         up=camera_cfg["up"],
         base_path_mode=str(camera_cfg["base_path_mode"]),
+        path_parameterization=str(camera_cfg["path_parameterization"]),
         orbit_yaw_start_degrees=float(camera_cfg["orbit_yaw_start_degrees"]),
         orbit_yaw_end_degrees=float(camera_cfg["orbit_yaw_end_degrees"]),
         orbit_pitch_degrees=float(camera_cfg["orbit_pitch_degrees"]),
+        drone_integration_horizon=float(camera_cfg["drone_integration_horizon"]),
+        drone_damping=float(camera_cfg["drone_damping"]),
+        drone_max_linear_velocity_ratio=float(camera_cfg["drone_max_linear_velocity_ratio"]),
+        drone_max_linear_acceleration_ratio=float(camera_cfg["drone_max_linear_acceleration_ratio"]),
+        drone_max_angular_velocity_degrees=float(camera_cfg["drone_max_angular_velocity_degrees"]),
+        drone_max_angular_acceleration_degrees=float(camera_cfg["drone_max_angular_acceleration_degrees"]),
+        drone_gimbal_max_rotation_degrees=float(camera_cfg["drone_gimbal_max_rotation_degrees"]),
+        drone_body_frame_translation=bool(camera_cfg["drone_body_frame_translation"]),
         lens_model=str(camera_cfg["lens_model"]),  # type: ignore[arg-type]
         distortion=camera_cfg["distortion"],
     )
@@ -397,6 +448,13 @@ def camera_regularization(
         + float(loss_cfg["camera_temporal_weight"]) * terms["camera_temporal_l2"]
         + float(loss_cfg["camera_global_weight"]) * terms["camera_global_l2"]
     )
+    for key, weight_key in (
+        ("camera_velocity_l2", "camera_velocity_weight"),
+        ("camera_acceleration_l2", "camera_acceleration_weight"),
+        ("camera_gimbal_l2", "camera_gimbal_weight"),
+    ):
+        if key in terms:
+            loss = loss + float(loss_cfg[weight_key]) * terms[key]
     return loss, terms
 
 
@@ -408,7 +466,7 @@ def compact_camera_metrics(camera_decoder: PowerFoamImplicitCameraDecoder | None
     base = camera_decoder.base_camera_to_world_matrices(device=c2w.device, dtype=c2w.dtype)
     origin_delta = torch.linalg.vector_norm(c2w[:, :3, 3] - base[:, :3, 3], dim=-1)
     forward_delta = torch.linalg.vector_norm(c2w[:, :3, 2] - base[:, :3, 2], dim=-1)
-    return {
+    metrics = {
         "state_camera_fov_degrees": float(state.fov_degrees.detach().cpu()),
         "state_camera_radius": float(state.radius.detach().cpu()),
         "state_camera_rotation_delta_mean_degrees": float(
@@ -421,6 +479,119 @@ def compact_camera_metrics(camera_decoder: PowerFoamImplicitCameraDecoder | None
         "state_camera_forward_delta_mean": float(forward_delta.mean().detach().cpu()),
         "state_camera_global_residual_l2": float(state.global_residuals.square().mean().detach().cpu()),
     }
+    terms = camera_decoder.regularization_terms()
+    for key in ("camera_velocity_l2", "camera_acceleration_l2", "camera_gimbal_l2"):
+        if key in terms:
+            metrics[f"state_{key}"] = float(terms[key].detach().cpu())
+    return metrics
+
+
+def _camera_pose_geodesic(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    relative = predicted[:, :3, :3].transpose(1, 2) @ target[:, :3, :3]
+    trace = relative.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+    cos_angle = ((trace - 1.0) * 0.5).clamp(-1.0, 1.0)
+    return torch.where(
+        cos_angle > 1.0 - 1.0e-6,
+        torch.zeros_like(cos_angle),
+        torch.acos(cos_angle.clamp(-1.0 + 1.0e-6, 1.0 - 1.0e-6)),
+    )
+
+
+def _camera_velocity_alignment(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    if predicted.shape[0] < 2:
+        return predicted.new_zeros(())
+    pred_translation_delta = predicted[1:, :3, 3] - predicted[:-1, :3, 3]
+    target_translation_delta = target[1:, :3, 3] - target[:-1, :3, 3]
+    pred_relative = predicted[:-1, :3, :3].transpose(1, 2) @ predicted[1:, :3, :3]
+    target_relative = target[:-1, :3, :3].transpose(1, 2) @ target[1:, :3, :3]
+    trace = (pred_relative.transpose(1, 2) @ target_relative).diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+    cos_angle = ((trace - 1.0) * 0.5).clamp(-1.0, 1.0)
+    angle = torch.where(
+        cos_angle > 1.0 - 1.0e-6,
+        torch.zeros_like(cos_angle),
+        torch.acos(cos_angle.clamp(-1.0 + 1.0e-6, 1.0 - 1.0e-6)),
+    )
+    return F.mse_loss(pred_translation_delta, target_translation_delta) + angle.square().mean()
+
+
+def _extract_camera_to_world_records(payload: Any) -> torch.Tensor:
+    if isinstance(payload, dict):
+        for key in ("camera_to_world", "camera_to_world_matrices", "cameras"):
+            if key in payload:
+                return _extract_camera_to_world_records(payload[key])
+    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        return torch.tensor([record["camera_to_world"] for record in payload], dtype=torch.float32)
+    tensor = torch.as_tensor(payload, dtype=torch.float32)
+    if tensor.ndim == 2 and tuple(tensor.shape) == (4, 4):
+        tensor = tensor.unsqueeze(0)
+    if tensor.ndim != 3 or tuple(tensor.shape[-2:]) != (4, 4):
+        raise ValueError(f"Expected camera-to-world payload shape [T,4,4], got {tuple(tensor.shape)}")
+    return tensor
+
+
+def load_teacher_camera_to_world(camera_cfg: dict[str, Any], frame_count: int) -> torch.Tensor | None:
+    path = camera_cfg["init_teacher_path"]
+    if path is None:
+        return None
+    teacher = _extract_camera_to_world_records(json.loads(Path(path).read_text(encoding="utf-8")))
+    if teacher.shape[0] < int(frame_count):
+        raise ValueError(f"camera.init_teacher_path has {teacher.shape[0]} frames but training needs {frame_count}")
+    teacher = teacher[: int(frame_count)]
+    if bool(camera_cfg["init_teacher_normalize_to_first"]):
+        teacher = torch.linalg.inv(teacher[0]) @ teacher
+    return teacher
+
+
+def camera_teacher_alignment_loss(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    camera_cfg: dict[str, Any],
+) -> tuple[torch.Tensor, dict[str, float]]:
+    rotation = _camera_pose_geodesic(predicted, target).square().mean()
+    translation = F.mse_loss(predicted[:, :3, 3], target[:, :3, 3])
+    velocity = _camera_velocity_alignment(predicted, target)
+    loss = (
+        float(camera_cfg["init_teacher_rotation_weight"]) * rotation
+        + float(camera_cfg["init_teacher_translation_weight"]) * translation
+        + float(camera_cfg["init_teacher_velocity_weight"]) * velocity
+    )
+    return loss, {
+        "teacher_camera_loss": float(loss.detach().cpu()),
+        "teacher_camera_rotation_loss": float(rotation.detach().cpu()),
+        "teacher_camera_translation_loss": float(translation.detach().cpu()),
+        "teacher_camera_velocity_loss": float(velocity.detach().cpu()),
+    }
+
+
+def prefit_camera_decoder_from_teacher(
+    camera_decoder: PowerFoamImplicitCameraDecoder | None,
+    cfg: dict[str, Any],
+    *,
+    frame_count: int,
+    device: torch.device,
+    output_dir: Path,
+) -> dict[str, float]:
+    if camera_decoder is None or int(cfg["camera"]["init_teacher_steps"]) == 0:
+        return {}
+    camera_decoder.to(device)
+    teacher = load_teacher_camera_to_world(cfg["camera"], int(frame_count))
+    if teacher is None:
+        return {}
+    teacher = teacher.to(device=device, dtype=torch.float32)
+    optimizer = torch.optim.Adam(camera_decoder.parameters(), lr=float(cfg["camera"]["init_teacher_lr"]))
+    last_metrics: dict[str, float] = {}
+    for _step in range(1, int(cfg["camera"]["init_teacher_steps"]) + 1):
+        predicted = camera_decoder.camera_to_world_matrices()
+        loss, last_metrics = camera_teacher_alignment_loss(predicted, teacher, cfg["camera"])
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+    last_metrics = {"teacher_camera_init_steps": float(cfg["camera"]["init_teacher_steps"]), **last_metrics}
+    (output_dir / "camera_teacher_init_metrics.json").write_text(
+        json.dumps(last_metrics, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return last_metrics
 
 
 def decoded_powerfoam_rays(
@@ -1949,6 +2120,9 @@ def log_artifacts(
             "state_camera_origin_delta_mean": "Camera/OriginDeltaMean",
             "state_camera_forward_delta_mean": "Camera/ForwardDeltaMean",
             "state_camera_global_residual_l2": "Camera/GlobalResidualL2",
+            "state_camera_velocity_l2": "Camera/VelocityL2",
+            "state_camera_acceleration_l2": "Camera/AccelerationL2",
+            "state_camera_gimbal_l2": "Camera/GimbalL2",
         }
         for metric_key, wandb_key in camera_payload_keys.items():
             if metric_key in metrics:
@@ -2054,6 +2228,8 @@ def dynamic_geometry_summary(
             "camera_enabled": bool(cfg["camera"]["enabled"]),
             "camera_mode": str(cfg["camera"]["mode"]),
             "camera_base_path_mode": str(cfg["camera"]["base_path_mode"]),
+            "camera_path_parameterization": str(cfg["camera"]["path_parameterization"]),
+            "camera_init_teacher_steps": int(cfg["camera"]["init_teacher_steps"]),
             "static_only_steps": int(cfg["train"]["static_only_steps"]),
             "no_repaint_steps": int(cfg["train"]["no_repaint_steps"]),
         },
@@ -2112,6 +2288,15 @@ def run_training(config: dict[str, Any]) -> None:
     cfg["video_fps"] = float(sequence.video_fps)
     wandb_run = init_wandb_run(cfg)
     camera_decoder = build_camera_decoder(cfg, frame_count=int(targets.size(0)))
+    teacher_init_metrics = prefit_camera_decoder_from_teacher(
+        camera_decoder,
+        cfg,
+        frame_count=int(targets.size(0)),
+        device=device,
+        output_dir=output_dir,
+    )
+    if teacher_init_metrics:
+        print({"camera_teacher_init": teacher_init_metrics})
 
     model_kwargs = {
         "frame_count": targets.size(0),
@@ -2200,6 +2385,7 @@ def run_training(config: dict[str, Any]) -> None:
             "feature_dim": int(cfg["model"]["feature_dim"]),
             "camera_mode": str(cfg["camera"]["mode"]),
             "camera_enabled": bool(cfg["camera"]["enabled"]),
+            "camera_path_parameterization": str(cfg["camera"]["path_parameterization"]),
             "train_background_mode": str(cfg["render"]["train_background_mode"]),
             "eval_background_mode": str(cfg["render"]["eval_background_mode"]),
             "neighbors": int(cfg["model"]["neighbor_count"]),
@@ -2207,6 +2393,10 @@ def run_training(config: dict[str, Any]) -> None:
         }
     )
     apply_training_stage(model, cfg, 0)
+    if teacher_init_metrics:
+        init_record = {"kind": "camera_teacher_init", "step": 0, **teacher_init_metrics}
+        metrics_history.append(init_record)
+        append_jsonl(history_path, init_record)
     initial_metrics = log_artifacts(model, colorizer, targets, cfg, 0, output_dir, wandb_run)
     initial_record = {"kind": "eval", "step": 0, **initial_metrics}
     metrics_history.append(initial_record)
@@ -2267,6 +2457,9 @@ def run_training(config: dict[str, Any]) -> None:
                 "camera_translation_l2",
                 "camera_temporal_l2",
                 "camera_global_l2",
+                "camera_velocity_l2",
+                "camera_acceleration_l2",
+                "camera_gimbal_l2",
             ):
                 if key in temporal_terms:
                     train_metrics[key] = float(temporal_terms[key].detach().cpu())
@@ -2297,6 +2490,13 @@ def run_training(config: dict[str, Any]) -> None:
                             "Train/CameraGlobalL2": train_metrics["camera_global_l2"],
                         }
                     )
+                    for metric_key, wandb_key in (
+                        ("camera_velocity_l2", "Train/CameraVelocityL2"),
+                        ("camera_acceleration_l2", "Train/CameraAccelerationL2"),
+                        ("camera_gimbal_l2", "Train/CameraGimbalL2"),
+                    ):
+                        if metric_key in train_metrics:
+                            payload[wandb_key] = train_metrics[metric_key]
                 wandb_run.log(payload, step=step)
         if step % int(cfg["logging"]["image_log_every"]) == 0 or (
             bool(cfg["logging"]["always_log_last_step"]) and step == int(cfg["train"]["steps"])

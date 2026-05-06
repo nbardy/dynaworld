@@ -91,3 +91,60 @@ def test_powerfoam_implicit_camera_orbit_base_path_spans_half_turn() -> None:
     subset = decoder.camera_to_world_matrices(torch.tensor([0, 4]))
     assert subset.shape == (2, 4, 4)
     assert torch.allclose(subset[1], camera_to_world[-1], atol=1.0e-6)
+
+
+def test_powerfoam_integrated_drone_zero_init_matches_static_base() -> None:
+    decoder = PowerFoamImplicitCameraDecoder(
+        frame_count=4,
+        image_size=8,
+        fov_degrees=60.0,
+        base_radius=2.0,
+        token_dim=8,
+        hidden_dim=16,
+        time_basis_count=2,
+        path_parameterization="integrated_drone",
+    )
+
+    camera_to_world = decoder.camera_to_world_matrices()
+    expected = build_look_at_camera_to_world(torch.tensor([0.0, 0.0, -2.0]))
+
+    assert torch.allclose(camera_to_world, expected.expand_as(camera_to_world), atol=1.0e-6)
+    assert decoder.regularization_terms()["camera_velocity_l2"].item() == 0.0
+    assert decoder.regularization_terms()["camera_acceleration_l2"].item() == 0.0
+
+
+def test_powerfoam_integrated_drone_velocity_and_acceleration_move_path() -> None:
+    decoder = PowerFoamImplicitCameraDecoder(
+        frame_count=5,
+        image_size=8,
+        fov_degrees=60.0,
+        base_radius=2.0,
+        token_dim=8,
+        hidden_dim=16,
+        time_basis_count=2,
+        path_parameterization="integrated_drone",
+        drone_integration_horizon=2.0,
+        drone_max_linear_velocity_ratio=0.5,
+        drone_max_linear_acceleration_ratio=0.5,
+        drone_max_angular_velocity_degrees=45.0,
+        drone_max_angular_acceleration_degrees=45.0,
+        drone_gimbal_max_rotation_degrees=0.0,
+    )
+
+    with torch.no_grad():
+        decoder.velocity_head[-1].bias[1] = 0.4
+        decoder.velocity_head[-1].bias[3] = 0.5
+        decoder.acceleration_head[-1].bias[4] = 0.5
+
+    camera_to_world = decoder.camera_to_world_matrices()
+    centers = camera_to_world[:, :3, 3]
+    rotations = camera_to_world[:, :3, :3]
+    subset = decoder.camera_to_world_matrices(torch.tensor([1, 4]))
+    terms = decoder.regularization_terms()
+
+    assert not torch.allclose(centers[0], centers[-1])
+    assert not torch.allclose(rotations[0], rotations[-1])
+    assert torch.allclose(subset[0], camera_to_world[1], atol=1.0e-6)
+    assert torch.allclose(subset[1], camera_to_world[4], atol=1.0e-6)
+    assert terms["camera_velocity_l2"].item() > 0.0
+    assert terms["camera_acceleration_l2"].item() > 0.0
