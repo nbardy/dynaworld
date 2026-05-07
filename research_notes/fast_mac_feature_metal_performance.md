@@ -2,8 +2,13 @@
 
 Date: 2026-05-07
 
+For the concise percent-speedup catalog and CUDA port checklist, see
+`research_notes/fast_mac_feature_kernel_catalog_2026-05-07.md`.
+
 ## Artifact Map
 
+- Concise attempt catalog:
+  `research_notes/fast_mac_feature_kernel_catalog_2026-05-07.md`
 - Stable baseline, do not mutate for experiments:
   `third_party/fast-mac-gsplat/variants/v6_refined_features`
 - Main F32 atomic-reduction fork:
@@ -26,6 +31,8 @@ Date: 2026-05-07
   `third_party/fast-mac-gsplat/variants/v6_feature_lookup_experiment`
 - Safe benchmark runner:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/benchmarks/benchmark_matrix.py`
+- Sampled contributor-count diagnostic:
+  `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/benchmarks/profile_contributors.py`
 - Opt-in trainer dispatch:
   `render.fast_mac.feature_variant = "v6_refined_features_f32_reduce"`,
   `"v6_refined_features_f32_accum"`,
@@ -872,6 +879,55 @@ stable reported raster backward `13.2ms`, while f32_reduce reported `20.9ms`.
 Conclusion: the opt-in dispatch is runtime-valid, but this 64px trainer probe is
 not a sufficient promotion gate. Use a larger phase trace before claiming trainer
 speedup.
+
+## Contributor Counts And Thresholds
+
+2026-05-07 follow-up: the benchmark surface now exposes
+`--alpha-threshold` and `--transmittance-threshold` on the
+`v6_refined_features_f32_reduce` benchmark. A new sampled diagnostic
+(`benchmarks/profile_contributors.py`) estimates true per-pixel contributor
+counts from the same synthetic inputs and binned candidate lists. The existing
+`profile_projected_gaussians(...)` metrics remain tile-level only:
+`mean_pairs_per_tile` is the binned candidate count and `mean_stop_count` is the
+tile max depth prefix used by backward, not the average number of splats that
+actually pass `eval_alpha` for a pixel.
+
+Default thresholds are already doing two forms of pruning:
+
+- `alpha_threshold = 1/255` drops low-opacity support before binning and rejects
+  per-pixel samples below that alpha.
+- `transmittance_threshold = 1e-4` is top-p-like only for front-to-back alpha
+  compositing. It stops a pixel when remaining transmittance falls below the
+  threshold, but backward still uses the tile max stop prefix, so it only helps
+  backward if most pixels in the tile stop early.
+
+Sampled counts, `GSP_CHUNK=64`, `GSP_FAST_CAP=2048`, `B=16`, `G=8192`,
+`F=32`, `case=medium_sigma_3_8`, 2048 sampled pixels:
+
+| Shape / threshold | tile candidates mean / p95 | checked prefix mean / p95 | alpha contributors mean / p95 | early-stop fraction | Artifact |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 512px default | 62.9 / 78 | 62.9 / 78 | 26.6 / 36 | 0.0% | `2026-05-07_512_b16_g8192_f32_reduce_sampled_contributors_default.json` |
+| 512px alpha `1/64` | 50.4 / 64 | 50.4 / 64 | 18.8 / 26 | 0.0% | `2026-05-07_512_b16_g8192_f32_reduce_sampled_contributors_alpha1_64.json` |
+| 512px trans `1e-2` | 62.9 / 78 | 61.9 / 77 | 26.2 / 35 | 10.2% | `2026-05-07_512_b16_g8192_f32_reduce_sampled_contributors_trans1e_2.json` |
+| 256px default | 241.3 / 286 | 182.3 / 246 | 77.9 / 101 | 89.3% | `2026-05-07_256_b16_g8192_f32_reduce_sampled_contributors_default.json` |
+| 256px alpha `1/64` | 194.1 / 230 | 149.5 / 199 | 56.2 / 72 | 87.5% | `2026-05-07_256_b16_g8192_f32_reduce_sampled_contributors_alpha1_64.json` |
+
+Timing sweep on the same synthetic row:
+
+| Shape / threshold | forward ms | backward ms | total mean ms | profile mean stop | Read |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 512px default | 100.4 | 331.3 | 431.7 | 62.9 | baseline threshold |
+| 512px alpha `1/64` | 78.3 | 282.1 | 360.4 | 50.3 | useful direct candidate reduction |
+| 512px trans `1e-2` | 93.5 | 310.9 | 404.5 | 62.9 | per-pixel stop does not reduce tile max much |
+| 256px default | 85.7 | 240.8 | 326.5 | 224.5 | denser current trainer-like shape |
+| 256px alpha `1/64` | 63.1 | 198.5 | 261.5 | 183.0 | useful direct candidate reduction |
+
+Read: if we want a threshold speed lever, raise `alpha_threshold` first. It
+reduces binned pairs, sampled contributors, and backward stop counts. Raising
+`transmittance_threshold` is semantically closer to "top-p", but at 512px it
+barely changes the tile max stop prefix, so the backward benefit is limited.
+Quality risk is nonzero for either setting; this is a candidate for a short
+heldout-quality A/B, not a new default.
 
 ## Next Forks To Try
 
