@@ -33,6 +33,13 @@ For the concise percent-speedup catalog and CUDA port checklist, see
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/benchmarks/benchmark_matrix.py`
 - Sampled contributor-count diagnostic:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/benchmarks/profile_contributors.py`
+- Stable-trainer alpha-threshold A/B configs:
+  `src/train_configs/local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_256_16f_8192splats_goodset_train0006_0014_holdout0005_alphaab_alpha1_{255,128,96,64}.jsonc`
+- Stable-trainer alpha-threshold A/B W&B runs:
+  [`j9fkocvj`](https://wandb.ai/nbardy/dynaworld/runs/j9fkocvj),
+  [`hru1yv0t`](https://wandb.ai/nbardy/dynaworld/runs/hru1yv0t),
+  [`dsq6u3wq`](https://wandb.ai/nbardy/dynaworld/runs/dsq6u3wq),
+  [`obclxj4w`](https://wandb.ai/nbardy/dynaworld/runs/obclxj4w)
 - Opt-in trainer dispatch:
   `render.fast_mac.feature_variant = "v6_refined_features_f32_reduce"`,
   `"v6_refined_features_f32_accum"`,
@@ -926,8 +933,29 @@ Read: if we want a threshold speed lever, raise `alpha_threshold` first. It
 reduces binned pairs, sampled contributors, and backward stop counts. Raising
 `transmittance_threshold` is semantically closer to "top-p", but at 512px it
 barely changes the tile max stop prefix, so the backward benefit is limited.
-Quality risk is nonzero for either setting; this is a candidate for a short
-heldout-quality A/B, not a new default.
+Quality risk is nonzero for either setting; the follow-up below makes `1/128`
+the stable 256px goodset F32 candidate while keeping `1/64` as a speed-only
+stress point.
+
+2026-05-08 stable-trainer quality A/B: ran the current 256px goodset F32
+`v5_features` setup for 250 steps at default, `1/128`, `1/96`, and `1/64`.
+Only `render.alpha_threshold`, `render.fast_mac.alpha_threshold`, run labels,
+and checkpoint paths changed. W&B stayed enabled and both multicam media grids
+were logged at final step.
+
+| Threshold | W&B | Runtime | Speedup vs default | Heldout PSNR / SSIM / L1 | Source PSNRs | Read |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `1/255` | [`j9fkocvj`](https://wandb.ai/nbardy/dynaworld/runs/j9fkocvj) | 26.01 min | 0.0% | 12.7536 / 0.1716 / 0.1729 | 19.3927 / 19.5976 | default control |
+| `1/128` | [`hru1yv0t`](https://wandb.ai/nbardy/dynaworld/runs/hru1yv0t) | 18.37 min | 29.4% | **13.6248 / 0.1922 / 0.1561** | 19.2271 / 19.7479 | best heldout and strong speedup; promote for this setup |
+| `1/96` | [`dsq6u3wq`](https://wandb.ai/nbardy/dynaworld/runs/dsq6u3wq) | 16.60 min | 36.2% | 13.2942 / 0.1838 / 0.1599 | 20.1208 / 20.6967 | faster and still above default, but lower heldout than `1/128` |
+| `1/64` | [`obclxj4w`](https://wandb.ai/nbardy/dynaworld/runs/obclxj4w) | 14.27 min | 45.1% | 12.7667 / 0.1806 / 0.1712 | 18.0380 / 18.3682 | fastest, but not a quality win; source-view fit visibly drops |
+
+Qualitative read: the final `Feature | GT | Render` grids show all thresholds
+remain blurry, but `1/128` and `1/96` preserve the same broad source/heldout
+layout as default without obvious support holes. `1/64` keeps coverage but is
+more smeared and loses source-view fidelity, matching the lower train PSNR.
+Conclusion: use `1/128` as the stable goodset F32 threshold; keep `1/96` as a
+possible speed-biased follow-up; do not promote `1/64` by speed alone.
 
 ## Next Forks To Try
 

@@ -8,11 +8,18 @@ Stable baselines stayed untouched; all kernel experiments were copied forks.
 
 ## Current Best Read
 
-The largest safe win is still `v6_refined_features_f32_reduce`: it fixes the
-big F-channel color-gradient atomic bottleneck without changing render
-semantics. The best next trainable candidate is `f32_gradcache` or a combined
-`gradcache + zero_bg` fork. The best semantic speed knob is raising
-`alpha_threshold`, but that needs a heldout-quality A/B before use in training.
+The largest safe kernel win is still `v6_refined_features_f32_reduce`: it fixes
+the big F-channel color-gradient atomic bottleneck without changing render
+semantics. The best next trainable kernel candidate is `f32_gradcache` or a
+combined `gradcache + zero_bg` fork.
+
+The best semantic speed knob now has a stable-training answer for the current
+256px goodset F32 `v5_features` setup: `alpha_threshold = 1/128` improved
+heldout PSNR/SSIM/L1 over default and cut W&B runtime by 29.4%. `1/96` was
+faster and still above default quality, but lower than `1/128`; `1/64` was the
+fastest but source-view quality dropped and heldout PSNR was essentially
+default. This validates `1/128` for the stable goodset trainer, not automatic
+promotion of any experimental kernel fork.
 
 `transmittance_threshold` is top-p-like per pixel, but backward mostly pays the
 tile max depth prefix, so it is not the main lever unless we change backward
@@ -30,8 +37,8 @@ microbenchmarks unless otherwise noted.
 | Frozen splat features/colors | `449.2ms -> 267.7ms` | 512px B16/G8192/F32 | **40.4% faster total**, **44.9% faster backward** | useful for camera-only/frozen-feature runs, changes training |
 | `f32_gradcache` | `431.7ms -> 388.1ms` | 512px B16/G8192/F32 latest local confirm | **10.1% faster total** | live opt-in candidate |
 | `f32_gradcache` | `326.5ms -> 286.8ms` | 256px B16/G8192/F32 latest local confirm | **12.2% faster total** | live opt-in candidate |
-| Alpha threshold `1/64` | `431.7ms -> 360.4ms` | 512px B16/G8192/F32 | **16.5% faster total** | quality A/B needed |
-| Alpha threshold `1/64` | `326.5ms -> 261.5ms` | 256px B16/G8192/F32 | **19.9% faster total** | quality A/B needed |
+| Alpha threshold `1/64` | `431.7ms -> 360.4ms` | 512px B16/G8192/F32 | **16.5% faster total** | synthetic speed win; trainer A/B says too aggressive for promotion |
+| Alpha threshold `1/64` | `326.5ms -> 261.5ms` | 256px B16/G8192/F32 | **19.9% faster total** | fastest stable-trainer A/B row, but not best quality |
 | Transmittance threshold `1e-2` | `431.7ms -> 404.5ms` | 512px B16/G8192/F32 | **6.3% faster total** | weaker; tile max stop remains |
 | `zero_bg` tail skip | `610.7ms -> 556.7ms` | 512px B16/G8192/F32 active off | **8.8% faster total** | bounded fork, safe version keeps explicit pixel zero/write |
 | `zero_bg` tail skip | `386.0ms -> 361.1ms` | 256px B16/G8192/F32 active off | **6.5% faster total** | bounded fork |
@@ -60,6 +67,31 @@ Key point: `alpha_threshold` reduces binned candidates and actual contributors.
 `transmittance_threshold` can stop pixels earlier, but backward still pays the
 tile max stop prefix.
 
+## 2026-05-08 Stable Trainer Alpha-Threshold A/B
+
+Setup: 256px DeepView `03_Dog` goodset F32 feature splatting, train
+`camera_0006`/`camera_0014`, heldout `camera_0005`,
+`feature_variant = "v5_features"`, 8192 splats, 16 frames, 250 steps. Only
+`render.alpha_threshold`, `render.fast_mac.alpha_threshold`, and label/checkpoint
+fields differed across configs. Real W&B runs logged both multicam diagnostic
+video grids.
+
+| Threshold | Config suffix | W&B | Runtime | Speedup vs default | Heldout PSNR / SSIM / L1 | Train PSNR mean | Read |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| `1/255` | `alphaab_alpha1_255` | [`j9fkocvj`](https://wandb.ai/nbardy/dynaworld/runs/j9fkocvj) | 26.01 min | 0.0% | 12.7536 / 0.1716 / 0.1729 | 19.4952 | default control |
+| `1/128` | `alphaab_alpha1_128` | [`hru1yv0t`](https://wandb.ai/nbardy/dynaworld/runs/hru1yv0t) | 18.37 min | 29.4% | **13.6248 / 0.1922 / 0.1561** | 19.4875 | promote for this stable setup |
+| `1/96` | `alphaab_alpha1_96` | [`dsq6u3wq`](https://wandb.ai/nbardy/dynaworld/runs/dsq6u3wq) | 16.60 min | 36.2% | 13.2942 / 0.1838 / 0.1599 | 20.4087 | faster, still above default, but lower heldout than `1/128` |
+| `1/64` | `alphaab_alpha1_64` | [`obclxj4w`](https://wandb.ai/nbardy/dynaworld/runs/obclxj4w) | 14.27 min | 45.1% | 12.7667 / 0.1806 / 0.1712 | 18.2031 | fastest, but source quality drops and heldout PSNR is near default |
+
+Qualitative read from the final `Multicam_Feature_GT_Render_ByCamera_Grid_Video`
+and `Multicam_GT_Splat_Alpha_Feature_Grid_Video` artifacts: all rows are still
+blurry and under-detailed, but `1/128` and `1/96` preserve the same camera-row
+structure as default without obvious support holes. `1/64` keeps broad coverage
+but loses source-view fidelity and looks more smeared, matching the train PSNR
+drop. Use heldout quality as selector: `1/128` is the safe stable-training
+threshold; `1/96` is a speed/quality tradeoff candidate; `1/64` remains a
+throughput stress point rather than a promoted default.
+
 ## CUDA Port Notes
 
 The Metal kernel now has explicit `CUDA port note` comments at the mechanisms
@@ -86,15 +118,13 @@ Do not port the failed paths blindly:
 
 ## Next Experiments
 
-1. Run heldout-quality A/B for `alpha_threshold`: default, `1/128`, `1/96`,
-   `1/64`. This is the most direct speed knob but changes support.
-2. Copy a combined `f32_gradcache + zero_bg` fork and benchmark 256/512 B16
+1. Copy a combined `f32_gradcache + zero_bg` fork and benchmark 256/512 B16
    plus trainer fixed-render.
-3. Prototype per-pixel backward stop handling. This is the real top-p path,
+2. Prototype per-pixel backward stop handling. This is the real top-p path,
    but it needs a different scheduling design so barriers remain safe.
-4. Wire compact lookup into trainer fixed-render. It is the biggest remaining
+3. Wire compact lookup into trainer fixed-render. It is the biggest remaining
    speed/memory idea if quality holds.
-5. Only after those, try a very narrow F32-specialized vector/unrolled backward
+4. Only after those, try a very narrow F32-specialized vector/unrolled backward
    path. The `block4` failure says this should be measured immediately and
    killed if it regresses.
 
@@ -108,5 +138,12 @@ Do not port the failed paths blindly:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/benchmarks/profile_contributors.py`
 - Threshold benchmark surface:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/benchmarks/benchmark_mps.py`
+- Stable-trainer alpha A/B configs:
+  `src/train_configs/local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_256_16f_8192splats_goodset_train0006_0014_holdout0005_alphaab_alpha1_{255,128,96,64}.jsonc`
+- Stable-trainer alpha A/B W&B runs:
+  [`j9fkocvj`](https://wandb.ai/nbardy/dynaworld/runs/j9fkocvj),
+  [`hru1yv0t`](https://wandb.ai/nbardy/dynaworld/runs/hru1yv0t),
+  [`dsq6u3wq`](https://wandb.ai/nbardy/dynaworld/runs/dsq6u3wq),
+  [`obclxj4w`](https://wandb.ai/nbardy/dynaworld/runs/obclxj4w)
 - Experimental Metal comments:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/csrc/metal/gsplat_v6_refined_features_f32_reduce_kernels.metal`
