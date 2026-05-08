@@ -27,6 +27,30 @@ def test_relative_pose_head_starts_at_zero_residual() -> None:
     assert torch.equal(se3_residual_identity_loss(rotation, translation), rotation.new_zeros(()))
 
 
+def test_relative_pose_head_nonzero_output_init_breaks_identity_start() -> None:
+    torch.manual_seed(19)
+    head = RelativePoseCrossAttentionHead(
+        dim=8,
+        num_heads=2,
+        layers=1,
+        hidden_dim=8,
+        output_init_std=0.12,
+        max_rotation_degrees=45.0,
+        max_translation=3.0,
+    )
+    source = torch.randn(4, 4, 8)
+    target = torch.randn(4, 4, 8)
+
+    rotation, translation = head(source, target)
+
+    assert rotation.shape == (4, 3)
+    assert translation.shape == (4, 3)
+    assert torch.linalg.norm(rotation).item() > 0.0
+    assert torch.linalg.norm(translation).item() > 0.0
+    assert torch.rad2deg(rotation.abs()).max().item() <= 45.0
+    assert translation.abs().max().item() <= 3.0
+
+
 def test_identity_residual_preserves_camera_pose() -> None:
     camera = CameraSpec(
         fx=torch.tensor(10.0),

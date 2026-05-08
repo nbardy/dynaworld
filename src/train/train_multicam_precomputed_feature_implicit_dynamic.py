@@ -78,6 +78,7 @@ TRAIN_MULTICAM_DEFAULTS = {
     "relpose_mlp_ratio": 2.0,
     "relpose_head_hidden_dim": None,
     "relpose_query_init_std": 0.02,
+    "relpose_output_init_std": 0.0,
     "relpose_max_rotation_degrees": 5.0,
     "relpose_max_translation_ratio": 0.05,
     "relpose_identity_loss_weight": 1.0,
@@ -129,6 +130,9 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         if cfg["train"]["relpose_head_hidden_dim"] is not None:
             cfg["train"]["relpose_head_hidden_dim"] = int(cfg["train"]["relpose_head_hidden_dim"])
         cfg["train"]["relpose_query_init_std"] = float(cfg["train"]["relpose_query_init_std"])
+        cfg["train"]["relpose_output_init_std"] = float(cfg["train"]["relpose_output_init_std"])
+        if cfg["train"]["relpose_output_init_std"] < 0.0:
+            raise ValueError("train.relpose_output_init_std must be >= 0.")
         cfg["train"]["relpose_max_rotation_degrees"] = float(cfg["train"]["relpose_max_rotation_degrees"])
         cfg["train"]["relpose_max_translation_ratio"] = float(cfg["train"]["relpose_max_translation_ratio"])
         cfg["train"]["relpose_identity_loss_weight"] = float(cfg["train"]["relpose_identity_loss_weight"])
@@ -161,6 +165,7 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
                 mlp_ratio=float(self.train_cfg["relpose_mlp_ratio"]),
                 hidden_dim=self.train_cfg["relpose_head_hidden_dim"],
                 query_init_std=float(self.train_cfg["relpose_query_init_std"]),
+                output_init_std=float(self.train_cfg["relpose_output_init_std"]),
                 max_rotation_degrees=float(self.train_cfg["relpose_max_rotation_degrees"]),
                 max_translation=float(self.cfg["camera"]["rig_radius"])
                 * float(self.train_cfg["relpose_max_translation_ratio"]),

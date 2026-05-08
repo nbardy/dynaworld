@@ -23,6 +23,7 @@ class RelativePoseCrossAttentionHead(nn.Module):
         mlp_ratio: float = 2.0,
         hidden_dim: int | None = None,
         query_init_std: float = 0.02,
+        output_init_std: float = 0.0,
         max_rotation_degrees: float = 5.0,
         max_translation: float = 0.15,
     ) -> None:
@@ -31,6 +32,8 @@ class RelativePoseCrossAttentionHead(nn.Module):
             raise ValueError(f"query_count must be >= 1, got {query_count}.")
         if layers < 1:
             raise ValueError(f"layers must be >= 1, got {layers}.")
+        if output_init_std < 0:
+            raise ValueError(f"output_init_std must be >= 0, got {output_init_std}.")
         self.dim = int(dim)
         self.query_count = int(query_count)
         self.max_rotation_radians = math.radians(float(max_rotation_degrees))
@@ -52,7 +55,10 @@ class RelativePoseCrossAttentionHead(nn.Module):
             nn.Linear(hidden, 6),
         )
         final = self.output[-1]
-        nn.init.zeros_(final.weight)
+        if float(output_init_std) > 0.0:
+            nn.init.normal_(final.weight, mean=0.0, std=float(output_init_std))
+        else:
+            nn.init.zeros_(final.weight)
         nn.init.zeros_(final.bias)
 
     def forward(self, source_memory: torch.Tensor, target_memory: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

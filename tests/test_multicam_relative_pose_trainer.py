@@ -31,6 +31,11 @@ F32_256_JOINT_CONFIG = (
     / "src/train_configs/"
     "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_256_16f_8192splats_goodset_train0006_0014_holdout0005.jsonc"
 )
+F32_256_RELPOSE_OUTPUTINIT_CONFIG = (
+    REPO_ROOT
+    / "src/train_configs/"
+    "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_256_16f_8192splats_goodset_train0006_0014_holdout0005_alpha1_128_relpose_outputinit012.jsonc"
+)
 F32_512_V6_JOINT_CONFIG = (
     REPO_ROOT
     / "src/train_configs/"
@@ -63,6 +68,7 @@ def test_joint_full_relpose_config_resolves_predicted_heldout_mode() -> None:
     cfg = MulticamRelativePoseImplicitTrainer.resolve_config(load_config_file(JOINT_CONFIG))
 
     assert cfg["train"]["relpose_output_mode"] == "full"
+    assert cfg["train"]["relpose_output_init_std"] == 0.0
     assert cfg["train"]["heldout_eval_camera_mode"] == "predicted_relpose"
     assert cfg["train"]["trainable_scope"] == "all"
     assert cfg["train"]["relpose_feature_frame_mode"] == "first_frame"
@@ -102,8 +108,21 @@ def test_f32_256_joint_full_relpose_config_keeps_modern_feature_settings() -> No
     assert cfg["render"]["fast_mac"]["feature_background"] == 0.0
     assert cfg["logging"]["feature_pca_log"] is True
     assert "256px" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["relpose_output_init_std"] == 0.0
     assert cfg["train"]["checkpoint_save_path"] == Path(
         "outputs/multicam_relative_pose/full_relpose_features_F32_256_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
+    )
+
+
+def test_f32_256_relpose_output_init_config_breaks_identity_init() -> None:
+    cfg = MulticamRelativePoseImplicitTrainer.resolve_config(load_config_file(F32_256_RELPOSE_OUTPUTINIT_CONFIG))
+
+    assert cfg["render"]["alpha_threshold"] == 1.0 / 128.0
+    assert cfg["render"]["fast_mac"]["alpha_threshold"] == 1.0 / 128.0
+    assert cfg["train"]["relpose_output_init_std"] == 0.12
+    assert "relpose-output-init-012" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["checkpoint_save_path"] == Path(
+        "outputs/multicam_relative_pose/full_relpose_features_F32_256_alpha1_128_relpose_outputinit012_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
     )
 
 
