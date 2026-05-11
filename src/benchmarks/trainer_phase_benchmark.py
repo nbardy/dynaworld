@@ -26,7 +26,9 @@ if str(TRAIN_ROOT) not in sys.path:
     sys.path.insert(0, str(TRAIN_ROOT))
 
 from config_utils import load_config_file  # noqa: E402
+from objective.loss import resize_target_for_render  # noqa: E402
 from objective.types import BackgroundSample, RasterizedView  # noqa: E402
+from objective.v12a_fused_l1 import fused_no_norm_l1_mean_loss  # noqa: E402
 from pipeline.losses import build_bank_rate_loss, build_camera_loss  # noqa: E402
 from pipeline.render import _viewport_cameras, gaussian_sequence_slice  # noqa: E402
 from renderers.fast_mac import (  # noqa: E402
@@ -429,7 +431,36 @@ def iter_target_chunks(
         yield chunk_start, chunk_end, chunk_sequence, chunk_target
 
 
-def build_step_graph(trainer, *, multicam: bool, timer: PhaseTimer) -> tuple[list[ChunkRecord], torch.Tensor]:
+def _v12a_fused_l1_chunk_loss(
+    trainer,
+    raster_graph: RasterGraph,
+    target,
+    background: BackgroundSample,
+    *,
+    total_frames: int,
+) -> torch.Tensor:
+    if trainer.colorize is None:
+        raise ValueError("--v12a-fused-l1 requires a feature colorizer.")
+    if background.rgb is None:
+        raise ValueError("--v12a-fused-l1 requires an explicit RGB background.")
+    target_rgb = resize_target_for_render(target, render_size=int(raster_graph.features.shape[-1]))
+    loss_mean = fused_no_norm_l1_mean_loss(
+        features_nchw=raster_graph.features,
+        alpha_nhw=raster_graph.alpha,
+        target_rgb=target_rgb,
+        background_rgb=background.rgb,
+        colorizer=trainer.colorize,
+    )
+    return loss_mean * (float(raster_graph.features.shape[0]) / float(max(total_frames, 1)))
+
+
+def build_step_graph(
+    trainer,
+    *,
+    multicam: bool,
+    timer: PhaseTimer,
+    use_v12a_fused_l1: bool = False,
+) -> tuple[list[ChunkRecord], torch.Tensor]:
     if multicam:
         _sequence_data, clip_frames, clip_times, decoded, targets = multicam_sample_and_encode(trainer, timer)
     else:
@@ -460,22 +491,31 @@ def build_step_graph(trainer, *, multicam: bool, timer: PhaseTimer) -> tuple[lis
                 timer,
             )
             with timer.measure("loss"):
-                rasterized = RasterizedView(
-                    view=chunk_target,
-                    features=raster_graph.features,
-                    alpha=raster_graph.alpha,
-                    cameras=chunk_target.cameras,
-                    view_dirs=trainer.view_dirs_for_features(raster_graph.features, tuple(chunk_target.cameras)),
-                )
-                rendered = trainer.rgb_objective.compose_rasterized(
-                    rasterized,
-                    phase="train",
-                    background=background,
-                    retain_target=True,
-                )
-                chunk_loss = trainer.rgb_objective.reconstruction_loss_per_image(rendered).sum() / float(
-                    max(total_frames, 1)
-                )
+                if use_v12a_fused_l1:
+                    chunk_loss = _v12a_fused_l1_chunk_loss(
+                        trainer,
+                        raster_graph,
+                        chunk_target,
+                        background,
+                        total_frames=total_frames,
+                    )
+                else:
+                    rasterized = RasterizedView(
+                        view=chunk_target,
+                        features=raster_graph.features,
+                        alpha=raster_graph.alpha,
+                        cameras=chunk_target.cameras,
+                        view_dirs=trainer.view_dirs_for_features(raster_graph.features, tuple(chunk_target.cameras)),
+                    )
+                    rendered = trainer.rgb_objective.compose_rasterized(
+                        rasterized,
+                        phase="train",
+                        background=background,
+                        retain_target=True,
+                    )
+                    chunk_loss = trainer.rgb_objective.reconstruction_loss_per_image(rendered).sum() / float(
+                        max(total_frames, 1)
+                    )
             chunk_records.append(ChunkRecord(loss=chunk_loss, raster=raster_graph))
     return chunk_records, regularizer_loss
 
@@ -575,6 +615,7 @@ def benchmark_fixed_render_case(
     *,
     freeze_colors: bool,
     backward_mode: str = "batched",
+    use_v12a_fused_l1: bool = False,
 ) -> dict[str, float]:
     if trainer.colorize is not None:
         trainer.colorize.train()
@@ -591,23 +632,32 @@ def benchmark_fixed_render_case(
             timer,
         )
         with timer.measure("loss"):
-            rasterized = RasterizedView(
-                view=fixed_chunk.target,
-                features=raster_graph.features,
-                alpha=raster_graph.alpha,
-                cameras=fixed_chunk.target.cameras,
-                view_dirs=trainer.view_dirs_for_features(raster_graph.features, tuple(fixed_chunk.target.cameras)),
-            )
-            rendered = trainer.rgb_objective.compose_rasterized(
-                rasterized,
-                phase="train",
-                background=chunk_background,
-                retain_target=True,
-            )
-            chunk_loss = (
-                trainer.rgb_objective.reconstruction_loss_per_image(rendered).sum()
-                / float(max(fixed_case.total_frames, 1))
-            )
+            if use_v12a_fused_l1:
+                chunk_loss = _v12a_fused_l1_chunk_loss(
+                    trainer,
+                    raster_graph,
+                    fixed_chunk.target,
+                    chunk_background,
+                    total_frames=fixed_case.total_frames,
+                )
+            else:
+                rasterized = RasterizedView(
+                    view=fixed_chunk.target,
+                    features=raster_graph.features,
+                    alpha=raster_graph.alpha,
+                    cameras=fixed_chunk.target.cameras,
+                    view_dirs=trainer.view_dirs_for_features(raster_graph.features, tuple(fixed_chunk.target.cameras)),
+                )
+                rendered = trainer.rgb_objective.compose_rasterized(
+                    rasterized,
+                    phase="train",
+                    background=chunk_background,
+                    retain_target=True,
+                )
+                chunk_loss = (
+                    trainer.rgb_objective.reconstruction_loss_per_image(rendered).sum()
+                    / float(max(fixed_case.total_frames, 1))
+                )
         if backward_mode == "chunked":
             with timer.measure("autograd_backward_total"):
                 chunk_loss.backward()
@@ -624,13 +674,18 @@ def benchmark_fixed_render_case(
     return {phase: float(timer.elapsed_ms.get(phase, 0.0)) for phase in FIXED_RENDER_PHASES}
 
 
-def benchmark_one_step(trainer, *, multicam: bool) -> dict[str, float]:
+def benchmark_one_step(trainer, *, multicam: bool, use_v12a_fused_l1: bool = False) -> dict[str, float]:
     trainer.model.train()
     if trainer.colorize is not None:
         trainer.colorize.train()
     trainer.optimizer.zero_grad(set_to_none=True)
     timer = PhaseTimer(trainer.device)
-    chunk_records, regularizer_loss = build_step_graph(trainer, multicam=multicam, timer=timer)
+    chunk_records, regularizer_loss = build_step_graph(
+        trainer,
+        multicam=multicam,
+        timer=timer,
+        use_v12a_fused_l1=use_v12a_fused_l1,
+    )
 
     if multicam:
         with timer.measure("autograd_backward_total"):
@@ -823,6 +878,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--v12a-fused-l1",
+        action="store_true",
+        help=(
+            "Use the opt-in v12a fused no-norm colorize+alpha-compose+L1 autograd path for the "
+            "reconstruction loss. Requires colorize.pre_norm=false, hidden_dim=null, sigmoid, and "
+            "view_condition=none."
+        ),
+    )
+    parser.add_argument(
         "--memory-sample-interval-ms",
         type=float,
         default=0.0,
@@ -874,9 +938,10 @@ def main() -> None:
                     fixed_case,
                     freeze_colors=bool(args.fixed_render_freeze_colors),
                     backward_mode=str(args.fixed_render_backward_mode),
+                    use_v12a_fused_l1=bool(args.v12a_fused_l1),
                 )
             else:
-                benchmark_one_step(trainer, multicam=multicam)
+                benchmark_one_step(trainer, multicam=multicam, use_v12a_fused_l1=bool(args.v12a_fused_l1))
         for _ in range(max(1, args.iters)):
             def run_measured_iteration():
                 if fixed_case is not None:
@@ -885,8 +950,13 @@ def main() -> None:
                         fixed_case,
                         freeze_colors=bool(args.fixed_render_freeze_colors),
                         backward_mode=str(args.fixed_render_backward_mode),
+                        use_v12a_fused_l1=bool(args.v12a_fused_l1),
                     )
-                return benchmark_one_step(trainer, multicam=multicam)
+                return benchmark_one_step(
+                    trainer,
+                    multicam=multicam,
+                    use_v12a_fused_l1=bool(args.v12a_fused_l1),
+                )
 
             if float(args.memory_sample_interval_ms) > 0.0:
                 samples.append(
@@ -905,10 +975,17 @@ def main() -> None:
                         fixed_case,
                         freeze_colors=bool(args.fixed_render_freeze_colors),
                         backward_mode=str(args.fixed_render_backward_mode),
+                        use_v12a_fused_l1=bool(args.v12a_fused_l1),
                     )
                 )
             else:
-                samples.append(benchmark_one_step(trainer, multicam=multicam))
+                samples.append(
+                    benchmark_one_step(
+                        trainer,
+                        multicam=multicam,
+                        use_v12a_fused_l1=bool(args.v12a_fused_l1),
+                    )
+                )
         summary = summarize(samples, phases)
         memory_summary = summarize_sampled_memory(samples)
         breakdown_samples: list[dict[str, float]] = []
@@ -931,6 +1008,7 @@ def main() -> None:
                 fixed_case.temporal_chunk_size if fixed_case is not None else None
             ),
             "fixed_render_backward_mode": str(args.fixed_render_backward_mode) if fixed_case is not None else None,
+            "v12a_fused_l1": bool(args.v12a_fused_l1),
             "fixed_render_setup_phases_ms": fixed_case.setup_phases_ms if fixed_case is not None else None,
             "fixed_render_chunk_count": len(fixed_case.chunks) if fixed_case is not None else None,
             "fixed_render_note": (

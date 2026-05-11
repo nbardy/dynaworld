@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
+import wandb
 
 from camera_swap_sampling import (
     CameraSwapPair,
@@ -25,9 +27,13 @@ from relative_pose import (
     se3_residual_matrix,
     se3_transform_l2_loss,
 )
-from rendering import resize_images
+from rendering import build_or_reuse_grid, resize_images
 from runtime_types import SequenceData
 from train_multicam_precomputed_feature_implicit_dynamic import MulticamPrecomputedFeatureImplicitTrainer
+from train_video_token_implicit_dynamic import (
+    _render_preview_image_impl,
+    pick_renderer_mode_from_config,
+)
 
 
 RELATIVE_POSE_TRAIN_DEFAULTS = {
@@ -36,6 +42,9 @@ RELATIVE_POSE_TRAIN_DEFAULTS = {
     "trainable_scope": "all",
     "relpose_feature_frame_mode": "first_frame",
     "relpose_pose_loss_weight": 1.0,
+    "multires_render_sizes": None,
+    "multires_render_probabilities": None,
+    "multires_token_detail_levels": None,
     "checkpoint_load_path": None,
     "checkpoint_save_path": None,
 }
@@ -49,6 +58,85 @@ class FullRelativePosePrediction:
     camera_to_world_per_frame: torch.Tensor
     oracle_camera_to_world: torch.Tensor
     target_template_cameras: tuple[Any, ...]
+
+
+def normalize_multires_render_sizes(value: Any) -> list[int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("train.multires_render_sizes must be null or a list of positive integer render sizes.")
+    if not value:
+        raise ValueError("train.multires_render_sizes cannot be empty when provided.")
+    sizes: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            raise ValueError("train.multires_render_sizes entries must be positive integers, not booleans.")
+        size = int(item)
+        if size < 1:
+            raise ValueError(f"train.multires_render_sizes entries must be >= 1, got {item!r}.")
+        sizes.append(size)
+    if len(set(sizes)) != len(sizes):
+        raise ValueError(f"train.multires_render_sizes must not contain duplicates, got {sizes!r}.")
+    return sizes
+
+
+def normalize_multires_render_probabilities(value: Any, *, render_sizes: list[int] | None) -> list[float] | None:
+    if value is None:
+        return None
+    if render_sizes is None:
+        raise ValueError("train.multires_render_probabilities requires train.multires_render_sizes.")
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("train.multires_render_probabilities must be null or a list of non-negative weights.")
+    if len(value) != len(render_sizes):
+        raise ValueError(
+            "train.multires_render_probabilities must have the same length as train.multires_render_sizes "
+            f"({len(render_sizes)}), got {len(value)}."
+        )
+    weights: list[float] = []
+    for item in value:
+        if isinstance(item, bool):
+            raise ValueError("train.multires_render_probabilities entries must be numeric weights, not booleans.")
+        weight = float(item)
+        if weight < 0.0:
+            raise ValueError(f"train.multires_render_probabilities entries must be >= 0, got {item!r}.")
+        weights.append(weight)
+    total = sum(weights)
+    if total <= 0.0:
+        raise ValueError("train.multires_render_probabilities must contain at least one positive weight.")
+    return [weight / total for weight in weights]
+
+
+def normalize_multires_token_detail_levels(value: Any, *, render_sizes: list[int] | None) -> list[int] | None:
+    if value is None:
+        return None
+    if render_sizes is None:
+        raise ValueError("train.multires_token_detail_levels requires train.multires_render_sizes.")
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("train.multires_token_detail_levels must be null or a list of non-negative integers.")
+    if len(value) != len(render_sizes):
+        raise ValueError(
+            "train.multires_token_detail_levels must have the same length as train.multires_render_sizes "
+            f"({len(render_sizes)}), got {len(value)}."
+        )
+    levels: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            raise ValueError("train.multires_token_detail_levels entries must be integers, not booleans.")
+        level = int(item)
+        if level < 0:
+            raise ValueError(f"train.multires_token_detail_levels entries must be >= 0, got {item!r}.")
+        levels.append(level)
+    return levels
+
+
+def model_token_layout_detail_levels(model_cfg: dict[str, Any]) -> int:
+    token_layout = model_cfg.get("token_layout")
+    if token_layout is None:
+        return 0
+    return max(
+        len(token_layout.get("static_detail_tokens") or []),
+        len(token_layout.get("dynamic_detail_tokens") or []),
+    )
 
 
 def first_frame_repeated_sequence(sequence_data: SequenceData, *, repeat_count: int, cache_tag: str) -> SequenceData:
@@ -112,6 +200,25 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         if cfg["train"]["relpose_feature_frame_mode"] not in {"first_frame", "clip"}:
             raise ValueError("train.relpose_feature_frame_mode must be one of: first_frame, clip.")
         cfg["train"]["relpose_pose_loss_weight"] = float(cfg["train"]["relpose_pose_loss_weight"])
+        cfg["train"]["multires_render_sizes"] = normalize_multires_render_sizes(cfg["train"]["multires_render_sizes"])
+        cfg["train"]["multires_render_probabilities"] = normalize_multires_render_probabilities(
+            cfg["train"]["multires_render_probabilities"],
+            render_sizes=cfg["train"]["multires_render_sizes"],
+        )
+        cfg["train"]["multires_token_detail_levels"] = normalize_multires_token_detail_levels(
+            cfg["train"]["multires_token_detail_levels"],
+            render_sizes=cfg["train"]["multires_render_sizes"],
+        )
+        if cfg["train"]["multires_token_detail_levels"] is not None:
+            if cfg["model"].get("token_layout") is None:
+                raise ValueError("train.multires_token_detail_levels requires model.token_layout.")
+            max_detail_level = model_token_layout_detail_levels(cfg["model"])
+            invalid = [level for level in cfg["train"]["multires_token_detail_levels"] if level > max_detail_level]
+            if invalid:
+                raise ValueError(
+                    "train.multires_token_detail_levels cannot exceed model.token_layout detail levels "
+                    f"({max_detail_level}), got {invalid!r}."
+                )
         cfg["train"]["checkpoint_load_path"] = path_or_none(cfg["train"]["checkpoint_load_path"])
         cfg["train"]["checkpoint_save_path"] = path_or_none(cfg["train"]["checkpoint_save_path"])
         if cfg["train"]["trainable_scope"] == "relpose_only":
@@ -124,8 +231,39 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
     def __init__(self, config: dict[str, Any]) -> None:
         self.relpose_first_frame_sequences: dict[tuple[str, int], SequenceData] = {}
         super().__init__(config)
+        self.base_render_size = int(self.render_cfg["render_size"])
+        self.multires_render_sizes = tuple(self.train_cfg["multires_render_sizes"] or ())
+        self.multires_render_probabilities = tuple(self.train_cfg["multires_render_probabilities"] or ())
+        self.multires_render_probability_by_size = (
+            dict(zip(self.multires_render_sizes, self.multires_render_probabilities, strict=True))
+            if self.multires_render_probabilities
+            else {}
+        )
+        self._multires_render_probability_tensor = (
+            torch.tensor(self.multires_render_probabilities, dtype=torch.float32, device=self.device)
+            if self.multires_render_probabilities
+            else None
+        )
+        self.multires_token_detail_levels = tuple(self.train_cfg["multires_token_detail_levels"] or ())
+        self.multires_token_detail_by_size = (
+            dict(zip(self.multires_render_sizes, self.multires_token_detail_levels, strict=True))
+            if self.multires_token_detail_levels
+            else {}
+        )
+        self._dense_grid_by_render_size = {int(self.render_size): self.dense_grid}
+        self.last_train_render_size = int(self.render_size)
+        self.last_train_token_detail_level = self.current_token_detail_level()
         if self.relpose_head is None:
             raise ValueError("MulticamRelativePoseImplicitTrainer requires a constructed relpose_head.")
+        if self.multires_render_sizes:
+            print(
+                "Multires render schedule enabled: "
+                f"train sizes={list(self.multires_render_sizes)}, "
+                f"probabilities={list(self.multires_render_probabilities) or 'uniform'}, "
+                f"validation size={self.base_render_size}"
+            )
+        if self.multires_token_detail_by_size:
+            print(f"Multires token-detail schedule enabled: {self.multires_token_detail_by_size}")
         self._load_checkpoint_if_configured()
         self._configure_trainable_scope()
 
@@ -178,7 +316,16 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         if "model" not in payload or "relpose_head" not in payload:
             raise KeyError("Relative-pose checkpoint must contain 'model' and 'relpose_head' state dicts.")
         self.model.load_state_dict(payload["model"])
-        self.relpose_head.load_state_dict(payload["relpose_head"])
+        relpose_load = self.relpose_head.load_state_dict(payload["relpose_head"], strict=False)
+        allowed_missing = {"pair_delta_norm.weight", "pair_delta_norm.bias", "pair_delta_output.weight"}
+        missing = set(relpose_load.missing_keys)
+        unexpected = set(relpose_load.unexpected_keys)
+        if unexpected:
+            raise KeyError(f"Unexpected relative-pose checkpoint keys: {sorted(unexpected)}")
+        if missing - allowed_missing:
+            raise KeyError(f"Missing relative-pose checkpoint keys: {sorted(missing)}")
+        if missing:
+            print(f"Initialized new relative-pose pair-delta keys not present in checkpoint: {sorted(missing)}")
         if self.colorize is not None and "colorizer" in payload:
             self.colorize.load_state_dict(payload["colorizer"])
         if hasattr(self, "camera_rig") and "camera_rig" in payload:
@@ -227,6 +374,95 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         super().run()
         self.save_checkpoint_if_configured()
 
+    def _dense_grid_for_render_size(self, render_size: int) -> torch.Tensor:
+        size = int(render_size)
+        if not hasattr(self, "_dense_grid_by_render_size"):
+            self._dense_grid_by_render_size = {}
+        if size not in self._dense_grid_by_render_size:
+            self._dense_grid_by_render_size[size] = build_or_reuse_grid(size, size, self.device)
+        return self._dense_grid_by_render_size[size]
+
+    def _activate_render_size(self, render_size: int) -> None:
+        size = int(render_size)
+        self.cfg["render"]["render_size"] = size
+        self.render_size = size
+        self.dense_grid = self._dense_grid_for_render_size(size)
+        self.renderer_mode, self.effective_gaussians = pick_renderer_mode_from_config(
+            self.cfg,
+            active_detail_level=self.current_token_detail_level(),
+        )
+
+    @contextmanager
+    def temporary_render_size(self, render_size: int):
+        previous_size = int(self.render_size)
+        previous_grid = self.dense_grid
+        previous_renderer_mode = self.renderer_mode
+        previous_effective_gaussians = self.effective_gaussians
+        self._activate_render_size(int(render_size))
+        try:
+            yield
+        finally:
+            self.cfg["render"]["render_size"] = previous_size
+            self.render_size = previous_size
+            self.dense_grid = previous_grid
+            self.renderer_mode = previous_renderer_mode
+            self.effective_gaussians = previous_effective_gaussians
+
+    def sample_train_render_size(self) -> int:
+        if not self.multires_render_sizes:
+            return self.base_render_size
+        if self._multires_render_probability_tensor is None:
+            index = int(torch.randint(len(self.multires_render_sizes), (1,), device=self.device).item())
+        else:
+            index = int(torch.multinomial(self._multires_render_probability_tensor, 1).item())
+        return int(self.multires_render_sizes[index])
+
+    def current_token_detail_level(self) -> int | None:
+        return getattr(self.model, "active_detail_level", None) if hasattr(self, "model") else None
+
+    @contextmanager
+    def temporary_token_detail_level(self, active_detail_level: int | None):
+        if active_detail_level is None:
+            yield
+            return
+        if not hasattr(self.model, "set_active_detail_level"):
+            raise ValueError("train.multires_token_detail_levels requires a model with set_active_detail_level().")
+        previous_level = self.current_token_detail_level()
+        previous_renderer_mode = self.renderer_mode
+        previous_effective_gaussians = self.effective_gaussians
+        self.model.set_active_detail_level(int(active_detail_level))
+        self.renderer_mode, self.effective_gaussians = pick_renderer_mode_from_config(
+            self.cfg,
+            active_detail_level=int(active_detail_level),
+        )
+        try:
+            yield
+        finally:
+            self.model.set_active_detail_level(previous_level)
+            self.renderer_mode = previous_renderer_mode
+            self.effective_gaussians = previous_effective_gaussians
+
+    def sample_train_token_detail_level(self, render_size: int) -> int | None:
+        return self.multires_token_detail_by_size.get(int(render_size))
+
+    def step(self, keep_preview: bool = False):
+        render_size = self.sample_train_render_size()
+        token_detail_level = self.sample_train_token_detail_level(render_size)
+        self.last_train_render_size = render_size
+        self.last_train_token_detail_level = token_detail_level
+        with self.temporary_render_size(render_size), self.temporary_token_detail_level(token_detail_level):
+            result = super().step(keep_preview=keep_preview)
+        setattr(result, "render_size", render_size)
+        setattr(result, "token_detail_level", token_detail_level)
+        if hasattr(self.model, "active_decoded_token_count") and token_detail_level is not None:
+            previous_level = self.current_token_detail_level()
+            self.model.set_active_detail_level(token_detail_level)
+            try:
+                setattr(result, "active_decoded_tokens", self.model.active_decoded_token_count())
+            finally:
+                self.model.set_active_detail_level(previous_level)
+        return result
+
     def sequence_for_camera_set(self, camera_set: str, view: int):
         key = (str(camera_set), int(view))
         if self.train_cfg["relpose_feature_frame_mode"] == "first_frame" and key in self.relpose_first_frame_sequences:
@@ -261,17 +497,24 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         source_key = ("train", int(pair.source_view))
         query_key = (pair.query_set, int(pair.query_view))
         if source_key not in memory_cache:
-            memory_cache[source_key] = self.projected_feature_memory_for_relpose_view("train", int(pair.source_view))
+            with self.profile_section("relpose/feature_memory"):
+                memory_cache[source_key] = self.projected_feature_memory_for_relpose_view("train", int(pair.source_view))
         if query_key not in memory_cache:
-            memory_cache[query_key] = self.projected_feature_memory_for_relpose_view(pair.query_set, int(pair.query_view))
-        rotation, translation = self.relpose_head(memory_cache[source_key], memory_cache[query_key])
-        camera_to_world = se3_residual_matrix(rotation, translation)
-        target_template_cameras = self.source_relative_cameras_for_pair(pair, clip_indices)
-        oracle_camera_to_world = torch.stack(
-            [camera.camera_to_world.to(device=camera_to_world.device, dtype=camera_to_world.dtype) for camera in target_template_cameras],
-            dim=0,
-        )
-        camera_to_world_per_frame = camera_to_world.expand(len(target_template_cameras), -1, -1)
+            with self.profile_section("relpose/feature_memory"):
+                memory_cache[query_key] = self.projected_feature_memory_for_relpose_view(pair.query_set, int(pair.query_view))
+        with self.profile_section("relpose/head"):
+            rotation, translation = self.relpose_head(memory_cache[source_key], memory_cache[query_key])
+        with self.profile_section("relpose/camera_math"):
+            camera_to_world = se3_residual_matrix(rotation, translation)
+            target_template_cameras = self.source_relative_cameras_for_pair(pair, clip_indices)
+            oracle_camera_to_world = torch.stack(
+                [
+                    camera.camera_to_world.to(device=camera_to_world.device, dtype=camera_to_world.dtype)
+                    for camera in target_template_cameras
+                ],
+                dim=0,
+            )
+            camera_to_world_per_frame = camera_to_world.expand(len(target_template_cameras), -1, -1)
         return FullRelativePosePrediction(
             rotation=rotation,
             translation=translation,
@@ -391,32 +634,37 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
 
         rendered_count = 0
         for source_index, source_pairs in pairs_by_source.items():
-            sequence_data, clip_frames, _clip_times, decoded = self._decode_source_view(source_index, clip_indices)
+            with self.profile_section("camera_swap/source_decode"):
+                sequence_data, clip_frames, _clip_times, decoded = self._decode_source_view(source_index, clip_indices)
             if first_sequence_data is None:
                 first_sequence_data = sequence_data
                 first_clip_frames = clip_frames
                 first_camera_state = decoded.camera_state
-            source_bank_loss, source_bank_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
+            with self.profile_section("camera_swap/bank_rate"):
+                source_bank_loss, source_bank_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
             bank_rate_loss = bank_rate_loss + source_bank_loss
             for key, value in source_bank_terms.items():
                 bank_rate_terms_accum[key] = bank_rate_terms_accum.get(key, value.new_zeros(())) + value
 
             for pair_index, pair in enumerate(source_pairs):
-                target_frames = self.camera_swap_target_frames(pair, clip_indices)
-                background = self.rgb_objective.sample_background(
-                    phase=phase,
-                    like=target_frames,
-                    frame_count=len(clip_indices),
-                )
-                prediction = self.full_relative_pose_for_pair(
-                    pair,
-                    clip_indices=clip_indices,
-                    memory_cache=relpose_memory_cache,
-                )
-                pose_loss = se3_transform_l2_loss(
-                    prediction.camera_to_world_per_frame,
-                    prediction.oracle_camera_to_world,
-                )
+                with self.profile_section("camera_swap/background"):
+                    target_frames = self.camera_swap_target_frames(pair, clip_indices)
+                    background = self.rgb_objective.sample_background(
+                        phase=phase,
+                        like=target_frames,
+                        frame_count=len(clip_indices),
+                    )
+                with self.profile_section("camera_swap/relpose_predict"):
+                    prediction = self.full_relative_pose_for_pair(
+                        pair,
+                        clip_indices=clip_indices,
+                        memory_cache=relpose_memory_cache,
+                    )
+                with self.profile_section("camera_swap/relpose_loss"):
+                    pose_loss = se3_transform_l2_loss(
+                        prediction.camera_to_world_per_frame,
+                        prediction.oracle_camera_to_world,
+                    )
                 relpose_pose_loss = relpose_pose_loss + pose_loss
                 relpose_pose_count += 1
                 if pair.is_self_reconstruction:
@@ -425,33 +673,38 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
                         prediction.translation,
                     )
                     relpose_identity_count += 1
-                cycle_loss = self.relpose_cycle_loss_for_prediction(
-                    pair,
-                    prediction,
-                    clip_indices=clip_indices,
-                    memory_cache=relpose_memory_cache,
-                )
+                with self.profile_section("camera_swap/relpose_cycle"):
+                    cycle_loss = self.relpose_cycle_loss_for_prediction(
+                        pair,
+                        prediction,
+                        clip_indices=clip_indices,
+                        memory_cache=relpose_memory_cache,
+                    )
                 if cycle_loss is not None:
                     relpose_cycle_loss = relpose_cycle_loss + cycle_loss
                     relpose_cycle_count += 1
-                rendered = self.render_camera_swap_pair_with_cameras(
-                    decoded,
-                    pair=pair,
-                    cameras=cameras_with_se3_transform(
+                with self.profile_section("camera_swap/camera_apply"):
+                    cameras = cameras_with_se3_transform(
                         prediction.target_template_cameras,
                         prediction.camera_to_world,
-                    ),
-                    clip_indices=clip_indices,
-                    phase=phase,
-                    background=background,
-                    log_media=keep_preview and preview_render is None and pair_index == 0,
-                )
+                    )
+                with self.profile_section("render_view_total"):
+                    rendered = self.render_camera_swap_pair_with_cameras(
+                        decoded,
+                        pair=pair,
+                        cameras=cameras,
+                        clip_indices=clip_indices,
+                        phase=phase,
+                        background=background,
+                        log_media=keep_preview and preview_render is None and pair_index == 0,
+                    )
                 if phase == "train" and self.feature_dim != 3 and rendered.alpha is None:
                     raise ValueError(
                         "F-channel camera-swap training requires alpha-aware render output so random-background "
                         "composition is active. Got alpha=None; check renderer='fast_mac' and v5_features build."
                     )
-                recon_loss = recon_loss + self.rgb_objective.reconstruction_loss(rendered)
+                with self.profile_section("recon_loss"):
+                    recon_loss = recon_loss + self.rgb_objective.reconstruction_loss(rendered)
                 rendered_count += 1
                 if keep_preview and preview_render is None:
                     preview_render = rendered.rgb[0].detach()
@@ -578,6 +831,10 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         )
 
     def validation_video_payload(self, step: int | None = None) -> dict[str, Any]:
+        base_render_size = getattr(self, "base_render_size", int(self.render_cfg["render_size"]))
+        if int(self.render_size) != int(base_render_size):
+            with self.temporary_render_size(base_render_size):
+                return self.validation_video_payload(step=step)
         train_rendered, heldout_rendered, decoded_metrics = self.render_full_predicted_relative_views()
         train_targets = [
             resize_images(self.multicam_bundle.train_frames[view], self.render_size).detach().cpu()
@@ -606,6 +863,19 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
 
     def scalar_payload(self, result) -> dict[str, Any]:
         payload = super().scalar_payload(result)
+        payload["RenderSize"] = int(getattr(result, "render_size", self.render_size))
+        payload["Render/BaseSize"] = int(getattr(self, "base_render_size", self.render_size))
+        payload["Render/MultiResEnabled"] = 1.0 if self.multires_render_sizes else 0.0
+        if self.multires_render_sizes:
+            payload["Render/MultiResChoiceCount"] = len(self.multires_render_sizes)
+        if self.multires_render_probability_by_size:
+            payload["Render/MultiResProbability"] = float(
+                self.multires_render_probability_by_size[int(getattr(result, "render_size", self.render_size))]
+            )
+        token_detail_level = getattr(result, "token_detail_level", None)
+        if token_detail_level is not None:
+            payload["Tokens/ActiveDetailLevel"] = int(token_detail_level)
+            payload["Tokens/ActiveDecodedTokens"] = int(getattr(result, "active_decoded_tokens", 0))
         payload["RelPose/FullPoseMode"] = 1.0
         payload["RelPose/HeldoutPredictedEval"] = (
             1.0 if self.train_cfg["heldout_eval_camera_mode"] == "predicted_relpose" else 0.0
@@ -613,6 +883,35 @@ class MulticamRelativePoseImplicitTrainer(MulticamPrecomputedFeatureImplicitTrai
         payload["RelPose/RelposeOnlyTrainable"] = 1.0 if self.train_cfg["trainable_scope"] == "relpose_only" else 0.0
         payload["RelPose/PoseLossWeight"] = float(self.train_cfg["relpose_pose_loss_weight"])
         return payload
+
+    def val_log(self, step: int, result) -> None:
+        should_log_scalars = self.should_log_scalars(step)
+        should_log_images = self.should_log_images(step)
+        should_log_videos = self.should_log_videos(step)
+        if not (should_log_scalars or should_log_images or should_log_videos):
+            return
+
+        result_render_size = int(getattr(result, "render_size", self.render_size))
+        with self.temporary_render_size(result_render_size):
+            payload = self.scalar_payload(result)
+            if should_log_images:
+                payload["Render_GT_vs_Pred"] = _render_preview_image_impl(self.cfg, result, step)
+                if self.feature_pca_log:
+                    if result.preview_features is None:
+                        raise ValueError(
+                            "feature_pca_log is on but preview_features was not retained for the training step."
+                        )
+                    from feature_pca_viz import feature_pca_to_rgb
+
+                    pca_rgb = feature_pca_to_rgb(result.preview_features)
+                    pca_image = (
+                        pca_rgb.detach().cpu().clamp(0, 1).permute(1, 2, 0) * 255.0
+                    ).to(torch.uint8).numpy()
+                    payload["media/feature_pca_image"] = wandb.Image(pca_image, caption=f"Step {step}")
+        if should_log_videos:
+            with self.temporary_render_size(self.base_render_size):
+                payload.update(self.validation_video_payload(step=step))
+        wandb.log(payload, step=step)
 
 
 def run_training(config: dict[str, Any]) -> None:

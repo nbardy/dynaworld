@@ -74,6 +74,7 @@ MODEL_DEFAULTS: dict[str, Any] = {
     "dynamic_rotation_degrees": 10.0,
     "dynamic_alpha_logit_extent": 2.0,
     "dynamic_coeff_output_init_std": 1.0e-4,
+    "token_layout": None,
     "free_frame_count": None,
     "free_time_interpolation": "nearest",
     "free_velocity_extent": 1.0,
@@ -224,6 +225,7 @@ BASE_VIDEO_ARGS: dict[str, ArgSource] = {
     "video_feature_output_dtype": "video_feature_output_dtype",
     "cross_attn_layers": "cross_attn_layers",
     "camera_refine_with_decode_time": "camera_refine_with_decode_time",
+    "token_layout": "token_layout",
 }
 
 DYNAMIC_SPLIT_ARGS: dict[str, ArgSource] = {
@@ -380,13 +382,21 @@ def normalized_model_section(model_spec: Mapping[str, Any]) -> dict[str, Any]:
     if values["video_feature_output_dtype"] is not None:
         values["video_feature_output_dtype"] = str(values["video_feature_output_dtype"]).lower()
     values["camera_refine_with_decode_time"] = bool(values["camera_refine_with_decode_time"])
+    if values["token_layout"] is not None and not isinstance(values["token_layout"], Mapping):
+        raise ModelFactoryConfigError("model.token_layout must be a mapping or null.")
     if values["xy_extent"] is None:
         values["xy_extent"] = values["scene_extent"]
     if values["z_min"] is None:
         values["z_min"] = -values["scene_extent"]
     if values["z_max"] is None:
         values["z_max"] = values["scene_extent"]
-    if values["static_tokens"] is not None or values["dynamic_tokens"] is not None:
+    if values["token_layout"] is not None:
+        if (values["static_tokens"] is None) != (values["dynamic_tokens"] is None):
+            raise ModelFactoryConfigError(
+                "model.static_tokens and model.dynamic_tokens must be provided together when token_layout is set."
+            )
+        values["use_static_dynamic_split"] = True
+    elif values["static_tokens"] is not None or values["dynamic_tokens"] is not None:
         if values["static_tokens"] is None or values["dynamic_tokens"] is None:
             raise ModelFactoryConfigError("model.static_tokens and model.dynamic_tokens must be provided together.")
         values["use_static_dynamic_split"] = True

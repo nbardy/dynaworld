@@ -35,6 +35,7 @@ lever: [CORE_GOAL.md](../../CORE_GOAL.md).
 | TokenGS-style splat tokens | Decouple Gaussian count and placement from pixels; predict global 3D/4D tokens through a decoder. | Probe | [gemini_thread_3.md](gemini_thread_3.md), [thread_1.txt](thread_1.txt), [KEY_ARCHITECTURE_DECISIONS.md](KEY_ARCHITECTURE_DECISIONS.md) |
 | Single-step video diffusion -> splats | Use a frozen/frozen-mostly video diffusion model as a one-step geometry feature extractor, then train splat tokens through render loss. | Probe | [single_step/STUDY_NOTES.md](single_step/STUDY_NOTES.md), [gemini_thread_3.md](gemini_thread_3.md), [SESSION_Q_AND_A_SYNTHESIS.md](SESSION_Q_AND_A_SYNTHESIS.md) |
 | Pixel-space SDS from rendered splats | Keep 3D tokens clean, render them to 2D, noise the rendered pixels/latents, and use a frozen video diffusion teacher for score gradients. | Probe | [KEY_ARCHITECTURE_DECISIONS.md](KEY_ARCHITECTURE_DECISIONS.md), [gemini_thread_3.md](gemini_thread_3.md), [diffusion forcing synthesis](chats/diffusion_splat_forcing_apr_20th_gemini/result.md) |
+| Teacher supervision losses | Use RADIO-ViPE-style pose/depth/features and video-diffusion teacher features or score/Jacobian pullbacks as auxiliary supervised losses for world-token training. | Probe | [teacher-supervision loss TODO](../TODO/radio_vipe_supervised_loss_todo.md) |
 | Diffusion as loss vs diffusion as conditioning | Name the two distinct roles a pretrained video diffusion model plays — input-side feature conditioning vs. output-side score supervision — and design around both, especially for novel-view supervision without multi-view data. | Probe | [meta_philosophy/architecture_design_north_star.md](meta_philosophy/architecture_design_north_star.md), [meta_philosophy/our_problem_core_requirements_and_goals_and_current_philosophy_and_insight.md](meta_philosophy/our_problem_core_requirements_and_goals_and_current_philosophy_and_insight.md) |
 | World-token AR/diffusion generation | Predict future or conditional world tokens for video continuation, image=>video, and text=>video after the base tokens pass novel-camera checks. | Speculative | [diffusion forcing synthesis](chats/diffusion_splat_forcing_apr_20th_gemini/result.md), [path B causal notes](proposed_architectures/path_b_causal_autoregressive/01_CAUSAL_STATE_UPDATE.md), [ChopGrad path B](proposed_architectures/path_b_causal_autoregressive/02_CHOPGRAD_TRAINING.md) |
 | Physical lens and shutter blur | Model f-stop / focal length / finite-aperture DoF, camera motion blur, and dynamic-object blur as capture-state in the renderer rather than baked scene content. | Probe | [blur_dof_motion_paper_review.md](blur_dof_motion_paper_review.md), [paper corpus](blur_dof_motion_papers/paper_index.md) |
@@ -175,6 +176,28 @@ Main risks:
   ground truth.
 - Video diffusion teachers may reward temporal texture coherence more than
   physical 3D consistency unless camera/view conditioning is explicit.
+
+### Teacher Supervision Losses
+
+RADIO-ViPE is a useful reference for an auxiliary-supervision lane: run an
+online calibration-free semantic SLAM system on raw RGB video, then distill its
+pose, intrinsics, depth/disparity, dense feature maps, and temporal-stability
+weights into the DynaWorld trainer. This should be treated as a teacher, not as
+ground truth and not as a replacement for RGB render loss.
+
+The same config surface should also support a frozen video-diffusion teacher as
+an output-side loss. First target the deterministic no-noise version: compare
+teacher features or latents on rendered clips versus reference clips and use
+VJP/JVP-style teacher pullbacks when memory requires it. Then prototype the
+rigorous diffusion variant as Score Jacobian Chaining / DiffRep-style pullback,
+not as unlabeled naive SDS.
+
+Near-term test: add a zero-default `losses.teacher_supervision` config path,
+wire pose-teacher loss first for the multicam relative-pose trainer, add
+feature-teacher loss through the existing F32 feature-splatting renderer, then
+add deterministic video-teacher feature loss before score/Jacobian pullback.
+Select by heldout-camera quality, not source-camera reconstruction. Detailed
+task list: [teacher-supervision loss TODO](../TODO/radio_vipe_supervised_loss_todo.md).
 
 ### Diffusion As Loss Vs Diffusion As Conditioning
 

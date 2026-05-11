@@ -18,6 +18,7 @@ CameraOwner = Literal["model", "target", "external_rig", "none"]
 BackgroundMode = Literal["white", "black", "fixed_rgb", "random_rgb", "none"]
 BackgroundSampleScope = Literal["step", "view", "frame", "pixel"]
 ReconstructionLossKind = Literal["mse", "l1", "l1_mse", "standard_gs"]
+DSSIMBackend = Literal["torch", "metal"]
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ class ReconstructionLossSpec:
     ssim_window_size: int = 11
     ssim_c1: float = 0.01**2
     ssim_c2: float = 0.03**2
+    dssim_backend: DSSIMBackend = "torch"
 
 
 @dataclass(frozen=True)

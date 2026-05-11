@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from .choices import checked_choice
+from .metal_dssim import metal_dssim_mean
 from .types import ReconstructionLossKind, ReconstructionLossSpec, RenderedView, TargetView, ViewLoss
 from .background import background_spec_from_mapping
 from .types import ObjectiveSpec
@@ -83,6 +84,11 @@ def reconstruction_loss_spec_from_mapping(values: Mapping[str, Any]) -> Reconstr
         ssim_window_size=int(values["ssim_window_size"]) if "ssim_window_size" in values else 11,
         ssim_c1=float(values["ssim_c1"]) if "ssim_c1" in values else 0.01**2,
         ssim_c2=float(values["ssim_c2"]) if "ssim_c2" in values else 0.03**2,
+        dssim_backend=checked_choice(
+            values["dssim_backend"] if "dssim_backend" in values else "torch",
+            allowed=frozenset(("torch", "metal")),
+            label="losses.dssim_backend",
+        ),
     )
 
 
@@ -119,13 +125,22 @@ def reconstruction_loss_per_image(
         return spec.l1_weight * l1 + spec.mse_weight * mse
     if spec.kind == "standard_gs":
         l1 = _mean_per_image(delta.abs())
-        dssim = dssim_per_image(
-            prediction,
-            target,
-            window_size=spec.ssim_window_size,
-            c1=spec.ssim_c1,
-            c2=spec.ssim_c2,
-        )
+        if spec.dssim_backend == "metal":
+            dssim = metal_dssim_mean(
+                prediction.float(),
+                target.float(),
+                window_size=spec.ssim_window_size,
+                c1=spec.ssim_c1,
+                c2=spec.ssim_c2,
+            ).expand_as(l1)
+        else:
+            dssim = dssim_per_image(
+                prediction,
+                target,
+                window_size=spec.ssim_window_size,
+                c1=spec.ssim_c1,
+                c2=spec.ssim_c2,
+            )
         return spec.l1_weight * l1 + spec.dssim_weight * dssim
     raise ValueError(f"Unknown reconstruction loss type: {spec.kind!r}")
 

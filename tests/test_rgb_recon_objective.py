@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from objective.objective import RGBReconObjective
+from objective.loss import objective_spec_from_loss_config
 from objective.types import (
     BackgroundSample,
     BackgroundSpec,
@@ -99,3 +100,15 @@ def test_background_policy_random_train_white_eval() -> None:
     assert eval_bg.mode == "white"
     assert eval_bg.rgb is not None
     assert torch.allclose(eval_bg.rgb, torch.ones(1, 3, 1, 1))
+
+
+def test_objective_spec_parses_dssim_backend_toggle() -> None:
+    spec = objective_spec_from_loss_config(
+        {
+            "type": "standard_gs",
+            "dssim_backend": "metal",
+            "background": {"train_mode": "random_rgb", "eval_mode": "white", "fixed_rgb": (1.0, 1.0, 1.0)},
+        }
+    )
+
+    assert spec.reconstruction.dssim_backend == "metal"

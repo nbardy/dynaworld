@@ -836,6 +836,209 @@ class LearnedQueryTokenBank(nn.Module):
 
 
 @dataclass(frozen=True)
+class QueryTokenSpan:
+    name: str
+    start: int
+    count: int
+
+    @property
+    def end(self) -> int:
+        return self.start + self.count
+
+
+@dataclass(frozen=True)
+class QueryTokenLayout:
+    world_tokens: int
+    register_tokens: int
+    default_active_detail_level: int
+    static_core_span: QueryTokenSpan
+    dynamic_core_span: QueryTokenSpan
+    static_detail_spans: tuple[QueryTokenSpan, ...]
+    dynamic_detail_spans: tuple[QueryTokenSpan, ...]
+    detail_register_spans: tuple[QueryTokenSpan, ...]
+    total_non_camera_tokens: int
+
+    @property
+    def detail_levels(self) -> int:
+        return max(len(self.static_detail_spans), len(self.dynamic_detail_spans))
+
+    @property
+    def max_decoded_static_tokens(self) -> int:
+        return self.decoded_static_tokens(self.detail_levels)
+
+    @property
+    def max_decoded_dynamic_tokens(self) -> int:
+        return self.decoded_dynamic_tokens(self.detail_levels)
+
+    @property
+    def max_decoded_tokens(self) -> int:
+        return self.max_decoded_static_tokens + self.max_decoded_dynamic_tokens
+
+    def validate_active_detail_level(self, active_detail_level: int | None = None) -> int:
+        if active_detail_level is None:
+            active_detail_level = self.default_active_detail_level
+        active_detail_level = int(active_detail_level)
+        if not 0 <= active_detail_level <= self.detail_levels:
+            raise ValueError(
+                f"token_layout active_detail_level must be between 0 and {self.detail_levels}, "
+                f"got {active_detail_level}."
+            )
+        return active_detail_level
+
+    def static_spans(self, active_detail_level: int | None = None) -> tuple[QueryTokenSpan, ...]:
+        level = self.validate_active_detail_level(active_detail_level)
+        return (self.static_core_span,) + self.static_detail_spans[:level]
+
+    def dynamic_spans(self, active_detail_level: int | None = None) -> tuple[QueryTokenSpan, ...]:
+        level = self.validate_active_detail_level(active_detail_level)
+        return (self.dynamic_core_span,) + self.dynamic_detail_spans[:level]
+
+    def decoded_static_tokens(self, active_detail_level: int | None = None) -> int:
+        return sum(span.count for span in self.static_spans(active_detail_level))
+
+    def decoded_dynamic_tokens(self, active_detail_level: int | None = None) -> int:
+        return sum(span.count for span in self.dynamic_spans(active_detail_level))
+
+    def gather_static(self, queries, active_detail_level: int | None = None):
+        return _gather_token_spans(queries, self.static_spans(active_detail_level))
+
+    def gather_dynamic(self, queries, active_detail_level: int | None = None):
+        return _gather_token_spans(queries, self.dynamic_spans(active_detail_level))
+
+
+def _nonnegative_int(value, field_name):
+    value = int(value)
+    if value < 0:
+        raise ValueError(f"token_layout.{field_name} must be >= 0, got {value}.")
+    return value
+
+
+def _positive_int(value, field_name):
+    value = int(value)
+    if value < 1:
+        raise ValueError(f"token_layout.{field_name} must be >= 1, got {value}.")
+    return value
+
+
+def _detail_counts(layout, field_name):
+    values = layout.get(field_name, ())
+    if values is None:
+        return ()
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"token_layout.{field_name} must be a list of token counts.")
+    return tuple(_nonnegative_int(value, field_name) for value in values)
+
+
+def _detail_register_counts(layout, detail_levels):
+    values = _detail_counts(layout, "detail_register_tokens")
+    if len(values) > detail_levels:
+        raise ValueError(
+            "token_layout.detail_register_tokens cannot be longer than the number of detail levels "
+            f"({detail_levels}), got {len(values)}."
+        )
+    return values + (0,) * (detail_levels - len(values))
+
+
+def _gather_token_spans(queries, spans):
+    parts = [queries[:, 2 + span.start : 2 + span.end, :] for span in spans if span.count > 0]
+    if not parts:
+        raise ValueError("Token layout selected no decoded Gaussian tokens.")
+    return torch.cat(parts, dim=1)
+
+
+def _resolve_query_token_layout(token_layout, *, num_tokens, static_tokens=None, dynamic_tokens=None):
+    if token_layout is None:
+        return None
+    if not isinstance(token_layout, Mapping):
+        raise ValueError("token_layout must be a mapping or null.")
+    allowed = {
+        "world_tokens",
+        "register_tokens",
+        "static_core_tokens",
+        "dynamic_core_tokens",
+        "static_detail_tokens",
+        "dynamic_detail_tokens",
+        "detail_register_tokens",
+        "active_detail_level",
+    }
+    unknown = set(token_layout) - allowed
+    if unknown:
+        known = ", ".join(sorted(allowed))
+        raise ValueError(f"Unknown token_layout key(s): {', '.join(sorted(unknown))}. Known keys: {known}.")
+
+    world_tokens = _nonnegative_int(token_layout.get("world_tokens", 0), "world_tokens")
+    register_tokens = _nonnegative_int(token_layout.get("register_tokens", 0), "register_tokens")
+    static_core_tokens = _positive_int(token_layout.get("static_core_tokens", 0), "static_core_tokens")
+    dynamic_core_tokens = _positive_int(token_layout.get("dynamic_core_tokens", 0), "dynamic_core_tokens")
+    static_detail_tokens = _detail_counts(token_layout, "static_detail_tokens")
+    dynamic_detail_tokens = _detail_counts(token_layout, "dynamic_detail_tokens")
+    detail_levels = max(len(static_detail_tokens), len(dynamic_detail_tokens))
+    static_detail_tokens = static_detail_tokens + (0,) * (detail_levels - len(static_detail_tokens))
+    dynamic_detail_tokens = dynamic_detail_tokens + (0,) * (detail_levels - len(dynamic_detail_tokens))
+    detail_register_tokens = _detail_register_counts(token_layout, detail_levels)
+    active_detail_level = token_layout.get("active_detail_level", detail_levels)
+    if active_detail_level is None:
+        active_detail_level = detail_levels
+    active_detail_level = int(active_detail_level)
+    if not 0 <= active_detail_level <= detail_levels:
+        raise ValueError(
+            f"token_layout.active_detail_level must be between 0 and {detail_levels}, got {active_detail_level}."
+        )
+
+    static_detail_spans = []
+    dynamic_detail_spans = []
+    detail_register_spans = []
+    cursor = 0
+    cursor += world_tokens
+    cursor += register_tokens
+    static_core = QueryTokenSpan(name="static_core", start=cursor, count=static_core_tokens)
+    cursor = static_core.end
+    dynamic_core = QueryTokenSpan(name="dynamic_core", start=cursor, count=dynamic_core_tokens)
+    cursor = dynamic_core.end
+    for level, (register_count, static_count, dynamic_count) in enumerate(
+        zip(detail_register_tokens, static_detail_tokens, dynamic_detail_tokens, strict=True)
+    ):
+        register_span = QueryTokenSpan(name=f"detail_register_{level}", start=cursor, count=register_count)
+        detail_register_spans.append(register_span)
+        cursor = register_span.end
+        static_detail_span = QueryTokenSpan(name=f"static_detail_{level}", start=cursor, count=static_count)
+        static_detail_spans.append(static_detail_span)
+        cursor = static_detail_span.end
+        dynamic_detail_span = QueryTokenSpan(name=f"dynamic_detail_{level}", start=cursor, count=dynamic_count)
+        dynamic_detail_spans.append(dynamic_detail_span)
+        cursor = dynamic_detail_span.end
+
+    if cursor != int(num_tokens):
+        raise ValueError(
+            f"token_layout spans must sum to num_tokens={int(num_tokens)}, got {cursor}. "
+            "Include world/register, static/dynamic core, and all detail tokens in model.tokens."
+        )
+
+    layout = QueryTokenLayout(
+        world_tokens=world_tokens,
+        register_tokens=register_tokens,
+        default_active_detail_level=active_detail_level,
+        static_core_span=static_core,
+        dynamic_core_span=dynamic_core,
+        static_detail_spans=tuple(static_detail_spans),
+        dynamic_detail_spans=tuple(dynamic_detail_spans),
+        detail_register_spans=tuple(detail_register_spans),
+        total_non_camera_tokens=cursor,
+    )
+    if static_tokens is not None and int(static_tokens) != layout.max_decoded_static_tokens:
+        raise ValueError(
+            "model.static_tokens must match the full token_layout decoded static capacity "
+            f"({layout.max_decoded_static_tokens}), got {static_tokens}."
+        )
+    if dynamic_tokens is not None and int(dynamic_tokens) != layout.max_decoded_dynamic_tokens:
+        raise ValueError(
+            "model.dynamic_tokens must match the full token_layout decoded dynamic capacity "
+            f"({layout.max_decoded_dynamic_tokens}), got {dynamic_tokens}."
+        )
+    return layout
+
+
+@dataclass(frozen=True)
 class DynamicGaussianBank:
     xyz0: torch.Tensor
     scales: torch.Tensor
@@ -1845,16 +2048,32 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         dynamic_rotation_degrees=10.0,
         dynamic_alpha_logit_extent=2.0,
         dynamic_coeff_output_init_std=1.0e-4,
+        token_layout=None,
         feature_dim=3,
     ):
         super().__init__()
         self.clip_length = clip_length
         self.image_size = image_size
         self.num_tokens = int(num_tokens)
-        self.static_tokens = None if static_tokens is None else int(static_tokens)
-        self.dynamic_tokens = None if dynamic_tokens is None else int(dynamic_tokens)
-        self.use_static_dynamic_split = self.static_tokens is not None or self.dynamic_tokens is not None
-        if self.use_static_dynamic_split:
+        legacy_static_tokens = None if static_tokens is None else int(static_tokens)
+        legacy_dynamic_tokens = None if dynamic_tokens is None else int(dynamic_tokens)
+        self.token_layout = _resolve_query_token_layout(
+            token_layout,
+            num_tokens=self.num_tokens,
+            static_tokens=legacy_static_tokens,
+            dynamic_tokens=legacy_dynamic_tokens,
+        )
+        if self.token_layout is None:
+            self.static_tokens = legacy_static_tokens
+            self.dynamic_tokens = legacy_dynamic_tokens
+        else:
+            self.active_detail_level = self.token_layout.default_active_detail_level
+            self.static_tokens = self.token_layout.decoded_static_tokens(self.active_detail_level)
+            self.dynamic_tokens = self.token_layout.decoded_dynamic_tokens(self.active_detail_level)
+        self.use_static_dynamic_split = (
+            self.token_layout is not None or self.static_tokens is not None or self.dynamic_tokens is not None
+        )
+        if self.use_static_dynamic_split and self.token_layout is None:
             if self.static_tokens is None or self.dynamic_tokens is None:
                 raise ValueError("static_tokens and dynamic_tokens must be provided together.")
             if self.static_tokens < 1 or self.dynamic_tokens < 1:
@@ -1969,6 +2188,35 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         )
         self.time_proj = build_time_projector(1, feat_dim)
         self.head_time_proj = build_time_projector(1, feat_dim)
+
+    def set_active_detail_level(self, active_detail_level: int | None) -> int | None:
+        if self.token_layout is None:
+            if active_detail_level is not None:
+                raise ValueError("active_detail_level requires model.token_layout.")
+            return None
+        level = self.token_layout.validate_active_detail_level(active_detail_level)
+        self.active_detail_level = level
+        self.static_tokens = self.token_layout.decoded_static_tokens(level)
+        self.dynamic_tokens = self.token_layout.decoded_dynamic_tokens(level)
+        return level
+
+    def active_decoded_token_count(self) -> int:
+        if self.token_layout is None:
+            return int(self.num_tokens)
+        return int(self.static_tokens) + int(self.dynamic_tokens)
+
+    def active_gaussian_count(self) -> int:
+        return self.active_decoded_token_count() * int(self.gaussians_per_token)
+
+    def decoded_static_query_tokens(self, fixed_queries):
+        if self.token_layout is None:
+            return fixed_queries[:, 2 : 2 + self.static_tokens, :]
+        return self.token_layout.gather_static(fixed_queries, self.active_detail_level)
+
+    def decoded_dynamic_query_tokens(self, fixed_queries):
+        if self.token_layout is None:
+            return fixed_queries[:, 2 + self.static_tokens :, :]
+        return self.token_layout.gather_dynamic(fixed_queries, self.active_detail_level)
 
     def refine_queries(self, video_tokens, decode_time=None):
         batch_size = video_tokens.shape[0]
@@ -2089,8 +2337,8 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
         )
 
     def _decode_static_dynamic_split(self, video_tokens, fixed_queries, decode_times, fixed_global_camera_token):
-        static_token_slice = fixed_queries[:, 2 : 2 + self.static_tokens, :]
-        dynamic_token_slice = fixed_queries[:, 2 + self.static_tokens :, :]
+        static_token_slice = self.decoded_static_query_tokens(fixed_queries)
+        dynamic_token_slice = self.decoded_dynamic_query_tokens(fixed_queries)
         static_xyz, static_scales, static_quats, static_opacities, static_rgbs = self.static_gaussian_heads(
             static_token_slice
         )
@@ -2126,16 +2374,19 @@ class DynamicVideoTokenGSImplicitCamera(nn.Module):
                 )
             )
 
-        return self._merge_decoded_frames(
-            decoded,
-            auxiliary={
-                "static_opacities": static_opacities,
-                "dynamic_opacities": torch.stack(dynamic_opacity_frames, dim=0),
-                "dynamic_A_mu": dynamic_bank.A_mu,
-                "dynamic_A_rot": dynamic_bank.A_rot,
-                "dynamic_A_alpha": dynamic_bank.A_alpha,
-            },
-        )
+        auxiliary = {
+            "static_opacities": static_opacities,
+            "dynamic_opacities": torch.stack(dynamic_opacity_frames, dim=0),
+            "dynamic_A_mu": dynamic_bank.A_mu,
+            "dynamic_A_rot": dynamic_bank.A_rot,
+            "dynamic_A_alpha": dynamic_bank.A_alpha,
+        }
+        if self.token_layout is not None:
+            auxiliary["token_layout_active_detail_level"] = torch.tensor(
+                self.active_detail_level,
+                device=static_opacities.device,
+            )
+        return self._merge_decoded_frames(decoded, auxiliary=auxiliary)
 
     def forward(self, video, decode_times, input_times=None):
         if decode_times.ndim != 2:

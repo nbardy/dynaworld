@@ -57,6 +57,41 @@ FAST_MAC_V6_REFINED_FEATURES_F32_ZERO_BG_DIR = (
     / "variants"
     / "v6_refined_features_f32_zero_bg"
 )
+FAST_MAC_V9_FEATURES_GRADCACHE_ZERO_BG_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v9_features_gradcache_zero_bg"
+)
+FAST_MAC_V10_FEATURES_GRADCACHE_ZERO_BG_HOSTMETA_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v10_features_gradcache_zero_bg_hostmeta"
+)
+FAST_MAC_V11_FEATURES_GRADCACHE_ZERO_BG_HOSTMETA_FIXEDBIN_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v11_features_gradcache_zero_bg_hostmeta_fixedbin"
+)
+FAST_MAC_V13A_TEMPORAL_RECOMPUTE_STATE_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v13a_temporal_recompute_state"
+)
+FAST_MAC_V13B_RGB_GRAD_HANDOFF_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "third_party"
+    / "fast-mac-gsplat"
+    / "variants"
+    / "v13b_rgb_grad_handoff"
+)
 
 
 def _float_tuple(value: Any, *, field_name: str) -> tuple[float, ...]:
@@ -130,6 +165,7 @@ class FastMacRendererConfig:
     active_dense_multiplier: float = 2.0
     stop_count_mode: str = "adaptive"
     stop_count_dense_threshold: int = 64
+    backward_state_strategy: str = "save"
 
     @classmethod
     def from_mapping(
@@ -157,6 +193,11 @@ class FastMacRendererConfig:
                     "v6_refined_features_f32_gradcache",
                     "v6_refined_features_f32_fixedbin",
                     "v6_refined_features_f32_zero_bg",
+                    "v9_features_gradcache_zero_bg",
+                    "v10_features_gradcache_zero_bg_hostmeta",
+                    "v11_features_gradcache_zero_bg_hostmeta_fixedbin",
+                    "v13a_temporal_recompute_state",
+                    "v13b_rgb_grad_handoff",
                 },
             ),
             tile_size=int(values.get("tile_size", fallback_tile_size)),
@@ -197,6 +238,11 @@ class FastMacRendererConfig:
             ),
             stop_count_dense_threshold=int(
                 values.get("stop_count_dense_threshold", cls.stop_count_dense_threshold)
+            ),
+            backward_state_strategy=_normalize_choice(
+                values.get("backward_state_strategy", cls.backward_state_strategy),
+                field_name="fast_mac.backward_state_strategy",
+                choices={"save", "recompute"},
             ),
         )
 
@@ -286,6 +332,46 @@ def _ensure_fast_mac_v6_refined_features_f32_zero_bg_on_path() -> None:
     )
 
 
+def _ensure_fast_mac_v9_features_gradcache_zero_bg_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V9_FEATURES_GRADCACHE_ZERO_BG_DIR,
+        package_name="torch_gsplat_bridge_v9_features_gradcache_zero_bg",
+        label="v9_features_gradcache_zero_bg",
+    )
+
+
+def _ensure_fast_mac_v10_features_gradcache_zero_bg_hostmeta_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V10_FEATURES_GRADCACHE_ZERO_BG_HOSTMETA_DIR,
+        package_name="torch_gsplat_bridge_v10_features_gradcache_zero_bg_hostmeta",
+        label="v10_features_gradcache_zero_bg_hostmeta",
+    )
+
+
+def _ensure_fast_mac_v11_features_gradcache_zero_bg_hostmeta_fixedbin_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V11_FEATURES_GRADCACHE_ZERO_BG_HOSTMETA_FIXEDBIN_DIR,
+        package_name="torch_gsplat_bridge_v11_features_gradcache_zero_bg_hostmeta_fixedbin",
+        label="v11_features_gradcache_zero_bg_hostmeta_fixedbin",
+    )
+
+
+def _ensure_fast_mac_v13a_temporal_recompute_state_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V13A_TEMPORAL_RECOMPUTE_STATE_DIR,
+        package_name="torch_gsplat_bridge_v13a_temporal_recompute_state",
+        label="v13a_temporal_recompute_state",
+    )
+
+
+def _ensure_fast_mac_v13b_rgb_grad_handoff_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V13B_RGB_GRAD_HANDOFF_DIR,
+        package_name="torch_gsplat_bridge_v13b_rgb_grad_handoff",
+        label="v13b_rgb_grad_handoff",
+    )
+
+
 def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
     _ensure_fast_mac_v5_on_path()
     from torch_gsplat_bridge_v5 import RasterConfig
@@ -342,6 +428,35 @@ def _feature_raster_config_cls(config: FastMacRendererConfig):
         from torch_gsplat_bridge_v6_refined_features_f32_zero_bg import RasterConfig as FeatureRasterConfig
 
         return FeatureRasterConfig
+    if config.feature_variant == "v9_features_gradcache_zero_bg":
+        _ensure_fast_mac_v9_features_gradcache_zero_bg_on_path()
+        from torch_gsplat_bridge_v9_features_gradcache_zero_bg import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
+    if config.feature_variant == "v10_features_gradcache_zero_bg_hostmeta":
+        _ensure_fast_mac_v10_features_gradcache_zero_bg_hostmeta_on_path()
+        from torch_gsplat_bridge_v10_features_gradcache_zero_bg_hostmeta import (
+            RasterConfig as FeatureRasterConfig,
+        )
+
+        return FeatureRasterConfig
+    if config.feature_variant == "v11_features_gradcache_zero_bg_hostmeta_fixedbin":
+        _ensure_fast_mac_v11_features_gradcache_zero_bg_hostmeta_fixedbin_on_path()
+        from torch_gsplat_bridge_v11_features_gradcache_zero_bg_hostmeta_fixedbin import (
+            RasterConfig as FeatureRasterConfig,
+        )
+
+        return FeatureRasterConfig
+    if config.feature_variant == "v13a_temporal_recompute_state":
+        _ensure_fast_mac_v13a_temporal_recompute_state_on_path()
+        from torch_gsplat_bridge_v13a_temporal_recompute_state import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
+    if config.feature_variant == "v13b_rgb_grad_handoff":
+        _ensure_fast_mac_v13b_rgb_grad_handoff_on_path()
+        from torch_gsplat_bridge_v13b_rgb_grad_handoff import RasterConfig as FeatureRasterConfig
+
+        return FeatureRasterConfig
     raise ValueError(f"Unsupported fast_mac.feature_variant={config.feature_variant!r}.")
 
 
@@ -377,6 +492,11 @@ def _make_feature_config(config: FastMacRendererConfig, height: int, width: int,
         "v6_refined_features_f32_gradcache",
         "v6_refined_features_f32_fixedbin",
         "v6_refined_features_f32_zero_bg",
+        "v9_features_gradcache_zero_bg",
+        "v10_features_gradcache_zero_bg_hostmeta",
+        "v11_features_gradcache_zero_bg_hostmeta_fixedbin",
+        "v13a_temporal_recompute_state",
+        "v13b_rgb_grad_handoff",
     }:
         kwargs.update(
             {
@@ -389,6 +509,8 @@ def _make_feature_config(config: FastMacRendererConfig, height: int, width: int,
                 "stop_count_dense_threshold": config.stop_count_dense_threshold,
             }
         )
+    if config.feature_variant == "v13a_temporal_recompute_state":
+        kwargs["backward_state_strategy"] = config.backward_state_strategy
     return FeatureRasterConfig(**kwargs)
 
 
@@ -478,6 +600,68 @@ def _rasterize_features_projected(
     if config.feature_variant == "v6_refined_features_f32_zero_bg":
         _ensure_fast_mac_v6_refined_features_f32_zero_bg_on_path()
         from torch_gsplat_bridge_v6_refined_features_f32_zero_bg import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v9_features_gradcache_zero_bg":
+        _ensure_fast_mac_v9_features_gradcache_zero_bg_on_path()
+        from torch_gsplat_bridge_v9_features_gradcache_zero_bg import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v10_features_gradcache_zero_bg_hostmeta":
+        _ensure_fast_mac_v10_features_gradcache_zero_bg_hostmeta_on_path()
+        from torch_gsplat_bridge_v10_features_gradcache_zero_bg_hostmeta import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v11_features_gradcache_zero_bg_hostmeta_fixedbin":
+        _ensure_fast_mac_v11_features_gradcache_zero_bg_hostmeta_fixedbin_on_path()
+        from torch_gsplat_bridge_v11_features_gradcache_zero_bg_hostmeta_fixedbin import (
+            rasterize_projected_gaussians,
+        )
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v13a_temporal_recompute_state":
+        _ensure_fast_mac_v13a_temporal_recompute_state_on_path()
+        from torch_gsplat_bridge_v13a_temporal_recompute_state import rasterize_projected_gaussians
+
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_feature_config(config, height, width, feature_dim),
+        )
+    if config.feature_variant == "v13b_rgb_grad_handoff":
+        _ensure_fast_mac_v13b_rgb_grad_handoff_on_path()
+        from torch_gsplat_bridge_v13b_rgb_grad_handoff import rasterize_projected_gaussians
 
         return rasterize_projected_gaussians(
             means2d,

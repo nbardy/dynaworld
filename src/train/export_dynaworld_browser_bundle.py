@@ -232,8 +232,13 @@ def export_browser_bundle_from_model(
         with torch.no_grad(), fast_attn_context(clip_times.device):
             video_tokens = model.video_encoder(model_input, frame_times=clip_times)
             fixed_queries = model.refine_queries(video_tokens, decode_time=None).squeeze(0)
-            static_query_tokens = fixed_queries[2 : 2 + int(model.static_tokens)]
-            dynamic_query_tokens = fixed_queries[2 + int(model.static_tokens) :]
+            batched_fixed_queries = fixed_queries.unsqueeze(0)
+            if hasattr(model, "decoded_static_query_tokens") and hasattr(model, "decoded_dynamic_query_tokens"):
+                static_query_tokens = model.decoded_static_query_tokens(batched_fixed_queries).squeeze(0)
+                dynamic_query_tokens = model.decoded_dynamic_query_tokens(batched_fixed_queries).squeeze(0)
+            else:
+                static_query_tokens = fixed_queries[2 : 2 + int(model.static_tokens)]
+                dynamic_query_tokens = fixed_queries[2 + int(model.static_tokens) :]
     finally:
         if was_training:
             model.train()
@@ -285,6 +290,7 @@ def export_browser_bundle_from_model(
             "gaussians_per_token": int(model.gaussians_per_token),
             "static_tokens": int(model.static_tokens),
             "dynamic_tokens": int(model.dynamic_tokens),
+            "token_layout": resolved["model"].get("token_layout"),
             "dynamic_time_basis_count": int(model.dynamic_time_basis_count),
             "dynamic_time_max_frequency": float(model.dynamic_time_max_frequency),
             "image_size": int(model.image_size),
@@ -316,7 +322,7 @@ def export_browser_bundle_from_model(
         "counts": {
             "static_gaussians": int(model.static_tokens * model.gaussians_per_token),
             "dynamic_gaussians": int(model.dynamic_tokens * model.gaussians_per_token),
-            "total_gaussians": int(model.num_tokens * model.gaussians_per_token),
+            "total_gaussians": int((model.static_tokens + model.dynamic_tokens) * model.gaussians_per_token),
         },
         "tensors": tensors,
     }

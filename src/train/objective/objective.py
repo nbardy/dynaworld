@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any, Protocol
 
 import torch
@@ -113,6 +114,11 @@ class RGBReconObjective:
         self.background_policy = background_policy or BackgroundPolicy(objective_spec.background)
         self.rasterizer = rasterizer
 
+    def profile_section(self, name: str):
+        if self.rasterizer is not None and hasattr(self.rasterizer, "profile_section"):
+            return self.rasterizer.profile_section(name)
+        return nullcontext()
+
     def rasterize_view(
         self,
         decoded: GaussianSequence,
@@ -120,20 +126,22 @@ class RGBReconObjective:
     ) -> RasterizedView:
         if self.rasterizer is None:
             raise ValueError("RGBReconObjective.rasterize_view requires a rasterizer.")
-        return self.rasterizer.rasterize(decoded, target)
+        with self.profile_section("render/rasterize"):
+            return self.rasterizer.rasterize(decoded, target)
 
     def colorize_view(self, rasterized: RasterizedView) -> ColorizedView | None:
-        if self.colorizer is None:
-            if rasterized.feature_dim == 3:
-                return ColorizedView(splat_rgb=rasterized.features, view_dirs=rasterized.view_dirs)
-            return None
-        if hasattr(self.colorizer, "forward_with_logits"):
-            rgb, logits = self.colorizer.forward_with_logits(rasterized.features, view_dirs=rasterized.view_dirs)
-            return ColorizedView(splat_rgb=rgb, logits=logits, view_dirs=rasterized.view_dirs)
-        return ColorizedView(
-            splat_rgb=self.colorizer(rasterized.features, view_dirs=rasterized.view_dirs),
-            view_dirs=rasterized.view_dirs,
-        )
+        with self.profile_section("render/colorize"):
+            if self.colorizer is None:
+                if rasterized.feature_dim == 3:
+                    return ColorizedView(splat_rgb=rasterized.features, view_dirs=rasterized.view_dirs)
+                return None
+            if hasattr(self.colorizer, "forward_with_logits"):
+                rgb, logits = self.colorizer.forward_with_logits(rasterized.features, view_dirs=rasterized.view_dirs)
+                return ColorizedView(splat_rgb=rgb, logits=logits, view_dirs=rasterized.view_dirs)
+            return ColorizedView(
+                splat_rgb=self.colorizer(rasterized.features, view_dirs=rasterized.view_dirs),
+                view_dirs=rasterized.view_dirs,
+            )
 
     def background_for_view(
         self,
@@ -185,7 +193,8 @@ class RGBReconObjective:
             and self.objective_spec.background.apply_when_alpha_missing
         ):
             raise ValueError("background.apply_when_alpha_missing=True requires RasterizedView.alpha.")
-        rgb = compose_rgb(rasterized=rasterized, colorized=colorized, background=background)
+        with self.profile_section("render/compose"):
+            rgb = compose_rgb(rasterized=rasterized, colorized=colorized, background=background)
         rendered = RenderedView(
             view=rasterized.view,
             rgb=rgb,
@@ -239,10 +248,11 @@ class RGBReconObjective:
         rendered: RenderedView,
         target_rgb: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        target = rendered.target_rgb if target_rgb is None else target_rgb
-        if target is None:
-            raise ValueError("target_rgb is required for reconstruction_loss_per_image.")
-        return reconstruction_loss_per_image(rendered.rgb, target, self.objective_spec.reconstruction)
+        with self.profile_section("loss/reconstruction"):
+            target = rendered.target_rgb if target_rgb is None else target_rgb
+            if target is None:
+                raise ValueError("target_rgb is required for reconstruction_loss_per_image.")
+            return reconstruction_loss_per_image(rendered.rgb, target, self.objective_spec.reconstruction)
 
     def reconstruction_loss(
         self,

@@ -35,7 +35,7 @@ from relative_pose import (
 )
 from rendering import resize_images
 from runtime_types import StepResult
-from sequence_data import select_window_indices
+from temporal_sampling import select_frame_indices
 from train_precomputed_feature_implicit_dynamic import PrecomputedFeatureImplicitTrainer
 
 
@@ -79,6 +79,7 @@ TRAIN_MULTICAM_DEFAULTS = {
     "relpose_head_hidden_dim": None,
     "relpose_query_init_std": 0.02,
     "relpose_output_init_std": 0.0,
+    "relpose_pair_delta_init_std": 0.0,
     "relpose_max_rotation_degrees": 5.0,
     "relpose_max_translation_ratio": 0.05,
     "relpose_identity_loss_weight": 1.0,
@@ -133,6 +134,9 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
         cfg["train"]["relpose_output_init_std"] = float(cfg["train"]["relpose_output_init_std"])
         if cfg["train"]["relpose_output_init_std"] < 0.0:
             raise ValueError("train.relpose_output_init_std must be >= 0.")
+        cfg["train"]["relpose_pair_delta_init_std"] = float(cfg["train"]["relpose_pair_delta_init_std"])
+        if cfg["train"]["relpose_pair_delta_init_std"] < 0.0:
+            raise ValueError("train.relpose_pair_delta_init_std must be >= 0.")
         cfg["train"]["relpose_max_rotation_degrees"] = float(cfg["train"]["relpose_max_rotation_degrees"])
         cfg["train"]["relpose_max_translation_ratio"] = float(cfg["train"]["relpose_max_translation_ratio"])
         cfg["train"]["relpose_identity_loss_weight"] = float(cfg["train"]["relpose_identity_loss_weight"])
@@ -166,6 +170,7 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
                 hidden_dim=self.train_cfg["relpose_head_hidden_dim"],
                 query_init_std=float(self.train_cfg["relpose_query_init_std"]),
                 output_init_std=float(self.train_cfg["relpose_output_init_std"]),
+                pair_delta_init_std=float(self.train_cfg["relpose_pair_delta_init_std"]),
                 max_rotation_degrees=float(self.train_cfg["relpose_max_rotation_degrees"]),
                 max_translation=float(self.cfg["camera"]["rig_radius"])
                 * float(self.train_cfg["relpose_max_translation_ratio"]),
@@ -233,9 +238,10 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
 
     def sample_multicam_clip(self):
         sequence_data = self.sequence_data
-        clip_indices = select_window_indices(
+        clip_indices = select_frame_indices(
             sequence_data.frame_count,
             self.model_cfg["train_frame_count"],
+            self.train_cfg["frame_sampling"],
             device=self.device,
         )
         clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
@@ -483,19 +489,21 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
             frame_count=len(clip_indices),
         )
         for view in views:
-            rendered = self.render_view_clip(
-                decoded,
-                view=int(view),
-                clip_indices=clip_indices,
-                phase=phase,
-                background=background,
-            )
+            with self.profile_section("render_view_total"):
+                rendered = self.render_view_clip(
+                    decoded,
+                    view=int(view),
+                    clip_indices=clip_indices,
+                    phase=phase,
+                    background=background,
+                )
             if phase == "train" and self.feature_dim != 3 and rendered.alpha is None:
                 raise ValueError(
                     "F-channel multicam training requires alpha-aware render output so random-background "
                     "composition is active. Got alpha=None; check renderer='fast_mac' and v5_features build."
                 )
-            recon_loss = recon_loss + self.rgb_objective.reconstruction_loss(rendered)
+            with self.profile_section("recon_loss"):
+                recon_loss = recon_loss + self.rgb_objective.reconstruction_loss(rendered)
             if keep_preview and preview_render is None:
                 preview_render = rendered.rgb[0].detach()
                 if self.feature_pca_log:
@@ -533,55 +541,62 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
 
         rendered_count = 0
         for source_index, source_pairs in pairs_by_source.items():
-            sequence_data, clip_frames, clip_times, decoded = self._decode_source_view(source_index, clip_indices)
+            with self.profile_section("camera_swap/source_decode"):
+                sequence_data, clip_frames, clip_times, decoded = self._decode_source_view(source_index, clip_indices)
             if first_sequence_data is None:
                 first_sequence_data = sequence_data
                 first_clip_frames = clip_frames
                 first_camera_state = decoded.camera_state
-            source_bank_loss, source_bank_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
+            with self.profile_section("camera_swap/bank_rate"):
+                source_bank_loss, source_bank_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
             bank_rate_loss = bank_rate_loss + source_bank_loss
             for key, value in source_bank_terms.items():
                 bank_rate_terms_accum[key] = bank_rate_terms_accum.get(key, value.new_zeros(())) + value
 
             for pair_index, pair in enumerate(source_pairs):
-                target_frames = self.camera_swap_target_frames(pair, clip_indices)
-                background = self.rgb_objective.sample_background(
-                    phase=phase,
-                    like=target_frames,
-                    frame_count=len(clip_indices),
-                )
-                residual, residual_loss = self.relpose_residual_for_pair(
-                    pair,
-                    clip_indices=clip_indices,
-                    memory_cache=relpose_memory_cache,
-                )
+                with self.profile_section("camera_swap/background"):
+                    target_frames = self.camera_swap_target_frames(pair, clip_indices)
+                    background = self.rgb_objective.sample_background(
+                        phase=phase,
+                        like=target_frames,
+                        frame_count=len(clip_indices),
+                    )
+                with self.profile_section("camera_swap/relpose_predict"):
+                    residual, residual_loss = self.relpose_residual_for_pair(
+                        pair,
+                        clip_indices=clip_indices,
+                        memory_cache=relpose_memory_cache,
+                    )
                 if residual_loss is not None:
                     relpose_identity_loss = relpose_identity_loss + residual_loss
                     relpose_identity_count += 1
-                cycle_loss = self.relpose_cycle_loss_for_pair(
-                    pair,
-                    clip_indices=clip_indices,
-                    residual=residual,
-                    memory_cache=relpose_memory_cache,
-                )
+                with self.profile_section("camera_swap/relpose_cycle"):
+                    cycle_loss = self.relpose_cycle_loss_for_pair(
+                        pair,
+                        clip_indices=clip_indices,
+                        residual=residual,
+                        memory_cache=relpose_memory_cache,
+                    )
                 if cycle_loss is not None:
                     relpose_cycle_loss = relpose_cycle_loss + cycle_loss
                     relpose_cycle_count += 1
-                rendered = self.render_camera_swap_pair(
-                    decoded,
-                    pair=pair,
-                    clip_indices=clip_indices,
-                    phase=phase,
-                    background=background,
-                    log_media=keep_preview and preview_render is None and pair_index == 0,
-                    residual=residual,
-                )
+                with self.profile_section("render_view_total"):
+                    rendered = self.render_camera_swap_pair(
+                        decoded,
+                        pair=pair,
+                        clip_indices=clip_indices,
+                        phase=phase,
+                        background=background,
+                        log_media=keep_preview and preview_render is None and pair_index == 0,
+                        residual=residual,
+                    )
                 if phase == "train" and self.feature_dim != 3 and rendered.alpha is None:
                     raise ValueError(
                         "F-channel camera-swap training requires alpha-aware render output so random-background "
                         "composition is active. Got alpha=None; check renderer='fast_mac' and v5_features build."
                     )
-                recon_loss = recon_loss + self.rgb_objective.reconstruction_loss(rendered)
+                with self.profile_section("recon_loss"):
+                    recon_loss = recon_loss + self.rgb_objective.reconstruction_loss(rendered)
                 rendered_count += 1
                 if keep_preview and preview_render is None:
                     preview_render = rendered.rgb[0].detach()
@@ -696,65 +711,79 @@ class MulticamPrecomputedFeatureImplicitTrainer(PrecomputedFeatureImplicitTraine
                 self.model.train()
 
     def step(self, keep_preview: bool = False) -> StepResult:
-        self.optimizer.zero_grad(set_to_none=True)
-        if self.train_cfg["camera_swap_mode"] in {"oracle_relative", "learned_residual"}:
-            clip_indices = select_window_indices(
-                self.sequence_data.frame_count,
-                self.model_cfg["train_frame_count"],
-                device=self.device,
-            )
-            pairs = self.sample_camera_swap_pairs()
-            self.last_camera_swap_counts = camera_swap_pair_counts(pairs)
-            (
-                recon_loss,
-                bank_rate_loss,
-                bank_rate_terms,
-                preview_render,
-                preview_features,
-                camera_state,
-                clip_frames,
-                sequence_data,
-            ) = self.camera_swap_recon_loss(
+        self.reset_profile_timing()
+        with self.profile_section("step_total"):
+            with self.profile_section("zero_grad"):
+                self.optimizer.zero_grad(set_to_none=True)
+            if self.train_cfg["camera_swap_mode"] in {"oracle_relative", "learned_residual"}:
+                with self.profile_section("sample_clip"):
+                    clip_indices = select_frame_indices(
+                        self.sequence_data.frame_count,
+                        self.model_cfg["train_frame_count"],
+                        self.train_cfg["frame_sampling"],
+                        device=self.device,
+                    )
+                    pairs = self.sample_camera_swap_pairs()
+                    self.last_camera_swap_counts = camera_swap_pair_counts(pairs)
+                (
+                    recon_loss,
+                    bank_rate_loss,
+                    bank_rate_terms,
+                    preview_render,
+                    preview_features,
+                    camera_state,
+                    clip_frames,
+                    sequence_data,
+                ) = self.camera_swap_recon_loss(
+                    clip_indices=clip_indices,
+                    pairs=pairs,
+                    phase="train",
+                    keep_preview=keep_preview,
+                )
+                rig_loss = clip_frames.new_zeros(())
+                loss = recon_loss + bank_rate_loss + rig_loss
+                with self.profile_section("backward"):
+                    loss.backward()
+                with self.profile_section("optimizer_step"):
+                    self.optimizer.step()
+                self.finish_profile_timing()
+                zero = clip_frames.new_zeros(())
+                return StepResult(
+                    source_path=sequence_data.source_path,
+                    sequence_frame_count=sequence_data.frame_count,
+                    clip_frames=clip_frames,
+                    preview_render=preview_render,
+                    preview_features=preview_features,
+                    camera_state=camera_state,
+                    loss=loss.detach(),
+                    recon_loss=recon_loss.detach(),
+                    camera_motion_loss=zero,
+                    camera_temporal_loss=zero,
+                    camera_global_loss=zero,
+                    bank_rate_loss=(bank_rate_loss + rig_loss).detach(),
+                    bank_rate_terms={key: value.detach() for key, value in bank_rate_terms.items()},
+                )
+
+            with self.profile_section("sample_clip"):
+                sequence_data, clip_indices, clip_frames, clip_times, views = self.sample_multicam_clip()
+            with self.profile_section("forward_decode"):
+                decoded = self._decode_clip(sequence_data, clip_frames, clip_times)
+            with self.profile_section("regularizers"):
+                bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
+                rig_loss = self.rig_regularization_loss()
+            recon_loss, preview_render, preview_features = self.multicam_recon_loss(
+                decoded,
                 clip_indices=clip_indices,
-                pairs=pairs,
+                views=views,
                 phase="train",
                 keep_preview=keep_preview,
             )
-            rig_loss = clip_frames.new_zeros(())
             loss = recon_loss + bank_rate_loss + rig_loss
-            loss.backward()
-            self.optimizer.step()
-            zero = clip_frames.new_zeros(())
-            return StepResult(
-                source_path=sequence_data.source_path,
-                sequence_frame_count=sequence_data.frame_count,
-                clip_frames=clip_frames,
-                preview_render=preview_render,
-                preview_features=preview_features,
-                camera_state=camera_state,
-                loss=loss.detach(),
-                recon_loss=recon_loss.detach(),
-                camera_motion_loss=zero,
-                camera_temporal_loss=zero,
-                camera_global_loss=zero,
-                bank_rate_loss=(bank_rate_loss + rig_loss).detach(),
-                bank_rate_terms={key: value.detach() for key, value in bank_rate_terms.items()},
-            )
-
-        sequence_data, clip_indices, clip_frames, clip_times, views = self.sample_multicam_clip()
-        decoded = self._decode_clip(sequence_data, clip_frames, clip_times)
-        bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
-        rig_loss = self.rig_regularization_loss()
-        recon_loss, preview_render, preview_features = self.multicam_recon_loss(
-            decoded,
-            clip_indices=clip_indices,
-            views=views,
-            phase="train",
-            keep_preview=keep_preview,
-        )
-        loss = recon_loss + bank_rate_loss + rig_loss
-        loss.backward()
-        self.optimizer.step()
+            with self.profile_section("backward"):
+                loss.backward()
+            with self.profile_section("optimizer_step"):
+                self.optimizer.step()
+        self.finish_profile_timing()
         zero = clip_frames.new_zeros(())
         return StepResult(
             source_path=sequence_data.source_path,

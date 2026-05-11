@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sys
-from contextlib import nullcontext
+import time
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -65,8 +66,8 @@ from sequence_data import (
     load_manifest_sequences,
     load_uncalibrated_sequence,
     resolve_frames_dir,
-    select_window_indices,
 )
+from temporal_sampling import normalize_frame_sampling_config, select_frame_indices, validate_frame_sampling_config
 from tqdm import tqdm
 
 LOSS_OPTION_DEFAULTS = {
@@ -74,6 +75,7 @@ LOSS_OPTION_DEFAULTS = {
     "l1_weight": 1.0,
     "mse_weight": 0.2,
     "dssim_weight": 0.2,
+    "dssim_backend": "torch",
     "ssim_window_size": 11,
     "ssim_c1": 0.0001,
     "ssim_c2": 0.0009,
@@ -142,6 +144,7 @@ MODEL_OPTION_DEFAULTS = {
     "ray_condition_grid_size": 16,
     "static_tokens": None,
     "dynamic_tokens": None,
+    "token_layout": None,
     "dynamic_time_basis_count": 8,
     "dynamic_time_max_frequency": 8.0,
     "dynamic_motion_extent": None,
@@ -205,6 +208,13 @@ def _resolve_amp_dtype(device: torch.device, dtype_name: str) -> torch.dtype:
     if device.type == "cuda" and dtype_by_name[dtype_name] == torch.bfloat16 and not torch.cuda.is_bf16_supported():
         raise ValueError("train.amp_dtype='bfloat16' requested, but CUDA bf16 is not supported on this device.")
     return dtype_by_name[dtype_name]
+
+
+TRAIN_TIMING_DEFAULTS = {
+    "profile_timing": False,
+    "profile_timing_sync": True,
+    "profile_timing_log_every": 1,
+}
 
 
 def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -301,7 +311,10 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         cfg["model"]["z_min"] = -cfg["model"]["scene_extent"]
     if cfg["model"]["z_max"] is None:
         cfg["model"]["z_max"] = cfg["model"]["scene_extent"]
-    has_static_dynamic_split = (
+    if cfg["model"]["token_layout"] is not None and not isinstance(cfg["model"]["token_layout"], dict):
+        raise ValueError("model.token_layout must be an object or null.")
+    has_token_layout = cfg["model"]["token_layout"] is not None
+    has_static_dynamic_split = has_token_layout or (
         cfg["model"]["static_tokens"] is not None or cfg["model"]["dynamic_tokens"] is not None
     )
     cfg["model"]["use_static_dynamic_split"] = has_static_dynamic_split
@@ -319,30 +332,49 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         total_tokens = int(cfg["model"]["tokens"])
         static_tokens = cfg["model"]["static_tokens"]
         dynamic_tokens = cfg["model"]["dynamic_tokens"]
-        if static_tokens is None and dynamic_tokens is None:
-            static_tokens = max(1, int(round(total_tokens * 0.75)))
-            dynamic_tokens = total_tokens - static_tokens
-        elif static_tokens is None:
-            dynamic_tokens = int(dynamic_tokens)
-            static_tokens = total_tokens - dynamic_tokens
-        elif dynamic_tokens is None:
-            static_tokens = int(static_tokens)
-            dynamic_tokens = total_tokens - static_tokens
+        if has_token_layout:
+            if (static_tokens is None) != (dynamic_tokens is None):
+                raise ValueError("model.static_tokens and model.dynamic_tokens must be provided together with token_layout.")
+            if static_tokens is not None:
+                static_tokens = int(static_tokens)
+                dynamic_tokens = int(dynamic_tokens)
+                if static_tokens < 1 or dynamic_tokens < 1:
+                    raise ValueError(
+                        f"static/dynamic split requires positive static/dynamic tokens, "
+                        f"got static_tokens={static_tokens}, dynamic_tokens={dynamic_tokens}."
+                    )
+                if static_tokens + dynamic_tokens > total_tokens:
+                    raise ValueError(
+                        f"token_layout static_tokens + dynamic_tokens cannot exceed model.tokens={total_tokens}, "
+                        f"got {static_tokens} + {dynamic_tokens}."
+                    )
+                cfg["model"]["static_tokens"] = static_tokens
+                cfg["model"]["dynamic_tokens"] = dynamic_tokens
         else:
-            static_tokens = int(static_tokens)
-            dynamic_tokens = int(dynamic_tokens)
-        if static_tokens < 1 or dynamic_tokens < 1:
-            raise ValueError(
-                f"static/dynamic split requires positive static/dynamic tokens, "
-                f"got static_tokens={static_tokens}, dynamic_tokens={dynamic_tokens}."
-            )
-        if static_tokens + dynamic_tokens != total_tokens:
-            raise ValueError(
-                f"static_tokens + dynamic_tokens must equal model.tokens={total_tokens}, "
-                f"got {static_tokens} + {dynamic_tokens}."
-            )
-        cfg["model"]["static_tokens"] = static_tokens
-        cfg["model"]["dynamic_tokens"] = dynamic_tokens
+            if static_tokens is None and dynamic_tokens is None:
+                static_tokens = max(1, int(round(total_tokens * 0.75)))
+                dynamic_tokens = total_tokens - static_tokens
+            elif static_tokens is None:
+                dynamic_tokens = int(dynamic_tokens)
+                static_tokens = total_tokens - dynamic_tokens
+            elif dynamic_tokens is None:
+                static_tokens = int(static_tokens)
+                dynamic_tokens = total_tokens - static_tokens
+            else:
+                static_tokens = int(static_tokens)
+                dynamic_tokens = int(dynamic_tokens)
+            if static_tokens < 1 or dynamic_tokens < 1:
+                raise ValueError(
+                    f"static/dynamic split requires positive static/dynamic tokens, "
+                    f"got static_tokens={static_tokens}, dynamic_tokens={dynamic_tokens}."
+                )
+            if static_tokens + dynamic_tokens != total_tokens:
+                raise ValueError(
+                    f"static_tokens + dynamic_tokens must equal model.tokens={total_tokens}, "
+                    f"got {static_tokens} + {dynamic_tokens}."
+                )
+            cfg["model"]["static_tokens"] = static_tokens
+            cfg["model"]["dynamic_tokens"] = dynamic_tokens
     apply_defaults(cfg["camera"], CAMERA_OPTION_DEFAULTS)
     cfg["camera"]["global_head"] = str(cfg["camera"]["global_head"]).lower()
     cfg["camera"]["lens_model"] = str(cfg["camera"]["lens_model"]).lower()
@@ -367,6 +399,11 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     if cfg["losses"]["type"] not in {"standard_gs", "l1_mse", "l1", "mse"}:
         raise ValueError(
             f"Unknown losses.type={cfg['losses']['type']!r}. Expected one of: standard_gs, l1_mse, l1, mse."
+        )
+    cfg["losses"]["dssim_backend"] = str(cfg["losses"]["dssim_backend"]).lower()
+    if cfg["losses"]["dssim_backend"] not in {"torch", "metal"}:
+        raise ValueError(
+            f"Unknown losses.dssim_backend={cfg['losses']['dssim_backend']!r}. Expected one of: torch, metal."
         )
     window_size = int(cfg["losses"]["ssim_window_size"])
     if window_size < 1 or window_size % 2 != 1:
@@ -413,6 +450,16 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     if "amp_dtype" not in cfg["train"]:
         cfg["train"]["amp_dtype"] = "auto"
     cfg["train"]["amp_dtype"] = str(cfg["train"]["amp_dtype"]).lower()
+    apply_defaults(cfg["train"], TRAIN_TIMING_DEFAULTS)
+    cfg["train"]["profile_timing"] = bool(cfg["train"]["profile_timing"])
+    cfg["train"]["profile_timing_sync"] = bool(cfg["train"]["profile_timing_sync"])
+    cfg["train"]["profile_timing_log_every"] = int(cfg["train"]["profile_timing_log_every"])
+    if cfg["train"]["profile_timing_log_every"] < 1:
+        raise ValueError(
+            f"train.profile_timing_log_every must be >= 1, got {cfg['train']['profile_timing_log_every']}."
+        )
+    cfg["train"]["frame_sampling"] = normalize_frame_sampling_config(cfg["train"].get("frame_sampling"))
+    validate_frame_sampling_config(cfg["train"]["frame_sampling"], int(cfg["model"]["train_frame_count"]))
     if cfg["train"]["recon_backward_strategy"] not in {"framewise", "microbatch", "batched"}:
         raise ValueError(
             f"Unsupported recon_backward_strategy={cfg['train']['recon_backward_strategy']!r}. "
@@ -425,10 +472,64 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
-def pick_renderer_mode_from_config(config: dict[str, Any]) -> tuple[str, int]:
+def decoded_token_count_from_model_config(
+    model_cfg: dict[str, Any],
+    *,
+    active_detail_level: int | None = None,
+) -> int:
+    token_layout = model_cfg.get("token_layout")
+    if token_layout is None:
+        return int(model_cfg["tokens"])
+
+    static_detail_tokens = list(token_layout.get("static_detail_tokens") or [])
+    dynamic_detail_tokens = list(token_layout.get("dynamic_detail_tokens") or [])
+    detail_levels = max(len(static_detail_tokens), len(dynamic_detail_tokens))
+    if active_detail_level is None:
+        active_detail_level = token_layout.get("active_detail_level", detail_levels)
+    if active_detail_level is None:
+        active_detail_level = detail_levels
+    active_detail_level = int(active_detail_level)
+    if not 0 <= active_detail_level <= detail_levels:
+        raise ValueError(
+            f"model.token_layout active_detail_level must be between 0 and {detail_levels}, "
+            f"got {active_detail_level}."
+        )
+
+    static_count = int(token_layout["static_core_tokens"]) + sum(
+        int(value) for value in static_detail_tokens[:active_detail_level]
+    )
+    dynamic_count = int(token_layout["dynamic_core_tokens"]) + sum(
+        int(value) for value in dynamic_detail_tokens[:active_detail_level]
+    )
+    return static_count + dynamic_count
+
+
+def token_summary_from_model_config(model_cfg: dict[str, Any]) -> str:
+    token_layout = model_cfg.get("token_layout")
+    if token_layout is not None:
+        active_level = token_layout.get("active_detail_level")
+        decoded_tokens = decoded_token_count_from_model_config(model_cfg, active_detail_level=active_level)
+        return (
+            f"{decoded_tokens} active decoded 3DGS tokens "
+            f"inside {int(model_cfg['tokens'])} total non-camera query tokens"
+        )
+    if not model_cfg["use_static_dynamic_split"]:
+        return f"{model_cfg['tokens']} 3DGS tokens"
+    return f"{model_cfg['static_tokens']} static + {model_cfg['dynamic_tokens']} dynamic 3DGS tokens"
+
+
+def pick_renderer_mode_from_config(
+    config: dict[str, Any],
+    *,
+    active_detail_level: int | None = None,
+) -> tuple[str, int]:
     model_cfg = config["model"]
     render_cfg = config["render"]
-    effective_gaussians = model_cfg["tokens"] * model_cfg["gaussians_per_token"]
+    decoded_token_count = decoded_token_count_from_model_config(
+        model_cfg,
+        active_detail_level=active_detail_level,
+    )
+    effective_gaussians = decoded_token_count * model_cfg["gaussians_per_token"]
     renderer_mode = resolve_renderer_mode(
         renderer=render_cfg["renderer"],
         gaussian_count=effective_gaussians,
@@ -523,6 +624,11 @@ class Trainer:
             rasterizer=self,
         )
         self.gt_video_logged = False
+        self.profile_timing_enabled = bool(self.train_cfg["profile_timing"])
+        self.profile_timing_sync = bool(self.train_cfg["profile_timing_sync"])
+        self.profile_timing_log_every = int(self.train_cfg["profile_timing_log_every"])
+        self._current_timing_terms: dict[str, float] = {}
+        self.last_timing_terms: dict[str, float] = {}
 
     def on_sequences_loaded(self) -> None:
         pass
@@ -693,6 +799,51 @@ class Trainer:
             return torch.autocast(device_type=self.device.type, dtype=self.amp_dtype)
         return nullcontext()
 
+    def reset_profile_timing(self) -> None:
+        self._current_timing_terms = {}
+        self.last_timing_terms = {}
+
+    def _sync_for_profile_timing(self) -> None:
+        if not self.profile_timing_enabled or not self.profile_timing_sync:
+            return
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        elif self.device.type == "mps" and hasattr(torch, "mps"):
+            torch.mps.synchronize()
+
+    @contextmanager
+    def profile_section(self, name: str):
+        if not self.profile_timing_enabled:
+            yield
+            return
+        self._sync_for_profile_timing()
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._sync_for_profile_timing()
+            elapsed = time.perf_counter() - start
+            self._current_timing_terms[name] = self._current_timing_terms.get(name, 0.0) + elapsed
+            if name == "step_total":
+                self.finish_profile_timing()
+
+    def finish_profile_timing(self) -> None:
+        if not self.profile_timing_enabled:
+            return
+        self.last_timing_terms = dict(sorted(self._current_timing_terms.items()))
+
+    def profile_timing_payload(self) -> dict[str, float]:
+        return {f"Timing/{key}_s": float(value) for key, value in self.last_timing_terms.items()}
+
+    def should_print_profile_timing(self, step: int) -> bool:
+        return self.profile_timing_enabled and step % self.profile_timing_log_every == 0
+
+    def profile_timing_message(self, step: int) -> str:
+        if not self.last_timing_terms:
+            return f"Timing step {step}: no measured sections"
+        parts = " ".join(f"{key}={value:.4f}s" for key, value in self.last_timing_terms.items())
+        return f"Timing step {step}: {parts}"
+
     def sample_sequence(self) -> SequenceData:
         if len(self.train_sequences) == 1:
             return self.train_sequences[0]
@@ -701,9 +852,10 @@ class Trainer:
 
     def sample_clip(self) -> tuple[SequenceData, torch.Tensor, torch.Tensor]:
         sequence_data = self.sample_sequence()
-        clip_indices = select_window_indices(
+        clip_indices = select_frame_indices(
             sequence_data.frame_count,
             self.model_cfg["train_frame_count"],
+            self.train_cfg["frame_sampling"],
             device=self.device,
         )
         clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
@@ -790,11 +942,12 @@ class Trainer:
         frame_count = len(decoded.cameras)
         chunk_size = self.temporal_recon_chunk_size(frame_count)
 
-        train_background = self.rgb_objective.sample_background(
-            phase="train",
-            like=clip_frames,
-            frame_count=frame_count,
-        )
+        with self.profile_section("background"):
+            train_background = self.rgb_objective.sample_background(
+                phase="train",
+                like=clip_frames,
+                frame_count=frame_count,
+            )
 
         for chunk_start in range(0, frame_count, chunk_size):
             chunk_end = min(chunk_start + chunk_size, frame_count)
@@ -809,12 +962,13 @@ class Trainer:
                 cameras=tuple(decoded.cameras[chunk_start:chunk_end]),
                 role="train",
             )
-            rendered_chunk = self.rgb_objective.render_view(
-                chunk_sequence,
-                target,
-                phase="train",
-                background=train_background,
-            )
+            with self.profile_section("render_view_total"):
+                rendered_chunk = self.rgb_objective.render_view(
+                    chunk_sequence,
+                    target,
+                    phase="train",
+                    background=train_background,
+                )
             if self.feature_dim != 3 and rendered_chunk.alpha is None:
                 raise ValueError(
                     "F-channel training requires alpha-aware render output so random-background "
@@ -826,12 +980,14 @@ class Trainer:
             chunk_renders = rendered_chunk.rgb
             if keep_preview and preview_render is None:
                 preview_render = chunk_renders[0].detach()
-            chunk_losses = self.rgb_objective.reconstruction_loss_per_image(rendered_chunk)
+            with self.profile_section("recon_loss"):
+                chunk_losses = self.rgb_objective.reconstruction_loss_per_image(rendered_chunk)
             chunk_recon_loss = chunk_losses.sum() / frame_count
             recon_loss = recon_loss + chunk_recon_loss.detach()
             is_last_chunk = chunk_end == frame_count
             backward_loss = chunk_recon_loss + (regularizer_loss if is_last_chunk else 0.0)
-            backward_loss.backward(retain_graph=not is_last_chunk)
+            with self.profile_section("backward"):
+                backward_loss.backward(retain_graph=not is_last_chunk)
 
         return recon_loss, preview_render, preview_features
 
@@ -887,28 +1043,37 @@ class Trainer:
                 self.model.train()
 
     def step(self, keep_preview: bool = False) -> StepResult:
-        self.optimizer.zero_grad(set_to_none=True)
-        sequence_data, clip_frames, clip_times = self.sample_clip()
-        model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
-        decoded = self.forward_clip(model_input, clip_times)
-        if decoded.camera_state is None:
-            raise ValueError("Implicit-camera video decode must include camera_state.")
+        self.reset_profile_timing()
+        with self.profile_section("step_total"):
+            with self.profile_section("zero_grad"):
+                self.optimizer.zero_grad(set_to_none=True)
+            with self.profile_section("sample_clip"):
+                sequence_data, clip_frames, clip_times = self.sample_clip()
+            with self.profile_section("model_input"):
+                model_input = self.model_input_for_clip(sequence_data, clip_frames, clip_times)
+            with self.profile_section("forward_decode"):
+                decoded = self.forward_clip(model_input, clip_times)
+            if decoded.camera_state is None:
+                raise ValueError("Implicit-camera video decode must include camera_state.")
 
-        camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss = _build_camera_loss_impl(
-            clip_times,
-            decoded.camera_state,
-            self.loss_cfg,
-        )
-        bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
+            with self.profile_section("regularizers"):
+                camera_loss, camera_motion_loss, camera_temporal_loss, camera_global_loss = _build_camera_loss_impl(
+                    clip_times,
+                    decoded.camera_state,
+                    self.loss_cfg,
+                )
+                bank_rate_loss, bank_rate_terms = _build_bank_rate_loss_impl(decoded, self.loss_cfg)
 
-        recon_loss, preview_render, preview_features = self.recon_backward(
-            clip_frames,
-            decoded,
-            camera_loss + bank_rate_loss,
-            keep_preview,
-        )
+            recon_loss, preview_render, preview_features = self.recon_backward(
+                clip_frames,
+                decoded,
+                camera_loss + bank_rate_loss,
+                keep_preview,
+            )
 
-        self.optimizer.step()
+            with self.profile_section("optimizer_step"):
+                self.optimizer.step()
+        self.finish_profile_timing()
         loss = recon_loss + camera_loss.detach() + bank_rate_loss.detach()
         return StepResult(
             source_path=sequence_data.source_path,
@@ -963,12 +1128,14 @@ class Trainer:
         )
 
     def scalar_payload(self, result: StepResult) -> dict[str, Any]:
-        return _scalar_payload_impl(
+        payload = _scalar_payload_impl(
             self.cfg,
             result,
             train_sequence_count=len(self.train_sequences),
             eval_sequence_count=len(self.eval_sequences),
         )
+        payload.update(self.profile_timing_payload())
+        return payload
 
     def _eval_decode_clip(
         self,
@@ -1085,14 +1252,7 @@ class Trainer:
         wandb.log(payload, step=step)
 
     def run(self) -> None:
-        token_summary = (
-            f"{self.model_cfg['tokens']} 3DGS tokens"
-            if not self.model_cfg["use_static_dynamic_split"]
-            else (
-                f"{self.model_cfg['static_tokens']} static + "
-                f"{self.model_cfg['dynamic_tokens']} dynamic 3DGS tokens"
-            )
-        )
+        token_summary = token_summary_from_model_config(self.model_cfg)
         print(
             "Starting DynamicVideoTokenGSImplicitCamera Training: "
             f"{len(self.train_sequences)} train sequence(s), train_frame_count={self.model_cfg['train_frame_count']}, "
@@ -1127,6 +1287,8 @@ class Trainer:
                 keep_preview = self.should_log_images(step)
                 result = self.step(keep_preview=keep_preview)
                 pbar.set_description(self.progress_message(result))
+                if self.should_print_profile_timing(step):
+                    pbar.write(self.profile_timing_message(step))
                 self.val_log(step, result)
             self.export_browser_bundle()
         finally:
@@ -1147,9 +1309,10 @@ class KnownCameraTrainer(Trainer):
 
     def sample_clip(self) -> tuple[SequenceData, torch.Tensor, torch.Tensor, tuple[Any, ...]]:
         sequence_data = self.sample_sequence()
-        clip_indices = select_window_indices(
+        clip_indices = select_frame_indices(
             sequence_data.frame_count,
             self.model_cfg["train_frame_count"],
+            self.train_cfg["frame_sampling"],
             device=self.device,
         )
         clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
@@ -1276,7 +1439,8 @@ class KnownCameraTrainer(Trainer):
             "Starting DynamicVideoTokenGSKnownCamera Training: "
             f"{len(self.train_sequences)} train sequence(s), train_frame_count={self.model_cfg['train_frame_count']}, "
             f"input_size={self.model_cfg['size']}, render_size={self.render_size}, "
-            f"{self.model_cfg['tokens']} 3DGS tokens x {self.model_cfg['gaussians_per_token']} gaussians/token = "
+            f"{token_summary_from_model_config(self.model_cfg)} x "
+            f"{self.model_cfg['gaussians_per_token']} gaussians/token = "
             f"{self.effective_gaussians} explicit Gaussians with {self.renderer_mode} renderer..."
         )
         print(f"Reconstruction backward strategy: {self.recon_backward_strategy}")

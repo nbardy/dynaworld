@@ -4,7 +4,10 @@ import pytest
 import torch
 
 from config_utils import load_config_file
-from gs_models.dynamic_video_token_gs_implicit_camera import PrecomputedVideoFeatureAdapter
+from gs_models.dynamic_video_token_gs_implicit_camera import (
+    DynamicVideoTokenGSImplicitCamera,
+    PrecomputedVideoFeatureAdapter,
+)
 from model_factories import (
     build_colorizer,
     ModelFactoryConfigError,
@@ -43,6 +46,27 @@ def test_validated_model_kwargs_accepts_multicam_rig_keys_without_passing_them_t
     assert kwargs["camera_refine_with_decode_time"] is False
     assert "rig_radius" not in kwargs
     assert "rig_init" not in kwargs
+
+
+def test_validated_model_kwargs_passes_opt_in_token_layout() -> None:
+    cfg = load_config_file(F32_MULTICAM_CONFIG)
+    cfg["model"]["tokens"] = 144
+    cfg["model"]["token_layout"] = {
+        "world_tokens": 8,
+        "register_tokens": 8,
+        "static_core_tokens": 64,
+        "dynamic_core_tokens": 16,
+        "static_detail_tokens": [32],
+        "dynamic_detail_tokens": [16],
+        "active_detail_level": 1,
+    }
+
+    kwargs = validated_model_kwargs(cfg["model"], cfg["camera"])
+
+    assert kwargs["num_tokens"] == 144
+    assert kwargs["token_layout"]["world_tokens"] == 8
+    assert kwargs["static_tokens"] == 96
+    assert kwargs["dynamic_tokens"] == 32
 
 
 def test_model_factory_rejects_unknown_model_keys() -> None:
@@ -114,3 +138,91 @@ def test_resolve_config_accepts_explicit_bf16_amp_dtype() -> None:
     resolved = resolve_config(cfg)
 
     assert resolved["train"]["amp_dtype"] == "bf16"
+
+
+def _tiny_precomputed_token_layout_model(active_detail_level: int) -> DynamicVideoTokenGSImplicitCamera:
+    return DynamicVideoTokenGSImplicitCamera(
+        clip_length=2,
+        image_size=16,
+        num_tokens=10,
+        feat_dim=8,
+        bottleneck_dim=8,
+        num_heads=2,
+        mlp_ratio=1.0,
+        gaussians_per_token=1,
+        scene_extent=1.0,
+        video_encoder_backend="precomputed",
+        video_feature_layers=["vjepa_tokens"],
+        video_feature_channels={"vjepa_tokens": 4},
+        cross_attn_layers=1,
+        static_tokens=None,
+        dynamic_tokens=None,
+        token_layout={
+            "world_tokens": 2,
+            "register_tokens": 1,
+            "static_core_tokens": 2,
+            "dynamic_core_tokens": 1,
+            "static_detail_tokens": [2],
+            "dynamic_detail_tokens": [2],
+            "active_detail_level": active_detail_level,
+        },
+        feature_dim=32,
+    )
+
+
+def test_token_layout_keeps_world_register_queries_but_decodes_active_core_only() -> None:
+    torch.manual_seed(123)
+    model = _tiny_precomputed_token_layout_model(active_detail_level=0)
+    features = {"vjepa_tokens": torch.randn(1, 6, 4)}
+    decode_times = torch.tensor([[0.0, 1.0]])
+
+    sequence = model(features, decode_times)
+
+    assert model.query_tokens(1).shape == (1, 12, 8)
+    assert model.static_tokens == 2
+    assert model.dynamic_tokens == 1
+    assert sequence.xyz.shape == (2, 3, 3)
+    assert sequence.rgbs.shape == (2, 3, 32)
+    assert sequence.auxiliary["token_layout_active_detail_level"].item() == 0
+
+
+def test_token_layout_active_detail_level_adds_decoded_detail_tokens() -> None:
+    torch.manual_seed(123)
+    model = _tiny_precomputed_token_layout_model(active_detail_level=1)
+    features = {"vjepa_tokens": torch.randn(1, 6, 4)}
+    decode_times = torch.tensor([[0.0, 1.0]])
+
+    sequence = model(features, decode_times)
+
+    assert model.query_tokens(1).shape == (1, 12, 8)
+    assert model.static_tokens == 4
+    assert model.dynamic_tokens == 3
+    assert sequence.xyz.shape == (2, 7, 3)
+    assert sequence.rgbs.shape == (2, 7, 32)
+
+
+def test_token_layout_null_preserves_legacy_static_dynamic_split() -> None:
+    model = DynamicVideoTokenGSImplicitCamera(
+        clip_length=2,
+        image_size=16,
+        num_tokens=3,
+        feat_dim=8,
+        bottleneck_dim=8,
+        num_heads=2,
+        mlp_ratio=1.0,
+        gaussians_per_token=1,
+        scene_extent=1.0,
+        video_encoder_backend="precomputed",
+        video_feature_layers=["vjepa_tokens"],
+        video_feature_channels={"vjepa_tokens": 4},
+        cross_attn_layers=1,
+        static_tokens=2,
+        dynamic_tokens=1,
+        token_layout=None,
+        feature_dim=32,
+    )
+
+    sequence = model({"vjepa_tokens": torch.randn(1, 6, 4)}, torch.tensor([[0.0, 1.0]]))
+
+    assert model.query_tokens(1).shape == (1, 5, 8)
+    assert sequence.xyz.shape == (2, 3, 3)

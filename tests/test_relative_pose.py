@@ -51,6 +51,34 @@ def test_relative_pose_head_nonzero_output_init_breaks_identity_start() -> None:
     assert translation.abs().max().item() <= 3.0
 
 
+def test_relative_pose_pair_delta_init_creates_target_dependent_start() -> None:
+    torch.manual_seed(29)
+    head = RelativePoseCrossAttentionHead(
+        dim=8,
+        num_heads=2,
+        layers=1,
+        hidden_dim=8,
+        output_init_std=0.0,
+        pair_delta_init_std=0.5,
+        max_rotation_degrees=45.0,
+        max_translation=3.0,
+    )
+    source = torch.randn(1, 4, 8).expand(3, -1, -1).contiguous()
+    target = source.clone()
+    target[1] = target[1] + torch.tensor([0.0, 0.7, -0.4, 0.2, -0.8, 0.5, 0.1, -0.3])
+    target[2] = target[2] + torch.tensor([0.6, -0.2, 0.3, -0.7, 0.4, -0.1, 0.8, -0.5])
+
+    rotation, translation = head(source, target)
+    pose = torch.cat([rotation, translation], dim=-1)
+
+    assert torch.allclose(pose[0], torch.zeros_like(pose[0]), atol=1.0e-6)
+    assert torch.linalg.norm(pose[1]).item() > 0.0
+    assert torch.linalg.norm(pose[2]).item() > 0.0
+    assert not torch.allclose(pose[1], pose[2])
+    assert torch.rad2deg(rotation.abs()).max().item() <= 45.0
+    assert translation.abs().max().item() <= 3.0
+
+
 def test_identity_residual_preserves_camera_pose() -> None:
     camera = CameraSpec(
         fx=torch.tensor(10.0),

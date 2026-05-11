@@ -12,6 +12,9 @@ from runtime_types import SequenceData
 from train_multicam_relative_pose_implicit_dynamic import (
     MulticamRelativePoseImplicitTrainer,
     first_frame_repeated_sequence,
+    normalize_multires_render_probabilities,
+    normalize_multires_render_sizes,
+    normalize_multires_token_detail_levels,
 )
 
 
@@ -35,6 +38,26 @@ F32_256_RELPOSE_OUTPUTINIT_CONFIG = (
     REPO_ROOT
     / "src/train_configs/"
     "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_256_16f_8192splats_goodset_train0006_0014_holdout0005_alpha1_128_relpose_outputinit012.jsonc"
+)
+F32_256_RELPOSE_PAIRDELTA_CONFIG = (
+    REPO_ROOT
+    / "src/train_configs/"
+    "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_256_16f_8192splats_goodset_train0006_0014_holdout0005_alpha1_128_relpose_pairdelta012.jsonc"
+)
+F32_FAST_RELPOSE_PAIRDELTA_CONFIG = (
+    REPO_ROOT
+    / "src/train_configs/"
+    "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_multires64_128_256_512_tokenbudget_world4_fast_16f_8192splats_goodset_train0006_0014_holdout0005_alpha1_128_relpose_pairdelta012.jsonc"
+)
+F32_MULTIRES_RELPOSE_OUTPUTINIT_CONFIG = (
+    REPO_ROOT
+    / "src/train_configs/"
+    "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_multires64_128_256_512_1024_1920_16f_8192splats_goodset_train0006_0014_holdout0005_alpha1_128_relpose_outputinit012.jsonc"
+)
+F32_MULTIRES_TOKENBUDGET_RELPOSE_OUTPUTINIT_CONFIG = (
+    REPO_ROOT
+    / "src/train_configs/"
+    "local_mac_multicam_deepview_3cam_train2_test1_vjepa_full_relpose_features_F32_multires64_128_256_512_1024_1920_tokenbudget_world4_16f_8192splats_goodset_train0006_0014_holdout0005_alpha1_128_relpose_outputinit012.jsonc"
 )
 F32_512_V6_JOINT_CONFIG = (
     REPO_ROOT
@@ -69,6 +92,7 @@ def test_joint_full_relpose_config_resolves_predicted_heldout_mode() -> None:
 
     assert cfg["train"]["relpose_output_mode"] == "full"
     assert cfg["train"]["relpose_output_init_std"] == 0.0
+    assert cfg["train"]["relpose_pair_delta_init_std"] == 0.0
     assert cfg["train"]["heldout_eval_camera_mode"] == "predicted_relpose"
     assert cfg["train"]["trainable_scope"] == "all"
     assert cfg["train"]["relpose_feature_frame_mode"] == "first_frame"
@@ -109,6 +133,7 @@ def test_f32_256_joint_full_relpose_config_keeps_modern_feature_settings() -> No
     assert cfg["logging"]["feature_pca_log"] is True
     assert "256px" in cfg["logging"]["wandb_tags"]
     assert cfg["train"]["relpose_output_init_std"] == 0.0
+    assert cfg["train"]["relpose_pair_delta_init_std"] == 0.0
     assert cfg["train"]["checkpoint_save_path"] == Path(
         "outputs/multicam_relative_pose/full_relpose_features_F32_256_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
     )
@@ -120,10 +145,132 @@ def test_f32_256_relpose_output_init_config_breaks_identity_init() -> None:
     assert cfg["render"]["alpha_threshold"] == 1.0 / 128.0
     assert cfg["render"]["fast_mac"]["alpha_threshold"] == 1.0 / 128.0
     assert cfg["train"]["relpose_output_init_std"] == 0.12
+    assert cfg["train"]["relpose_pair_delta_init_std"] == 0.0
+    assert cfg["train"]["multires_render_sizes"] is None
     assert "relpose-output-init-012" in cfg["logging"]["wandb_tags"]
     assert cfg["train"]["checkpoint_save_path"] == Path(
         "outputs/multicam_relative_pose/full_relpose_features_F32_256_alpha1_128_relpose_outputinit012_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
     )
+
+
+def test_f32_256_relpose_pairdelta_config_uses_target_dependent_init() -> None:
+    cfg = MulticamRelativePoseImplicitTrainer.resolve_config(load_config_file(F32_256_RELPOSE_PAIRDELTA_CONFIG))
+
+    assert cfg["render"]["alpha_threshold"] == 1.0 / 128.0
+    assert cfg["train"]["relpose_output_init_std"] == 0.0
+    assert cfg["train"]["relpose_pair_delta_init_std"] == 0.12
+    assert cfg["train"]["multires_render_sizes"] is None
+    assert "relpose-output-init-000" in cfg["logging"]["wandb_tags"]
+    assert "relpose-pair-delta-init-012" in cfg["logging"]["wandb_tags"]
+    assert "target-dependent-relpose-init" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["checkpoint_save_path"] == Path(
+        "outputs/multicam_relative_pose/full_relpose_features_F32_256_alpha1_128_relpose_pairdelta012_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
+    )
+
+
+def test_fast_multires_relpose_pairdelta_config_is_the_current_short_run() -> None:
+    cfg = MulticamRelativePoseImplicitTrainer.resolve_config(load_config_file(F32_FAST_RELPOSE_PAIRDELTA_CONFIG))
+
+    assert cfg["train"]["relpose_output_init_std"] == 0.0
+    assert cfg["train"]["relpose_pair_delta_init_std"] == 0.12
+    assert cfg["train"]["multires_render_sizes"] == [64, 128, 256, 512]
+    assert cfg["train"]["multires_render_probabilities"] == [0.25, 0.45, 0.25, 0.05]
+    assert cfg["train"]["multires_token_detail_levels"] == [0, 0, 1, 2]
+    assert "fast-res-capped-512" in cfg["logging"]["wandb_tags"]
+    assert "target-dependent-relpose-init" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["checkpoint_save_path"] == Path(
+        "outputs/multicam_relative_pose/full_relpose_features_F32_multires64_128_256_512_tokenbudget_world4_fast_alpha1_128_relpose_pairdelta012_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
+    )
+
+
+def test_f32_multires_relpose_config_preserves_baseline_and_enables_schedule() -> None:
+    cfg = MulticamRelativePoseImplicitTrainer.resolve_config(load_config_file(F32_MULTIRES_RELPOSE_OUTPUTINIT_CONFIG))
+
+    assert cfg["model"]["size"] == 256
+    assert cfg["render"]["render_size"] == 256
+    assert cfg["model"]["feature_dim"] == 32
+    assert cfg["render"]["alpha_threshold"] == 1.0 / 128.0
+    assert cfg["render"]["fast_mac"]["feature_variant"] == "v5_features"
+    assert cfg["render"]["fast_mac"]["alpha_threshold"] == 1.0 / 128.0
+    assert cfg["render"]["fast_mac"]["feature_background"] == 0.0
+    assert cfg["train"]["multires_render_sizes"] == [64, 128, 256, 512, 1024, 1920]
+    assert cfg["train"]["multires_render_probabilities"] == [0.2, 0.4, 0.2, 0.1, 0.05, 0.05]
+    assert cfg["train"]["multires_token_detail_levels"] is None
+    assert cfg["train"]["frame_sampling"]["mode"] == "contiguous"
+    assert cfg["train"]["relpose_output_init_std"] == 0.12
+    assert cfg["data"]["multicam_train_cameras"] == ["camera_0006", "camera_0014"]
+    assert cfg["data"]["multicam_heldout_camera"] == "camera_0005"
+    assert cfg["features"]["cache_dir"] == Path(
+        "data/feature_cache/multicam_deepview_static_dynamic_vjepa2_1_vitb_384_256px"
+    )
+    assert "multires-render" in cfg["logging"]["wandb_tags"]
+    assert "multires-64-128-256-512-1024-1920" in cfg["logging"]["wandb_tags"]
+    assert "weighted-resolutions" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["checkpoint_save_path"] == Path(
+        "outputs/multicam_relative_pose/full_relpose_features_F32_multires64_128_256_512_1024_1920_alpha1_128_relpose_outputinit012_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
+    )
+
+
+def test_f32_multires_tokenbudget_config_adds_world_tokens_and_detail_schedule() -> None:
+    cfg = MulticamRelativePoseImplicitTrainer.resolve_config(
+        load_config_file(F32_MULTIRES_TOKENBUDGET_RELPOSE_OUTPUTINIT_CONFIG)
+    )
+
+    assert cfg["model"]["size"] == 256
+    assert cfg["model"]["feature_dim"] == 32
+    assert cfg["model"]["tokens"] == 136
+    assert cfg["model"]["static_tokens"] == 96
+    assert cfg["model"]["dynamic_tokens"] == 32
+    assert cfg["model"]["token_layout"] == {
+        "world_tokens": 4,
+        "register_tokens": 2,
+        "static_core_tokens": 56,
+        "dynamic_core_tokens": 16,
+        "detail_register_tokens": [1, 1],
+        "static_detail_tokens": [24, 16],
+        "dynamic_detail_tokens": [8, 8],
+        "active_detail_level": 2,
+    }
+    assert cfg["train"]["multires_render_sizes"] == [64, 128, 256, 512, 1024, 1920]
+    assert cfg["train"]["multires_render_probabilities"] == [0.2, 0.4, 0.2, 0.1, 0.05, 0.05]
+    assert cfg["train"]["multires_token_detail_levels"] == [0, 0, 1, 2, 2, 2]
+    assert cfg["train"]["frame_sampling"]["mode"] == "contiguous"
+    assert cfg["render"]["fast_mac"]["feature_variant"] == "v5_features"
+    assert cfg["data"]["multicam_train_cameras"] == ["camera_0006", "camera_0014"]
+    assert cfg["data"]["multicam_heldout_camera"] == "camera_0005"
+    assert "token-layout" in cfg["logging"]["wandb_tags"]
+    assert "dynamic-token-budget" in cfg["logging"]["wandb_tags"]
+    assert "weighted-resolutions" in cfg["logging"]["wandb_tags"]
+    assert cfg["train"]["checkpoint_save_path"] == Path(
+        "outputs/multicam_relative_pose/full_relpose_features_F32_multires64_128_256_512_1024_1920_tokenbudget_world4_alpha1_128_relpose_outputinit012_goodset_train0006_0014_holdout0005/checkpoint_final.pt"
+    )
+
+
+def test_multires_render_size_normalization_rejects_ambiguous_values() -> None:
+    assert normalize_multires_render_sizes([128, "192", 256]) == [128, 192, 256]
+    assert normalize_multires_render_probabilities([20, 40, 40], render_sizes=[64, 128, 256]) == [0.2, 0.4, 0.4]
+    assert normalize_multires_token_detail_levels([0, "1", 2], render_sizes=[128, 192, 256]) == [0, 1, 2]
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        normalize_multires_render_sizes([])
+
+    with pytest.raises(ValueError, match="duplicates"):
+        normalize_multires_render_sizes([128, 128])
+
+    with pytest.raises(ValueError, match="list"):
+        normalize_multires_render_sizes(True)
+
+    with pytest.raises(ValueError, match="same length"):
+        normalize_multires_token_detail_levels([0, 1], render_sizes=[128, 192, 256])
+
+    with pytest.raises(ValueError, match="requires"):
+        normalize_multires_token_detail_levels([0], render_sizes=None)
+
+    with pytest.raises(ValueError, match="same length"):
+        normalize_multires_render_probabilities([0.5, 0.5], render_sizes=[64, 128, 256])
+
+    with pytest.raises(ValueError, match="positive"):
+        normalize_multires_render_probabilities([0.0, 0.0], render_sizes=[64, 128])
 
 
 def test_f32_512_v6_joint_full_relpose_config_uses_refined_feature_rasterizer() -> None:

@@ -1050,3 +1050,131 @@ possible speed-biased follow-up; do not promote `1/64` by speed alone.
     `[B,H,W,F]` tensor still exists and this is not an Xcode/Metal memory
     capture. Do not wire it into trainer dispatch until a fixed-render trainer
     profile shows the branch solves the actual F32 pressure.
+
+## 2026-05-08 v9 Gradcache + Zero BG
+
+New copied fork:
+
+```text
+third_party/fast-mac-gsplat/variants/v9_features_gradcache_zero_bg/
+```
+
+Lineage: `v6_refined_features_f32_gradcache` plus the bounded zero-feature-
+background final-tail skip from `v6_refined_features_f32_zero_bg`. Stable
+variants were not edited. Root dispatch accepts it as:
+
+```jsonc
+"render": {
+  "fast_mac": {
+    "feature_variant": "v9_features_gradcache_zero_bg"
+  }
+}
+```
+
+Direct benchmark, `B=16,G=8192,F=32`, `medium_sigma_3_8`,
+`GSP_TILE_SIZE=16,GSP_CHUNK=64,GSP_FAST_CAP=2048,GSP_FEATURE_CAP=64`,
+active off, backward on, warmup 3, iters 8:
+
+| Variant | 256 mean/fwd/bwd ms | 512 mean/fwd/bwd ms |
+| --- | ---: | ---: |
+| `v6_refined_features` | 771.669 / 77.172 / 694.497 | 1005.936 / 91.949 / 913.987 |
+| `v6_refined_features_f32_reduce` | 311.416 / 76.223 / 235.193 | 403.377 / 92.223 / 311.154 |
+| `v6_refined_features_f32_gradcache` | 291.201 / 75.870 / 215.331 | 367.351 / 88.994 / 278.357 |
+| `v6_refined_features_f32_zero_bg` | 311.211 / 74.613 / 236.597 | 400.173 / 89.354 / 310.819 |
+| `v9_features_gradcache_zero_bg` | 291.516 / 76.602 / 214.914 | 364.049 / 86.369 / 277.679 |
+
+Active-tile check on the two gradcache variants showed active on is slower for
+the dense target row:
+
+| Variant | Shape | Active off mean ms | Active on mean ms |
+| --- | --- | ---: | ---: |
+| `f32_gradcache` | 256 | 274.225 | 334.917 |
+| `f32_gradcache` | 512 | 372.667 | 526.546 |
+| `v9_features_gradcache_zero_bg` | 256 | 274.334 | 334.884 |
+| `v9_features_gradcache_zero_bg` | 512 | 368.283 | 527.979 |
+
+Trainer fixed-render parity, stable `v6_refined_features` versus
+`v9_features_gradcache_zero_bg`, 256px train target with gradients:
+
+```text
+loss_abs_diff: 0.0
+max_feature_abs_diff: 0.0
+max_alpha_abs_diff: 0.0
+max_rgb_abs_diff: 0.0
+max_colorize_grad_abs_diff: 0.0
+max_sequence_grad_abs_diff: 8.149072527885437e-10
+```
+
+Read: v9 is a valid opt-in trainer candidate with exact forward parity and
+near-zero sequence-gradient drift. It is mainly "gradcache plus a small 512px
+zero-bg forward win"; it should be profiled in a short trainer run before
+becoming any default.
+
+Artifacts:
+
+```text
+agent_notes/loose_notes/2026-05-08_16-55-00_v9_feature_shader_benchmark.md
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_feature_variants_B16_G8192_F32_256_active_off.jsonl
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_feature_variants_B16_G8192_F32_512_active_off.jsonl
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_fixed_render_parity_v6_refined_features_vs_v9_features_gradcache_zero_bg_256.json
+```
+
+## 2026-05-08 v10/v11 Hostmeta and Fixedbin
+
+New copied forks:
+
+```text
+third_party/fast-mac-gsplat/variants/v10_features_gradcache_zero_bg_hostmeta/
+third_party/fast-mac-gsplat/variants/v11_features_gradcache_zero_bg_hostmeta_fixedbin/
+```
+
+Lineage:
+
+- `v10`: `v9_features_gradcache_zero_bg` plus v8-style host metadata. It keeps
+  shader metadata on MPS while parsing CPU host metadata in the bridge.
+- `v11`: `v10` plus fixed-capacity no-overflow binning from
+  `v6_refined_features_f32_fixedbin`.
+
+Both variants build and pass the local F32 feature/alpha contract checks. The
+F32 gradient check max diff remained `2.3283064e-10`, and the alpha-output
+check passed tests A-F.
+
+Same-session direct target matrix, `B=16,G=8192,F=32`,
+`medium_sigma_3_8`, active off, backward on, warmup 3, iters 8:
+
+| Variant | 256 mean/fwd/bwd ms | 512 mean/fwd/bwd ms | Read |
+| --- | ---: | ---: | --- |
+| `v9_features_gradcache_zero_bg` | 273.189 / 70.754 / 202.435 | 367.900 / 89.877 / 278.023 | combined parent |
+| `v10_features_gradcache_zero_bg_hostmeta` | 271.220 / 69.237 / 201.982 | 366.133 / 88.372 / 277.761 | small host metadata win |
+| `v11_features_gradcache_zero_bg_hostmeta_fixedbin` | **270.471 / 68.298 / 202.173** | **364.049 / 86.256 / 277.793** | best direct row, no-overflow only |
+
+Trainer fixed-render parity versus v9, 256px train target with gradients:
+
+| Candidate | loss diff | feature diff | alpha diff | rgb diff | colorize grad diff | sequence grad diff |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `v10_features_gradcache_zero_bg_hostmeta` | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | `1.0186340659856796e-09` |
+| `v11_features_gradcache_zero_bg_hostmeta_fixedbin` | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | `6.111804395914078e-10` |
+
+Short trainer fixed-render timing, 256px, seed 0, warmup 1, iters 3:
+
+| Variant | total median ms | raster fwd median ms | backward median ms |
+| --- | ---: | ---: | ---: |
+| `v9_features_gradcache_zero_bg` | 911.913 | 74.493 | 744.056 |
+| `v10_features_gradcache_zero_bg_hostmeta` | 942.831 | 76.453 | 764.017 |
+| `v11_features_gradcache_zero_bg_hostmeta_fixedbin` | **897.462** | **69.505** | **731.843** |
+
+Read: v11 is the best opt-in "best of all worlds" feature shader from this
+loop, but the win is incremental. The dominant cost remains F32 backward, and
+v11 is no-overflow only with the fixedbin ID-buffer memory tradeoff.
+
+Artifacts:
+
+```text
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_v9_v10_v11_256_B16_G8192_F32.jsonl
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_v9_v10_v11_512_B16_G8192_F32.jsonl
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_fixed_render_parity_v9_vs_v10_features_gradcache_zero_bg_hostmeta_256_train.json
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_fixed_render_parity_v9_vs_v11_features_gradcache_zero_bg_hostmeta_fixedbin_256_train.json
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_trainer_fixed_render_v9_features_gradcache_zero_bg_256_seed0_warm1_iters3.json
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_trainer_fixed_render_v10_features_gradcache_zero_bg_hostmeta_256_seed0_warm1_iters3.json
+benchmark_outputs/fast_mac_feature_kernels/2026-05-08_trainer_fixed_render_v11_features_gradcache_zero_bg_hostmeta_fixedbin_256_seed0_warm1_iters3.json
+```

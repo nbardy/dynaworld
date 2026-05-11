@@ -24,6 +24,7 @@ class RelativePoseCrossAttentionHead(nn.Module):
         hidden_dim: int | None = None,
         query_init_std: float = 0.02,
         output_init_std: float = 0.0,
+        pair_delta_init_std: float = 0.0,
         max_rotation_degrees: float = 5.0,
         max_translation: float = 0.15,
     ) -> None:
@@ -34,6 +35,8 @@ class RelativePoseCrossAttentionHead(nn.Module):
             raise ValueError(f"layers must be >= 1, got {layers}.")
         if output_init_std < 0:
             raise ValueError(f"output_init_std must be >= 0, got {output_init_std}.")
+        if pair_delta_init_std < 0:
+            raise ValueError(f"pair_delta_init_std must be >= 0, got {pair_delta_init_std}.")
         self.dim = int(dim)
         self.query_count = int(query_count)
         self.max_rotation_radians = math.radians(float(max_rotation_degrees))
@@ -54,6 +57,13 @@ class RelativePoseCrossAttentionHead(nn.Module):
             nn.GELU(),
             nn.Linear(hidden, 6),
         )
+        if float(pair_delta_init_std) > 0.0:
+            self.pair_delta_norm = nn.LayerNorm(self.dim)
+            self.pair_delta_output = nn.Linear(self.dim, 6, bias=False)
+            nn.init.normal_(self.pair_delta_output.weight, mean=0.0, std=float(pair_delta_init_std))
+        else:
+            self.pair_delta_norm = None
+            self.pair_delta_output = None
         final = self.output[-1]
         if float(output_init_std) > 0.0:
             nn.init.normal_(final.weight, mean=0.0, std=float(output_init_std))
@@ -82,6 +92,9 @@ class RelativePoseCrossAttentionHead(nn.Module):
         for block in self.blocks:
             queries = block(queries, memory)
         raw = self.output(queries[:, 0, :])
+        if self.pair_delta_norm is not None and self.pair_delta_output is not None:
+            pair_delta = self.pair_delta_norm(target.mean(dim=1) - source.mean(dim=1))
+            raw = raw + self.pair_delta_output(pair_delta)
         rotation = torch.tanh(raw[:, :3]) * self.max_rotation_radians
         translation = torch.tanh(raw[:, 3:]) * self.max_translation
         return rotation, translation

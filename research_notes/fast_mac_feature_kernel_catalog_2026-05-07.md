@@ -8,10 +8,14 @@ Stable baselines stayed untouched; all kernel experiments were copied forks.
 
 ## Current Best Read
 
-The largest safe kernel win is still `v6_refined_features_f32_reduce`: it fixes
-the big F-channel color-gradient atomic bottleneck without changing render
-semantics. The best next trainable kernel candidate is `f32_gradcache` or a
-combined `gradcache + zero_bg` fork.
+The largest safe kernel win is still the `f32_reduce` family: it fixes the big
+F-channel color-gradient atomic bottleneck without changing render semantics.
+As of 2026-05-08, the best opt-in trainer candidate is
+`v9_features_gradcache_zero_bg`, a copied `f32_gradcache` fork with the
+zero-feature-background tail skip added. It has trainer fixed-render parity
+against stable `v6_refined_features` and is slightly faster than plain
+`f32_gradcache` at 512px in the direct benchmark, but the win is incremental,
+not a new speed class.
 
 The best semantic speed knob now has a stable-training answer for the current
 256px goodset F32 `v5_features` setup: `alpha_threshold = 1/128` improved
@@ -42,6 +46,12 @@ microbenchmarks unless otherwise noted.
 | Transmittance threshold `1e-2` | `431.7ms -> 404.5ms` | 512px B16/G8192/F32 | **6.3% faster total** | weaker; tile max stop remains |
 | `zero_bg` tail skip | `610.7ms -> 556.7ms` | 512px B16/G8192/F32 active off | **8.8% faster total** | bounded fork, safe version keeps explicit pixel zero/write |
 | `zero_bg` tail skip | `386.0ms -> 361.1ms` | 256px B16/G8192/F32 active off | **6.5% faster total** | bounded fork |
+| `v9 gradcache + zero_bg` | `367.4ms -> 364.0ms` | 512px B16/G8192/F32 active off | **0.9% faster total**, **2.9% faster forward** vs `f32_gradcache` | parity-safe combined candidate |
+| `v9 gradcache + zero_bg` | `291.2ms -> 291.5ms` | 256px B16/G8192/F32 active off | tied/slightly slower | no 256px win in direct matrix |
+| `v10 hostmeta` | `273.2ms -> 271.2ms` | 256px B16/G8192/F32 same-session vs v9 | **0.7% faster total** | small bridge sync win |
+| `v10 hostmeta` | `367.9ms -> 366.1ms` | 512px B16/G8192/F32 same-session vs v9 | **0.5% faster total** | small bridge sync win |
+| `v11 hostmeta+fixedbin` | `273.2ms -> 270.5ms` | 256px B16/G8192/F32 same-session vs v9 | **1.0% faster total**, **3.5% faster forward** | best direct row, no-overflow only |
+| `v11 hostmeta+fixedbin` | `367.9ms -> 364.0ms` | 512px B16/G8192/F32 same-session vs v9 | **1.0% faster total**, **4.0% faster forward** | best direct row, no-overflow only |
 | `fixedbin` no-overflow IDs | `855.4ms -> 501.8ms` | 512px B16/G8192/F32 synthetic target row | **41.3% faster total** vs reduce in that matrix | narrow, higher trainer memory |
 | `fixedbin` trainer fixed-render | `725.4ms -> 696.1ms` | 256px multicam fixed-render | **4.0% faster total** | mixed; not a memory fix |
 | Compact lookup K=4 | `225.9ms -> 96.9ms` | 128px B16/G8192/F32 prototype | **57.1% faster**, **31.9% lower sampled current memory** | architectural prototype |
@@ -118,12 +128,14 @@ Do not port the failed paths blindly:
 
 ## Next Experiments
 
-1. Copy a combined `f32_gradcache + zero_bg` fork and benchmark 256/512 B16
-   plus trainer fixed-render.
-2. Prototype per-pixel backward stop handling. This is the real top-p path,
+1. Prototype per-pixel backward stop handling. This is the real top-p path,
    but it needs a different scheduling design so barriers remain safe.
-3. Wire compact lookup into trainer fixed-render. It is the biggest remaining
+2. Wire compact lookup into trainer fixed-render. It is the biggest remaining
    speed/memory idea if quality holds.
+3. Try a longer trainer A/B with `v11_features_gradcache_zero_bg_hostmeta_fixedbin`
+   and a no-overflow profile guard. It is the best current opt-in shader, but
+   the fixedbin memory/no-overflow tradeoff should be proven over optimizer
+   time before config promotion.
 4. Only after those, try a very narrow F32-specialized vector/unrolled backward
    path. The `block4` failure says this should be measured immediately and
    killed if it regresses.
@@ -145,5 +157,17 @@ Do not port the failed paths blindly:
   [`hru1yv0t`](https://wandb.ai/nbardy/dynaworld/runs/hru1yv0t),
   [`dsq6u3wq`](https://wandb.ai/nbardy/dynaworld/runs/dsq6u3wq),
   [`obclxj4w`](https://wandb.ai/nbardy/dynaworld/runs/obclxj4w)
+- v9 combined fork note:
+  `agent_notes/loose_notes/2026-05-08_16-55-00_v9_feature_shader_benchmark.md`
+- Alpha/background contract note:
+  `agent_notes/loose_notes/2026-05-08_16-25-46_alpha_bg_bleed_features.md`
+- v9 direct benchmark artifacts:
+  `benchmark_outputs/fast_mac_feature_kernels/2026-05-08_feature_variants_B16_G8192_F32_{256,512}_active_off.jsonl`
+- v9 trainer fixed-render parity:
+  `benchmark_outputs/fast_mac_feature_kernels/2026-05-08_fixed_render_parity_v6_refined_features_vs_v9_features_gradcache_zero_bg_256.json`
+- v10/v11 direct and trainer artifacts:
+  `benchmark_outputs/fast_mac_feature_kernels/2026-05-08_v9_v10_v11_{256,512}_B16_G8192_F32.jsonl`,
+  `benchmark_outputs/fast_mac_feature_kernels/2026-05-08_fixed_render_parity_v9_vs_v{10,11}_*_256_train.json`,
+  `benchmark_outputs/fast_mac_feature_kernels/2026-05-08_trainer_fixed_render_v{9,10,11}_*_256_seed0_warm1_iters3.json`
 - Experimental Metal comments:
   `third_party/fast-mac-gsplat/variants/v6_refined_features_f32_reduce/csrc/metal/gsplat_v6_refined_features_f32_reduce_kernels.metal`
