@@ -1,0 +1,31 @@
+{
+  // CamXTime row-one smoke fixture metadata.
+  //
+  // Source page: http://zheninghuang.github.io/camxtime_dataset
+  // Hugging Face dataset: https://huggingface.co/datasets/zhening/CamxTime
+  //
+  // This config intentionally tracks only a tiny local subset of the public
+  // full_grid_renders archive: scene_1 camera_data.json plus camera_000,
+  // camera_020, and camera_040. The data files live under ignored data/
+  // storage and are not committed.
+  "name": "camxtime_row1_full_grid_smoke",
+  "dataset": "camxtime_full_grid",
+  "manifest": "src/dataset_configs/camxtime_row1_full_grid_smoke_manifest.jsonl",
+  "local_scene_dir": "data/external/camxtime/extracted/CamxTime_eval/full_grid_renders/scene_1",
+  "required_files": [
+    "data/external/camxtime/extracted/CamxTime_eval/full_grid_renders/scene_1/camera_data.json",
+    "data/external/camxtime/extracted/CamxTime_eval/full_grid_renders/scene_1/camera_000.mp4",
+    "data/external/camxtime/extracted/CamxTime_eval/full_grid_renders/scene_1/camera_020.mp4",
+    "data/external/camxtime/extracted/CamxTime_eval/full_grid_renders/scene_1/camera_040.mp4"
+  ],
+  "row_one": {
+    "scene": "scene_1",
+    "train_cameras": ["camera_000", "camera_020"],
+    "heldout_cameras": ["camera_040"],
+    "anchor_camera": "camera_000",
+    "condition_camera": "camera_000",
+    "fps": 4.0,
+    "frame_count": 16,
+    "source_resolution": [1080, 1080]
+  }
+}

@@ -230,6 +230,114 @@ def test_cameras_from_K_w2c_preserves_lens_metadata() -> None:
     assert torch.equal(camera_grid[0][0].distortion, distortion[0])
 
 
+def test_camxtime_extra_camera_path_and_start_time(tmp_path: Path) -> None:
+    scene_dir = tmp_path / "scene_1"
+    scene_dir.mkdir()
+    (scene_dir / "camera_020.mp4").touch()
+    record = {
+        "dataset": "camxtime_full_grid",
+        "sample_id": "camxtime_row1",
+        "source_camera": "camera_000",
+        "target_camera": "camera_040",
+        "source_video_path": str(scene_dir / "camera_000.mp4"),
+        "target_video_path": str(scene_dir / "camera_040.mp4"),
+        "camxtime_scene_dir": str(scene_dir),
+        "source_start_seconds": 1.25,
+        "target_start_seconds": 9.0,
+    }
+
+    assert camera_start_seconds(record, "camera_020") == 1.25
+    assert multicam_video_data.video_path_for_camera(record, "20") == scene_dir / "camera_020.mp4"
+
+
+def test_load_multicam_video_bundle_supports_camxtime_record_level_split(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scene_dir = tmp_path / "scene_1"
+    scene_dir.mkdir()
+    for camera_name in ("camera_000", "camera_020", "camera_040"):
+        (scene_dir / f"{camera_name}.mp4").touch()
+    c2w0 = torch.eye(4).tolist()
+    c2w20 = torch.eye(4)
+    c2w20[0, 3] = 2.0
+    c2w40 = torch.eye(4)
+    c2w40[0, 3] = 4.0
+    camera_data_path = scene_dir / "camera_data.json"
+    camera_data_path.write_text(
+        """
+{
+  "intrinsics": {
+    "K": [[100.0, 0.0, 50.0], [0.0, 120.0, 60.0], [0.0, 0.0, 1.0]]
+  },
+  "n_cameras": 120,
+  "cameras": {
+    "0": {"c2w": %s},
+    "20": {"c2w": %s},
+    "40": {"c2w": %s}
+  }
+}
+"""
+        % (c2w0, c2w20.tolist(), c2w40.tolist()),
+        encoding="utf-8",
+    )
+    record = {
+        "dataset": "camxtime_full_grid",
+        "sample_id": "camxtime_row1",
+        "source_camera": "camera_000",
+        "target_camera": "camera_040",
+        "source_video_path": str(scene_dir / "camera_000.mp4"),
+        "target_video_path": str(scene_dir / "camera_040.mp4"),
+        "camxtime_scene_dir": str(scene_dir),
+        "camxtime_camera_data_path": str(camera_data_path),
+        "camxtime_source_width": 100,
+        "camxtime_source_height": 120,
+        "fps": 4.0,
+        "frame_count": 4,
+        "train_cameras": ["camera_000", "camera_020"],
+        "heldout_cameras": ["camera_040"],
+        "anchor_camera": "camera_000",
+        "condition_camera": "camera_020",
+    }
+    camera_values = {"camera_000": 1.0, "camera_020": 2.0, "camera_040": 3.0}
+
+    monkeypatch.setattr(multicam_video_data, "select_multicam_record", lambda _data_cfg: record)
+
+    def fake_load_camera_video(
+        _record: dict,
+        camera_name: str,
+        *,
+        target_size: int,
+        device: torch.device,
+        frame_count: int | None = None,
+    ) -> torch.Tensor:
+        count = int(frame_count or _record["frame_count"])
+        frames = torch.full((count, 3, target_size, target_size), camera_values[camera_name], device=device)
+        frames[:, 0, 0, 0] += torch.arange(count, dtype=frames.dtype, device=device)
+        return frames
+
+    monkeypatch.setattr(multicam_video_data, "load_camera_video", fake_load_camera_video)
+
+    bundle = load_multicam_video_bundle(
+        data_cfg={"max_frames": 3, "frame_indices": [0, 2]},
+        camera_cfg={"rig_init": "camxtime", "base_radius": 2.0},
+        target_size=4,
+        device=torch.device("cpu"),
+    )
+
+    assert bundle.pose_source == "camxtime_full_grid_relative_pinhole"
+    assert bundle.train_camera_names == ["camera_000", "camera_020"]
+    assert bundle.heldout_camera_names == ["camera_040"]
+    assert bundle.train_frames.shape == (2, 2, 3, 4, 4)
+    assert bundle.heldout_frames is not None and bundle.heldout_frames.shape == (1, 2, 3, 4, 4)
+    assert torch.allclose(bundle.train_K[0], torch.tensor([[4.0, 0.0, 2.0], [0.0, 4.0, 2.0], [0.0, 0.0, 1.0]]))
+    assert torch.allclose(bundle.train_w2c[0, 0], torch.eye(4))
+    assert torch.allclose(bundle.train_w2c[1, 0, :3, 3], torch.tensor([-2.0, 0.0, 0.0]))
+    assert bundle.anchor_c2w is not None and torch.allclose(bundle.anchor_c2w, torch.eye(4))
+    assert torch.all(bundle.condition_sequence.frames[:, 1:] == 2.0)
+    assert torch.allclose(bundle.condition_sequence.frames[:, 0, 0, 0], torch.tensor([2.0, 4.0]))
+
+
 def test_deepview_lens_metadata_maps_fisheye_radial_distortion(tmp_path: Path) -> None:
     models_path = tmp_path / "models.json"
     models_path.write_text(

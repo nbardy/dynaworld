@@ -1,3 +1,10 @@
+"""Multicam bundle loaders for novel-view training.
+
+This module owns the calibrated multi-camera side of
+``research_notes/data_contract.md``: train/condition cameras go in and heldout
+cameras provide novel-view supervision. Broad one-camera scale pretraining
+belongs in ``sequence_data.py``.
+"""
 from __future__ import annotations
 
 import json
@@ -54,6 +61,16 @@ class MulticamVideoBundle:
         if not self.heldout_camera_names:
             return None
         return self.heldout_camera_names[0]
+
+
+CAMXTIME_DATASETS = {"camxtime", "camxtime_full_grid", "camxtime_eval_gt"}
+CAMXTIME_TRAJECTORY_VIDEOS = {
+    "moving_forward",
+    "moving_backward",
+    "moving_zigzag",
+    "moving_bullettime",
+    "moving_slowmo",
+}
 
 
 def make_fixed_pinhole_K(*, H: int, W: int, fov_degrees: float, device: torch.device) -> torch.Tensor:
@@ -211,6 +228,210 @@ def deepview_video_path_for_camera(record: dict[str, Any], camera_name: str) -> 
     if not path.exists():
         raise FileNotFoundError(f"DeepView camera video not found: {path}")
     return path
+
+
+def camxtime_scene_dir(record: dict[str, Any]) -> Path:
+    scene_dir = record.get("camxtime_scene_dir") or record.get("dataset_scene_dir")
+    if not scene_dir:
+        raise ValueError(
+            f"CamXTime record {record.get('sample_id')!r} is missing camxtime_scene_dir/dataset_scene_dir."
+        )
+    return Path(scene_dir)
+
+
+def camxtime_camera_data_path(record: dict[str, Any]) -> Path:
+    path = Path(record.get("camxtime_camera_data_path") or camxtime_scene_dir(record) / "camera_data.json")
+    if not path.exists():
+        raise FileNotFoundError(f"CamXTime camera_data.json not found: {path}")
+    return path
+
+
+def load_camxtime_camera_data(record: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(camxtime_camera_data_path(record).read_text(encoding="utf-8"))
+
+
+def camxtime_intrinsics(camera_data: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(camera_data.get("intrinsics"), dict):
+        return camera_data["intrinsics"]
+    cameras = camera_data.get("cameras")
+    if isinstance(cameras, dict) and isinstance(cameras.get("intrinsics"), dict):
+        return cameras["intrinsics"]
+    raise ValueError("CamXTime camera_data.json is missing intrinsics.")
+
+
+def camxtime_camera_count(camera_data: dict[str, Any]) -> int:
+    if camera_data.get("n_cameras") is not None:
+        return int(camera_data["n_cameras"])
+    cameras = camera_data.get("cameras")
+    if isinstance(cameras, dict) and isinstance(cameras.get("extrinsic"), dict):
+        return len(cameras["extrinsic"])
+    if isinstance(cameras, dict):
+        return len([key for key, value in cameras.items() if isinstance(value, dict) and "intrinsics" not in key])
+    raise ValueError("CamXTime camera_data.json is missing cameras.")
+
+
+def camxtime_camera_index(camera_name: str) -> int:
+    stem = Path(str(camera_name)).stem
+    if stem.startswith("camera_"):
+        return int(stem.split("_", 1)[1])
+    return int(stem)
+
+
+def camxtime_camera_indices(camera_name: str, *, frame_count: int, camera_count: int) -> list[int]:
+    if camera_name in CAMXTIME_TRAJECTORY_VIDEOS:
+        if frame_count > camera_count:
+            raise ValueError(
+                f"CamXTime trajectory {camera_name!r} needs {frame_count} camera poses, "
+                f"but camera_data.json contains {camera_count}."
+            )
+        return list(range(frame_count))
+    index = camxtime_camera_index(camera_name)
+    if not 0 <= index < camera_count:
+        raise IndexError(f"CamXTime camera index {index} out of range for {camera_count} cameras.")
+    return [index] * int(frame_count)
+
+
+def camxtime_c2w_for_index(
+    camera_data: dict[str, Any],
+    camera_index: int,
+    *,
+    device: torch.device,
+    extrinsic_convention: str = "c2w",
+) -> torch.Tensor:
+    cameras = camera_data.get("cameras")
+    if not isinstance(cameras, dict):
+        raise ValueError("CamXTime camera_data.json is missing cameras.")
+
+    full_grid_key = str(camera_index)
+    if full_grid_key in cameras and isinstance(cameras[full_grid_key], dict):
+        camera_record = cameras[full_grid_key]
+        if "c2w" in camera_record:
+            return torch.tensor(camera_record["c2w"], dtype=torch.float32, device=device)
+        if "w2c" in camera_record:
+            w2c = torch.tensor(camera_record["w2c"], dtype=torch.float32, device=device)
+            return torch.linalg.inv(w2c)
+
+    extrinsics = cameras.get("extrinsic")
+    if isinstance(extrinsics, dict):
+        key = f"camera_{camera_index:03d}"
+        if key not in extrinsics:
+            raise KeyError(f"CamXTime camera {key!r} not present in camera_data.json.")
+        matrix = torch.tensor(extrinsics[key], dtype=torch.float32, device=device)
+        convention = str(extrinsic_convention).lower()
+        if convention == "c2w":
+            return matrix
+        if convention == "w2c":
+            return torch.linalg.inv(matrix)
+        raise ValueError("camxtime_extrinsic_convention must be 'c2w' or 'w2c'.")
+
+    raise KeyError(f"CamXTime camera index {camera_index} not present in camera_data.json.")
+
+
+def camxtime_K_from_camera_data(
+    record: dict[str, Any],
+    camera_data: dict[str, Any],
+    *,
+    H: int,
+    W: int,
+    device: torch.device,
+) -> torch.Tensor:
+    intr = camxtime_intrinsics(camera_data)
+    if "K" in intr:
+        matrix = intr["K"]
+        fx = float(matrix[0][0])
+        fy = float(matrix[1][1])
+        cx = float(matrix[0][2])
+        cy = float(matrix[1][2])
+    else:
+        fx = float(intr["fx"])
+        fy = float(intr["fy"])
+        cx = float(intr["cx"])
+        cy = float(intr["cy"])
+    source_width = float(record.get("camxtime_source_width") or intr.get("width") or (2.0 * cx))
+    source_height = float(record.get("camxtime_source_height") or intr.get("height") or (2.0 * cy))
+    return make_scaled_intrinsics(
+        fx=fx,
+        fy=fy,
+        cx=cx,
+        cy=cy,
+        source_width=source_width,
+        source_height=source_height,
+        target_width=W,
+        target_height=H,
+        device=device,
+    )
+
+
+def camxtime_video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
+    if camera_name == str(record.get("source_camera")):
+        return Path(record["source_video_path"])
+    if camera_name == str(record.get("target_camera")):
+        return Path(record["target_video_path"])
+    scene_dir = camxtime_scene_dir(record)
+    candidates = [scene_dir / f"{camera_name}.mp4"]
+    if camera_name not in CAMXTIME_TRAJECTORY_VIDEOS:
+        try:
+            candidates.append(scene_dir / f"camera_{camxtime_camera_index(camera_name):03d}.mp4")
+        except ValueError:
+            pass
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"CamXTime camera video not found for {camera_name!r}; tried {candidates}.")
+
+
+def make_camxtime_multiview_cameras(
+    record: dict[str, Any],
+    *,
+    train_cameras: list[str],
+    heldout_cameras: list[str],
+    anchor_camera: str,
+    T: int,
+    H: int,
+    W: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    dataset = str(record.get("dataset") or "")
+    if dataset not in CAMXTIME_DATASETS:
+        raise ValueError(f"camera.rig_init=camxtime requires a CamXTime record; got dataset={dataset!r}.")
+
+    camera_data = load_camxtime_camera_data(record)
+    camera_count = camxtime_camera_count(camera_data)
+    extrinsic_convention = str(record.get("camxtime_extrinsic_convention", "c2w"))
+    anchor_indices = camxtime_camera_indices(anchor_camera, frame_count=T, camera_count=camera_count)
+    anchor_c2w = camxtime_c2w_for_index(
+        camera_data,
+        anchor_indices[0],
+        device=device,
+        extrinsic_convention=extrinsic_convention,
+    )
+    K = camxtime_K_from_camera_data(record, camera_data, H=H, W=W, device=device)
+
+    def build_view(camera_name: str) -> tuple[torch.Tensor, torch.Tensor]:
+        c2w_sequence = torch.stack(
+            [
+                camxtime_c2w_for_index(
+                    camera_data,
+                    index,
+                    device=device,
+                    extrinsic_convention=extrinsic_convention,
+                )
+                for index in camxtime_camera_indices(camera_name, frame_count=T, camera_count=camera_count)
+            ],
+            dim=0,
+        )
+        rel_w2c = torch.linalg.inv(c2w_sequence) @ anchor_c2w
+        return K, rel_w2c
+
+    train_pairs = [build_view(camera_name) for camera_name in train_cameras]
+    heldout_pairs = [build_view(camera_name) for camera_name in heldout_cameras]
+    return (
+        torch.stack([pair[0] for pair in train_pairs], dim=0),
+        torch.stack([pair[1] for pair in train_pairs], dim=0),
+        torch.stack([pair[0] for pair in heldout_pairs], dim=0),
+        torch.stack([pair[1] for pair in heldout_pairs], dim=0),
+        f"{dataset}_relative_pinhole",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -859,7 +1080,7 @@ def camera_start_seconds(record: dict[str, Any], camera_name: str) -> float:
         return float(record.get("target_start_seconds", 0.0))
 
     dataset = str(record.get("dataset") or "")
-    if dataset in {"deepview_video", "aist_dance_db", "neural_3d_video"}:
+    if dataset in {"deepview_video", "aist_dance_db", "neural_3d_video"} | CAMXTIME_DATASETS:
         return float(record.get("source_start_seconds", record.get("target_start_seconds", 0.0)))
     if dataset == "vivo":
         raise ValueError(
@@ -879,13 +1100,16 @@ def video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
         return neural_3d_video_path_for_camera(record, camera_name)
     elif dataset == "vivo":
         return vivo_video_path_for_camera(record, camera_name)
+    elif dataset in CAMXTIME_DATASETS:
+        return camxtime_video_path_for_camera(record, camera_name)
     elif camera_name == str(record.get("source_camera")):
         return Path(record["source_video_path"])
     elif camera_name == str(record.get("target_camera")):
         return Path(record["target_video_path"])
     else:
         raise ValueError(
-            f"Arbitrary train camera {camera_name!r} requires a DeepView, AIST, Neural 3D Video, or ViVo record; "
+            f"Arbitrary train camera {camera_name!r} requires a DeepView, AIST, Neural 3D Video, ViVo, "
+            f"or CamXTime record; "
             f"record dataset={dataset!r}."
         )
 
@@ -1166,18 +1390,20 @@ def load_multicam_video_bundle(
     device: torch.device,
 ) -> MulticamVideoBundle:
     record = select_multicam_record(data_cfg)
-    train_raw = data_cfg.get("multicam_train_cameras")
+    train_raw = data_cfg.get("multicam_train_cameras") or record.get("train_cameras")
     if train_raw:
         train_cameras = [str(camera) for camera in train_raw]
     else:
         train_cameras = [str(record["source_camera"])]
-    heldout_raw = data_cfg.get("multicam_heldout_cameras")
+    heldout_raw = data_cfg.get("multicam_heldout_cameras") or record.get("heldout_cameras")
     if heldout_raw:
         heldout_cameras = [str(camera) for camera in heldout_raw]
     else:
-        heldout_cameras = [str(data_cfg.get("multicam_heldout_camera") or record["target_camera"])]
-    anchor_camera = str(data_cfg.get("multicam_anchor_camera") or train_cameras[0])
-    condition_camera = str(data_cfg.get("multicam_condition_camera") or anchor_camera)
+        heldout_cameras = [
+            str(data_cfg.get("multicam_heldout_camera") or record.get("heldout_camera") or record["target_camera"])
+        ]
+    anchor_camera = str(data_cfg.get("multicam_anchor_camera") or record.get("anchor_camera") or train_cameras[0])
+    condition_camera = str(data_cfg.get("multicam_condition_camera") or record.get("condition_camera") or anchor_camera)
     validate_multicam_camera_split(
         train_cameras=train_cameras,
         heldout_cameras=heldout_cameras,
@@ -1294,6 +1520,33 @@ def load_multicam_video_bundle(
             device=device,
             translation_scale=translation_scale,
         )
+    elif rig_init == "camxtime":
+        if str(record.get("dataset") or "") not in CAMXTIME_DATASETS:
+            raise ValueError(
+                f"camera.rig_init=camxtime requires a CamXTime record; got dataset={record.get('dataset')!r}."
+            )
+        camera_data = load_camxtime_camera_data(record)
+        anchor_indices = camxtime_camera_indices(
+            anchor_camera,
+            frame_count=T,
+            camera_count=camxtime_camera_count(camera_data),
+        )
+        anchor_c2w = camxtime_c2w_for_index(
+            camera_data,
+            anchor_indices[0],
+            device=device,
+            extrinsic_convention=str(record.get("camxtime_extrinsic_convention", "c2w")),
+        )
+        train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_camxtime_multiview_cameras(
+            record,
+            train_cameras=train_cameras,
+            heldout_cameras=heldout_cameras,
+            anchor_camera=anchor_camera,
+            T=T,
+            H=H,
+            W=W,
+            device=device,
+        )
     elif rig_init == "orthogonal_origin":
         anchor_c2w = torch.eye(4, dtype=torch.float32, device=device)
         train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_orthogonal_origin_multiview_cameras(
@@ -1308,7 +1561,7 @@ def load_multicam_video_bundle(
         )
     else:
         raise ValueError(
-            "camera.rig_init must be one of: deepview, aist, neural_3d_video, vivo, orthogonal_origin"
+            "camera.rig_init must be one of: deepview, aist, neural_3d_video, vivo, camxtime, orthogonal_origin"
         )
 
     condition_index = train_cameras.index(condition_camera)
