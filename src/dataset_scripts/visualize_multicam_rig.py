@@ -58,6 +58,11 @@ def _as_camera_list(value: Any) -> list[str] | None:
     return [str(item) for item in value]
 
 
+def _camxtime_camera_names(record: dict[str, Any]) -> list[str]:
+    camera_count = camxtime_camera_count(load_camxtime_camera_data(record))
+    return [f"camera_{index:03d}" for index in range(camera_count)]
+
+
 def _resolve_split(
     data_cfg: dict[str, Any],
     record: dict[str, Any],
@@ -66,6 +71,7 @@ def _resolve_split(
     train_cameras_override: str | None,
     heldout_cameras_override: str | None,
     all_camxtime_cameras: bool,
+    all_camxtime_role: str,
 ) -> tuple[list[str], list[str], str, str]:
     train_cameras = (
         _as_camera_list(train_cameras_override)
@@ -94,12 +100,24 @@ def _resolve_split(
         dataset = str(record.get("dataset") or "")
         if dataset not in CAMXTIME_DATASETS:
             raise ValueError("--all-camxtime-cameras requires a CamXTime record.")
-        camera_count = camxtime_camera_count(load_camxtime_camera_data(record))
-        all_names = [f"camera_{index:03d}" for index in range(camera_count)]
+        all_names = _camxtime_camera_names(record)
         if condition_camera not in all_names:
             raise ValueError(f"condition/input camera {condition_camera!r} is not present in CamXTime camera_data.json.")
-        train_cameras = [condition_camera]
-        heldout_cameras = [camera for camera in all_names if camera != condition_camera]
+        if all_camxtime_role == "heldout_except_input":
+            train_cameras = [condition_camera]
+            heldout_cameras = [camera for camera in all_names if camera != condition_camera]
+        elif all_camxtime_role == "train_except_heldout":
+            heldout_set = set(heldout_cameras)
+            train_cameras = [camera for camera in all_names if camera not in heldout_set]
+            if condition_camera not in train_cameras:
+                raise ValueError(
+                    f"condition/input camera {condition_camera!r} is in the heldout set; "
+                    "choose a different --input-camera or --heldout-cameras."
+                )
+        else:
+            raise ValueError(
+                "--all-camxtime-role must be 'heldout_except_input' or 'train_except_heldout'."
+            )
         anchor_camera = condition_camera
     validate_multicam_camera_split(
         train_cameras=train_cameras,
@@ -192,6 +210,133 @@ def _camera_entry(
     }
 
 
+def _dot(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right))
+
+
+def _norm(values: list[float]) -> float:
+    return float(sum(value * value for value in values) ** 0.5)
+
+
+def _sub(left: list[float], right: list[float]) -> list[float]:
+    return [a - b for a, b in zip(left, right)]
+
+
+def _cross(left: list[float], right: list[float]) -> list[float]:
+    return [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
+
+
+def _camera_rotation(entry: dict[str, Any]) -> torch.Tensor:
+    return torch.tensor(
+        [
+            [entry["right"][0], entry["up"][0], entry["forward"][0]],
+            [entry["right"][1], entry["up"][1], entry["forward"][1]],
+            [entry["right"][2], entry["up"][2], entry["forward"][2]],
+        ],
+        dtype=torch.float64,
+    )
+
+
+def _axis_focus_point(centers: torch.Tensor, directions: torch.Tensor) -> torch.Tensor:
+    directions = directions / torch.clamp(torch.linalg.norm(directions, dim=1, keepdim=True), min=1e-12)
+    identity = torch.eye(3, dtype=torch.float64)
+    projectors = identity.unsqueeze(0) - directions.unsqueeze(2) @ directions.unsqueeze(1)
+    lhs = torch.sum(projectors, dim=0)
+    rhs = torch.sum(projectors @ centers.unsqueeze(2), dim=0).squeeze(1)
+    return torch.linalg.pinv(lhs) @ rhs
+
+
+def _add_pose_diagnostics(
+    cameras: list[dict[str, Any]],
+    *,
+    condition_camera: str,
+) -> dict[str, Any]:
+    if not cameras:
+        return {}
+    condition = next((camera for camera in cameras if camera["name"] == condition_camera), cameras[0])
+    condition_center = [float(value) for value in condition["center"]]
+    condition_forward = [float(value) for value in condition["forward"]]
+
+    centers = torch.tensor([camera["center"] for camera in cameras], dtype=torch.float64)
+    directions = torch.tensor([camera["forward"] for camera in cameras], dtype=torch.float64)
+    rotations = torch.stack([_camera_rotation(camera) for camera in cameras], dim=0)
+    identity = torch.eye(3, dtype=torch.float64)
+    determinants = torch.linalg.det(rotations)
+    orthogonality = torch.linalg.norm(rotations.transpose(1, 2) @ rotations - identity, dim=(1, 2))
+    radii = torch.linalg.norm(centers, dim=1)
+    focus = _axis_focus_point(centers, directions)
+    focus_depths = []
+    focus_misses = []
+
+    for camera in cameras:
+        center = [float(value) for value in camera["center"]]
+        forward = [float(value) for value in camera["forward"]]
+        to_anchor_origin = [-value for value in center]
+        to_focus = [float(value) for value in (focus - torch.tensor(center, dtype=torch.float64)).tolist()]
+        center_norm = _norm(center)
+        forward_norm = max(_norm(forward), 1e-12)
+        anchor_origin_depth = _dot(to_anchor_origin, forward) / forward_norm
+        anchor_origin_ray_miss = 0.0 if center_norm < 1e-9 else _norm(_cross(forward, to_anchor_origin)) / forward_norm
+        focus_depth = _dot(to_focus, forward) / forward_norm
+        focus_ray_miss = _norm(_cross(forward, to_focus)) / forward_norm
+        distance_to_condition = _norm(_sub(center, condition_center))
+        forward_dot = _dot(forward, condition_forward) / (forward_norm * max(_norm(condition_forward), 1e-12))
+        camera["anchor_origin_depth_along_forward"] = anchor_origin_depth
+        camera["anchor_origin_ray_miss_distance"] = anchor_origin_ray_miss
+        camera["focus_depth_along_forward"] = focus_depth
+        camera["focus_ray_miss_distance"] = focus_ray_miss
+        camera["distance_to_condition"] = distance_to_condition
+        camera["forward_angle_from_condition_degrees"] = float(
+            torch.rad2deg(torch.acos(torch.tensor(_clamp(forward_dot, -1.0, 1.0)))).item()
+        )
+        focus_depths.append(focus_depth)
+        focus_misses.append(focus_ray_miss)
+
+    pairwise = torch.cdist(centers, centers)
+    if len(cameras) > 1:
+        pairwise.fill_diagonal_(float("inf"))
+        nearest = torch.min(pairwise)
+    else:
+        nearest = torch.tensor(0.0, dtype=torch.float64)
+
+    role_counts: dict[str, int] = {}
+    for camera in cameras:
+        role = str(camera["role"])
+        role_counts[role] = role_counts.get(role, 0) + 1
+
+    return {
+        "camera_count": len(cameras),
+        "role_counts": role_counts,
+        "position_min": torch.min(centers, dim=0).values.tolist(),
+        "position_max": torch.max(centers, dim=0).values.tolist(),
+        "radius_min": float(torch.min(radii).item()),
+        "radius_max": float(torch.max(radii).item()),
+        "radius_mean": float(torch.mean(radii).item()),
+        "nearest_camera_distance": float(nearest.item()),
+        "rotation_det_min": float(torch.min(determinants).item()),
+        "rotation_det_max": float(torch.max(determinants).item()),
+        "rotation_orthogonality_error_max": float(torch.max(orthogonality).item()),
+        "condition_origin_error": _norm(condition_center),
+        "condition_rotation_from_identity_fro": float(torch.linalg.norm(_camera_rotation(condition) - identity).item()),
+        "axis_focus_point": focus.tolist(),
+        "axis_focus_depth_min": min(focus_depths),
+        "axis_focus_depth_max": max(focus_depths),
+        "axis_focus_rms_miss_distance": float((sum(value * value for value in focus_misses) / len(focus_misses)) ** 0.5),
+        "axis_focus_max_miss_distance": max(focus_misses),
+        "cameras_with_focus_behind": [
+            camera["name"] for camera in cameras if float(camera["focus_depth_along_forward"]) < -1e-6
+        ],
+    }
+
+
 def build_payload(
     config_path: Path,
     *,
@@ -199,6 +344,7 @@ def build_payload(
     train_cameras_override: str | None,
     heldout_cameras_override: str | None,
     all_camxtime_cameras: bool,
+    all_camxtime_role: str,
     frame_count: int,
     target_size: int | None,
     frame_index: int,
@@ -215,6 +361,7 @@ def build_payload(
         train_cameras_override=train_cameras_override,
         heldout_cameras_override=heldout_cameras_override,
         all_camxtime_cameras=all_camxtime_cameras,
+        all_camxtime_role=all_camxtime_role,
     )
     train_K, train_w2c, heldout_K, heldout_w2c, pose_source = _make_rig_tensors(
         record,
@@ -247,6 +394,7 @@ def build_payload(
         )
         for index, name in enumerate(heldout_cameras)
     )
+    diagnostics = _add_pose_diagnostics(cameras, condition_camera=condition_camera)
     metadata = {
         "config": _repo_text(config_path),
         "sample_id": record.get("sample_id"),
@@ -262,6 +410,7 @@ def build_payload(
         "anchor_camera": anchor_camera,
         "condition_camera": condition_camera,
         "coordinate_frame": "anchor_relative_opencv_plus_z_forward",
+        "diagnostics": diagnostics,
     }
     return CameraRigPayload(metadata=metadata, cameras=cameras)
 
@@ -420,6 +569,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="For CamXTime, draw the input camera plus every other camera in camera_data.json.",
     )
+    parser.add_argument(
+        "--all-camxtime-role",
+        choices=("heldout_except_input", "train_except_heldout"),
+        default="heldout_except_input",
+        help=(
+            "How to label all CamXTime cameras when --all-camxtime-cameras is set. "
+            "Use train_except_heldout to model one input camera with losses on every "
+            "camera except the configured heldout split."
+        ),
+    )
     parser.add_argument("--frame-count", type=int, default=1, help="Pose sequence length to materialize.")
     parser.add_argument("--frame-index", type=int, default=0, help="Frame index to draw for moving-camera trajectories.")
     parser.add_argument("--target-size", type=int, default=None, help="Camera intrinsic viewport size override.")
@@ -434,6 +593,7 @@ def main() -> None:
         train_cameras_override=args.train_cameras,
         heldout_cameras_override=args.heldout_cameras,
         all_camxtime_cameras=bool(args.all_camxtime_cameras),
+        all_camxtime_role=str(args.all_camxtime_role),
         frame_count=int(args.frame_count),
         target_size=args.target_size,
         frame_index=int(args.frame_index),

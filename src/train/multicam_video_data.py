@@ -297,7 +297,20 @@ def camxtime_c2w_for_index(
     *,
     device: torch.device,
     extrinsic_convention: str = "c2w",
+    camera_convention: str = "opengl",
 ) -> torch.Tensor:
+    def normalize_camera_axes(c2w: torch.Tensor) -> torch.Tensor:
+        convention = str(camera_convention).lower()
+        if convention in {"opencv", "opencv_plus_z", "plus_z"}:
+            return c2w
+        if convention in {"opengl", "blender", "nerf"}:
+            # Blender/OpenGL camera poses store +Y as image up and -Z as the
+            # view direction. CameraSpec/renderers use OpenCV-style +Y down and
+            # +Z forward, so flip the camera-frame Y/Z columns.
+            flip = torch.diag(torch.tensor([1.0, -1.0, -1.0, 1.0], dtype=torch.float32, device=device))
+            return c2w @ flip
+        raise ValueError("camxtime_camera_convention must be 'opengl'/'blender' or 'opencv'.")
+
     cameras = camera_data.get("cameras")
     if not isinstance(cameras, dict):
         raise ValueError("CamXTime camera_data.json is missing cameras.")
@@ -306,10 +319,10 @@ def camxtime_c2w_for_index(
     if full_grid_key in cameras and isinstance(cameras[full_grid_key], dict):
         camera_record = cameras[full_grid_key]
         if "c2w" in camera_record:
-            return torch.tensor(camera_record["c2w"], dtype=torch.float32, device=device)
+            return normalize_camera_axes(torch.tensor(camera_record["c2w"], dtype=torch.float32, device=device))
         if "w2c" in camera_record:
             w2c = torch.tensor(camera_record["w2c"], dtype=torch.float32, device=device)
-            return torch.linalg.inv(w2c)
+            return normalize_camera_axes(torch.linalg.inv(w2c))
 
     extrinsics = cameras.get("extrinsic")
     if isinstance(extrinsics, dict):
@@ -319,9 +332,9 @@ def camxtime_c2w_for_index(
         matrix = torch.tensor(extrinsics[key], dtype=torch.float32, device=device)
         convention = str(extrinsic_convention).lower()
         if convention == "c2w":
-            return matrix
+            return normalize_camera_axes(matrix)
         if convention == "w2c":
-            return torch.linalg.inv(matrix)
+            return normalize_camera_axes(torch.linalg.inv(matrix))
         raise ValueError("camxtime_extrinsic_convention must be 'c2w' or 'w2c'.")
 
     raise KeyError(f"CamXTime camera index {camera_index} not present in camera_data.json.")
@@ -398,12 +411,14 @@ def make_camxtime_multiview_cameras(
     camera_data = load_camxtime_camera_data(record)
     camera_count = camxtime_camera_count(camera_data)
     extrinsic_convention = str(record.get("camxtime_extrinsic_convention", "c2w"))
+    camera_convention = str(record.get("camxtime_camera_convention", "opengl"))
     anchor_indices = camxtime_camera_indices(anchor_camera, frame_count=T, camera_count=camera_count)
     anchor_c2w = camxtime_c2w_for_index(
         camera_data,
         anchor_indices[0],
         device=device,
         extrinsic_convention=extrinsic_convention,
+        camera_convention=camera_convention,
     )
     K = camxtime_K_from_camera_data(record, camera_data, H=H, W=W, device=device)
 
@@ -415,6 +430,7 @@ def make_camxtime_multiview_cameras(
                     index,
                     device=device,
                     extrinsic_convention=extrinsic_convention,
+                    camera_convention=camera_convention,
                 )
                 for index in camxtime_camera_indices(camera_name, frame_count=T, camera_count=camera_count)
             ],
@@ -430,7 +446,7 @@ def make_camxtime_multiview_cameras(
         torch.stack([pair[1] for pair in train_pairs], dim=0),
         torch.stack([pair[0] for pair in heldout_pairs], dim=0),
         torch.stack([pair[1] for pair in heldout_pairs], dim=0),
-        f"{dataset}_relative_pinhole",
+        f"{dataset}_{camera_convention.lower()}_to_opencv_relative_pinhole",
     )
 
 
@@ -1526,6 +1542,7 @@ def load_multicam_video_bundle(
                 f"camera.rig_init=camxtime requires a CamXTime record; got dataset={record.get('dataset')!r}."
             )
         camera_data = load_camxtime_camera_data(record)
+        camera_convention = str(record.get("camxtime_camera_convention", "opengl"))
         anchor_indices = camxtime_camera_indices(
             anchor_camera,
             frame_count=T,
@@ -1536,6 +1553,7 @@ def load_multicam_video_bundle(
             anchor_indices[0],
             device=device,
             extrinsic_convention=str(record.get("camxtime_extrinsic_convention", "c2w")),
+            camera_convention=camera_convention,
         )
         train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_camxtime_multiview_cameras(
             record,

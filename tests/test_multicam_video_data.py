@@ -250,6 +250,31 @@ def test_camxtime_extra_camera_path_and_start_time(tmp_path: Path) -> None:
     assert multicam_video_data.video_path_for_camera(record, "20") == scene_dir / "camera_020.mp4"
 
 
+def test_camxtime_defaults_to_opengl_camera_axes() -> None:
+    camera_data = {
+        "cameras": {
+            "0": {"c2w": torch.eye(4).tolist()},
+        },
+    }
+
+    c2w = multicam_video_data.camxtime_c2w_for_index(
+        camera_data,
+        0,
+        device=torch.device("cpu"),
+    )
+
+    assert torch.allclose(c2w, torch.diag(torch.tensor([1.0, -1.0, -1.0, 1.0])))
+    assert torch.allclose(
+        multicam_video_data.camxtime_c2w_for_index(
+            camera_data,
+            0,
+            device=torch.device("cpu"),
+            camera_convention="opencv",
+        ),
+        torch.eye(4),
+    )
+
+
 def test_load_multicam_video_bundle_supports_camxtime_record_level_split(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -292,6 +317,7 @@ def test_load_multicam_video_bundle_supports_camxtime_record_level_split(
         "camxtime_camera_data_path": str(camera_data_path),
         "camxtime_source_width": 100,
         "camxtime_source_height": 120,
+        "camxtime_camera_convention": "opencv",
         "fps": 4.0,
         "frame_count": 4,
         "train_cameras": ["camera_000", "camera_020"],
@@ -325,7 +351,7 @@ def test_load_multicam_video_bundle_supports_camxtime_record_level_split(
         device=torch.device("cpu"),
     )
 
-    assert bundle.pose_source == "camxtime_full_grid_relative_pinhole"
+    assert bundle.pose_source == "camxtime_full_grid_opencv_to_opencv_relative_pinhole"
     assert bundle.train_camera_names == ["camera_000", "camera_020"]
     assert bundle.heldout_camera_names == ["camera_040"]
     assert bundle.train_frames.shape == (2, 2, 3, 4, 4)
