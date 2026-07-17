@@ -71,7 +71,9 @@ should be a short trainer-level `direct_serial` versus `direct_atomic` 512px
 parity/timing gate, followed by the selected visual-quality bridge only if it
 does not regress the old objective.
 
-The new renderer report contains fresh STAR rows but no dynamic-gsplat/F32
-rows because the historical source JSONLs it names are absent from this
-checkout. A genuine all-renderer refresh therefore requires re-running those
-matching dynamic/F32 probes, not a report-only change.
+The matching `64f/8192` dynamic RGB and F32 feature raster rows were then
+refreshed at 128/256/512px and are stored at
+`outputs/benchmarks/2026-07-18_fastmac_rgb_f32_64f_8192t_128_256_512.jsonl`.
+The consolidated report now reads them. Historical 32768-tube inputs remain
+absent, so the new all-renderer table is an 8192-primitive benchmark rather
+than an invented reconstruction of the old 32768 table.

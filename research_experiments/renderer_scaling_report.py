@@ -31,6 +31,7 @@ STAR_DIRS = (
     ROOT / "outputs/benchmarks/2026-05-18_star_uvt_scale_512_64f_32768_top",
 )
 RGB_JSONL = ROOT / "outputs/benchmarks/2026-05-18_fastmac_rgb_dynamic_B64_G32768_res128_256_512.jsonl"
+CURRENT_FAST_MAC_JSONL = ROOT / "outputs/benchmarks/2026-07-18_fastmac_rgb_f32_64f_8192t_128_256_512.jsonl"
 FEATURE_JSONLS = (
     ROOT / "outputs/benchmarks/2026-05-18_feature_f32_B64_G32768_res128.jsonl",
     ROOT / "outputs/benchmarks/2026-05-18_feature_f32_B64_G32768_res256.jsonl",
@@ -110,38 +111,42 @@ def _read_star_rows() -> list[dict[str, Any]]:
 
 
 def _read_rgb_rows() -> list[dict[str, Any]]:
-    if not RGB_JSONL.exists():
-        return []
     rows: list[dict[str, Any]] = []
-    for row in load_research_jsonl(RGB_JSONL):
-        rows.append(
-            {
-                "family": "dynamic_gsplat_rgb_raster",
-                "renderer": row.get("variant"),
-                "resolution": int(row["resolution"]),
-                "frames": int(row["batch_size_requested"]),
-                "primitives": int(row["gaussians_requested"]),
-                "feature_dim": 3,
-                "status": row["status"],
-                "steps": None,
-                "total_ms": _float(row.get("median_ms") or row.get("total_median_ms")),
-                "forward_ms": _float(row.get("forward_ms") or row.get("forward_median_ms")),
-                "backward_ms": _float(row.get("backward_ms") or row.get("backward_median_ms")),
-                "sample_count": None,
-                "mean_pairs_per_tile": _float(row.get("profile_mean_pairs_per_tile")),
-                "overflow_tiles": int(row["profile_overflow_tile_count"]) if row.get("profile_overflow_tile_count") is not None else None,
-                "artifact": str(RGB_JSONL.relative_to(ROOT)),
-                "note": "projected raster synthetic B=frames",
-            }
-        )
+    for path in _available_paths((RGB_JSONL, CURRENT_FAST_MAC_JSONL)):
+        for row in load_research_jsonl(path):
+            if row.get("feature_dim") not in (None, 3):
+                continue
+            rows.append(
+                {
+                    "family": "dynamic_gsplat_rgb_raster",
+                    "renderer": row.get("variant"),
+                    "resolution": int(row["resolution"]),
+                    "frames": int(row["batch_size_requested"]),
+                    "primitives": int(row["gaussians_requested"]),
+                    "feature_dim": 3,
+                    "status": row["status"],
+                    "steps": None,
+                    "total_ms": _float(row.get("median_ms") or row.get("total_median_ms")),
+                    "forward_ms": _float(row.get("forward_ms") or row.get("forward_median_ms")),
+                    "backward_ms": _float(row.get("backward_ms") or row.get("backward_median_ms")),
+                    "sample_count": None,
+                    "mean_pairs_per_tile": _float(row.get("profile_mean_pairs_per_tile")),
+                    "overflow_tiles": int(row["profile_overflow_tile_count"]) if row.get("profile_overflow_tile_count") is not None else None,
+                    "artifact": str(path.relative_to(ROOT)),
+                    "note": "projected raster synthetic B=frames",
+                }
+            )
     return rows
 
 
 def _read_feature_rows() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for path in _available_paths(FEATURE_JSONLS):
+    for path in _available_paths(FEATURE_JSONLS + (CURRENT_FAST_MAC_JSONL,)):
         for wrapper in load_research_jsonl(path):
             result = wrapper.get("result") if isinstance(wrapper.get("result"), dict) else {}
+            if int(result.get("feature_dim") or wrapper.get("feature_dim") or 0) != 32:
+                continue
+            timing = result or wrapper
             status = str(wrapper.get("status"))
             height = result.get("height") or wrapper.get("height") or _command_arg(wrapper, "--height")
             batch = result.get("batch_size") or wrapper.get("batch_size") or _command_arg(wrapper, "--batch-size")
@@ -157,12 +162,12 @@ def _read_feature_rows() -> list[dict[str, Any]]:
                     "feature_dim": int(feature_dim) if feature_dim is not None else 32,
                     "status": status,
                     "steps": None,
-                    "total_ms": _float(result.get("median_ms")),
-                    "forward_ms": _float(result.get("forward_ms")),
-                    "backward_ms": _float(result.get("backward_ms")),
+                    "total_ms": _float(timing.get("median_ms")),
+                    "forward_ms": _float(timing.get("forward_ms")),
+                    "backward_ms": _float(timing.get("backward_ms")),
                     "sample_count": None,
-                    "mean_pairs_per_tile": _float(result.get("profile_mean_pairs_per_tile")),
-                    "overflow_tiles": int(result["profile_overflow_tile_count"]) if result.get("profile_overflow_tile_count") is not None else None,
+                    "mean_pairs_per_tile": _float(timing.get("profile_mean_pairs_per_tile")),
+                    "overflow_tiles": int(timing["profile_overflow_tile_count"]) if timing.get("profile_overflow_tile_count") is not None else None,
                     "artifact": str(path.relative_to(ROOT)),
                     "note": wrapper.get("error") or wrapper.get("stderr") or "projected F32 raster synthetic B=frames",
                 }
@@ -492,6 +497,7 @@ def write_report(
         "",
         f"- CSV: `{_display_path(csv_path)}`",
         "- RGB JSONL: " + _artifact_status(RGB_JSONL),
+        "- Current RGB/F32 JSONL: " + _artifact_status(CURRENT_FAST_MAC_JSONL),
         "- STAR feature summary: " + _artifact_status(star_feature_summary),
         f"- STAR feature direct glob: `outputs/benchmarks/{STAR_FEATURE_DIRECT_GLOB}`",
         f"- Current STAR kernel glob: `outputs/benchmarks/{CURRENT_STAR_KERNEL_GLOB}`",

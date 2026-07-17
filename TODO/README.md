@@ -12,9 +12,10 @@ passing. Fresh RGB STAR kernel evidence is recorded in
 and appended to `../BASELINES.md`. The default remains `direct_atomic +
 index_add`; 512px direct-serial is a promising kernel-probe result only and
 needs a trainer-level parity/repeat gate before promotion. The renderer-scaling
-report now tolerates archived-source absence and ingests the fresh STAR matrix,
-but a true current dynamic-gsplat/F32 comparison needs new matching raster
-benchmarks because the old source JSONLs are absent. Do not repeat the
+report now tolerates archived-source absence and ingests the fresh STAR plus
+dynamic RGB/F32 64f/8192 matrix. The old 32768-tube source JSONLs remain
+absent, so do not compare the new 8192 rows to the deleted historical 32768
+table. Do not repeat the
 alpha-background ablation: its current renderer/resolution-specific decision
 is already recorded in `EXPERIMENTS.md` and the May 21 loose notes.
 

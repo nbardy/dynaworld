@@ -164,6 +164,8 @@ class FreeDynamic3DGS(nn.Module):
         self.T = int(num_frames)
         self.log_scale_min = float(log_scale_min)
         self.log_scale_max = float(log_scale_max)
+        self.splat_count = int(init_xyz.shape[0])
+        self.active_splat_count = self.splat_count
         frame_count = self.T if splat_mode == "per_frame" else 1
 
         xyz = init_xyz.unsqueeze(0).repeat(frame_count, 1, 1)
@@ -190,27 +192,36 @@ class FreeDynamic3DGS(nn.Module):
     def parameter_index(self, t: int) -> int:
         return 0 if self.splat_mode == "static" else int(t)
 
+    def set_active_splat_count(self, count: int) -> None:
+        if not 1 <= int(count) <= self.splat_count:
+            raise ValueError(f"active splat count must be in [1, {self.splat_count}], got {count}")
+        self.active_splat_count = int(count)
+
     def frame(self, t: int) -> GaussianFrame:
         index = self.parameter_index(t)
+        active = slice(0, self.active_splat_count)
         return GaussianFrame(
-            xyz=self.xyz[index],
-            scales=torch.exp(self.log_scales[index].clamp(self.log_scale_min, self.log_scale_max)).clamp_min(1e-6),
-            quats=torch.nn.functional.normalize(self.raw_quats[index], p=2, dim=-1),
-            opacities=torch.sigmoid(self.opacity_logits[index]),
-            rgbs=torch.sigmoid(self.rgb_logits[index]),
+            xyz=self.xyz[index, active],
+            scales=torch.exp(self.log_scales[index, active].clamp(self.log_scale_min, self.log_scale_max)).clamp_min(1e-6),
+            quats=torch.nn.functional.normalize(self.raw_quats[index, active], p=2, dim=-1),
+            opacities=torch.sigmoid(self.opacity_logits[index, active]),
+            rgbs=torch.sigmoid(self.rgb_logits[index, active]),
         )
 
     def temporal_smoothness_loss(self) -> torch.Tensor:
         if self.splat_mode == "static" or self.xyz.shape[0] < 2:
             return self.xyz.new_zeros(())
-        xyz = (self.xyz[1:] - self.xyz[:-1]).square().mean()
-        scales = (self.log_scales[1:] - self.log_scales[:-1]).square().mean()
-        opacity = (self.opacity_logits[1:] - self.opacity_logits[:-1]).square().mean()
-        rgb = (self.rgb_logits[1:] - self.rgb_logits[:-1]).square().mean()
+        active = slice(0, self.active_splat_count)
+        xyz = (self.xyz[1:, active] - self.xyz[:-1, active]).square().mean()
+        scales = (self.log_scales[1:, active] - self.log_scales[:-1, active]).square().mean()
+        opacity = (self.opacity_logits[1:, active] - self.opacity_logits[:-1, active]).square().mean()
+        rgb = (self.rgb_logits[1:, active] - self.rgb_logits[:-1, active]).square().mean()
         return xyz + 0.1 * scales + 0.01 * opacity + 0.01 * rgb
 
     def scale_loss(self) -> torch.Tensor:
-        return torch.exp(self.log_scales.clamp(self.log_scale_min, self.log_scale_max)).mean()
+        return torch.exp(
+            self.log_scales[:, : self.active_splat_count].clamp(self.log_scale_min, self.log_scale_max)
+        ).mean()
 
     @torch.no_grad()
     def metrics(self) -> dict[str, float]:
