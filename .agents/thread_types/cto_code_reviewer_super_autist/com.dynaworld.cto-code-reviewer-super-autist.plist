@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dynaworld.cto-code-reviewer-super-autist</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nicholasbardy/git/gsplats_browser/dynaworld/.agents/thread_types/cto_code_reviewer_super_autist/run_hourly_review.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/nicholasbardy/git/gsplats_browser/dynaworld</string>
+
+  <key>StartInterval</key>
+  <integer>3600</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/nicholasbardy/git/gsplats_browser/dynaworld/outputs/code_reviews/logs/launchd.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/nicholasbardy/git/gsplats_browser/dynaworld/outputs/code_reviews/logs/launchd.err.log</string>
+</dict>
+</plist>

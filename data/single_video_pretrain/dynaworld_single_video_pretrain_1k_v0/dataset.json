@@ -1,0 +1,269 @@
+{
+  "created_at_utc": "2026-05-15T11:01:47.987562+00:00",
+  "dataset_name": "dynaworld_single_video_pretrain_1k_v0",
+  "heldout_reference_path_count": 31,
+  "paths": {
+    "dataset_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_1k_v0/dataset.json",
+    "eval_manifest_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_1k_v0/eval_manifest.jsonl",
+    "heldout_manifest_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_1k_v0/heldout_manifest.jsonl",
+    "manifest_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_1k_v0/manifest.jsonl",
+    "train_manifest_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_1k_v0/train_manifest.jsonl"
+  },
+  "schema_notes": [
+    "frame_clip_sequence and synthetic_camera_json_sequence records are load_manifest_sequences compatible today.",
+    "single_view_video_window records do not copy assets; train_video_token loads video_path from start_seconds at fps.",
+    "heldout matching is path-level/camera-level, not scene-level; known test/val target video paths are not emitted as train single-view windows."
+  ],
+  "schema_version": "dynaworld_single_video_pretrain_manifest_v0",
+  "seed": 20260515,
+  "selected_eval_items": 0,
+  "selected_train_items": 1000,
+  "source_stats": {
+    "aist_train_singleview": {
+      "by_record_type": {
+        "single_view_video_window": 64
+      },
+      "by_source_label": {
+        "aist_train_singleview": 64
+      },
+      "by_split": {
+        "train": 64
+      },
+      "count": 64,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 64
+      },
+      "skipped": {
+        "heldout_path": 3
+      },
+      "video_count": 5
+    },
+    "blender_sintel_camera_json": {
+      "by_record_type": {
+        "synthetic_camera_json_sequence": 1
+      },
+      "by_source_label": {
+        "blender_sintel_camera_json": 1
+      },
+      "by_split": {
+        "train": 1
+      },
+      "count": 1,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 1
+      }
+    },
+    "deepview_singleview": {
+      "by_record_type": {
+        "single_view_video_window": 185
+      },
+      "by_source_label": {
+        "deepview_singleview": 185
+      },
+      "by_split": {
+        "train": 185
+      },
+      "count": 185,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 185
+      },
+      "skipped": {
+        "heldout_path": 4,
+        "too_short": 45
+      },
+      "video_count": 86
+    },
+    "local_mac_30_synthetic_clip": {
+      "by_record_type": {
+        "frame_clip_sequence": 20
+      },
+      "by_source_label": {
+        "local_mac_30_synthetic_clip": 20
+      },
+      "by_split": {
+        "heldout": 2,
+        "train": 18
+      },
+      "count": 20,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 20
+      }
+    },
+    "neural3d_coffee_singleview": {
+      "by_record_type": {
+        "single_view_video_window": 225
+      },
+      "by_source_label": {
+        "neural3d_coffee_singleview": 225
+      },
+      "by_split": {
+        "train": 225
+      },
+      "count": 225,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 225
+      },
+      "skipped": {
+        "heldout_path": 9
+      },
+      "video_count": 18
+    },
+    "vivo_train_singleview": {
+      "by_record_type": {
+        "single_view_video_window": 510
+      },
+      "by_source_label": {
+        "vivo_train_singleview": 510
+      },
+      "by_split": {
+        "train": 510
+      },
+      "count": 510,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 510
+      },
+      "skipped": {
+        "eval_path": 4
+      },
+      "video_count": 14
+    },
+    "youtube_curated_spans_64_clip": {
+      "by_record_type": {
+        "frame_clip_sequence": 18
+      },
+      "by_source_label": {
+        "youtube_curated_spans_64_clip": 18
+      },
+      "by_split": {
+        "train": 18
+      },
+      "count": 18,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 18
+      }
+    },
+    "youtube_curated_spans_raw": {
+      "by_record_type": {
+        "single_view_video_window": 428
+      },
+      "by_source_label": {
+        "youtube_curated_spans_raw": 428
+      },
+      "by_split": {
+        "train": 428
+      },
+      "count": 428,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 428
+      },
+      "skipped": {
+        "heldout_path": 1,
+        "too_short": 7
+      },
+      "video_count": 30
+    },
+    "youtube_high_motion_smokes": {
+      "by_record_type": {
+        "single_view_video_window": 14
+      },
+      "by_source_label": {
+        "youtube_high_motion_smokes": 14
+      },
+      "by_split": {
+        "train": 14
+      },
+      "count": 14,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 14
+      },
+      "skipped": {
+        "too_short": 1
+      },
+      "video_count": 3
+    },
+    "youtube_scene_distinct_256_clip": {
+      "by_record_type": {
+        "frame_clip_sequence": 20
+      },
+      "by_source_label": {
+        "youtube_scene_distinct_256_clip": 20
+      },
+      "by_split": {
+        "train": 20
+      },
+      "count": 20,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 20
+      }
+    },
+    "youtube_scene_distinct_segments": {
+      "by_record_type": {
+        "single_view_video_window": 28
+      },
+      "by_source_label": {
+        "youtube_scene_distinct_segments": 28
+      },
+      "by_split": {
+        "train": 28
+      },
+      "count": 28,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 28
+      },
+      "skipped": {
+        "heldout_path": 10,
+        "too_short": 3
+      },
+      "video_count": 41
+    }
+  },
+  "summary": {
+    "by_record_type": {
+      "frame_clip_sequence": 46,
+      "single_view_video_window": 955,
+      "synthetic_camera_json_sequence": 1
+    },
+    "by_source_label": {
+      "aist_train_singleview": 51,
+      "blender_sintel_camera_json": 1,
+      "deepview_singleview": 153,
+      "local_mac_30_synthetic_clip": 15,
+      "neural3d_coffee_singleview": 193,
+      "vivo_train_singleview": 260,
+      "youtube_curated_spans_64_clip": 15,
+      "youtube_curated_spans_raw": 260,
+      "youtube_high_motion_smokes": 12,
+      "youtube_scene_distinct_256_clip": 16,
+      "youtube_scene_distinct_segments": 26
+    },
+    "by_split": {
+      "heldout": 2,
+      "train": 1000
+    },
+    "count": 1002,
+    "current_loader_compatible": {
+      "false": 0,
+      "true": 1002
+    }
+  },
+  "target_eval_items": 64,
+  "target_train_items": 1000,
+  "window": {
+    "duration_seconds": 4.0,
+    "fps": 4.0,
+    "frame_count": 16,
+    "stride_seconds": 0.25,
+    "target_size": 256
+  }
+}

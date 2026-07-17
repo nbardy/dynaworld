@@ -17,6 +17,46 @@ counts, wall-clock times, and PSNR/SSIM/L1 per baseline category. Read it
 before claiming a model "beats baseline" or proposing a new one, and update
 it (append a dated row, do not overwrite) whenever a baseline is re-run.
 
+## Project State And TODO Routing
+
+Future agents should be able to answer "where are we?" without re-deriving the
+project from loose notes.
+
+Read these in order when starting non-trivial work:
+
+1. `PROJECT_INDEX.md` for the map of maps and current project state.
+2. `README.md` -> `## Progress` for the public project checklist.
+3. `TODO/README.md` for the active backlog map and current next steps.
+4. `EXPERIMENTS.md` for active experiment lanes, configs, logs, result JSONs,
+   and W&B ids.
+5. `BASELINES.md` -> `## Reruns needed (priority-ordered TODOs)` before
+   scheduling or claiming benchmark work.
+6. `research_notes/data_contract.md` before changing datasets, manifests, or
+   same-view/novel-view training.
+7. `CODE_ORGANIZATION.md` before broad refactors or trainer deduplication.
+8. `agent_notes/key_learnings.md` for compressed tactical lessons, then the
+   newest relevant `agent_notes/loose_notes/*.md` for chronology.
+
+As of 2026-05-18, the high-level state is:
+
+- Same-view scale data exists through the 1k lazy single-sequence manifest.
+- Calibrated multicam data exists for heldout novel-view smokes and validation.
+- The data loaders are reusable, but the mixed same-view plus novel-view
+  sampler/trainer is still the next bridge.
+- Baseline claims still need explicit rows in `BASELINES.md`; do not promote a
+  run from a note or W&B memory alone.
+- STAR UVT now has a first-class source-view overfit route; use
+  `direct_atomic + index_add` as the practical path while deterministic compact
+  backward remains blocked.
+- WorldFoam/Gate4 shader work is active research, not system parity; read
+  `EXPERIMENTS.md` and the latest loose notes before extending it.
+
+Keep `PROJECT_INDEX.md`, `TODO/README.md`, `EXPERIMENTS.md`, `BASELINES.md`,
+`CODE_ORGANIZATION.md`, and `research_notes/data_contract.md` in sync when
+completing or superseding TODOs. Raw session details still belong in
+`agent_notes/loose_notes/`; surprising lessons belong in
+`agent_notes/key_learnings.md`.
+
 ## Agent Notes
 
 There are two agent memory layers. Use both, but do not blur them.

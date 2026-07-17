@@ -1,0 +1,77 @@
+{
+  "task_id": "toy_kernel_selector_largest_cluster_trap",
+  "selection_budget": 1,
+  "candidate_support_weight": "sqrt",
+  "primary_metric": {
+    "name": "backward_ms",
+    "direction": "min"
+  },
+  "probe_ids": ["probe_parity", "probe_hidden_shape", "probe_gradient"],
+  "candidates": [
+    {
+      "candidate_id": "cand_wrong_cluster_a",
+      "visible_pass": true,
+      "probe_results": {
+        "probe_parity": true,
+        "probe_hidden_shape": false,
+        "probe_gradient": false
+      },
+      "metrics": {
+        "backward_ms": 90.0
+      },
+      "hidden_pass": false
+    },
+    {
+      "candidate_id": "cand_wrong_cluster_b",
+      "visible_pass": true,
+      "probe_results": {
+        "probe_parity": true,
+        "probe_hidden_shape": false,
+        "probe_gradient": false
+      },
+      "metrics": {
+        "backward_ms": 91.0
+      },
+      "hidden_pass": false
+    },
+    {
+      "candidate_id": "cand_wrong_cluster_c",
+      "visible_pass": true,
+      "probe_results": {
+        "probe_parity": true,
+        "probe_hidden_shape": false,
+        "probe_gradient": false
+      },
+      "metrics": {
+        "backward_ms": 92.0
+      },
+      "hidden_pass": false
+    },
+    {
+      "candidate_id": "cand_correct_kernel",
+      "visible_pass": true,
+      "probe_results": {
+        "probe_parity": true,
+        "probe_hidden_shape": true,
+        "probe_gradient": true
+      },
+      "metrics": {
+        "backward_ms": 130.0
+      },
+      "hidden_pass": true
+    },
+    {
+      "candidate_id": "cand_visible_fail_fast",
+      "visible_pass": false,
+      "probe_results": {
+        "probe_parity": false,
+        "probe_hidden_shape": false,
+        "probe_gradient": false
+      },
+      "metrics": {
+        "backward_ms": 10.0
+      },
+      "hidden_pass": false
+    }
+  ]
+}

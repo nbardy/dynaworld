@@ -1,0 +1,124 @@
+{
+  "created_at_utc": "2026-05-16T05:11:23.068860+00:00",
+  "dataset_name": "dynaworld_single_video_pretrain_300_youtube_64f_512_v0",
+  "heldout_reference_path_count": 31,
+  "paths": {
+    "dataset_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_300_youtube_64f_512_v0/dataset.json",
+    "eval_manifest_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_300_youtube_64f_512_v0/eval_manifest.jsonl",
+    "heldout_manifest_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_300_youtube_64f_512_v0/heldout_manifest.jsonl",
+    "manifest_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_300_youtube_64f_512_v0/manifest.jsonl",
+    "train_manifest_path": "data/single_video_pretrain/dynaworld_single_video_pretrain_300_youtube_64f_512_v0/train_manifest.jsonl"
+  },
+  "schema_notes": [
+    "frame_clip_sequence and synthetic_camera_json_sequence records are load_manifest_sequences compatible today.",
+    "single_view_video_window records do not copy assets; train_video_token loads video_path from start_seconds at fps.",
+    "heldout matching is path-level/camera-level, not scene-level; known test/val target video paths are not emitted as train single-view windows."
+  ],
+  "schema_version": "dynaworld_single_video_pretrain_manifest_v1",
+  "seed": 20260516,
+  "selected_eval_items": 0,
+  "selected_train_items": 300,
+  "source_stats": {
+    "youtube_curated_spans_raw_64f_512": {
+      "by_record_type": {
+        "single_view_video_window": 256
+      },
+      "by_source_label": {
+        "youtube_curated_spans_raw_64f_512": 256
+      },
+      "by_split": {
+        "train": 256
+      },
+      "count": 256,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 256
+      },
+      "skipped": {
+        "heldout_path": 1,
+        "too_short": 2
+      },
+      "video_count": 30
+    },
+    "youtube_high_motion_smokes_64f_512": {
+      "by_record_type": {},
+      "by_source_label": {},
+      "by_split": {},
+      "count": 0,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 0
+      },
+      "skipped": {
+        "too_short": 3
+      },
+      "video_count": 3
+    },
+    "youtube_scene_distinct_raw_64f_512": {
+      "by_record_type": {
+        "single_view_video_window": 270
+      },
+      "by_source_label": {
+        "youtube_scene_distinct_raw_64f_512": 270
+      },
+      "by_split": {
+        "train": 270
+      },
+      "count": 270,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 270
+      },
+      "skipped": {},
+      "video_count": 45
+    },
+    "youtube_scene_distinct_segments_64f_512": {
+      "by_record_type": {
+        "single_view_video_window": 62
+      },
+      "by_source_label": {
+        "youtube_scene_distinct_segments_64f_512": 62
+      },
+      "by_split": {
+        "train": 62
+      },
+      "count": 62,
+      "current_loader_compatible": {
+        "false": 0,
+        "true": 62
+      },
+      "skipped": {
+        "heldout_path": 10
+      },
+      "video_count": 41
+    }
+  },
+  "summary": {
+    "by_record_type": {
+      "single_view_video_window": 300
+    },
+    "by_source_label": {
+      "youtube_curated_spans_raw_64f_512": 132,
+      "youtube_scene_distinct_raw_64f_512": 140,
+      "youtube_scene_distinct_segments_64f_512": 28
+    },
+    "by_split": {
+      "train": 300
+    },
+    "count": 300,
+    "current_loader_compatible": {
+      "false": 0,
+      "true": 300
+    }
+  },
+  "target_eval_items": 0,
+  "target_train_items": 300,
+  "window": {
+    "duration_seconds": null,
+    "fps": "natural",
+    "frame_count": 64,
+    "image_crop_mode": "center_square",
+    "stride_seconds": 1.0,
+    "target_size": 512
+  }
+}
