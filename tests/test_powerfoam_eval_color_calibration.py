@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from train_powerfoam_metal import (
+from powerfoam_eval_color import (
     apply_eval_color_calibration,
     fit_eval_color_calibration,
     serialize_eval_color_calibration,

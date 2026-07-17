@@ -1,0 +1,169 @@
+{
+  // Data-side staging config for a broad single-video pretrain manifest that
+  // can scale toward ~1k train items without copying media or launching training.
+  // See research_notes/data_contract.md for the loader contract and the split
+  // between same-view scale pretraining and multicam heldout-camera training.
+  "dataset_name": "dynaworld_single_video_pretrain_1k_v0",
+  "output_dir": "data/single_video_pretrain/dynaworld_single_video_pretrain_1k_v0",
+  "seed": 20260515,
+  "target_train_items": 1000,
+  "target_eval_items": 64,
+
+  "window": {
+    "frame_count": 16,
+    "fps": 4.0,
+    "duration_seconds": 4.0,
+    "stride_seconds": 0.25,
+    "target_size": 256
+  },
+
+  "heldout_reference_manifests": [
+    {
+      "path": "data/youtube_scene_distinct/clip_sets/youtube_scene_distinct_30_256_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["test"],
+      "heldout_path_keys": ["source_path", "video_path"]
+    },
+    {
+      "path": "data/youtube_curated_spans/clip_sets/youtube_curated_spans_64_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["test"],
+      "heldout_path_keys": ["source_path", "video_path"]
+    },
+    {
+      "path": "data/clip_sets/local_mac_30_64_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["test"],
+      "heldout_path_keys": ["source_path", "video_path"]
+    },
+    {
+      "path": "data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["val"],
+      "heldout_path_keys": ["target_video_path"],
+      "heldout_list_path_keys": ["heldout_video_paths"]
+    },
+    {
+      "path": "data/multicam_val/clip_sets/multicam_val_v1_chunked_128_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["val"],
+      "heldout_path_keys": ["target_video_path"],
+      "heldout_list_path_keys": ["heldout_video_paths"]
+    },
+    {
+      "path": "src/dataset_configs/multicam_train2_holdout1_5sample_128_4fps_16f_manifest.jsonl",
+      "heldout_splits": ["train2_holdout1"],
+      "heldout_path_keys": ["target_video_path"],
+      "heldout_list_path_keys": ["heldout_video_paths"]
+    }
+  ],
+
+  "frame_clip_manifests": [
+    {
+      "label": "youtube_scene_distinct_256_clip",
+      "family": "youtube_prepared_clip",
+      "path": "data/youtube_scene_distinct/clip_sets/youtube_scene_distinct_30_256_4fps_16f/manifest.jsonl",
+      "include_splits": ["train"],
+      "output_split": "train",
+      "max_train_records": 20
+    },
+    {
+      "label": "youtube_curated_spans_64_clip",
+      "family": "youtube_prepared_clip",
+      "path": "data/youtube_curated_spans/clip_sets/youtube_curated_spans_64_4fps_16f/manifest.jsonl",
+      "include_splits": ["train"],
+      "output_split": "train",
+      "max_train_records": 18
+    },
+    {
+      "label": "local_mac_30_synthetic_clip",
+      "family": "synthetic_prepared_clip",
+      "path": "data/clip_sets/local_mac_30_64_4fps_16f/manifest.jsonl",
+      "include_splits": ["train"],
+      "output_split": "train",
+      "max_train_records": 20
+    }
+  ],
+
+  "single_view_video_roots": [
+    {
+      "label": "youtube_scene_distinct_segments",
+      "family": "youtube_video_window",
+      "root": "data/youtube_scene_distinct/segments",
+      "glob": "*.mp4",
+      "split": "train",
+      "stride_seconds": 0.25,
+      "max_windows_per_video": 8,
+      "max_train_records": 160
+    },
+    {
+      "label": "youtube_curated_spans_raw",
+      "family": "youtube_video_window",
+      "root": "data/youtube_curated_spans/raw",
+      "glob": "*.mp4",
+      "split": "train",
+      "stride_seconds": 0.25,
+      "max_windows_per_video": 30,
+      "max_train_records": 260
+    },
+    {
+      "label": "youtube_high_motion_smokes",
+      "family": "youtube_video_window",
+      "root": "data/youtube_curated_spans/high_motion_smokes",
+      "glob": "*.mp4",
+      "split": "train",
+      "stride_seconds": 0.25,
+      "max_windows_per_video": 80,
+      "max_train_records": 80
+    },
+    {
+      "label": "neural3d_coffee_singleview",
+      "family": "synthetic_dynamic_nerf_video_window",
+      "root": "data/external/neural_3d_video/extracted",
+      "glob": "**/*.mp4",
+      "split": "train",
+      "stride_seconds": 0.25,
+      "max_windows_per_video": 30,
+      "max_train_records": 260
+    },
+    {
+      "label": "deepview_singleview",
+      "family": "synthetic_lightfield_video_window",
+      "root": "data/external/deepview_video/extracted",
+      "glob": "**/*.mp4",
+      "split": "train",
+      "stride_seconds": 0.25,
+      "max_windows_per_video": 8,
+      "max_train_records": 220
+    },
+    {
+      "label": "vivo_train_singleview",
+      "family": "synthetic_multicam_video_window",
+      "root": "data/external/vivo/rgb_mp4",
+      "glob": "**/*.mp4",
+      "split_from_path": true,
+      "include_eval": false,
+      "stride_seconds": 0.25,
+      "max_windows_per_video": 60,
+      "max_train_records": 260
+    },
+    {
+      "label": "aist_train_singleview",
+      "family": "synthetic_multicam_video_window",
+      "root": "data/external/aist_dance_db/raw/refined_10M_sBM",
+      "glob": "*.mp4",
+      "split": "train",
+      "stride_seconds": 0.25,
+      "max_windows_per_video": 32,
+      "max_train_records": 60
+    }
+  ],
+
+  "multicam_manifests": [],
+
+  "blender_sequence_roots": [
+    {
+      "label": "blender_sintel_camera_json",
+      "family": "synthetic_blender_camera_json",
+      "root": "data/blender_synthetic/sintel/renders",
+      "glob": "*/cameras.json",
+      "split": "train",
+      "max_train_records": 4
+    }
+  ]
+}

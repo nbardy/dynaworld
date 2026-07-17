@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
+
+from train_artifacts import write_json, write_jsonl
 
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv")
@@ -334,7 +335,7 @@ def write_clip(
             "sampled_frames": sampled_frames,
         },
     }
-    (clip_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    write_json(clip_dir / "summary.json", summary, sort_keys=False)
     return {
         "clip_id": clip_id,
         "split": split,
@@ -464,12 +465,6 @@ def build_dataset(args: argparse.Namespace) -> list[dict[str, Any]]:
     return entries
 
 
-def write_jsonl(path: Path, entries: list[dict[str, Any]]) -> None:
-    with path.open("w") as handle:
-        for entry in entries:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
-
-
 def split_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for entry in entries:
@@ -545,7 +540,7 @@ def write_manifest(args: argparse.Namespace, entries: list[dict[str, Any]]) -> N
         "max_clips_per_source": args.max_clips_per_source,
         "manifest_path": str(manifest_path.resolve()),
     }
-    (args.output_dir / "dataset.json").write_text(json.dumps(dataset_summary, indent=2) + "\n")
+    write_json(args.output_dir / "dataset.json", dataset_summary, sort_keys=False)
 
 
 def main() -> None:

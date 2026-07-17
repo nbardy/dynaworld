@@ -2,25 +2,26 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import torch
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC_TRAIN = ROOT / "src" / "train"
-if str(SRC_TRAIN) not in sys.path:
-    sys.path.insert(0, str(SRC_TRAIN))
+try:
+    from .report_artifacts import PROJECT_ROOT, ensure_train_path, parse_frame_indices
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import PROJECT_ROOT, ensure_train_path, parse_frame_indices
+
+ROOT = PROJECT_ROOT
+ensure_train_path()
 
 from config_utils import load_config_file  # noqa: E402
+from checkpoint_utils import load_checkpoint_mapping, model_state_dict_from_checkpoint  # noqa: E402
+from powerfoam_adjacency import build_csr_adjacency  # noqa: E402
+from powerfoam_metal_config import resolve_config  # noqa: E402
+from powerfoam_raster_config import make_powerfoam_metal_raster_config as make_raster_config  # noqa: E402
 from sequence_data import load_video_sequence  # noqa: E402
-from train_powerfoam_metal import (  # noqa: E402
-    MetalPowerFoamVideo,
-    build_csr_adjacency,
-    make_raster_config,
-    resolve_config,
-)
+from powerfoam_metal_trainer import MetalPowerFoamVideo  # noqa: E402
 
 
 def _as_float(value: torch.Tensor) -> float:
@@ -74,8 +75,8 @@ def _instantiate_model(cfg: dict[str, Any], checkpoint_path: Path, device: torch
         image_init_jitter=float(cfg["model"]["image_init_jitter"]),
         raster_config=make_raster_config(cfg["render"]),
     ).to(device)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    model.load_state_dict(checkpoint["model"])
+    checkpoint = load_checkpoint_mapping(checkpoint_path, map_location="cpu")
+    model.load_state_dict(model_state_dict_from_checkpoint(checkpoint))
     model.eval()
     return model, targets
 
@@ -230,7 +231,7 @@ def main() -> None:
     device = torch.device(args.device)
     cfg = resolve_config(load_config_file(args.config))
     model, _targets = _instantiate_model(cfg, Path(args.checkpoint), device)
-    frame_indices = [int(v) for v in args.frames.split(",") if v.strip()]
+    frame_indices = parse_frame_indices(args.frames)
     per_frame = [_diagnose_frame(model, cfg, frame_index) for frame_index in frame_indices]
     print(json.dumps({"frames": per_frame}, indent=2))
 

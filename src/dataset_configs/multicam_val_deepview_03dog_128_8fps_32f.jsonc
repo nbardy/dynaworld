@@ -1,0 +1,39 @@
+{
+  // Real 32-frame DeepView heldout-multicam fixture for WorldFoam/STAR
+  // frame-scaling gates. This keeps the same 4s window as the 16f default
+  // but samples at 8fps instead of repeating the loaded 16f fixture.
+  "dataset_name": "multicam_val_deepview_03dog_128_8fps_32f",
+  "root_dir": "data/multicam_val",
+  "clip_frames": 32,
+  "fps": 8.0,
+  "target_size": 128,
+  "preview_size": 256,
+  "preview_fps": 30.0,
+  "materialize_metric_frames": false,
+  "overwrite": false,
+
+  "aist": {
+    "enabled": false
+  },
+
+  "neural_3d_video": {
+    "enabled": false
+  },
+
+  "vivo": {
+    "enabled": false
+  },
+
+  "deepview_video": {
+    "enabled": true,
+    "inventory_path": "data/external/deepview_video/metadata/scene_inventory.json",
+    "start_seconds": 0.5,
+    "scenes": [
+      {
+        "scene": "03_Dog",
+        "source_camera": "camera_0001",
+        "target_cameras": ["camera_0040"]
+      }
+    ]
+  }
+}

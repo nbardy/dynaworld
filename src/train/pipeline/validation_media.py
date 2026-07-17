@@ -1,4 +1,4 @@
-"""Validation-time W&B scalar and media payload helpers.
+"""Validation-time W&B media payload helpers.
 
 The single-cam and multicam trainers call this module for preview images,
 validation videos, alpha-mask videos, feature-PCA videos, and composite
@@ -11,12 +11,12 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 import torch
-import wandb
 
 from pipeline.diagnostics import eval_metric_payload, temporal_similarity_payload
-from train_logging import (
+from wandb_media import (
     build_validation_video_payload,
     make_preview_image,
+    make_wandb_image,
     make_wandb_video,
 )
 
@@ -25,12 +25,12 @@ __all__ = [
     "compose_gt_pred_alpha_pca_grid",
     "compose_multicam_feature_gt_render_grid",
     "compose_multicam_diagnostic_grid",
-    "scalar_payload",
     "render_preview_image",
     "render_diagnostics_payload",
     "single_cam_validation_video_payload",
     "multicam_validation_video_payload",
     "make_wandb_video",
+    "training_preview_payload",
 ]
 
 
@@ -137,65 +137,11 @@ def compose_multicam_feature_gt_render_grid(
 
 
 # --------------------------------------------------------------------------- #
-# Per-step scalar payload
-# --------------------------------------------------------------------------- #
-
-
-def _camera_state_metrics(camera_state) -> dict[str, float]:
-    """Mirrors `Trainer.camera_metrics` from the single-cam monolith."""
-    return {
-        "fov_degrees": camera_state.fov_degrees.item(),
-        "radius": camera_state.radius.item(),
-        "rotation_delta_mean_degrees": (
-            torch.rad2deg(torch.linalg.norm(camera_state.rotation_delta, dim=-1)).mean().item()
-        ),
-        "translation_delta_mean": torch.linalg.norm(camera_state.translation_delta, dim=-1).mean().item(),
-    }
-
-
-def scalar_payload(
-    cfg: Mapping[str, Any],
-    result,
-    *,
-    train_sequence_count: int,
-    eval_sequence_count: int,
-) -> dict[str, Any]:
-    """Build the per-step W&B scalar payload from a `StepResult`."""
-    payload: dict[str, Any] = {
-        "Loss": result.loss.item(),
-        "Loss/Reconstruction": result.recon_loss.item(),
-        "Loss/CameraMotion": result.camera_motion_loss.item(),
-        "Loss/CameraTemporal": result.camera_temporal_loss.item(),
-        "Loss/CameraGlobal": result.camera_global_loss.item(),
-        "Loss/BankRate": result.bank_rate_loss.item(),
-        "TrainFrameCount": int(cfg["model"]["train_frame_count"]),
-        "SequenceFrames": result.sequence_frame_count,
-        "TrainSequenceCount": int(train_sequence_count),
-        "EvalSequenceCount": int(eval_sequence_count),
-        "InputSize": int(cfg["model"]["size"]),
-        "RenderSize": int(cfg["render"]["render_size"]),
-    }
-    if result.camera_state is not None:
-        metrics = _camera_state_metrics(result.camera_state)
-        payload.update(
-            {
-                "Camera/FOVDegrees": metrics["fov_degrees"],
-                "Camera/Radius": metrics["radius"],
-                "Camera/RotationDeltaMeanDegrees": metrics["rotation_delta_mean_degrees"],
-                "Camera/TranslationDeltaMean": metrics["translation_delta_mean"],
-            }
-        )
-    for key, value in result.bank_rate_terms.items():
-        payload[f"BankRate/{key}"] = value.item()
-    return payload
-
-
-# --------------------------------------------------------------------------- #
 # Per-step preview image
 # --------------------------------------------------------------------------- #
 
 
-def render_preview_image(cfg: Mapping[str, Any], result, step: int) -> wandb.Image:
+def render_preview_image(cfg: Mapping[str, Any], result, step: int) -> Any:
     """Build the GT-vs-Pred preview image for the per-step image-log gate.
 
     `resize_images` is imported lazily so this module can be imported in a
@@ -210,6 +156,33 @@ def render_preview_image(cfg: Mapping[str, Any], result, step: int) -> wandb.Ima
 
     target = resize_images(result.clip_frames[0, 0], int(cfg["render"]["render_size"]))
     return make_preview_image(target, result.preview_render, caption=f"Step {step}")
+
+
+def training_preview_payload(
+    cfg: Mapping[str, Any],
+    result,
+    step: int,
+    *,
+    feature_pca_log: bool,
+) -> dict[str, Any]:
+    """Build the per-step image payload shared by trainer `val_log` methods."""
+
+    payload: dict[str, Any] = {
+        "Render_GT_vs_Pred": render_preview_image(cfg, result, step),
+    }
+    if feature_pca_log:
+        if result.preview_features is None:
+            raise ValueError(
+                "feature_pca_log is on but preview_features was not retained for the training step."
+            )
+        from feature_pca_viz import feature_pca_to_rgb
+
+        pca_rgb = feature_pca_to_rgb(result.preview_features)
+        pca_image = (
+            pca_rgb.detach().cpu().clamp(0, 1).permute(1, 2, 0) * 255.0
+        ).to(torch.uint8).numpy()
+        payload["media/feature_pca_image"] = make_wandb_image(pca_image, caption=f"Step {step}")
+    return payload
 
 
 # --------------------------------------------------------------------------- #

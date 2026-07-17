@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gc
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -11,6 +10,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from checkpoint_utils import atomic_torch_save, load_torch_checkpoint
 from config_utils import serialize_config_value
 from gs_models.dynamic_video_token_gs_implicit_camera import (
     TorchHubVJEPAVideoEncoder,
@@ -20,6 +20,7 @@ from gs_models.dynamic_video_token_gs_implicit_camera import (
     _resolve_vjepa_dtype,
 )
 from runtime_types import SequenceData
+from train_devices import clear_torch_device_cache
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -45,8 +46,11 @@ def _sample_fingerprint(sequence_data: SequenceData) -> dict[str, Any]:
         "source_path": _path_fingerprint(sequence_data.source_path),
         "frame_paths": frame_paths,
         "frame_source": sequence_data.frame_source,
+        "image_crop_mode": sequence_data.image_crop_mode,
+        "records": serialize_config_value(sequence_data.records),
         "frame_count": sequence_data.frame_count,
         "image_size": sequence_data.image_size,
+        "video_fps": sequence_data.video_fps,
         "selected_frame_count": sequence_data.selected_frame_count,
         "all_frame_count": sequence_data.all_frame_count,
     }
@@ -105,7 +109,7 @@ def sample_cache_key(sequence_data: SequenceData, feature_cfg: Mapping[str, Any]
 
 
 def _torch_load(path: Path) -> Any:
-    return torch.load(path, map_location="cpu", weights_only=True)
+    return load_torch_checkpoint(path, map_location="cpu", weights_only=True)
 
 
 def _dtype_from_name(name: str | None) -> torch.dtype:
@@ -122,12 +126,7 @@ def _dtype_from_name(name: str | None) -> torch.dtype:
 
 
 def _clear_accelerator_cache(device: torch.device | str) -> None:
-    gc.collect()
-    resolved = torch.device(device)
-    if resolved.type == "cuda" and torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    elif resolved.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
-        torch.mps.empty_cache()
+    clear_torch_device_cache(device)
 
 
 def _move_payload(value: Any, device: torch.device | str) -> Any:
@@ -599,6 +598,7 @@ class TorchHubVJEPAFeatureExtractor:
             feature_dim=self.feature_dim,
             freeze=True,
             pretrained=bool(self.feature_cfg.get("vjepa_pretrained", True)),
+            dtype=self.feature_cfg.get("torch_dtype", "float32"),
             crop_size=self.feature_cfg.get("vjepa_crop_size"),
             checkpoint_url=self.feature_cfg.get("vjepa_checkpoint_url"),
         ).to(self.device)
@@ -682,9 +682,7 @@ class VideoFeatureCache:
             "sample": _sample_fingerprint(sequence_data),
             "features": _cast_feature_payload(dict(features), self.save_dtype),
         }
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        torch.save(payload, tmp_path)
-        tmp_path.replace(path)
+        atomic_torch_save(payload, path)
 
     def load_or_bake(self, sequence_data: SequenceData) -> Mapping[str, torch.Tensor]:
         key = self.cache_key(sequence_data)

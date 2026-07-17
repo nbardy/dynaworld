@@ -16,6 +16,7 @@ from init_diagnostics import (
     raw_head_output_diagnostics,
 )
 from model_factories import build_model_from_config
+from trainer_registry import resolve_config_for_arch
 
 
 GAUSSIAN_FIELDS = ("xyz", "scales", "quats", "opacities", "rgbs")
@@ -64,9 +65,7 @@ def _require_single_gaussian_head(model: torch.nn.Module):
 def _probe_target_from_config(config: dict[str, Any]):
     arch = config.get("arch")
     if arch in VIDEO_TOKEN_ARCHES:
-        import train_video_token_implicit_dynamic as trainer
-
-        resolved = trainer.resolve_config(config)
+        resolved = resolve_config_for_arch(config)
         model = build_model_from_config(resolved).eval()
         variant = str(resolved["model"]["variant"]).lower()
         if variant in {
@@ -83,9 +82,7 @@ def _probe_target_from_config(config: dict[str, Any]):
             }
         tokens = _video_splat_tokens(model)
     elif arch in PRECOMPUTED_FEATURE_ARCHES:
-        import train_precomputed_feature_implicit_dynamic as trainer
-
-        resolved = trainer.PrecomputedFeatureImplicitTrainer.resolve_config(config)
+        resolved = resolve_config_for_arch(config)
         if resolved["model"]["video_feature_channels"] is None:
             raise ValueError(
                 "Precomputed-feature init probing needs model.video_feature_channels. "

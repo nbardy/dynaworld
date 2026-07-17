@@ -5,23 +5,22 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from .report_artifacts import load_report_json, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import load_report_json, write_report_json
+
 
 def load_summary(path: Path) -> dict[str, Any]:
     summary_path = path / "dynamic_geometry_summary.json" if path.is_dir() else path
-    payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise TypeError(f"{summary_path} must contain a JSON object.")
-    return payload
+    return load_report_json(summary_path)
 
 
 def load_frame_metrics(summary: dict[str, Any]) -> dict[str, Any]:
     metric_path = summary.get("artifacts", {}).get("final_per_frame_metrics")
     if not metric_path:
         raise KeyError("summary missing artifacts.final_per_frame_metrics")
-    payload = json.loads(Path(metric_path).read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise TypeError(f"{metric_path} must contain a JSON object.")
-    return payload
+    return load_report_json(Path(metric_path))
 
 
 def metric(summary: dict[str, Any], name: str) -> float:
@@ -138,8 +137,7 @@ def main() -> None:
         geometry_motion_threshold_px=float(args.geometry_motion_threshold_px),
         frozen_motion_threshold_px=float(args.frozen_motion_threshold_px),
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True))
     if not report["ok"]:
         raise SystemExit(1)

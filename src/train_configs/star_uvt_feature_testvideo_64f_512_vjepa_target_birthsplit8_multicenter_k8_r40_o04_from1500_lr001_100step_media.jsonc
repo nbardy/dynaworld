@@ -1,0 +1,152 @@
+{
+  "arch": "star_uvt_feature_overfit",
+  "colorize": {
+    "activation": "sigmoid",
+    "hidden_dim": 64,
+    "init_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_vjepa_rgb_probe_hidden64_lr01_1000step.pt",
+    "pre_norm": false,
+    "weight_init": "kaiming",
+    "weight_init_gain": 1.0
+  },
+  "data": {
+    "duration_seconds": null,
+    "fps": null,
+    "image_crop_mode": "center_square",
+    "max_frames": 64,
+    "start_seconds": null,
+    "target_size": 512,
+    "video_path": "test_data/test_video_384_128_6fps.mp4"
+  },
+  "dense_alpha": {
+    "enabled": false
+  },
+  "feature_target": {
+    "channel_adapter": "truncate_or_pad",
+    "enabled": true,
+    "image_vjp_mode": "analytic_sparse_grid_forward_batched",
+    "layer": "vjepa_tokens",
+    "loss_type": "mse",
+    "loss_weight": 1.0,
+    "materialization": "target_grid",
+    "materialization_chunk_size": 2,
+    "normalization": "channel_standardize",
+    "rgb_loss_weight": 0.0,
+    "rgb_probe_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_vjepa_rgb_probe_hidden64_lr01_1000step.pt",
+    "rgb_probe_loss_weight": 40.0,
+    "rgb_probe_target_rgb_adapter": "trilinear",
+    "temporal_spatial_adapter": "trilinear",
+    "token_grid_shape": [
+      32,
+      16,
+      16
+    ]
+  },
+  "feature_uvt": {
+    "alpha_threshold": 0.00392156862745098,
+    "feature_dim": 32,
+    "max_alpha": 0.99,
+    "render_mode": "feature_direct_gradcache_reduce_vec4",
+    "tile_capacity": 128,
+    "tile_t": 2,
+    "tube_count": 8192
+  },
+  "features": {
+    "cache_dir": "outputs/feature_cache/star_uvt_feature_targets/vjepa2_1_vitb_256crop_64f",
+    "cache_version": 1,
+    "extractor": "vjepa_torchhub",
+    "force_rebake": false,
+    "keep_in_memory": false,
+    "layers": [
+      "vjepa_tokens"
+    ],
+    "model_id": "vjepa2_1_vit_base_384",
+    "sample_cache_key": "star-uvt-vjepa2-1-vitb-256crop-64f-v1",
+    "save_dtype": "float16",
+    "torch_dtype": "float32",
+    "vjepa_checkpoint_url": "https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitb_dist_vitG_384.pt",
+    "vjepa_crop_size": 256,
+    "vjepa_feature_dim": 768,
+    "vjepa_pretrained": true
+  },
+  "logging": {
+    "wandb_enabled": true,
+    "wandb_mode": "offline",
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "star-uvt-birthsplit-multicenter-k8-n8-r40-o04-100step",
+    "wandb_tags": [
+      "star_uvt",
+      "feature_tubes",
+      "target_feature",
+      "support_birth_split",
+      "multicenter_k8",
+      "vjepa_torchhub",
+      "target_grid",
+      "rgb_probe",
+      "from1500",
+      "100step",
+      "uncovered_brightness",
+      "n8",
+      "r40",
+      "o0.4",
+      "cap128",
+      "support_pressure_reduction",
+      "promotion_gate"
+    ]
+  },
+  "output": {
+    "checkpoint": "outputs/checkpoints/2026-05-25_star_uvt_feature_targetgrid_birthsplit8_multicenter_k8_r40_o04_from1500_lr001_100step.pt",
+    "contact_sheet": "outputs/media/2026-05-25_star_uvt_birthsplit_multicenter_k8_n8_r40_o04_100step_contact.png",
+    "contact_sheet_frames": 8,
+    "contact_sheet_mode": "linspace",
+    "out_json": "outputs/benchmarks/2026-05-25_star_uvt_birthsplit_multicenter_k8_n8_r40_o04_100step_media.json",
+    "rgb_probe_contact_sheet": "outputs/media/2026-05-25_star_uvt_birthsplit_multicenter_k8_n8_r40_o04_100step_rgb_probe_contact.png",
+    "rgb_probe_side_by_side_fps": 6.0,
+    "rgb_probe_side_by_side_video": "outputs/media/2026-05-25_star_uvt_birthsplit_multicenter_k8_n8_r40_o04_100step_rgb_probe_side_by_side.mp4",
+    "side_by_side_fps": 6.0,
+    "side_by_side_video": "outputs/media/2026-05-25_star_uvt_birthsplit_multicenter_k8_n8_r40_o04_100step_side_by_side.mp4"
+  },
+  "sparse_visual": {
+    "enabled": false
+  },
+  "support_birth_split": {
+    "center_count": 8,
+    "center_strategy": "farthest_xy",
+    "enabled": true,
+    "frame_stride": 1,
+    "grid_stride": 8,
+    "max_points": 2048,
+    "opacity": 0.4,
+    "reallocate_tubes": 8,
+    "support_precision_radius_px": 40.0,
+    "support_radius_across_px": 40.0,
+    "support_radius_along_px": 40.0,
+    "support_radius_px": 40.0,
+    "support_shape": "isotropic",
+    "target_point_source": "uncovered_brightness",
+    "target_top_fraction": 0.02,
+    "temporal_radius_frames": 64.0,
+    "tube_selection": "lowest_opacity"
+  },
+  "train": {
+    "device": "mps",
+    "frame_chunk_size": 2,
+    "global_step_offset": 1500,
+    "lr": 0.001,
+    "require_gradient_flow": true,
+    "require_loss_decrease": true,
+    "require_no_tile_overflow": true,
+    "resume_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_sparseforward_batchedvjp_lr001_resume50_from1450_lr005sparse_1500step.pt",
+    "resume_colorizer": false,
+    "resume_optimizer": false,
+    "seed": 43,
+    "steps": 100,
+    "trace_global_steps": [
+      1500,
+      1550,
+      1599
+    ]
+  },
+  "visibility_proxy": {
+    "enabled": false
+  }
+}

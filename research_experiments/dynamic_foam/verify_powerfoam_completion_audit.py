@@ -4,21 +4,32 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC_TRAIN = ROOT / "src/train"
-POWERFOAM_METAL = ROOT / "third_party/powerfoam-metal"
-DYNAMIC_FOAM = Path(__file__).resolve().parent
-if str(SRC_TRAIN) not in sys.path:
-    sys.path.insert(0, str(SRC_TRAIN))
-if str(POWERFOAM_METAL) not in sys.path:
-    sys.path.insert(0, str(POWERFOAM_METAL))
-if str(DYNAMIC_FOAM) not in sys.path:
-    sys.path.insert(0, str(DYNAMIC_FOAM))
+try:
+    from .report_artifacts import (
+        DYNAMIC_FOAM_ROOT,
+        POWERFOAM_METAL_ROOT,
+        PROJECT_ROOT,
+        ensure_sys_path,
+        ensure_train_path,
+        load_report_json,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import (
+        DYNAMIC_FOAM_ROOT,
+        POWERFOAM_METAL_ROOT,
+        PROJECT_ROOT,
+        ensure_sys_path,
+        ensure_train_path,
+        load_report_json,
+    )
+
+ROOT = PROJECT_ROOT
+ensure_train_path()
+ensure_sys_path(POWERFOAM_METAL_ROOT, DYNAMIC_FOAM_ROOT)
 
 from verify_powerfoam_4k_benchmarks import (  # noqa: E402
     REGULAR_BENCHMARK,
@@ -192,10 +203,7 @@ def json_path_status(path: Path) -> dict[str, Any]:
 
 
 def read_json_object(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise TypeError(f"{path} must contain a JSON object.")
-    return payload
+    return load_report_json(path)
 
 
 def repo_path(value: str | Path | None) -> Path | None:

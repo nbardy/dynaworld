@@ -18,8 +18,13 @@ try:
 except ModuleNotFoundError:
     from research_experiments.dynamic_foam.export_powerfoam_smoke_dataset import export_dataset, sha256_file
 
+try:
+    from .report_artifacts import PROJECT_ROOT, load_report_json, relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import PROJECT_ROOT, load_report_json, relative_to_project as rel, write_report_json
 
-ROOT = Path(__file__).resolve().parents[2]
+
+ROOT = PROJECT_ROOT
 UPSTREAM_REPO_URL = "https://github.com/theialab/powerfoam"
 UPSTREAM_COMMIT = "96392252ebd0059fe6ca98881b62e12295d9242f"
 DEFAULT_VIDEO = ROOT / "test_data/test_video_small_128_4fps.mp4"
@@ -442,13 +447,6 @@ if __name__ == "__main__":
 '''
 
 
-def rel(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(ROOT))
-    except ValueError:
-        return str(path)
-
-
 def now_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -579,7 +577,7 @@ def run_official_fixture(*, upstream_root: Path, output_dir: Path, timeout_s: in
         str(output),
     ]
     completed = run_command(command, cwd=ROOT, timeout_s=timeout_s, env={"PYTHONPATH": str(ROOT / "src/train")})
-    payload = json.loads(output.read_text(encoding="utf-8"))
+    payload = load_report_json(output)
     return {
         "name": "official_cuda_warp_fixture",
         "status": "ok",
@@ -642,10 +640,10 @@ def run_lane(
     lane_dir.mkdir(parents=True, exist_ok=True)
     settings_path = lane_dir / "settings.json"
     metrics_path = lane_dir / "metrics.json"
-    settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(settings_path, settings)
     command = [sys.executable, str(entry), "--settings", str(settings_path), "--output", str(metrics_path)]
     completed = run_command(command, cwd=repo, timeout_s=timeout_s)
-    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics = load_report_json(metrics_path)
     warm_timing = warm_timing_from_steps(metrics.get("steps", []))
     return {
         "name": str(settings["run_name"]),
@@ -990,10 +988,7 @@ def execute_smoke(args: argparse.Namespace, output_dir: Path) -> dict[str, Any]:
 
 
 def write_summary(summary: dict[str, Any], output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "summary.json"
-    path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
+    return write_report_json(output_dir / "summary.json", summary)
 
 
 def main() -> None:

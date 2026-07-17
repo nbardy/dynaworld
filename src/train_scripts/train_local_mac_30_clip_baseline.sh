@@ -23,4 +23,4 @@ if [[ ! -f data/youtube_scene_distinct/clip_sets/youtube_scene_distinct_30_64_4f
 fi
 
 echo "Config: $CONFIG_PATH"
-uv run python src/train/train_video_token_implicit_dynamic.py "$CONFIG_PATH"
+PYTHONPATH=src/train uv run python src/train/train.py "$CONFIG_PATH"

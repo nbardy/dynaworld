@@ -2,24 +2,23 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import torch
 from torch.nn import functional as F
 
+try:
+    from .report_artifacts import ensure_train_path, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import ensure_train_path, write_report_json
 
-ROOT = Path(__file__).resolve().parents[2]
-TRAIN_SRC = ROOT / "src" / "train"
-if str(TRAIN_SRC) not in sys.path:
-    sys.path.insert(0, str(TRAIN_SRC))
-
+ensure_train_path()
 from camera import CameraSpec, build_camera_rays
 from config_utils import load_config_file
 from multicam_video_data import cameras_from_K_w2c, load_multicam_video_bundle
+from powerfoam_metal_config import resolve_config
 from renderers.projection import project_points_camera
-from train_powerfoam_metal import resolve_config
 
 
 def project_points(camera: CameraSpec, points: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -353,7 +352,7 @@ def build_plane_sweep_cloud(args: argparse.Namespace) -> dict[str, Any]:
         "lens_models": bundle.train_lens_models,
     }
     summary_path = Path(args.output).with_suffix(".json")
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(summary_path, summary)
     return summary
 
 

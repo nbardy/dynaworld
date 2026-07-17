@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
-
 import torch
 
-
-ROOT = Path(__file__).resolve().parents[2]
-os.chdir(ROOT)
-sys.path.insert(0, str(ROOT / "src" / "train"))
+from research_experiments.report_artifacts import chdir_root, root_path
 
 from config_utils import load_config_file  # noqa: E402
 from multicam_video_data import load_multicam_video_bundle  # noqa: E402
 
 
-SPLIT_CONFIG = ROOT / "src/dataset_configs/multicam_train2_holdout1_5sample_128_4fps_16f.jsonc"
+chdir_root()
+
+SPLIT_CONFIG = root_path("src/dataset_configs/multicam_train2_holdout1_5sample_128_4fps_16f.jsonc")
 
 
 def data_cfg_for_sample(split_cfg: dict, sample: dict) -> dict:

@@ -12,16 +12,13 @@ import cv2
 import numpy as np
 from PIL import Image
 
+try:
+    from .report_artifacts import PROJECT_ROOT, relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import PROJECT_ROOT, relative_to_project as rel, write_report_json
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = PROJECT_ROOT
 BLENDER_TO_OPENCV = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.float32)
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(ROOT))
-    except ValueError:
-        return str(path)
 
 
 def sha256_file(path: Path) -> str:
@@ -118,7 +115,7 @@ def write_transforms(path: Path, frames: list[dict[str, Any]], *, size: int, cam
         "h": int(size),
         "frames": frames,
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(path, payload)
 
 
 def export_dataset(
@@ -184,10 +181,7 @@ def export_dataset(
         "alpha_format_on_disk": "straight",
         "official_powerfoam_dataset": "blender",
     }
-    (scene_dir / "dynaworld_smoke_dataset.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_report_json(scene_dir / "dynaworld_smoke_dataset.json", summary)
     return summary
 
 

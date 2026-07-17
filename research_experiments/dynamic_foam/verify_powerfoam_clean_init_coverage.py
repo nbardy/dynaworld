@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import torch
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC_TRAIN = ROOT / "src/train"
-if str(SRC_TRAIN) not in sys.path:
-    sys.path.insert(0, str(SRC_TRAIN))
+try:
+    from .report_artifacts import DYNAMIC_FOAM_ROOT, PROJECT_ROOT, ensure_sys_path, ensure_train_path, load_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import DYNAMIC_FOAM_ROOT, PROJECT_ROOT, ensure_sys_path, ensure_train_path, load_report_json
+
+ROOT = PROJECT_ROOT
+ensure_train_path()
+ensure_sys_path(DYNAMIC_FOAM_ROOT)
 
 from multicam_video_data import (  # noqa: E402
     camera_from_K_w2c,
@@ -29,7 +32,6 @@ from renderers.projection import project_points_camera  # noqa: E402
 from verify_powerfoam_paper_acceptance import (  # noqa: E402
     clean_candidate_metrics,
     existing_clean_candidates,
-    load_json,
     missing_optional_clean_candidates,
 )
 
@@ -292,7 +294,7 @@ def preview_alpha_stats(path: Path) -> dict[str, Any] | None:
 
 def coverage_for_candidate(output_dir: Path, artifact_meta: Path) -> dict[str, Any]:
     clean_metrics, artifact_metrics = clean_candidate_metrics(output_dir, artifact_meta)
-    cfg = load_json(output_dir / "resolved_config.json")
+    cfg = load_report_json(output_dir / "resolved_config.json")
     point_cloud_path = ROOT / artifact_metrics["output"]
     points = load_ascii_ply_points(point_cloud_path)
     train_K, train_w2c, heldout_K, heldout_w2c, camera_meta = multicam_matrices(cfg)

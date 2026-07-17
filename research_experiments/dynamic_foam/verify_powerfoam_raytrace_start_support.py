@@ -8,25 +8,18 @@ from typing import Any
 import torch
 
 from config_utils import load_config_file
+from checkpoint_utils import load_checkpoint_mapping, model_state_dict_from_checkpoint
 from multicam_video_data import camera_from_K_w2c
-from train_powerfoam_metal import (
-    POWERFOAM_SOFTPLUS_BETA,
-    make_raster_config,
-    powerfoam_rays_from_camera,
-    resolve_config,
-)
+from powerfoam_direct import POWERFOAM_SOFTPLUS_BETA
+from powerfoam_geometry import powerfoam_rays_from_camera
+from powerfoam_metal_config import resolve_config
+from powerfoam_raster_config import make_powerfoam_metal_raster_config as make_raster_config
+try:
+    from .report_artifacts import relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import relative_to_project as rel, write_report_json
 from torch_powerfoam_metal.rasterize import _default_start_ids, _sampled_ray_support_counts
 from verify_powerfoam_clean_init_coverage import multicam_matrices
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
 
 
 def scalar(value: torch.Tensor | float | int) -> float:
@@ -153,7 +146,8 @@ def main() -> None:
     cfg = resolve_config(load_config_file(args.config))
     checkpoint = args.checkpoint or (cfg["logging"]["output_dir"] / "checkpoint_best.pt")
     output = args.output or (cfg["logging"]["output_dir"] / "raytrace_start_support_diagnostics.json")
-    state = torch.load(checkpoint, map_location="cpu")["model"]
+    checkpoint_payload = load_checkpoint_mapping(checkpoint, map_location="cpu")
+    state = model_state_dict_from_checkpoint(checkpoint_payload)
     points, radii = decode_checkpoint_points(state, cfg)
     raster_config = make_raster_config(cfg["render"])
     train_K, train_w2c, _heldout_K, _heldout_w2c, camera_meta = multicam_matrices(cfg)
@@ -208,8 +202,7 @@ def main() -> None:
             "A switched row means the patched default start no longer uses the origin-nearest cell."
         ),
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    write_report_json(output, report)
     print(json.dumps({"output": rel(output), "summary": report["summary"]}, indent=2, sort_keys=True))
 
 

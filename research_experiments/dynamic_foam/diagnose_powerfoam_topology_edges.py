@@ -10,17 +10,14 @@ import torch
 import torch.nn.functional as F
 
 from config_utils import load_config_file
-from train_powerfoam_metal import POWERFOAM_SOFTPLUS_BETA, build_csr_adjacency, resolve_config
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
+from checkpoint_utils import load_checkpoint_mapping, model_state_dict_from_checkpoint
+from powerfoam_adjacency import build_csr_adjacency
+from powerfoam_direct import POWERFOAM_SOFTPLUS_BETA
+from powerfoam_metal_config import resolve_config
+try:
+    from .report_artifacts import relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import relative_to_project as rel, write_report_json
 
 
 def scalar(value: torch.Tensor | float | int) -> float:
@@ -157,7 +154,8 @@ def main() -> None:
     cfg = resolve_config(load_config_file(args.config))
     checkpoint = args.checkpoint or (cfg["logging"]["output_dir"] / "checkpoint_best.pt")
     output = args.output or (cfg["logging"]["output_dir"] / "topology_edge_diagnostics.json")
-    state = torch.load(checkpoint, map_location="cpu")["model"]
+    checkpoint_payload = load_checkpoint_mapping(checkpoint, map_location="cpu")
+    state = model_state_dict_from_checkpoint(checkpoint_payload)
     points, radii = load_state_points(state, cfg)
     frame_indices = [int(frame) for frame in args.frames]
     frames = [frame_report(points, radii, cfg, frame) for frame in frame_indices]
@@ -181,8 +179,7 @@ def main() -> None:
             "a conservative ray-walk graph for this state; false Cech extras are separate from missing faces."
         ),
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output, report)
     print(json.dumps({"output": rel(output), "summary": report["summary"]}, indent=2, sort_keys=True))
 
 

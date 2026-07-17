@@ -14,6 +14,11 @@ from torch.nn import functional as F
 
 from powerfoam_direct import PowerFoamRenderOptions, render_powerfoam_torch
 
+try:
+    from .report_artifacts import load_report_json, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import load_report_json, write_report_json
+
 
 UPSTREAM_POWERFOAM_COMMIT = "96392252ebd0059fe6ca98881b62e12295d9242f"
 OFFICIAL_RASTER_TEXEL_TEMPERATURE = 10.0
@@ -75,7 +80,7 @@ def tensor_from_payload(payload: dict[str, Any], *, dtype: torch.dtype | None = 
 
 
 def load_local_scene(fixture_path: Path) -> tuple[dict[str, Any], dict[str, torch.Tensor], PowerFoamRenderOptions]:
-    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    fixture = load_report_json(fixture_path)
     inputs = fixture["inputs"]
     scene = {key: tensor_from_payload(inputs[key], dtype=torch.float32) for key in FLOAT_SCENE_KEYS}
     scene["adjacency"] = tensor_from_payload(inputs["adjacency"]).to(dtype=torch.long)
@@ -362,8 +367,7 @@ def main() -> None:
     output = args.output
     if output is None:
         output = Path(f"research_experiments/dynamic_foam/fixtures/powerfoam_tiny_height_sv_official_camera_{args.backend}_v1.json")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output, payload)
     print(output)
 
 

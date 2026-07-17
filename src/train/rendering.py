@@ -10,7 +10,7 @@ from renderers.dense import render_pytorch_3dgs, render_pytorch_3dgs_batch
 from renderers.fast_mac import FastMacRendererConfig, render_fast_mac_3dgs, render_fast_mac_3dgs_batch
 from renderers.taichi import TaichiRendererConfig, render_taichi_3dgs, render_taichi_3dgs_batch
 from renderers.tiled import render_pytorch_3dgs_tiled
-from runtime_types import GaussianFrame, GaussianSequence, ResolvedRendererMode
+from runtime_types import GaussianFrame, GaussianSequence, RasterizedClip, ResolvedRendererMode
 
 CAMERA_PROJECTION_MODES = {"auto", "legacy_pinhole", "camera_model"}
 
@@ -169,8 +169,8 @@ def render_gaussian_frame(
         )
     if mode == "fast_mac":
         # render_fast_mac_3dgs now returns (features, alpha). Strip alpha for
-        # the legacy single-frame caller; trainer paths that need alpha go
-        # through render_gaussian_frames_alpha_aware below.
+        # the legacy single-frame caller; trainer paths that need alpha use the
+        # typed RasterizedClip batch wrapper below.
         features, _alpha = render_fast_mac_3dgs(
             frame.xyz,
             frame.scales,
@@ -233,6 +233,45 @@ def _camera_scalar_vector(cameras: list[CameraSpec] | tuple[CameraSpec, ...], fi
     return torch.tensor(values, device=device, dtype=torch.float32)
 
 
+def _camera_to_world_batch(cameras: list[CameraSpec] | tuple[CameraSpec, ...], device) -> torch.Tensor:
+    return torch.stack(
+        [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
+        dim=0,
+    )
+
+
+def _render_fast_mac_frames(
+    cfg: Mapping[str, Any],
+    sequence: GaussianSequence,
+    cameras: list[CameraSpec] | tuple[CameraSpec, ...],
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    if sequence.frame_count != len(cameras):
+        raise ValueError(f"Expected {sequence.frame_count} cameras, got {len(cameras)}.")
+    device = sequence.xyz.device
+    return render_fast_mac_3dgs_batch(
+        sequence.xyz,
+        sequence.scales,
+        sequence.quats,
+        sequence.opacities,
+        sequence.rgbs,
+        int(cfg["render"]["render_size"]),
+        int(cfg["render"]["render_size"]),
+        _camera_scalar_vector(cameras, "fx", device),
+        _camera_scalar_vector(cameras, "fy", device),
+        _camera_scalar_vector(cameras, "cx", device),
+        _camera_scalar_vector(cameras, "cy", device),
+        camera_to_world=_camera_to_world_batch(cameras, device),
+        near_plane=cfg["render"]["near_plane"],
+        cameras=cameras,
+        projection_mode=_resolve_camera_projection_mode(cameras, cfg["render"]["camera_projection"]),
+        config=FastMacRendererConfig.from_mapping(
+            cfg["render"]["fast_mac"],
+            fallback_tile_size=cfg["render"]["tile_size"],
+            fallback_alpha_threshold=cfg["render"]["alpha_threshold"],
+        ),
+    )
+
+
 def render_gaussian_frames(
     cfg: Mapping[str, Any],
     sequence: GaussianSequence,
@@ -262,10 +301,7 @@ def render_gaussian_frames(
             grid=build_or_reuse_grid(
                 int(cfg["render"]["render_size"]), int(cfg["render"]["render_size"]), device, dense_grid
             ),
-            camera_to_world=torch.stack(
-                [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
-                dim=0,
-            ),
+            camera_to_world=_camera_to_world_batch(cameras, device),
             near_plane=cfg["render"]["near_plane"],
             return_aux=return_aux,
             cameras=cameras,
@@ -287,10 +323,7 @@ def render_gaussian_frames(
             _camera_scalar_vector(cameras, "fy", device),
             _camera_scalar_vector(cameras, "cx", device),
             _camera_scalar_vector(cameras, "cy", device),
-            camera_to_world=torch.stack(
-                [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
-                dim=0,
-            ),
+            camera_to_world=_camera_to_world_batch(cameras, device),
             near_plane=cfg["render"]["near_plane"],
             cameras=cameras,
             projection_mode=_resolve_camera_projection_mode(cameras, cfg["render"]["camera_projection"]),
@@ -303,31 +336,7 @@ def render_gaussian_frames(
     if mode == "fast_mac":
         # render_fast_mac_3dgs_batch returns (features, alpha); callers of
         # render_gaussian_frames expect a Tensor, so strip alpha here.
-        features, _alpha = render_fast_mac_3dgs_batch(
-            sequence.xyz,
-            sequence.scales,
-            sequence.quats,
-            sequence.opacities,
-            sequence.rgbs,
-            int(cfg["render"]["render_size"]),
-            int(cfg["render"]["render_size"]),
-            _camera_scalar_vector(cameras, "fx", device),
-            _camera_scalar_vector(cameras, "fy", device),
-            _camera_scalar_vector(cameras, "cx", device),
-            _camera_scalar_vector(cameras, "cy", device),
-            camera_to_world=torch.stack(
-                [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
-                dim=0,
-            ),
-            near_plane=cfg["render"]["near_plane"],
-            cameras=cameras,
-            projection_mode=_resolve_camera_projection_mode(cameras, cfg["render"]["camera_projection"]),
-            config=FastMacRendererConfig.from_mapping(
-                cfg["render"]["fast_mac"],
-                fallback_tile_size=cfg["render"]["tile_size"],
-                fallback_alpha_threshold=cfg["render"]["alpha_threshold"],
-            ),
-        )
+        features, _alpha = _render_fast_mac_frames(cfg, sequence, cameras)
         return features
     return torch.stack(
         [
@@ -352,51 +361,24 @@ def render_gaussian_frames(
     )
 
 
-def render_gaussian_frames_alpha_aware(
+def render_gaussian_frames_rasterized(
     cfg: Mapping[str, Any],
     sequence: GaussianSequence,
     cameras: list[CameraSpec] | tuple[CameraSpec, ...],
     *,
     mode: str,
     dense_grid: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Like render_gaussian_frames, but also returns the per-pixel alpha mask.
+) -> RasterizedClip:
+    """Rasterize a Gaussian sequence into the typed trainer payload.
 
-    Alpha is the v5_features rasterizer's accumulated alpha output `1 - T_final`,
-    used by the trainer to composite a white background in RGB space after the
-    colorize MLP. Only the fast_mac F!=3 path produces a non-None alpha; all
-    other modes return alpha=None.
+    This is the alpha-aware batch render boundary. Legacy callers that only
+    need the feature/RGB tensor can still use `render_gaussian_frames(...)`;
+    trainer paths should prefer this wrapper so alpha availability is explicit.
     """
     if mode == "fast_mac":
-        if sequence.frame_count != len(cameras):
-            raise ValueError(f"Expected {sequence.frame_count} cameras, got {len(cameras)}.")
-        device = sequence.xyz.device
-        return render_fast_mac_3dgs_batch(
-            sequence.xyz,
-            sequence.scales,
-            sequence.quats,
-            sequence.opacities,
-            sequence.rgbs,
-            int(cfg["render"]["render_size"]),
-            int(cfg["render"]["render_size"]),
-            _camera_scalar_vector(cameras, "fx", device),
-            _camera_scalar_vector(cameras, "fy", device),
-            _camera_scalar_vector(cameras, "cx", device),
-            _camera_scalar_vector(cameras, "cy", device),
-            camera_to_world=torch.stack(
-                [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in cameras],
-                dim=0,
-            ),
-            near_plane=cfg["render"]["near_plane"],
-            cameras=cameras,
-            projection_mode=_resolve_camera_projection_mode(cameras, cfg["render"]["camera_projection"]),
-            config=FastMacRendererConfig.from_mapping(
-                cfg["render"]["fast_mac"],
-                fallback_tile_size=cfg["render"]["tile_size"],
-                fallback_alpha_threshold=cfg["render"]["alpha_threshold"],
-            ),
-        )
-    # Non-fast_mac modes don't expose alpha; fall back to the standard renderer.
+        features, alpha = _render_fast_mac_frames(cfg, sequence, cameras)
+        return RasterizedClip(features=features, alpha=alpha)
+
     features = render_gaussian_frames(
         cfg,
         sequence,
@@ -405,8 +387,8 @@ def render_gaussian_frames_alpha_aware(
         dense_grid=dense_grid,
     )
     if isinstance(features, tuple):
-        raise RuntimeError("render_gaussian_frames_alpha_aware does not support return_aux modes")
-    return features, None
+        raise RuntimeError("render_gaussian_frames_rasterized does not support return_aux modes")
+    return RasterizedClip(features=features, alpha=None)
 
 
 __all__ = [
@@ -416,6 +398,6 @@ __all__ = [
     "pick_renderer_mode",
     "render_gaussian_frame",
     "render_gaussian_frames",
-    "render_gaussian_frames_alpha_aware",
+    "render_gaussian_frames_rasterized",
     "resize_images",
 ]

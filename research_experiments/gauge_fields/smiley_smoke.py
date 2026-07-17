@@ -3,16 +3,11 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
-import sys
 
 import torch
 
 
-EXPERIMENT_DIR = Path(__file__).resolve().parent
-DYNAWORLD_ROOT = Path(__file__).resolve().parents[2]
-if str(EXPERIMENT_DIR) not in sys.path:
-    sys.path.insert(0, str(EXPERIMENT_DIR))
-
+from common import DYNAWORLD_ROOT, save_rgb_mp4, write_columns_legend  # noqa: E402
 from train import (  # noqa: E402
     MaterialSurfelField,
     RenderConfig,
@@ -123,26 +118,7 @@ def save_smiley_strip(path: Path, rgb: torch.Tensor, alpha: torch.Tensor, depth:
     strip = torch.cat([rgb, alpha_rgb, depth_rgb], dim=1)
     path.parent.mkdir(parents=True, exist_ok=True)
     tensor_to_uint8_image(strip).save(path)
-    path.with_name(path.stem + "_columns.txt").write_text("columns: rgb | alpha | depth\n")
-
-
-def save_rgb_mp4(path: Path, video: torch.Tensor, fps: float) -> None:
-    import cv2
-
-    frames_u8 = (video.detach().cpu().clamp(0, 1) * 255.0).to(torch.uint8).numpy()
-    _, H, W, _ = frames_u8.shape
-    path.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(
-        str(path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        float(fps),
-        (W, H),
-    )
-    if not writer.isOpened():
-        raise RuntimeError(f"Could not open video writer for {path}")
-    for frame in frames_u8:
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    writer.release()
+    write_columns_legend(path, ("rgb", "alpha", "depth"))
 
 
 def parse_args() -> argparse.Namespace:

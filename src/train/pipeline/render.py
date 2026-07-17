@@ -1,14 +1,13 @@
 """Shared render orchestration for trainer validation paths.
 
 The trainers own model state, optimizer state, and objective policy. This
-module owns clip slicing, rasterization dispatch, colorizer view-conditioning
-directions, and full-sequence render stitching. Trainer-specific decode/render
-policy enters through small typed callables.
+module owns rasterization dispatch, colorizer view-conditioning directions, and
+full-sequence render stitching. Trainer-specific decode/render policy enters
+through small typed callables.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 import torch
@@ -20,15 +19,9 @@ from pipeline.diagnostics import (
     fill_decoded_frame_buffers,
     init_decoded_frame_buffers,
 )
-from rendering import camera_for_viewport, render_gaussian_frames_alpha_aware
-from runtime_types import CameraState, GaussianSequence, SequenceData
-
-
-def prepare_clip(sequence_data: SequenceData, clip_indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    clip_frames = sequence_data.frames[clip_indices]
-    time_denominator = max(sequence_data.frame_count - 1, 1)
-    clip_times = (clip_indices.to(dtype=torch.float32) / float(time_denominator)).reshape(1, -1)
-    return clip_frames.unsqueeze(0), clip_times
+from rendering import camera_for_viewport, render_gaussian_frames_rasterized
+from runtime_types import CameraState, GaussianSequence, RasterizedClip, RenderedClip, SequenceData
+from sequence_data import prepare_clip as _prepare_clip
 
 
 def stack_complete_frame_list(frames: list[torch.Tensor | None], *, name: str) -> torch.Tensor:
@@ -40,48 +33,6 @@ def stack_complete_frame_list(frames: list[torch.Tensor | None], *, name: str) -
     if not complete:
         raise RuntimeError(f"{name} did not produce any frames.")
     return torch.stack(complete, dim=0)
-
-
-# ---------------------------------------------------------------------------
-# Output bundle
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class RasterizedClip:
-    features: torch.Tensor
-    alpha: torch.Tensor | None
-
-
-@dataclass(frozen=True)
-class RenderedClip:
-    """The 5-tuple that `render_full_sequence` used to return, but as a
-    frozen typed bundle so future signature changes don't reintroduce
-    tuple-arity bugs.
-
-    NOTE: This is a clip-level result (full sequence rendered chunk-by-chunk
-    and stitched). It is intentionally distinct from
-    `objective.types.RenderedView`, which is a per-clip per-target view
-    result with its own (TargetView, RasterizedView, ColorizedView) chain.
-    The two coexist; do not confuse them.
-
-    Fields:
-        rgb_sequence: [F, 3, H, W] CPU tensor — the full clip rendered to RGB.
-        camera_state: aggregate `CameraState` for implicit-camera trainers,
-            or `None` for known-camera trainers (whose camera state is
-            empty by construction).
-        temporal_metrics: scalar payload from `decoded_temporal_payload`.
-        feature_sequence: [F, F_dim, H, W] CPU tensor when `feature_pca_log`
-            is on, else `None`.
-        alpha_sequence: [F, H, W] CPU tensor when the renderer produced
-            alpha (F!=3 fast_mac path), else `None`.
-    """
-
-    rgb_sequence: torch.Tensor
-    camera_state: CameraState | None
-    temporal_metrics: dict[str, float]
-    feature_sequence: torch.Tensor | None
-    alpha_sequence: torch.Tensor | None
 
 
 DecodeClipFn = Callable[[SequenceData, torch.Tensor, torch.Tensor, torch.Tensor], GaussianSequence]
@@ -201,7 +152,7 @@ def render_clip_sequence(
     dense_grid: torch.Tensor | None,
 ) -> RasterizedClip:
     """Rasterize a decoded sequence into features plus optional alpha."""
-    features, alpha = render_gaussian_frames_alpha_aware(
+    return render_gaussian_frames_rasterized(
         cfg,
         sequence,
         _viewport_cameras(
@@ -212,7 +163,6 @@ def render_clip_sequence(
         mode=renderer_mode,
         dense_grid=dense_grid,
     )
-    return RasterizedClip(features=features, alpha=alpha)
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +207,7 @@ def _render_full_sequence_chunked(
         clip_end = min(end, num_frames)
         clip_start = max(0, clip_end - train_frame_count)
         clip_indices = torch.arange(clip_start, clip_end, device=device)
-        clip_frames, clip_times = prepare_clip(sequence_data, clip_indices)
+        clip_frames, clip_times = _prepare_clip(sequence_data, clip_indices)
         decoded = decode_clip(sequence_data, clip_indices, clip_frames, clip_times)
         if decoded.cameras is None:
             raise ValueError("Video decode must include cameras for full-sequence render.")
@@ -365,11 +315,8 @@ def render_full_sequence(
 
 
 __all__ = [
-    "RasterizedClip",
-    "RenderedClip",
     "DecodeClipFn",
     "RenderClipFn",
-    "prepare_clip",
     "stack_complete_frame_list",
     "colorize_view_dirs_for_features",
     "gaussian_sequence_slice",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,6 +7,27 @@ from typing import Any
 import numpy as np
 import torch
 from PIL import Image
+
+from json_io import load_jsonl_objects
+
+
+ImageSizeLike = int | tuple[int, int] | list[int]
+
+
+def _target_height_width(target_size: ImageSizeLike | None) -> tuple[int, int] | None:
+    if target_size is None:
+        return None
+    if isinstance(target_size, bool):
+        raise ValueError("target_size must be an integer or [height, width]")
+    if isinstance(target_size, int):
+        height = width = int(target_size)
+    elif isinstance(target_size, (tuple, list)) and len(target_size) == 2:
+        height, width = (int(value) for value in target_size)
+    else:
+        raise ValueError("target_size must be an integer or [height, width]")
+    if height < 1 or width < 1:
+        raise ValueError("target_size dimensions must be positive")
+    return height, width
 
 
 try:
@@ -24,33 +44,28 @@ class MulticamValSample:
 
 
 def load_multicam_val_manifest(manifest_path: Path, split: str | None = "val") -> list[dict[str, Any]]:
-    records = []
-    with manifest_path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            record = json.loads(stripped)
-            if not isinstance(record, dict):
-                raise ValueError(f"Expected object on {manifest_path}:{line_number}.")
-            if split is None or str(record.get("split", "val")) == split:
-                records.append(record)
+    records = [
+        record
+        for record in load_jsonl_objects(manifest_path)
+        if split is None or str(record.get("split", "val")) == split
+    ]
     if not records:
         split_text = f" split={split!r}" if split is not None else ""
         raise ValueError(f"No multi-camera validation records found in {manifest_path}{split_text}.")
     return records
 
 
-def _load_frame(path: Path, target_size: int | None) -> torch.Tensor:
+def _load_frame(path: Path, target_size: ImageSizeLike | None) -> torch.Tensor:
     with Image.open(path) as image:
         rgb = image.convert("RGB")
-        if target_size is not None:
-            rgb = rgb.resize((target_size, target_size), resample=BILINEAR)
+        target_hw = _target_height_width(target_size)
+        if target_hw is not None:
+            rgb = rgb.resize((target_hw[1], target_hw[0]), resample=BILINEAR)
         array = np.asarray(rgb, dtype=np.float32) / 255.0
     return torch.from_numpy(array).permute(2, 0, 1).contiguous()
 
 
-def _load_frame_dir(path: Path, target_size: int | None = None) -> torch.Tensor:
+def _load_frame_dir(path: Path, target_size: ImageSizeLike | None = None) -> torch.Tensor:
     frames = sorted(path.glob("frame_*.png"))
     if len(frames) < 2:
         raise ValueError(f"Need at least 2 validation frames in {path}")
@@ -71,7 +86,7 @@ def _sample_video_frames(
     start_seconds: float,
     sample_fps: float,
     frame_count: int,
-    target_size: int,
+    target_size: ImageSizeLike,
 ) -> torch.Tensor:
     cv2 = _import_cv2()
     capture = cv2.VideoCapture(str(video_path))
@@ -96,8 +111,9 @@ def _sample_video_frames(
                 )
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(frame_rgb)
-            if target_size is not None:
-                image = image.resize((target_size, target_size), resample=BILINEAR)
+            target_hw = _target_height_width(target_size)
+            if target_hw is not None:
+                image = image.resize((target_hw[1], target_hw[0]), resample=BILINEAR)
             array = np.asarray(image, dtype=np.float32) / 255.0
             frames.append(torch.from_numpy(array).permute(2, 0, 1).contiguous())
     finally:
@@ -106,7 +122,7 @@ def _sample_video_frames(
     return torch.stack(frames, dim=0)
 
 
-def _load_record_frames(record: dict[str, Any], *, prefix: str, target_size: int) -> torch.Tensor:
+def _load_record_frames(record: dict[str, Any], *, prefix: str, target_size: ImageSizeLike) -> torch.Tensor:
     frames_dir = record.get(f"{prefix}_frames_dir")
     if frames_dir:
         path = Path(frames_dir)
@@ -128,7 +144,7 @@ def load_multicam_val_camera_frames(
     start_seconds: float,
     fps: float,
     frame_count: int,
-    target_size: int,
+    target_size: ImageSizeLike,
     device: torch.device | str | None = None,
 ) -> torch.Tensor:
     frames = _sample_video_frames(
@@ -146,12 +162,13 @@ def load_multicam_val_camera_frames(
 def load_multicam_val_sample(
     record: dict[str, Any],
     *,
-    target_size: int | None = None,
+    target_size: ImageSizeLike | None = None,
     device: torch.device | str | None = None,
 ) -> MulticamValSample:
-    resolved_size = int(target_size or record.get("target_size") or 0)
-    if resolved_size <= 0:
+    resolved_size = target_size if target_size is not None else record.get("target_size")
+    if resolved_size is None:
         raise ValueError("target_size must be provided or present in the multi-camera validation record.")
+    _target_height_width(resolved_size)
     source_frames = _load_record_frames(record, prefix="source", target_size=resolved_size)
     target_frames = _load_record_frames(record, prefix="target", target_size=resolved_size)
     if source_frames.shape != target_frames.shape:

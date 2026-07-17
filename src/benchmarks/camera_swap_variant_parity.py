@@ -3,52 +3,20 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import random
-import sys
 from pathlib import Path
 from typing import Any
 
 import torch
 
-ROOT = Path(__file__).resolve().parents[2]
-TRAIN_ROOT = ROOT / "src" / "train"
-if str(TRAIN_ROOT) not in sys.path:
-    sys.path.insert(0, str(TRAIN_ROOT))
-
-from camera_swap_sampling import CameraSwapPair  # noqa: E402
-from config_utils import load_config_file  # noqa: E402
-from fixed_render_variant_parity import _diff_stats  # noqa: E402
-from train_multicam_precomputed_feature_implicit_dynamic import MulticamPrecomputedFeatureImplicitTrainer  # noqa: E402
-from trainer_phase_benchmark import trainer_for_config  # noqa: E402
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    torch.manual_seed(seed)
-
-
-def _named_grads(trainer) -> dict[str, torch.Tensor | None]:
-    modules = {
-        "model": trainer.model,
-        "colorize": trainer.colorize,
-        "relpose_head": getattr(trainer, "relpose_head", None),
-        "camera_rig": getattr(trainer, "camera_rig", None),
-    }
-    grads: dict[str, torch.Tensor | None] = {}
-    for prefix, module in modules.items():
-        if module is None:
-            continue
-        for name, param in module.named_parameters():
-            grads[f"{prefix}.{name}"] = None if param.grad is None else param.grad.detach().clone()
-    return grads
-
-
-def _grad_diff_stats(
-    base: dict[str, torch.Tensor | None],
-    candidate: dict[str, torch.Tensor | None],
-) -> dict[str, dict[str, Any]]:
-    keys = sorted(set(base) | set(candidate))
-    return {key: _diff_stats(base.get(key), candidate.get(key)) for key in keys}
+import benchmark_bootstrap
+from benchmark_compare import grad_diff_stats, seed_everything
+from benchmark_gradients import named_module_parameter_grads
+from camera_swap_sampling import CameraSwapPair
+from config_utils import load_config_file
+from train_artifacts import write_json
+from train_logging import finish_wandb_run
+from trainer_capabilities import trainer_uses_multicam_phase
+from trainer_registry import instantiate_trainer_for_config
 
 
 def _top_diffs(diff: dict[str, dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
@@ -104,21 +72,21 @@ def _config_without_feature_variant(cfg: dict[str, Any]) -> dict[str, Any]:
     return cloned
 
 
-def _set_feature_variant(trainer: MulticamPrecomputedFeatureImplicitTrainer, feature_variant: str) -> str:
+def _set_feature_variant(trainer: Any, feature_variant: str) -> str:
     previous = str(trainer.cfg["render"]["fast_mac"]["feature_variant"])
     trainer.cfg["render"]["fast_mac"]["feature_variant"] = str(feature_variant)
     return previous
 
 
 def _run_graph(
-    trainer: MulticamPrecomputedFeatureImplicitTrainer,
+    trainer: Any,
     *,
     seed: int,
     clip_indices: torch.Tensor,
     pairs: tuple[CameraSwapPair, ...],
     feature_variant: str,
 ) -> dict[str, Any]:
-    _seed_everything(seed)
+    seed_everything(seed)
     trainer.optimizer.zero_grad(set_to_none=True)
     previous_variant = _set_feature_variant(trainer, feature_variant)
     try:
@@ -139,7 +107,14 @@ def _run_graph(
         )
         loss = recon_loss + bank_rate_loss
         loss.backward()
-        grads = _named_grads(trainer)
+        grads = named_module_parameter_grads(
+            {
+                "model": trainer.model,
+                "colorize": trainer.colorize,
+                "relpose_head": getattr(trainer, "relpose_head", None),
+                "camera_rig": getattr(trainer, "camera_rig", None),
+            }
+        )
     finally:
         _set_feature_variant(trainer, previous_variant)
         trainer.optimizer.zero_grad(set_to_none=True)
@@ -170,14 +145,14 @@ def main() -> None:
     baseline_variant = _feature_variant(baseline_cfg)
     candidate_variant = _feature_variant(candidate_cfg)
 
-    _seed_everything(int(args.seed))
-    trainer = trainer_for_config(baseline_cfg)
-    if not isinstance(trainer, MulticamPrecomputedFeatureImplicitTrainer):
+    seed_everything(int(args.seed))
+    trainer = instantiate_trainer_for_config(baseline_cfg, args.baseline_config)
+    if not trainer_uses_multicam_phase(trainer) or not hasattr(trainer, "camera_swap_recon_loss"):
         raise ValueError("camera_swap_variant_parity requires a multicam trainer config.")
 
     clip_length = int(trainer.model_cfg["train_frame_count"])
     clip_indices = torch.arange(0, clip_length, device=trainer.device)
-    _seed_everything(int(args.seed))
+    seed_everything(int(args.seed))
     pairs = trainer.sample_camera_swap_pairs()
 
     baseline_out = _run_graph(
@@ -194,7 +169,7 @@ def main() -> None:
         pairs=pairs,
         feature_variant=candidate_variant,
     )
-    grad_diff = _grad_diff_stats(baseline_out["grads"], candidate_out["grads"])
+    grad_diff = grad_diff_stats(baseline_out["grads"], candidate_out["grads"])
     max_grad = max((float(value.get("max_abs") or 0.0) for value in grad_diff.values()), default=0.0)
     max_grad_excluding_input_norms = _max_diff_excluding(
         grad_diff,
@@ -230,12 +205,9 @@ def main() -> None:
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     if args.json_output is not None:
-        args.json_output.parent.mkdir(parents=True, exist_ok=True)
-        args.json_output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        write_json(args.json_output, payload)
 
-    import wandb
-
-    wandb.finish()
+    finish_wandb_run()
 
 
 if __name__ == "__main__":

@@ -9,30 +9,25 @@ import torch
 from torch.nn import functional as F
 
 from config_utils import load_config_file
+from checkpoint_utils import load_checkpoint_mapping, model_state_dict_from_checkpoint
 from multicam_video_data import camera_from_K_w2c
-from train_powerfoam_metal import (
-    POWERFOAM_SOFTPLUS_BETA,
-    build_csr_adjacency,
-    make_raster_config,
-    powerfoam_rays_from_camera,
-    resolve_config,
-)
+from powerfoam_adjacency import build_csr_adjacency
+from powerfoam_direct import POWERFOAM_SOFTPLUS_BETA
+from powerfoam_geometry import powerfoam_rays_from_camera
+from powerfoam_metal_config import resolve_config
+from powerfoam_raster_config import make_powerfoam_metal_raster_config as make_raster_config
+from train_devices import sync_torch_device
+
+try:
+    from .report_artifacts import relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import relative_to_project as rel, write_report_json
 from torch_powerfoam_metal import (
     quaternion_frames,
     rasterize_power_foam_oriented_height_sv_texel_surface,
     raytrace_power_foam_oriented_height_sv_texel_surface,
 )
 from verify_powerfoam_clean_init_coverage import multicam_matrices
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
 
 
 def scalar(value: torch.Tensor | float | int) -> float:
@@ -299,7 +294,7 @@ def render_row(
     for name, start_ids in variants.items():
         ray_out, ray_alpha, steps = raytrace_variant(params, adjacency, offsets, rays, raster_config, start_ids)
         start_rows.append(start_summary(name, start_ids, stream_out, stream_alpha, ray_out, ray_alpha, steps))
-    torch.mps.synchronize()
+    sync_torch_device(rays.device)
     by_name = {row["start_mode"]: row for row in start_rows}
     origin = by_name.get("origin")
     default = by_name.get("default_per_ray")
@@ -334,7 +329,8 @@ def train_lens_model(camera_meta: dict[str, Any], view_index: int) -> str:
 def build_rows(args: argparse.Namespace) -> dict[str, Any]:
     cfg = resolve_config(load_config_file(args.config))
     checkpoint = args.checkpoint or (cfg["logging"]["output_dir"] / "checkpoint_best.pt")
-    state = torch.load(checkpoint, map_location="cpu")["model"]
+    checkpoint_payload = load_checkpoint_mapping(checkpoint, map_location="cpu")
+    state = model_state_dict_from_checkpoint(checkpoint_payload)
     decoded = decode_checkpoint_state(state, cfg)
     train_K, train_w2c, _heldout_K, _heldout_w2c, camera_meta = multicam_matrices(cfg)
     train_distortions = (
@@ -441,8 +437,7 @@ def main() -> None:
     cfg_preview = resolve_config(load_config_file(args.config))
     output = args.output or (cfg_preview["logging"]["output_dir"] / "raytrace_real_view_alpha_diagnostics.json")
     report["output"] = rel(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    write_report_json(output, report)
     print(json.dumps({"output": rel(output), "summary": report["summary"]}, indent=2, sort_keys=True))
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,11 +11,12 @@ from typing import Any
 import torch
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-TRAIN_DIR = REPO_ROOT / "src" / "train"
-if str(TRAIN_DIR) not in sys.path:
-    sys.path.insert(0, str(TRAIN_DIR))
+try:
+    from .script_paths import ensure_train_path, repo_text
+except ImportError:  # pragma: no cover - direct script execution
+    from script_paths import ensure_train_path, repo_text
 
+ensure_train_path()
 from config_utils import load_config_file  # noqa: E402
 from multicam_video_data import (  # noqa: E402
     CAMXTIME_DATASETS,
@@ -32,22 +32,14 @@ from multicam_video_data import (  # noqa: E402
     select_multicam_record,
     validate_multicam_camera_split,
 )
-from train_multicam_precomputed_feature_implicit_dynamic import (  # noqa: E402
-    MulticamPrecomputedFeatureImplicitTrainer,
-)
+from trainer_registry import resolve_config_for_arch  # noqa: E402
+from train_artifacts import write_json, write_text  # noqa: E402
 
 
 @dataclass(frozen=True)
 class CameraRigPayload:
     metadata: dict[str, Any]
     cameras: list[dict[str, Any]]
-
-
-def _repo_text(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(REPO_ROOT))
-    except ValueError:
-        return str(path.resolve())
 
 
 def _as_camera_list(value: Any) -> list[str] | None:
@@ -349,7 +341,7 @@ def build_payload(
     target_size: int | None,
     frame_index: int,
 ) -> CameraRigPayload:
-    config = MulticamPrecomputedFeatureImplicitTrainer.resolve_config(load_config_file(config_path))
+    config = resolve_config_for_arch(load_config_file(config_path), config_path)
     data_cfg = config["data"]
     camera_cfg = config["camera"]
     record = select_multicam_record(data_cfg)
@@ -396,7 +388,7 @@ def build_payload(
     )
     diagnostics = _add_pose_diagnostics(cameras, condition_camera=condition_camera)
     metadata = {
-        "config": _repo_text(config_path),
+        "config": repo_text(config_path),
         "sample_id": record.get("sample_id"),
         "dataset": record.get("dataset"),
         "scene": record.get("scene"),
@@ -545,14 +537,9 @@ resize();
 
 
 def write_outputs(payload: CameraRigPayload, output_path: Path, json_path: Path | None) -> tuple[Path, Path]:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(_html(payload), encoding="utf-8")
+    write_text(output_path, _html(payload))
     resolved_json = json_path or output_path.with_suffix(".json")
-    resolved_json.parent.mkdir(parents=True, exist_ok=True)
-    resolved_json.write_text(
-        json.dumps({"metadata": payload.metadata, "cameras": payload.cameras}, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_json(resolved_json, {"metadata": payload.metadata, "cameras": payload.cameras})
     return output_path, resolved_json
 
 
@@ -602,8 +589,8 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "html": _repo_text(html_path),
-                "json": _repo_text(json_path),
+                "html": repo_text(html_path),
+                "json": repo_text(json_path),
                 "camera_count": len(payload.cameras),
                 **payload.metadata,
             },

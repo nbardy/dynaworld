@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 from torch import nn
@@ -20,6 +21,18 @@ class PowerFoamRenderOptions:
     eps: float = 1.0e-6
     texel_temperature: float = 10.0
     background: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+def direct_powerfoam_render_options(render_cfg: dict[str, Any]) -> PowerFoamRenderOptions:
+    return PowerFoamRenderOptions(
+        near_plane=float(render_cfg["near_plane"]),
+        alpha_threshold=float(render_cfg["alpha_threshold"]),
+        transmittance_threshold=float(render_cfg["transmittance_threshold"]),
+        max_alpha=float(render_cfg["max_alpha"]),
+        eps=float(render_cfg["eps"]),
+        texel_temperature=float(render_cfg["texel_temperature"]),
+        background=tuple(float(v) for v in render_cfg["background"]),
+    )
 
 
 @dataclass(frozen=True)

@@ -38,5 +38,5 @@ for config in "${CONFIGS[@]}"; do
     exit 1
   fi
   echo "Config: $config"
-  uv run python src/train/train_video_token_implicit_dynamic.py "$config"
+  PYTHONPATH=src/train uv run python src/train/train.py "$config"
 done

@@ -1,6 +1,4 @@
 import argparse
-import json
-import sys
 from pathlib import Path
 
 import cv2
@@ -9,10 +7,11 @@ import numpy as np
 import torch
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parents[2]
-DUST3R_ROOT = ROOT / "third_party" / "dust3r"
-if str(DUST3R_ROOT) not in sys.path:
-    sys.path.insert(0, str(DUST3R_ROOT))
+from external_paths import PROJECT_ROOT as ROOT
+from external_paths import ensure_third_party_path
+from train_devices import resolve_torch_device
+
+DUST3R_ROOT = ensure_third_party_path("dust3r")
 
 from dust3r.cloud_opt import GlobalAlignerMode, global_aligner
 from dust3r.demo import get_3D_model_from_scene
@@ -20,6 +19,7 @@ from dust3r.image_pairs import make_pairs
 from dust3r.inference import inference
 from dust3r.model import AsymmetricCroCo3DStereo
 from dust3r.utils.image import load_images
+from train_artifacts import write_json
 
 
 def parse_args():
@@ -118,16 +118,6 @@ def parse_args():
         help="Confidence threshold used when exporting the GLB scene.",
     )
     return parser.parse_args()
-
-
-def pick_device(requested: str) -> str:
-    if requested != "auto":
-        return requested
-    if torch.backends.mps.is_available():
-        return "mps"
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
 
 
 def build_scene_graph(scene_graph: str, winsize: int, refid: int, noncyclic: bool) -> str:
@@ -241,7 +231,7 @@ def make_poses_relative_to_first(poses):
 
 def main():
     args = parse_args()
-    device = pick_device(args.device)
+    device = str(resolve_torch_device(args.device, auto_cuda=True))
 
     output_dir = args.output_dir
     frames_dir = output_dir / "frames"
@@ -330,7 +320,7 @@ def main():
 
     save_preview_triplets(preview_dir, rgb_images, depthmaps, confidences)
     per_frame_cameras = build_per_frame_camera_records(frame_info, poses, intrinsics, focals)
-    (output_dir / "per_frame_cameras.json").write_text(json.dumps(per_frame_cameras, indent=2))
+    write_json(output_dir / "per_frame_cameras.json", per_frame_cameras, sort_keys=False)
 
     summary = {
         "video": str(args.video.resolve()),
@@ -346,7 +336,7 @@ def main():
         "per_frame_cameras_path": str((output_dir / "per_frame_cameras.json").resolve()),
         "camera_bundle_path": str((output_dir / "camera_bundle.npz").resolve()),
     }
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    write_json(output_dir / "summary.json", summary, sort_keys=False)
 
     print(f"Saved DUSt3R outputs to {output_dir}")
     print(f"Scene GLB: {scene_glb}")

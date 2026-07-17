@@ -16,12 +16,12 @@ UNCONDITIONED_CAMERA_CLAMP_CONFIG_1000="src/train_configs/local_mac_ablate_time_
 
 run_video_token() {
   local config="$1"
-  PYTHONPATH=src/train uv run python src/train/train_video_token_implicit_dynamic.py "$config"
+  PYTHONPATH=src/train uv run python src/train/train.py "$config"
 }
 
 run_precomputed() {
   local config="$1"
-  PYTHONPATH=src/train uv run python src/train/train_precomputed_feature_implicit_dynamic.py "$config"
+  PYTHONPATH=src/train uv run python src/train/train.py "$config"
 }
 
 MODE="${1:-250}"

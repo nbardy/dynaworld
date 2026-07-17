@@ -9,6 +9,8 @@ from typing import Any
 
 import torch
 
+from renderer_benchmark_cli import parse_csv_floats, parse_csv_ints
+
 
 @dataclass(frozen=True)
 class ProjectedState:
@@ -318,15 +320,15 @@ def print_summary(metrics: dict[str, Any]) -> None:
         )
 
 
-def _csv_ints(value: str) -> list[int]:
-    values = [int(item.strip()) for item in value.split(",") if item.strip()]
+def _positive_csv_ints(value: str) -> list[int]:
+    values = parse_csv_ints(value)
     if not values or min(values) < 1:
         raise argparse.ArgumentTypeError("expected comma-separated positive integers")
     return values
 
 
-def _csv_floats(value: str) -> list[float]:
-    values = [float(item.strip()) for item in value.split(",") if item.strip()]
+def _nonempty_csv_floats(value: str) -> list[float]:
+    values = parse_csv_floats(value)
     if not values:
         raise argparse.ArgumentTypeError("expected at least one float")
     return values
@@ -340,14 +342,14 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--frames", type=int, default=8)
-    parser.add_argument("--gaussians", type=_csv_ints, default=_csv_ints("8192"))
+    parser.add_argument("--gaussians", type=_positive_csv_ints, default=_positive_csv_ints("8192"))
     parser.add_argument("--height", type=int, default=256)
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--tile-size", type=int, default=16)
     parser.add_argument("--feature-dim", type=int, default=32)
-    parser.add_argument("--radius-px", type=_csv_floats, default=_csv_floats("3.5"))
+    parser.add_argument("--radius-px", type=_nonempty_csv_floats, default=_nonempty_csv_floats("3.5"))
     parser.add_argument("--radius-jitter-px", type=float, default=0.2)
-    parser.add_argument("--motion-px", type=_csv_floats, default=_csv_floats("2.0"))
+    parser.add_argument("--motion-px", type=_nonempty_csv_floats, default=_nonempty_csv_floats("2.0"))
     parser.add_argument("--noise-px", type=float, default=0.25)
     parser.add_argument("--opacity", type=float, default=0.8)
     parser.add_argument("--alpha-threshold", type=float, default=1.0 / 128.0)

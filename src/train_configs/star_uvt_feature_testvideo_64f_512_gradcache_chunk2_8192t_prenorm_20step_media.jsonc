@@ -1,0 +1,62 @@
+{
+  "arch": "star_uvt_feature_overfit",
+  "data": {
+    "video_path": "test_data/test_video_384_128_6fps.mp4",
+    "start_seconds": null,
+    "fps": null,
+    "duration_seconds": null,
+    "image_crop_mode": "center_square",
+    "target_size": 512,
+    "max_frames": 64
+  },
+  "train": {
+    "steps": 20,
+    "lr": 0.02,
+    "device": "mps",
+    "seed": 43,
+    "frame_chunk_size": 2,
+    "require_loss_decrease": true,
+    "require_gradient_flow": true,
+    "require_no_tile_overflow": true
+  },
+  "feature_uvt": {
+    "tube_count": 8192,
+    "feature_dim": 32,
+    "render_mode": "feature_direct_gradcache",
+    "tile_t": 2,
+    "tile_capacity": 128,
+    "alpha_threshold": 0.00392156862745098,
+    "max_alpha": 0.99
+  },
+  "colorize": {
+    "hidden_dim": null,
+    "activation": "sigmoid",
+    "pre_norm": true,
+    "weight_init": "kaiming",
+    "weight_init_gain": 4.0
+  },
+  "output": {
+    "out_json": "outputs/benchmarks/2026-05-19_star_uvt_feature_firstclass_testvideo_64f_512px_8192t_f32_chunk2_gradcache_prenorm_20step_media.json",
+    "contact_sheet": "outputs/media/2026-05-19_star_uvt_feature_firstclass_testvideo_64f_512px_8192t_f32_chunk2_gradcache_prenorm_20step_contact.jpg",
+    "contact_sheet_frames": 8,
+    "contact_sheet_mode": "linspace",
+    "side_by_side_video": "outputs/media/2026-05-19_star_uvt_feature_firstclass_testvideo_64f_512px_8192t_f32_chunk2_gradcache_prenorm_20step_sbs.mp4",
+    "side_by_side_fps": 6.0
+  },
+  "logging": {
+    "wandb_enabled": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "star-uvt-feature-firstclass-testvideo-64f-512px-8192t-f32-chunk2-gradcache-prenorm-20step-media",
+    "wandb_tags": [
+      "star_uvt",
+      "feature_tubes",
+      "firstclass_trainer",
+      "feature_direct_gradcache",
+      "quality_gate",
+      "512px",
+      "pre_norm",
+      "media"
+    ],
+    "wandb_mode": "offline"
+  }
+}

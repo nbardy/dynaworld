@@ -2,20 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import torch
 
+try:
+    from .report_artifacts import ensure_train_path, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import ensure_train_path, write_report_json
 
-ROOT = Path(__file__).resolve().parents[2]
-TRAIN_SRC = ROOT / "src" / "train"
-if str(TRAIN_SRC) not in sys.path:
-    sys.path.insert(0, str(TRAIN_SRC))
-
+ensure_train_path()
 from multicam_video_data import neural_3d_camera_from_poses_bounds
-from train_powerfoam_metal import load_point_cloud_xyz_rgb
+from powerfoam_point_cloud import load_point_cloud_xyz_rgb
 
 
 def load_manifest_record(path: Path, sample_id: str) -> dict[str, Any]:
@@ -178,7 +177,7 @@ def build_anchor_point_cloud(args: argparse.Namespace) -> dict[str, Any]:
         "camera_projection": camera_info,
     }
     summary_path = Path(args.output).with_suffix(".json")
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    write_report_json(summary_path, summary, sort_keys=False)
     return summary
 
 

@@ -4,14 +4,15 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[2]
-PYTHON = ROOT / ".venv" / "bin" / "python"
+from benchmark_bootstrap import ROOT, VENV_PYTHON
+from renderer_benchmark_cli import parse_csv_strings
+
+PYTHON = VENV_PYTHON
 VARIANTS = ROOT / "third_party" / "fast-mac-gsplat" / "variants"
 
 
@@ -209,7 +210,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     by_name = {spec.name: spec for spec in ITERATIONS}
-    requested = [name.strip() for name in args.versions.split(",") if name.strip()]
+    requested = parse_csv_strings(args.versions)
     unknown = sorted(set(requested) - set(by_name))
     if unknown:
         raise ValueError(f"Unknown iterations: {unknown}. Known: {sorted(by_name)}")

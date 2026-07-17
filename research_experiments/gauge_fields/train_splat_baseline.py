@@ -20,7 +20,9 @@ from common import (
     save_side_by_side_mp4,
     scalar_background,
     video_metrics,
+    write_checkpoint,
     write_json,
+    resolve_dynaworld_path,
 )
 from camera import CameraSpec
 from config_utils import apply_defaults, load_config_file, resolved_config, serialize_config_value
@@ -100,13 +102,6 @@ LOGGING_DEFAULTS = {
     "wandb_mode": "online",
     "output_dir": "outputs/gauge_fields/splat_baseline_free_dynamic_3dgs",
 }
-
-
-def resolve_dynaworld_path(path: str | Path) -> Path:
-    value = Path(path)
-    if value.is_absolute():
-        return value
-    return DYNAWORLD_ROOT / value
 
 
 def logit(value: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
@@ -451,7 +446,8 @@ def main() -> None:
     write_json(output_dir / "config.json", serialize_config_value(cfg))
     write_json(output_dir / "logs.json", logs)
     write_json(output_dir / "metrics.json", metrics)
-    torch.save(
+    write_checkpoint(
+        output_dir / "checkpoint.pt",
         {
             "model": model.state_dict(),
             "config": serialize_config_value(cfg),
@@ -466,7 +462,6 @@ def main() -> None:
             "heldout_pose_source": bundle.heldout_pose_source,
             "metrics": metrics,
         },
-        output_dir / "checkpoint.pt",
     )
     save_preview_strip(output_dir / "preview.png", target=video, rendered=rendered["rgb"], alpha=rendered["alpha"])
     save_side_by_side_mp4(output_dir / "side_by_side.mp4", target=video, rendered=rendered["rgb"], fps=bundle.fps)

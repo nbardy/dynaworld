@@ -8,6 +8,11 @@ from typing import Any
 
 import numpy as np
 
+try:
+    from .report_artifacts import write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import write_report_json
+
 
 def _import_cv2():
     try:
@@ -188,8 +193,7 @@ def main() -> None:
         "inputs": {"globs": args.globs, "video_count": len(paths)},
         "ranked": ranked,
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(args.output, payload)
 
     for index, row in enumerate(ranked[: int(args.top)], start=1):
         print(

@@ -7,25 +7,31 @@ import pytest
 import torch
 
 from colorize import FeatureToColor
-from powerfoam_direct import logit_clamped
-from powerfoam_implicit_camera import PowerFoamImplicitCameraDecoder
-from train_dynamic_powerfoam_metal import (
-    DynamicMetalPowerFoamVideo,
-    LOSS_DEFAULTS,
-    TokenDynamicPowerFoamFeatures,
-    apply_training_stage,
-    camera_curriculum_active_frames,
+from dynamic_powerfoam_camera import (
     camera_regularization,
-    init_colorizer_rgb_identity,
     load_teacher_camera_to_world,
-    make_raster_config,
     prefit_camera_decoder_from_teacher,
-    render_features_to_rgb,
-    resolve_config,
-    sample_background,
-    temporal_motion_metrics,
 )
-from train_powerfoam_metal import make_pinhole_rays
+from dynamic_powerfoam_rendering import (
+    render_features_to_rgb,
+    sample_background,
+)
+from dynamic_powerfoam_staging import apply_training_stage, camera_curriculum_active_frames
+from dynamic_powerfoam_metal_config import LOSS_DEFAULTS, resolve_config
+from powerfoam_colorizers import (
+    DYNAMIC_POWERFOAM_COLORIZE_DEFAULTS,
+    build_dynamic_powerfoam_colorizer,
+    init_colorizer_rgb_identity,
+)
+from powerfoam_direct import logit_clamped
+from powerfoam_geometry import make_pinhole_rays
+from powerfoam_implicit_camera import PowerFoamImplicitCameraDecoder
+from powerfoam_raster_config import make_dynamic_powerfoam_metal_raster_config as make_raster_config
+from dynamic_powerfoam_temporal import temporal_motion_metrics
+from dynamic_powerfoam_metal_trainer import (
+    DynamicMetalPowerFoamVideo,
+    TokenDynamicPowerFoamFeatures,
+)
 from research_experiments.dynamic_foam.verify_dynamic_powerfoam_geometry_run import check_summary
 
 
@@ -649,6 +655,37 @@ def test_feature_colorizer_identity_and_background_composition() -> None:
         eps=1.0e-6,
     )
     assert torch.allclose(empty, background, atol=1.0e-6)
+
+
+def test_dynamic_powerfoam_colorizer_builder_gates_on_feature_mode() -> None:
+    cfg = {
+        "model": {"dynamic_mode": "rbf", "feature_dim": 8},
+        "colorize": dict(DYNAMIC_POWERFOAM_COLORIZE_DEFAULTS),
+    }
+
+    assert (
+        build_dynamic_powerfoam_colorizer(
+            cfg,
+            device=torch.device("cpu"),
+            feature_dynamic_mode="token_rbf_features",
+        )
+        is None
+    )
+
+    cfg["model"]["dynamic_mode"] = "token_rbf_features"
+    colorizer = build_dynamic_powerfoam_colorizer(
+        cfg,
+        device=torch.device("cpu"),
+        feature_dynamic_mode="token_rbf_features",
+    )
+
+    assert colorizer is not None
+    assert colorizer.hidden_dim is None
+    assert colorizer.pre_norm is None
+    weights = colorizer.net.weight.detach()
+    assert float(weights[0, 0, 0, 0]) == 1.0
+    assert float(weights[1, 1, 0, 0]) == 1.0
+    assert float(weights[2, 2, 0, 0]) == 1.0
 
 
 def test_rgb_direct_background_composition_uses_unpremultiplied_color() -> None:

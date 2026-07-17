@@ -7,7 +7,6 @@ belongs in ``sequence_data.py``.
 """
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +15,8 @@ from typing import Any
 import torch
 
 from camera import CameraSpec, build_look_at_camera_to_world
-from multicam_val_data import load_multicam_val_camera_frames, load_multicam_val_manifest
+from json_io import load_json
+from multicam_val_data import ImageSizeLike, load_multicam_val_camera_frames, load_multicam_val_manifest
 from runtime_types import SequenceData
 from sequence_data import normalize_frame_times
 
@@ -130,7 +130,7 @@ def rodrigues_matrix(axis_angle: list[float] | tuple[float, ...], device: torch.
 
 def deepview_models_by_name(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
     models_path = Path(record["models_path"])
-    models = json.loads(models_path.read_text(encoding="utf-8"))
+    models = load_json(models_path)
     return {str(model["name"]): model for model in models}
 
 
@@ -247,7 +247,7 @@ def camxtime_camera_data_path(record: dict[str, Any]) -> Path:
 
 
 def load_camxtime_camera_data(record: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(camxtime_camera_data_path(record).read_text(encoding="utf-8"))
+    return load_json(camxtime_camera_data_path(record))
 
 
 def camxtime_intrinsics(camera_data: dict[str, Any]) -> dict[str, Any]:
@@ -505,7 +505,7 @@ def aist_camera_from_setting(
             f"Rebuild the manifest with src/dataset_pipeline/multicam_val.py "
             f"after running the download-aist-cameras stage."
         )
-    params = json.loads(Path(setting_path).read_text(encoding="utf-8"))
+    params = load_json(setting_path)
     by_name = {str(item["name"]): item for item in params}
     if camera_name not in by_name:
         raise KeyError(
@@ -917,7 +917,7 @@ def vivo_camera_from_calibration(
             f"Add the canonical-frame transform composition in "
             f"vivo_camera_from_calibration before using this scene."
         )
-    payload = json.loads(Path(calibration_path).read_text(encoding="utf-8"))
+    payload = load_json(calibration_path)
     cameras = payload.get("cameras") or {}
     if camera_name not in cameras:
         raise KeyError(
@@ -1134,7 +1134,7 @@ def load_camera_video(
     record: dict[str, Any],
     camera_name: str,
     *,
-    target_size: int,
+    target_size: ImageSizeLike,
     device: torch.device,
     frame_count: int | None = None,
 ) -> torch.Tensor:
@@ -1402,7 +1402,7 @@ def load_multicam_video_bundle(
     *,
     data_cfg: dict[str, Any],
     camera_cfg: dict[str, Any],
-    target_size: int,
+    target_size: ImageSizeLike,
     device: torch.device,
 ) -> MulticamVideoBundle:
     record = select_multicam_record(data_cfg)

@@ -5,8 +5,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from .report_artifacts import PROJECT_ROOT
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import PROJECT_ROOT
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = PROJECT_ROOT
 SELECTED_BENCHMARK = (
     ROOT
     / "outputs/benchmarks/powerfoam_metal_height_sv_texel_surface_raytrace_cech_aabb_4k_train_normaldistance_median_2026-05-03.json"

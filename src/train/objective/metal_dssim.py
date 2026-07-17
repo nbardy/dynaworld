@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import torch
 
+from external_paths import ensure_module_path, third_party_path
 
 FAST_MAC_V12A_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
+    third_party_path("fast-mac-gsplat")
     / "variants"
     / "v12a_fused_colorize_l1_no_norm"
 )
@@ -17,19 +13,11 @@ FAST_MAC_V12A_DIR = (
 
 def _ensure_v12a_on_path() -> None:
     package_name = "torch_gsplat_bridge_v12a_fused_colorize_l1_no_norm"
-    if not FAST_MAC_V12A_DIR.exists():
-        raise RuntimeError(f"fast-mac v12a directory not found: {FAST_MAC_V12A_DIR}")
-    existing_module = sys.modules.get(package_name)
-    if existing_module is not None:
-        origin_raw = getattr(existing_module, "__file__", None)
-        if origin_raw is not None:
-            origin = Path(origin_raw).resolve()
-            if FAST_MAC_V12A_DIR.resolve() not in origin.parents:
-                raise RuntimeError(
-                    f"{package_name!r} is already imported from {origin}, not requested v12a directory."
-                )
-    if str(FAST_MAC_V12A_DIR) not in sys.path:
-        sys.path.insert(0, str(FAST_MAC_V12A_DIR))
+    ensure_module_path(
+        package_name,
+        FAST_MAC_V12A_DIR,
+        missing_message=f"fast-mac v12a directory not found: {FAST_MAC_V12A_DIR}",
+    )
 
 
 def _metal_dssim_forward_grad(

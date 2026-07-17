@@ -23,6 +23,7 @@ from common import (
     scalar_background,
     tensor_to_uint8_image,
     video_metrics,
+    write_checkpoint,
     write_json,
 )
 from config_utils import apply_defaults, load_config_file, path_or_none, resolved_config, serialize_config_value
@@ -44,7 +45,8 @@ from incidence import (
     validate_incidence_mode,
 )
 from sequence_data import load_uncalibrated_sequence, select_window_indices
-from train_logging import build_validation_video_payload, make_preview_image, make_wandb_video
+from train_logging import finish_wandb_run, log_wandb_payload
+from wandb_media import build_validation_video_payload, make_preview_image, make_wandb_video
 
 
 DEFAULT_CONFIG_PATH = "src/train_configs/local_mac_gauge_fields_material_surfel_128_16f_512el.jsonc"
@@ -1730,7 +1732,7 @@ def hwc_video_to_chw(video: torch.Tensor) -> torch.Tensor:
 def wandb_log_training_logs(logs: list[dict[str, float]]) -> None:
     for log in logs:
         step = int(log["step"])
-        wandb.log(
+        log_wandb_payload(
             {
                 "Loss": log["loss"],
                 "Loss/RGBL1": log["rgb_l1"],
@@ -2150,7 +2152,7 @@ def main() -> None:
 
         if wandb_enabled:
             wandb_log_training_logs(logs)
-            wandb.log(
+            log_wandb_payload(
                 wandb_final_payload(
                     video=video,
                     rendered=rendered["rgb"],
@@ -2161,13 +2163,14 @@ def main() -> None:
             )
     finally:
         if wandb_enabled:
-            wandb.finish()
+            finish_wandb_run()
 
     output_dir.mkdir(parents=True, exist_ok=True)
     write_json(output_dir / "config.json", serialize_config_value(cfg))
     write_json(output_dir / "logs.json", logs)
     write_json(output_dir / "metrics.json", metrics)
-    torch.save(
+    write_checkpoint(
+        output_dir / "checkpoint.pt",
         {
             "model": model.state_dict(),
             "K": K.detach().cpu(),
@@ -2183,7 +2186,6 @@ def main() -> None:
             "config": serialize_config_value(cfg),
             "metrics": metrics,
         },
-        output_dir / "checkpoint.pt",
     )
     save_preview_strip(
         output_dir / "preview.png",

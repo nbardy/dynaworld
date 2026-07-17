@@ -2,37 +2,33 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 
-ROOT = Path(__file__).resolve().parents[2]
-TRAIN_ROOT = ROOT / "src" / "train"
-if str(TRAIN_ROOT) not in sys.path:
-    sys.path.insert(0, str(TRAIN_ROOT))
-
+import benchmark_bootstrap
+from benchmark_compare import grad_diff_stats, max_tensor_diff, seed_everything, tensor_diff_stats
+from benchmark_gradients import module_parameter_grads, sequence_leaf_grads
+from fixed_render_cases import prepare_heldout_fixed_render_case
+from config_utils import load_config_file
 from objective.types import BackgroundSample, RasterizedView
 from pipeline.render import gaussian_sequence_slice
 from runtime_types import GaussianSequence
-from trainer_phase_benchmark import (
+from trainer_capabilities import trainer_uses_multicam_phase
+from trainer_registry import instantiate_trainer_for_config
+from fixed_render_graph import (
     FixedRenderCase,
     FixedRenderChunk,
     PhaseTimer,
-    _background_for_chunk,
+    background_for_chunk,
+    clone_sequence_for_fixed_render,
     fast_mac_project_and_rasterize,
     prepare_fixed_render_case,
-    trainer_for_config,
 )
-from fixed_render_variant_parity import (
-    _diff_stats,
-    _max_diff,
-    _prepare_heldout_fixed_render_case,
-    _seed_everything,
-)
-from config_utils import load_config_file
+from train_artifacts import write_json
+from train_logging import finish_wandb_run
 
 
 @dataclass(frozen=True)
@@ -42,47 +38,6 @@ class FullChunkSpec:
     sequence: GaussianSequence
     target: Any
     background: BackgroundSample
-
-
-def _clone_sequence_for_grad(sequence: GaussianSequence) -> GaussianSequence:
-    def leaf(tensor: torch.Tensor) -> torch.Tensor:
-        return tensor.detach().clone().requires_grad_(True)
-
-    return GaussianSequence(
-        xyz=leaf(sequence.xyz),
-        scales=leaf(sequence.scales),
-        quats=leaf(sequence.quats),
-        opacities=leaf(sequence.opacities),
-        rgbs=leaf(sequence.rgbs),
-        cameras=sequence.cameras,
-        camera_state=None,
-        auxiliary=sequence.auxiliary,
-    )
-
-
-def _sequence_grads(sequence: GaussianSequence) -> dict[str, torch.Tensor]:
-    return {
-        "xyz": torch.zeros_like(sequence.xyz) if sequence.xyz.grad is None else sequence.xyz.grad.detach().clone(),
-        "scales": torch.zeros_like(sequence.scales)
-        if sequence.scales.grad is None
-        else sequence.scales.grad.detach().clone(),
-        "quats": torch.zeros_like(sequence.quats)
-        if sequence.quats.grad is None
-        else sequence.quats.grad.detach().clone(),
-        "opacities": torch.zeros_like(sequence.opacities)
-        if sequence.opacities.grad is None
-        else sequence.opacities.grad.detach().clone(),
-        "rgbs": torch.zeros_like(sequence.rgbs) if sequence.rgbs.grad is None else sequence.rgbs.grad.detach().clone(),
-    }
-
-
-def _colorize_grads(trainer) -> dict[str, torch.Tensor | None]:
-    if trainer.colorize is None:
-        return {}
-    return {
-        name: None if param.grad is None else param.grad.detach().clone()
-        for name, param in trainer.colorize.named_parameters()
-    }
 
 
 def _chunk_key(chunk: FixedRenderChunk) -> str:
@@ -137,7 +92,7 @@ def _split_fixed_case(trainer, fixed_case: FixedRenderCase, *, temporal_chunk_si
                 FixedRenderChunk(
                     sequence=chunk_sequence,
                     target=chunk_target,
-                    background=_background_for_chunk(background, chunk_start=chunk_start, chunk_end=chunk_end),
+                    background=background_for_chunk(background, chunk_start=chunk_start, chunk_end=chunk_end),
                 )
             )
     return FixedRenderCase(
@@ -221,12 +176,12 @@ def _run_backward_mode(
     losses = []
     sequences: list[tuple[FixedRenderChunk, GaussianSequence]] = []
     for chunk in fixed_case.chunks:
-        sequence = _clone_sequence_for_grad(chunk.sequence)
+        sequence = clone_sequence_for_fixed_render(chunk.sequence, freeze_colors=False)
         loss = _render_loss(trainer, sequence, chunk, fixed_case)
         total_loss += float(loss.detach().cpu())
         if mode == "chunked":
             loss.backward()
-            _accumulate_chunk_grads(aggregated_grads, specs, chunk, _sequence_grads(sequence))
+            _accumulate_chunk_grads(aggregated_grads, specs, chunk, sequence_leaf_grads(sequence, missing="zero", clone=True))
         elif mode == "batched":
             losses.append(loss)
             sequences.append((chunk, sequence))
@@ -235,8 +190,8 @@ def _run_backward_mode(
     if mode == "batched":
         sum(losses).backward()
         for chunk, sequence in sequences:
-            _accumulate_chunk_grads(aggregated_grads, specs, chunk, _sequence_grads(sequence))
-    colorize_grads = _colorize_grads(trainer)
+            _accumulate_chunk_grads(aggregated_grads, specs, chunk, sequence_leaf_grads(sequence, missing="zero", clone=True))
+    colorize_grads = module_parameter_grads(trainer.colorize)
     trainer.optimizer.zero_grad(set_to_none=True)
     if trainer.colorize is not None:
         trainer.colorize.zero_grad(set_to_none=True)
@@ -255,22 +210,12 @@ def _nested_grad_diff(
     for key in sorted(set(base) | set(candidate)):
         rows[key] = {}
         for name in sorted(set(base.get(key, {})) | set(candidate.get(key, {}))):
-            rows[key][name] = _diff_stats(base.get(key, {}).get(name), candidate.get(key, {}).get(name))
+            rows[key][name] = tensor_diff_stats(base.get(key, {}).get(name), candidate.get(key, {}).get(name))
     return rows
 
 
 def _flat_max_nested(diff: dict[str, dict[str, dict[str, Any]]]) -> float:
     return max((float(row.get("max_abs") or 0.0) for by_name in diff.values() for row in by_name.values()), default=0.0)
-
-
-def _grad_diff_stats(
-    base: dict[str, torch.Tensor | None],
-    candidate: dict[str, torch.Tensor | None],
-) -> dict[str, dict[str, Any]]:
-    rows = {}
-    for name in sorted(set(base) | set(candidate)):
-        rows[name] = _diff_stats(base.get(name), candidate.get(name))
-    return rows
 
 
 def main() -> None:
@@ -285,23 +230,23 @@ def main() -> None:
     if int(args.temporal_chunk_size) < 1:
         raise ValueError("--temporal-chunk-size must be >= 1.")
 
-    _seed_everything(int(args.seed))
-    trainer = trainer_for_config(load_config_file(args.config))
-    multicam = trainer.__class__.__name__ == "MulticamPrecomputedFeatureImplicitTrainer"
+    seed_everything(int(args.seed))
+    trainer = instantiate_trainer_for_config(load_config_file(args.config), args.config)
+    multicam = trainer_uses_multicam_phase(trainer)
     if args.target == "heldout":
-        full_case = _prepare_heldout_fixed_render_case(trainer)
+        full_case = prepare_heldout_fixed_render_case(trainer)
     else:
         full_case = prepare_fixed_render_case(trainer, multicam=multicam)
     chunked_case = _split_fixed_case(trainer, full_case, temporal_chunk_size=int(args.temporal_chunk_size))
     specs = _full_specs(full_case)
 
-    _seed_everything(int(args.seed))
+    seed_everything(int(args.seed))
     batched = _run_backward_mode(trainer, full_case, specs=specs, mode="batched")
-    _seed_everything(int(args.seed))
+    seed_everything(int(args.seed))
     chunked = _run_backward_mode(trainer, chunked_case, specs=specs, mode="chunked")
 
     sequence_grad_diff = _nested_grad_diff(batched["sequence_grads"], chunked["sequence_grads"])
-    colorize_grad_diff = _grad_diff_stats(batched["colorize_grads"], chunked["colorize_grads"])
+    colorize_grad_diff = grad_diff_stats(batched["colorize_grads"], chunked["colorize_grads"])
     payload = {
         "config": str(args.config),
         "seed": int(args.seed),
@@ -313,18 +258,15 @@ def main() -> None:
         "chunked_loss": chunked["loss"],
         "loss_abs_diff": abs(float(batched["loss"]) - float(chunked["loss"])),
         "max_sequence_grad_abs_diff": _flat_max_nested(sequence_grad_diff),
-        "max_colorize_grad_abs_diff": _max_diff(colorize_grad_diff),
+        "max_colorize_grad_abs_diff": max_tensor_diff(colorize_grad_diff),
         "sequence_grad_diff": sequence_grad_diff,
         "colorize_grad_diff": colorize_grad_diff,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     if args.json_output is not None:
-        args.json_output.parent.mkdir(parents=True, exist_ok=True)
-        args.json_output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        write_json(args.json_output, payload)
 
-    import wandb
-
-    wandb.finish()
+    finish_wandb_run()
 
 
 if __name__ == "__main__":

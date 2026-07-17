@@ -1,0 +1,102 @@
+{
+  // Focused local manifest for a 100-item pretrain pass over longer 64-frame
+  // single-view video windows. This only indexes existing local media; it does
+  // not copy videos or launch training.
+  "dataset_name": "dynaworld_single_video_pretrain_100_64f_v0",
+  "output_dir": "data/single_video_pretrain/dynaworld_single_video_pretrain_100_64f_v0",
+  "seed": 20260515,
+  "target_train_items": 100,
+  "target_eval_items": 0,
+
+  "window": {
+    "frame_count": 64,
+    "fps": "natural",
+    "duration_seconds": null,
+    "stride_seconds": 1.0,
+    "target_size": 128
+  },
+
+  "heldout_reference_manifests": [
+    {
+      "path": "data/youtube_scene_distinct/clip_sets/youtube_scene_distinct_30_256_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["test"],
+      "heldout_path_keys": ["source_path", "video_path"]
+    },
+    {
+      "path": "data/youtube_curated_spans/clip_sets/youtube_curated_spans_64_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["test"],
+      "heldout_path_keys": ["source_path", "video_path"]
+    },
+    {
+      "path": "data/clip_sets/local_mac_30_64_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["test"],
+      "heldout_path_keys": ["source_path", "video_path"]
+    },
+    {
+      "path": "data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["val"],
+      "heldout_path_keys": ["target_video_path"],
+      "heldout_list_path_keys": ["heldout_video_paths"]
+    },
+    {
+      "path": "data/multicam_val/clip_sets/multicam_val_v1_chunked_128_4fps_16f/manifest.jsonl",
+      "heldout_splits": ["val"],
+      "heldout_path_keys": ["target_video_path"],
+      "heldout_list_path_keys": ["heldout_video_paths"]
+    },
+    {
+      "path": "src/dataset_configs/multicam_train2_holdout1_5sample_128_4fps_16f_manifest.jsonl",
+      "heldout_splits": ["train2_holdout1"],
+      "heldout_path_keys": ["target_video_path"],
+      "heldout_list_path_keys": ["heldout_video_paths"]
+    }
+  ],
+
+  "frame_clip_manifests": [],
+
+  "single_view_video_roots": [
+    {
+      "label": "youtube_scene_distinct_raw_64f",
+      "family": "youtube_video_window",
+      "root": "data/youtube_scene_distinct/raw",
+      "glob": "*.mp4",
+      "split": "train",
+      "stride_seconds": 2.0,
+      "max_windows_per_video": 4,
+      "max_train_records": 80
+    },
+    {
+      "label": "youtube_scene_distinct_segments_64f",
+      "family": "youtube_video_window",
+      "root": "data/youtube_scene_distinct/segments",
+      "glob": "*.mp4",
+      "split": "train",
+      "stride_seconds": 1.0,
+      "max_windows_per_video": 2,
+      "max_train_records": 40
+    },
+    {
+      "label": "youtube_curated_spans_raw_64f",
+      "family": "youtube_video_window",
+      "root": "data/youtube_curated_spans/raw",
+      "glob": "*.mp4",
+      "split": "train",
+      "stride_seconds": 1.0,
+      "max_windows_per_video": 6,
+      "max_train_records": 80
+    },
+    {
+      "label": "youtube_high_motion_smokes_64f",
+      "family": "youtube_video_window",
+      "root": "data/youtube_curated_spans/high_motion_smokes",
+      "glob": "*.mp4",
+      "split": "train",
+      "stride_seconds": 1.0,
+      "max_windows_per_video": 4,
+      "max_train_records": 16
+    }
+  ],
+
+  "multicam_manifests": [],
+  "blender_sequence_roots": []
+}

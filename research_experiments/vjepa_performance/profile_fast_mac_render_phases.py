@@ -1,69 +1,43 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import statistics
-import sys
-import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import torch
-import wandb
 
+from vjepa_benchmark_common import (
+    ROOT,
+    apply_video_benchmark_shape,
+    effective_splat_count,
+    quiet_training_logging,
+    set_total_splat_count,
+    sync_torch_device as sync,
+    timed,
+    timing_stats,
+)
 
-ROOT = Path(__file__).resolve().parents[2]
-os.chdir(ROOT)
-sys.path.insert(0, str(ROOT / "src" / "train"))
-
-from camera import CameraSpec  # noqa: E402
-from config_utils import load_config_file  # noqa: E402
-from pipeline.render import gaussian_sequence_slice  # noqa: E402
-from renderers.fast_mac import (  # noqa: E402
+from camera import CameraSpec
+from config_utils import load_config_file
+from pipeline.render import gaussian_sequence_slice
+from renderers.fast_mac import (
     FastMacRendererConfig,
-    _ensure_fast_mac_v5_features_on_path,
-    _ensure_fast_mac_v5_on_path,
-    _make_v5_config,
-    _make_v5_features_config,
+    _rasterize_features_projected,
+    _rasterize_rgb_projected,
     project_for_fast_mac_batch,
 )
-from rendering import _resolve_camera_projection_mode, camera_for_viewport  # noqa: E402
-from runtime_types import GaussianSequence  # noqa: E402
-from train_video_token_implicit_dynamic import trainer_class_for_config  # noqa: E402
+from rendering import _resolve_camera_projection_mode, camera_for_viewport
+from runtime_types import GaussianSequence
+from train_artifacts import write_jsonl
+from train_logging import finish_wandb_run, set_default_wandb_mode
+from trainer_registry import instantiate_trainer_for_config
 
 
 DEFAULT_CONFIGS = [
     ROOT / "src/train_configs/local_mac_compare_free_splats_16f_implicit_camera_128_fast_mac_8192splats.jsonc",
     ROOT / "src/train_configs/local_mac_compare_unconditioned_tokens_16f_implicit_camera_128_fast_mac_8192splats.jsonc",
 ]
-
-
-def sync(device: torch.device) -> None:
-    if device.type == "cuda" and torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif device.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
-        torch.mps.synchronize()
-
-
-def timed(name: str, device: torch.device, fn: Callable[[], Any]) -> tuple[str, float, Any]:
-    sync(device)
-    start = time.perf_counter()
-    value = fn()
-    sync(device)
-    return name, time.perf_counter() - start, value
-
-
-def summarize(values: list[float]) -> dict[str, float]:
-    if not values:
-        return {}
-    return {
-        "mean": float(statistics.mean(values)),
-        "median": float(statistics.median(values)),
-        "min": float(min(values)),
-        "max": float(max(values)),
-    }
 
 
 def prepare_config(
@@ -75,27 +49,17 @@ def prepare_config(
     amp_mode: str,
 ) -> dict[str, Any]:
     cfg = deepcopy(base_cfg)
-    cfg["model"]["size"] = int(render_size)
-    cfg["model"]["train_frame_count"] = int(clip_length)
-    if splat_count is not None:
-        tokens = int(cfg["model"]["tokens"])
-        if int(splat_count) % tokens != 0:
-            raise ValueError(f"splat_count={splat_count} must be divisible by model.tokens={tokens}.")
-        cfg["model"]["gaussians_per_token"] = int(splat_count) // tokens
-    cfg["render"]["render_size"] = int(render_size)
-    cfg["train"]["steps"] = 1
+    apply_video_benchmark_shape(cfg, render_size=render_size, clip_length=clip_length, steps=1)
+    set_total_splat_count(cfg, splat_count)
     if amp_mode == "off":
         cfg["train"]["amp"] = False
     else:
         cfg["train"]["amp"] = True
         cfg["train"]["amp_dtype"] = amp_mode
-    cfg["logging"]["log_every"] = 1_000_000
-    cfg["logging"]["image_log_every"] = 1_000_000
-    cfg["logging"]["video_log_every"] = 1_000_000
-    cfg["logging"]["always_log_last_step"] = False
+    quiet_training_logging(cfg)
     cfg["logging"]["wandb_run_name"] = (
         f"fast-mac-phase-profile-{cfg['model']['variant']}-r{render_size}-f{clip_length}-"
-        f"g{cfg['model']['tokens'] * cfg['model']['gaussians_per_token']}-{amp_mode}"
+        f"g{effective_splat_count(cfg)}-{amp_mode}"
     )
     return cfg
 
@@ -177,28 +141,27 @@ def rasterize_projected(
         fallback_alpha_threshold=float(cfg["render"]["alpha_threshold"]),
     )
     if feature_dim == 3:
-        _ensure_fast_mac_v5_on_path()
-        from torch_gsplat_bridge_v5 import rasterize_projected_gaussians
-
-        return rasterize_projected_gaussians(
+        return _rasterize_rgb_projected(
             means2d,
             conics,
             colors,
             opacities,
             depths,
-            _make_v5_config(config, render_size, render_size),
+            config,
+            render_size,
+            render_size,
         )
 
-    _ensure_fast_mac_v5_features_on_path()
-    from torch_gsplat_bridge_v5_features import rasterize_projected_gaussians as rasterize_v5_features
-
-    return rasterize_v5_features(
+    return _rasterize_features_projected(
         means2d,
         conics,
         colors,
         opacities,
         depths,
-        _make_v5_features_config(config, render_size, render_size, feature_dim),
+        config,
+        render_size,
+        render_size,
+        feature_dim,
     )
 
 
@@ -382,7 +345,7 @@ def run_case(
         splat_count=splat_count,
         amp_mode=amp_mode,
     )
-    trainer = trainer_class_for_config(cfg)(cfg)
+    trainer = instantiate_trainer_for_config(cfg, config_path)
     rows: list[dict[str, float]] = []
     try:
         for _ in range(warmup):
@@ -391,7 +354,7 @@ def run_case(
         for _ in range(steps):
             rows.append(profile_step(trainer))
     finally:
-        wandb.finish()
+        finish_wandb_run()
 
     timing_keys = [key for key in rows[0] if key != "loss"] if rows else []
     result = {
@@ -405,7 +368,7 @@ def run_case(
         "gaussians": int(trainer.effective_gaussians),
         "steps": int(steps),
         "warmup": int(warmup),
-        "timings": {key: summarize([row[key] for row in rows]) for key in timing_keys},
+        "timings": {key: timing_stats([row[key] for row in rows]) for key in timing_keys},
         "last_loss": rows[-1]["loss"] if rows else None,
         "low_precision_projected_input": low_precision,
     }
@@ -441,7 +404,7 @@ def main() -> None:
     if args.steps < 1 or args.warmup < 0:
         raise SystemExit("--steps must be >= 1 and --warmup must be >= 0")
 
-    os.environ.setdefault("WANDB_MODE", "disabled")
+    set_default_wandb_mode("disabled", silent=None)
     config_paths = args.config or DEFAULT_CONFIGS
     amp_modes = args.amp_mode or ["off"]
     results = []
@@ -460,10 +423,7 @@ def main() -> None:
             results.append(result)
 
     if args.output_jsonl is not None:
-        args.output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-        with args.output_jsonl.open("w", encoding="utf-8") as handle:
-            for result in results:
-                handle.write(json.dumps(result, sort_keys=True) + "\n")
+        write_jsonl(args.output_jsonl, results)
         print(f"wrote {args.output_jsonl}")
 
 

@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import copy
+import json
+from pathlib import Path
+
+import pytest
+
+from research_experiments.star_uvt_feature_tubes.projective_real_video_broad10_quality_tether_report import (
+    DEFAULT_OUT_DIR,
+    LOSS_CURVE_TOLERANCE,
+    assert_real_video_broad10_quality_tether_report,
+    summarize,
+    verify_real_video_broad10_quality_tether_report,
+)
+
+
+def _row(idx: int) -> dict[str, object]:
+    scene_id = f"scene_{idx:02d}_seg_000"
+    return {
+        "scene_id": scene_id,
+        "youtube_id": f"yt_{idx:02d}",
+        "frames": 8,
+        "cadence_case_path": f"cases/{scene_id}_cadence.json",
+        "measured_case_path": f"cases/{scene_id}_measured.json",
+        "case_files_exist": True,
+        "curve_length": 4,
+        "max_abs_loss_curve_delta": 0.0,
+        "max_abs_rgb_loss_curve_delta": 0.0,
+        "start_loss_abs_delta": 0.0,
+        "end_loss_abs_delta": 0.0,
+        "start_psnr_abs_delta": 0.0,
+        "end_psnr_abs_delta": 0.0,
+        "measured_loss_decrease": 0.01,
+        "cadence_loss_decrease": 0.01,
+        "measured_psnr_gain": 0.05,
+        "cadence_psnr_gain": 0.05,
+        "measured_end_psnr": 8.0,
+        "cadence_end_psnr": 8.0,
+        "measured_end_loss": 0.2,
+        "cadence_end_loss": 0.2,
+        "measured_pass": True,
+        "cadence_pass": True,
+        "missing_gradient_flags": [],
+        "row_errors": [],
+    }
+
+
+def _valid_report() -> dict[str, object]:
+    rows = [_row(idx) for idx in range(10)]
+    report: dict[str, object] = {
+        "status": "ok",
+        "benchmark": "star_uvt_projective_real_video_broad10_quality_tether",
+        "base_domain": "saved broad10 trainer case payloads",
+        "theory_contract": (
+            "This broad10 report does not prove broad media acceptance and does not prove timing acceptance. "
+            "It tethers the measured live-cache projective-interval path to the cadence full-rebuild reference."
+        ),
+        "source_trainer_report": "broad10_trainer.json",
+        "source_trainer_verifier_errors": [],
+        "source_trainer_summary": {
+            "distinct_youtube_id_count": 10,
+            "row_count": 20,
+            "all_measured_loss_matches_cadence": True,
+        },
+        "case_dir": "cases",
+        "loss_curve_tolerance": LOSS_CURVE_TOLERANCE,
+        "required_gradient_flags": ["center_uv_grad_seen"],
+        "rows": rows,
+    }
+    report["summary"] = summarize(report)
+    return report
+
+
+def test_broad10_quality_tether_accepts_valid_payload() -> None:
+    report = _valid_report()
+
+    assert verify_real_video_broad10_quality_tether_report(report) == []
+    assert_real_video_broad10_quality_tether_report(report)
+    assert report["summary"]["distinct_youtube_id_count"] == 10  # type: ignore[index]
+
+
+def test_broad10_quality_tether_rejects_source_count_regression() -> None:
+    report = _valid_report()
+    report["rows"].pop()  # type: ignore[index]
+    report["summary"] = summarize(report)  # type: ignore[arg-type]
+
+    errors = verify_real_video_broad10_quality_tether_report(report)
+
+    assert any("at least 10 distinct YouTube ids" in error for error in errors)
+
+
+def test_broad10_quality_tether_rejects_loss_curve_delta() -> None:
+    report = _valid_report()
+    report["rows"][0]["max_abs_loss_curve_delta"] = 1.0e-4  # type: ignore[index]
+    report["summary"] = summarize(report)  # type: ignore[arg-type]
+
+    errors = verify_real_video_broad10_quality_tether_report(report)
+
+    assert any("measured loss curve must match cadence" in error for error in errors)
+
+
+def test_broad10_quality_tether_accepts_float32_tick_delta() -> None:
+    report = _valid_report()
+    report["rows"][0]["max_abs_loss_curve_delta"] = 1.5e-8  # type: ignore[index]
+    report["rows"][0]["max_abs_rgb_loss_curve_delta"] = 1.5e-8  # type: ignore[index]
+    report["summary"] = summarize(report)  # type: ignore[arg-type]
+
+    assert verify_real_video_broad10_quality_tether_report(report) == []
+
+
+def test_broad10_quality_tether_rejects_missing_gradient_flag() -> None:
+    report = _valid_report()
+    report["rows"][1]["missing_gradient_flags"] = ["raw_precision_grad_seen"]  # type: ignore[index]
+    report["summary"] = summarize(report)  # type: ignore[arg-type]
+
+    errors = verify_real_video_broad10_quality_tether_report(report)
+
+    assert any("required gradient flags" in error for error in errors)
+
+
+def test_broad10_quality_tether_rejects_stale_summary() -> None:
+    report = copy.deepcopy(_valid_report())
+    report["rows"][0]["end_psnr_abs_delta"] = 0.25  # type: ignore[index]
+
+    errors = verify_real_video_broad10_quality_tether_report(report)
+
+    assert any("summary" in error and "mismatch" in error for error in errors)
+
+
+def test_saved_broad10_quality_tether_artifact_satisfies_contract() -> None:
+    summary_json = DEFAULT_OUT_DIR / "summary.json"
+    if not summary_json.exists():
+        pytest.skip(f"missing optional saved artifact: {summary_json}")
+
+    report = json.loads(Path(summary_json).read_text(encoding="utf-8"))
+
+    assert_real_video_broad10_quality_tether_report(report)

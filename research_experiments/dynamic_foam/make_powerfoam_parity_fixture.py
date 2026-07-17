@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,11 @@ from powerfoam_direct import (
     quaternion_frames,
     render_powerfoam_torch,
 )
+
+try:
+    from .report_artifacts import write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import write_report_json
 
 
 UPSTREAM_POWERFOAM_COMMIT = "96392252ebd0059fe6ca98881b62e12295d9242f"
@@ -161,8 +165,7 @@ def main() -> None:
         default=Path("research_experiments/dynamic_foam/fixtures/powerfoam_tiny_height_sv_origin_parity_v1.json"),
     )
     args = parser.parse_args()
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(make_fixture(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(args.output, make_fixture())
     print(args.output)
 
 

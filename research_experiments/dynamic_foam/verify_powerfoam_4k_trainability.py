@@ -2,21 +2,39 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import torch
 
+try:
+    from .report_artifacts import (
+        POWERFOAM_METAL_ROOT,
+        PROJECT_ROOT,
+        ensure_sys_path,
+        ensure_train_path,
+        load_report_json,
+        write_report_json,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import (
+        POWERFOAM_METAL_ROOT,
+        PROJECT_ROOT,
+        ensure_sys_path,
+        ensure_train_path,
+        load_report_json,
+        write_report_json,
+    )
 
-ROOT = Path(__file__).resolve().parents[2]
-POWERFOAM_METAL = ROOT / "third_party/powerfoam-metal"
-if str(POWERFOAM_METAL) not in sys.path:
-    sys.path.insert(0, str(POWERFOAM_METAL))
+
+ROOT = PROJECT_ROOT
+ensure_sys_path(POWERFOAM_METAL_ROOT)
+ensure_train_path()
 
 from torch_powerfoam_metal import FoamRasterConfig, raytrace_power_foam_oriented_height_sv_texel_surface  # noqa: E402
 from torch_powerfoam_metal.random_scene import make_adjacency, make_pinhole_rays, make_random_foam  # noqa: E402
+from train_devices import sync_torch_device  # noqa: E402
 
 
 DEFAULT_ARTIFACT = (
@@ -24,11 +42,6 @@ DEFAULT_ARTIFACT = (
     / "outputs/benchmarks/"
     "powerfoam_metal_height_sv_texel_surface_raytrace_cech_aabb_4k_trainability_1024cells_2026-05-05.json"
 )
-
-
-def sync() -> None:
-    if torch.backends.mps.is_available():
-        torch.mps.synchronize()
 
 
 def make_trainability_scene(
@@ -109,17 +122,17 @@ def generate_artifact(
 
     with torch.no_grad():
         before = trainability_loss(scene, config)
-        sync()
+        sync_torch_device(device)
         loss_before = float(before.detach().cpu())
 
     density_before = scene["densities"].detach().clone()
     t0 = time.perf_counter()
     loss = trainability_loss(scene, config)
-    sync()
+    sync_torch_device(device)
     t1 = time.perf_counter()
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
-    sync()
+    sync_torch_device(device)
     t2 = time.perf_counter()
     grad = scene["densities"].grad.detach().clone()
     optimizer.step()
@@ -128,7 +141,7 @@ def generate_artifact(
     density_update = (scene["densities"].detach() - density_before).abs()
     with torch.no_grad():
         after = trainability_loss(scene, config)
-        sync()
+        sync_torch_device(device)
         loss_after = float(after.detach().cpu())
     t3 = time.perf_counter()
 
@@ -160,7 +173,7 @@ def generate_artifact(
 
 
 def verify_artifact(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = load_report_json(path)
     checks = [
         ("renderer", data.get("renderer") == "powerfoam_metal"),
         ("feature_mode", data.get("feature_mode") == "oriented_height_sv_texel_surface"),
@@ -204,8 +217,7 @@ def main() -> None:
             seed=int(args.seed),
             lr=float(args.lr),
         )
-        artifact.parent.mkdir(parents=True, exist_ok=True)
-        artifact.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_report_json(artifact, data)
     report = verify_artifact(artifact)
     print(json.dumps(report, indent=2, sort_keys=True))
     if not report["ok"] and not args.allow_incomplete:

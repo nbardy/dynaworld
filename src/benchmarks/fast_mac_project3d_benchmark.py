@@ -11,19 +11,18 @@ from pathlib import Path
 import torch
 
 
-BENCHMARK_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BENCHMARK_DIR.parents[1]
-SRC_TRAIN_DIR = PROJECT_ROOT / "src" / "train"
+from benchmark_bootstrap import PROJECT_ROOT, TRAIN_ROOT, ensure_sys_path
+
 FAST_MAC_DIR = PROJECT_ROOT / "third_party" / "fast-mac-gsplat"
 FAST_MAC_V5_DIR = FAST_MAC_DIR / "variants" / "v5"
 FAST_MAC_V8_DIR = FAST_MAC_DIR / "variants" / "v8_project3d"
 FAST_MAC_V9_DIR = FAST_MAC_DIR / "variants" / "v9_project3d_train"
 
-for path in (FAST_MAC_V9_DIR, FAST_MAC_V8_DIR, FAST_MAC_V5_DIR, SRC_TRAIN_DIR):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+ensure_sys_path(FAST_MAC_V9_DIR, FAST_MAC_V8_DIR, FAST_MAC_V5_DIR, TRAIN_ROOT)
 
 from renderers.fast_mac import project_for_fast_mac_batch
+from renderer_benchmark_cli import parse_csv_strings
+from train_devices import sync_torch_device
 from torch_gsplat_bridge_v5 import RasterConfig as RasterConfigV5
 from torch_gsplat_bridge_v5 import rasterize_projected_gaussians as rasterize_v5
 
@@ -60,16 +59,12 @@ class Scene:
 
 
 def sync_mps() -> None:
-    if torch.backends.mps.is_available():
-        torch.mps.synchronize()
+    sync_torch_device(torch.device("mps"))
 
 
 def parse_cases(raw: str) -> list[Case]:
     cases: list[Case] = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
+    for item in parse_csv_strings(raw):
         parts = item.split(":")
         if len(parts) != 4:
             raise ValueError("cases must use name:size:gaussians:batch, comma-separated")

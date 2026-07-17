@@ -65,6 +65,69 @@ def _validate_rgb_shape(name: str, value: torch.Tensor, *, frame_count: int, hei
         raise ValueError(f"{name} must have shape {expected}, got {tuple(value.shape)}")
 
 
+def _validate_alpha_shape(alpha: torch.Tensor, *, frame_count: int, height: int, width: int) -> None:
+    expected = (frame_count, height, width)
+    if tuple(alpha.shape) != expected:
+        raise ValueError(f"alpha must have shape {expected}, got {tuple(alpha.shape)}")
+
+
+def compose_rgb_background_tensor(
+    splat_rgb: torch.Tensor,
+    alpha: torch.Tensor | None,
+    background: BackgroundSample,
+) -> torch.Tensor:
+    if splat_rgb.dim() != 4:
+        raise ValueError(f"splat_rgb must have shape [K,3,H,W], got {tuple(splat_rgb.shape)}")
+    frame_count, _channels, height, width = splat_rgb.shape
+    _validate_rgb_shape("splat_rgb", splat_rgb, frame_count=frame_count, height=height, width=width)
+    if background.feature is not None and background.rgb is not None:
+        raise ValueError("Feature-space and RGB-space backgrounds are mutually exclusive for RGB composition.")
+    if alpha is None or background.rgb is None:
+        return splat_rgb
+    _validate_alpha_shape(alpha, frame_count=frame_count, height=height, width=width)
+    alpha_rgb = alpha.unsqueeze(1).to(device=splat_rgb.device, dtype=splat_rgb.dtype)
+    bg = background.rgb.to(device=splat_rgb.device, dtype=splat_rgb.dtype)
+    return alpha_rgb * splat_rgb + (1.0 - alpha_rgb) * bg
+
+
+def compose_feature_background_tensor(
+    features: torch.Tensor,
+    alpha: torch.Tensor | None,
+    background: BackgroundSample,
+) -> torch.Tensor:
+    if features.dim() != 4:
+        raise ValueError(f"features must have shape [K,F,H,W], got {tuple(features.shape)}")
+    if background.feature is None:
+        return features
+    if alpha is None:
+        raise ValueError("Feature-space background composition requires alpha.")
+    _validate_alpha_shape(
+        alpha,
+        frame_count=int(features.shape[0]),
+        height=int(features.shape[-2]),
+        width=int(features.shape[-1]),
+    )
+    alpha_feature = alpha.unsqueeze(1).to(device=features.device, dtype=features.dtype)
+    feature_bg = background.feature.to(device=features.device, dtype=features.dtype)
+    return features + (1.0 - alpha_feature) * feature_bg
+
+
+def colorize_and_compose_feature_rgb(
+    features: torch.Tensor,
+    alpha: torch.Tensor | None,
+    colorizer: ColorizerProtocol,
+    background: BackgroundSample,
+    *,
+    view_dirs: torch.Tensor | None = None,
+) -> torch.Tensor:
+    feature_input = compose_feature_background_tensor(features, alpha, background)
+    if view_dirs is None:
+        splat_rgb = colorizer(feature_input)
+    else:
+        splat_rgb = colorizer(feature_input, view_dirs=view_dirs)
+    return compose_rgb_background_tensor(splat_rgb, alpha, background)
+
+
 def compose_rgb(
     *,
     rasterized: RasterizedView,
@@ -85,12 +148,14 @@ def compose_rgb(
         splat_rgb = colorized.splat_rgb
         _validate_rgb_shape("ColorizedView.splat_rgb", splat_rgb, frame_count=frame_count, height=height, width=width)
 
-    if rasterized.alpha is None or background.rgb is None:
-        return splat_rgb
+    return compose_rgb_background_tensor(splat_rgb, rasterized.alpha, background)
 
-    alpha = rasterized.alpha.unsqueeze(1).to(device=splat_rgb.device, dtype=splat_rgb.dtype)
-    bg = background.rgb.to(device=splat_rgb.device, dtype=splat_rgb.dtype)
-    return alpha * splat_rgb + (1.0 - alpha) * bg
+
+def compose_feature_background(
+    rasterized: RasterizedView,
+    background: BackgroundSample,
+) -> torch.Tensor:
+    return compose_feature_background_tensor(rasterized.features, rasterized.alpha, background)
 
 
 def validate_rendered_rgb_shape(rendered: RenderedView) -> None:
@@ -129,17 +194,24 @@ class RGBReconObjective:
         with self.profile_section("render/rasterize"):
             return self.rasterizer.rasterize(decoded, target)
 
-    def colorize_view(self, rasterized: RasterizedView) -> ColorizedView | None:
+    def colorize_view(
+        self,
+        rasterized: RasterizedView,
+        background: BackgroundSample | None = None,
+    ) -> ColorizedView | None:
         with self.profile_section("render/colorize"):
+            feature_input = (
+                rasterized.features if background is None else compose_feature_background(rasterized, background)
+            )
             if self.colorizer is None:
-                if rasterized.feature_dim == 3:
-                    return ColorizedView(splat_rgb=rasterized.features, view_dirs=rasterized.view_dirs)
+                if feature_input.shape[1] == 3:
+                    return ColorizedView(splat_rgb=feature_input, view_dirs=rasterized.view_dirs)
                 return None
             if hasattr(self.colorizer, "forward_with_logits"):
-                rgb, logits = self.colorizer.forward_with_logits(rasterized.features, view_dirs=rasterized.view_dirs)
+                rgb, logits = self.colorizer.forward_with_logits(feature_input, view_dirs=rasterized.view_dirs)
                 return ColorizedView(splat_rgb=rgb, logits=logits, view_dirs=rasterized.view_dirs)
             return ColorizedView(
-                splat_rgb=self.colorizer(rasterized.features, view_dirs=rasterized.view_dirs),
+                splat_rgb=self.colorizer(feature_input, view_dirs=rasterized.view_dirs),
                 view_dirs=rasterized.view_dirs,
             )
 
@@ -218,13 +290,13 @@ class RGBReconObjective:
         step: int | None = None,
         retain_target: bool = True,
     ) -> RenderedView:
-        colorized = self.colorize_view(rasterized)
         bg = background or self.background_for_view(
             rasterized,
             phase=phase,
             generator=generator,
             step=step,
         )
+        colorized = self.colorize_view(rasterized, bg)
         target_rgb = None
         if retain_target:
             target_rgb = resize_target_for_render(rasterized.view, render_size=rasterized.render_size)
@@ -260,6 +332,26 @@ class RGBReconObjective:
         target_rgb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         return self.reconstruction_loss_per_image(rendered, target_rgb).mean()
+
+    def require_alpha_for_feature_background(
+        self,
+        rendered: RenderedView,
+        *,
+        context: str = "training",
+    ) -> None:
+        if rendered.phase != "train":
+            return
+        if rendered.features.shape[1] == 3:
+            return
+        if (
+            rendered.background.rgb is None
+            and rendered.background.feature is None
+        ) or rendered.alpha is not None:
+            return
+        raise ValueError(
+            f"F-channel {context} requires alpha-aware render output so background composition is active. "
+            "Got alpha=None; check renderer='fast_mac' and v5_features build."
+        )
 
     def loss_for_rasterized(
         self,

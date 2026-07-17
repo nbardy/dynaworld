@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
-BENCHMARK_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BENCHMARK_DIR.parents[1]
+from benchmark_bootstrap import PROJECT_ROOT, ensure_sys_path
+
 RAW_METAL_DIR = PROJECT_ROOT / "third_party" / "raw-metal-mlx-gsplat"
 
 
@@ -43,8 +41,7 @@ def settings_from_config(config: dict[str, Any]) -> RawMetalSettings:
 def import_raw_metal():
     if not RAW_METAL_DIR.exists():
         raise RawMetalUnavailable(f"raw Metal experiment directory is missing: {RAW_METAL_DIR}")
-    if str(RAW_METAL_DIR) not in sys.path:
-        sys.path.insert(0, str(RAW_METAL_DIR))
+    ensure_sys_path(RAW_METAL_DIR)
     try:
         import mlx.core as mx
         from mlx_projected_gaussian_rasterizer import MetalRasterConfig, make_projected_gaussian_rasterizer

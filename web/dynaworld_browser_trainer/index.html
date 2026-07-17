@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Dynaworld Browser Trainer</title>
+		<link rel="stylesheet" href="./styles.css?v=20260710-converge59" />
+	</head>
+	<body>
+		<div class="app-shell">
+			<aside class="rail">
+				<header class="brand">
+					<h1>Dynaworld Browser Trainer</h1>
+					<p id="datasetName">preloading dataset</p>
+				</header>
+
+				<section class="controls" aria-label="Training controls">
+					<div class="button-row">
+						<button id="runButton" type="button">Start</button>
+						<button id="stepButton" type="button">Step</button>
+						<button id="resetButton" type="button">Reset</button>
+					</div>
+
+					<label class="field">
+						<span>Motion Model</span>
+						<select id="modeSelect">
+							<option value="world_tubes">World Tubes-style shared motion</option>
+							<option value="dynamic_splats">Dynamic splats-style velocity</option>
+						</select>
+					</label>
+
+					<label class="field">
+						<span>Splat Count</span>
+						<input id="splatSlider" type="range" min="96" max="768" step="32" value="768" />
+						<strong id="splatSliderValue">768</strong>
+					</label>
+
+					<label class="field">
+						<span>Preview Time</span>
+						<input id="timeSlider" type="range" min="0" max="1" step="0.001" value="0.35" />
+						<strong id="timeValue">0.350</strong>
+					</label>
+
+					<label class="field toggle-field">
+						<span>Loop Time</span>
+						<input id="timeLoopToggle" type="checkbox" checked />
+					</label>
+
+					<label class="field">
+						<span>Loop Speed</span>
+						<input id="timeSpeedSlider" type="range" min="0.04" max="0.80" step="0.02" value="0.18" />
+						<strong id="timeSpeedValue">0.18x</strong>
+					</label>
+
+					<label class="field">
+						<span>Target View</span>
+						<select id="targetViewSelect">
+							<option value="rgb">RGB target</option>
+							<option value="motion_residual">Motion residual</option>
+							<option value="validation_error">Validation error</option>
+						</select>
+					</label>
+
+					<label class="field">
+						<span>Result View</span>
+						<select id="resultViewSelect">
+							<option value="rgb">RGB result</option>
+							<option value="dynamic_residual">Dynamic layer</option>
+							<option value="alpha_support">Alpha support</option>
+						</select>
+					</label>
+
+					<label class="field">
+						<span>Temporal Support</span>
+						<input id="temporalSlider" type="range" min="0.14" max="0.32" step="0.01" value="0.30" />
+						<strong id="temporalValue">0.30</strong>
+					</label>
+
+					<label class="field">
+						<span>Learning Rate Scale</span>
+						<input id="lrSlider" type="range" min="0.25" max="2" step="0.05" value="1" />
+						<strong id="lrValue">1.00x</strong>
+					</label>
+
+					<label class="field">
+						<span>Samples / Step</span>
+						<input id="samplesSlider" type="range" min="16" max="192" step="8" value="96" />
+						<strong id="samplesValue">96</strong>
+					</label>
+
+					<label class="field">
+						<span>Motion Mix</span>
+						<input id="motionMixSlider" type="range" min="0.50" max="0.95" step="0.05" value="0.95" />
+						<strong id="motionMixValue">95%</strong>
+					</label>
+
+					<label class="field">
+						<span>Static Mix</span>
+						<input id="staticMixSlider" type="range" min="0" max="0.16" step="0.01" value="0.08" />
+						<strong id="staticMixValue">8%</strong>
+					</label>
+
+					<label class="field">
+						<span>Support Guard</span>
+						<input id="supportGuardSlider" type="range" min="0.40" max="0.60" step="0.01" value="0.52" />
+						<strong id="supportGuardValue">52%</strong>
+					</label>
+				</section>
+
+				<section class="stats" aria-label="Training stats">
+					<div>
+						<span>Step</span>
+						<strong id="stepValue">0</strong>
+					</div>
+					<div>
+						<span>Steps/s</span>
+						<strong id="stepRateValue">--</strong>
+					</div>
+					<div>
+						<span>Sample Loss</span>
+						<strong id="lossValue">--</strong>
+					</div>
+					<div>
+						<span>Grid Loss</span>
+						<strong id="gridLossValue">--</strong>
+					</div>
+					<div>
+						<span>Val MAE</span>
+						<strong id="valMaeValue">--</strong>
+					</div>
+					<div>
+						<span>Val PSNR</span>
+						<strong id="valPsnrValue">--</strong>
+					</div>
+					<div>
+						<span>Val SSIM</span>
+						<strong id="valSsimValue">--</strong>
+					</div>
+					<div>
+						<span>Motion Loss</span>
+						<strong id="motionLossValue">--</strong>
+					</div>
+					<div>
+						<span>Motion Cov</span>
+						<strong id="motionCoverageValue">--</strong>
+					</div>
+					<div>
+						<span>Static Cov</span>
+						<strong id="staticCoverageValue">--</strong>
+					</div>
+					<div>
+						<span>Peak Alpha</span>
+						<strong id="motionMaxAlphaValue">--</strong>
+					</div>
+					<div>
+						<span>Active</span>
+						<strong id="activeSplatValue">--</strong>
+					</div>
+					<div>
+						<span>Mean Opac</span>
+						<strong id="meanOpacityValue">--</strong>
+					</div>
+					<div>
+						<span>Mean Radius</span>
+						<strong id="meanRadiusValue">--</strong>
+					</div>
+					<div>
+						<span>Splats</span>
+						<strong id="splatValue">768</strong>
+					</div>
+					<div>
+						<span>Optimizer</span>
+						<strong>Adam</strong>
+					</div>
+					<div>
+						<span>Recycled</span>
+						<strong id="recycledSplatValue">0</strong>
+					</div>
+					<div>
+						<span>Param Delta</span>
+						<strong id="parameterDeltaValue">0</strong>
+					</div>
+					<div>
+						<span>Motion Px</span>
+						<strong id="motionSampleValue">--</strong>
+					</div>
+					<div>
+						<span>Static Px</span>
+						<strong id="staticSampleValue">--</strong>
+					</div>
+					<div>
+						<span>GPU</span>
+						<strong id="gpuValue">pending</strong>
+					</div>
+				</section>
+
+				<section class="status" aria-label="Status">
+					<p id="statusText">Loading preset target.</p>
+				</section>
+			</aside>
+
+			<main class="workbench">
+				<section class="viewport target-pane" aria-label="Target frame">
+					<div class="viewport-title">
+						<span>Target</span>
+						<strong id="targetFrameValue">frame 0</strong>
+					</div>
+					<canvas id="targetCanvas" width="192" height="192"></canvas>
+					<div id="angleStrip" class="angle-strip" aria-label="Camera angle previews">
+						<div class="angle-tile">
+							<div>
+								<span>Source</span>
+								<strong id="sourceViewFrameValue">--</strong>
+							</div>
+							<canvas id="sourceViewCanvas" width="128" height="128"></canvas>
+						</div>
+						<div class="angle-tile">
+							<div>
+								<span>Target</span>
+								<strong id="targetViewFrameValue">--</strong>
+							</div>
+							<canvas id="targetViewCanvas" width="128" height="128"></canvas>
+						</div>
+					</div>
+				</section>
+				<section class="viewport render-pane" aria-label="Current WebGPU render">
+					<div class="viewport-title">
+						<span>WebGPU Result</span>
+						<strong id="fpsValue">-- fps</strong>
+					</div>
+					<canvas id="renderCanvas"></canvas>
+				</section>
+			</main>
+		</div>
+		<script type="module" src="./app.js?v=20260710-converge59"></script>
+	</body>
+</html>

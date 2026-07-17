@@ -3,6 +3,8 @@ from contextlib import nullcontext
 
 import torch
 
+from train_devices import resolve_torch_device
+
 try:
     from torch.nn.attention import SDPBackend, sdpa_kernel
 except ImportError:
@@ -20,7 +22,7 @@ def _device_type(device):
 
 
 def pick_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    return resolve_torch_device("auto", auto_cuda=True, auto_prefer_cuda=True)
 
 
 def configure_fast_attn(device, attention_dtype):

@@ -10,6 +10,14 @@ from typing import Any
 
 import modal
 
+try:
+    from .report_artifacts import write_report_json
+except ImportError:  # pragma: no cover - direct script execution/importlib loading
+    dynamic_foam_dir = Path(__file__).resolve().parent
+    if str(dynamic_foam_dir) not in sys.path:
+        sys.path.insert(0, str(dynamic_foam_dir))
+    from report_artifacts import write_report_json
+
 APP_NAME = "dynaworld-colmap-cli-onnx-check"
 
 
@@ -136,7 +144,7 @@ def main(run_id: str = "latest") -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     result = check_remote_colmap_cli_onnx.remote()
     output = output_dir / "colmap_cli_onnx_check.json"
-    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output, result)
     print(json.dumps({"colmap_cli_onnx_check_ok": result["ok"], "output": str(output)}, indent=2))
     if not result["ok"]:
         raise SystemExit(1)

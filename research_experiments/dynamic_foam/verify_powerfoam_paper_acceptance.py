@@ -5,8 +5,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from .report_artifacts import PROJECT_ROOT, load_report_json, load_report_jsonl
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import PROJECT_ROOT, load_report_json, load_report_jsonl
 
-ROOT = Path(__file__).resolve().parents[2]
+
+ROOT = PROJECT_ROOT
 DEFAULT_MIN_CLEAN_HELDOUT_PSNR = 13.0
 DEFAULT_MIN_CLEAN_HELDOUT_SSIM = 0.15
 
@@ -175,19 +180,10 @@ EX4DGS_OUTPUT = (
 )
 
 
-def load_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(path)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise TypeError(f"{path} must contain a JSON object.")
-    return data
-
-
 def artifact_point_cloud_path(artifact_meta: Path) -> Path | None:
     if not artifact_meta.exists():
         return None
-    artifact = load_json(artifact_meta)
+    artifact = load_report_json(artifact_meta)
     output = Path(str(artifact.get("output", artifact_meta.with_suffix(".ply"))))
     return output if output.is_absolute() else ROOT / output
 
@@ -316,18 +312,11 @@ def relative_path_or_none(path: Path | None) -> str | None:
 
 def load_eval_history(output_dir: Path) -> list[dict[str, Any]]:
     history_path = output_dir / "eval_metrics_history.jsonl"
-    if not history_path.exists():
-        return []
     rows: list[dict[str, Any]] = []
-    for line_number, line in enumerate(history_path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        payload = json.loads(line)
-        if not isinstance(payload, dict):
-            raise TypeError(f"{history_path}:{line_number} must contain a JSON object.")
+    for payload in load_report_jsonl(history_path, missing_ok=True):
         metrics = payload.get("metrics", {})
         if not isinstance(metrics, dict):
-            raise TypeError(f"{history_path}:{line_number} metrics must contain a JSON object.")
+            raise TypeError(f"{history_path} row metrics must contain a JSON object.")
         rows.append({"step": int(payload["step"]), "metrics": metrics})
     return rows
 
@@ -571,9 +560,9 @@ def clean_candidate_metrics(
     min_clean_heldout_psnr: float = DEFAULT_MIN_CLEAN_HELDOUT_PSNR,
     min_clean_heldout_ssim: float = DEFAULT_MIN_CLEAN_HELDOUT_SSIM,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    clean_best = load_json(output_dir / "best_metrics.json")
-    clean_config = load_json(output_dir / "resolved_config.json")
-    clean_artifact = load_json(artifact_meta)
+    clean_best = load_report_json(output_dir / "best_metrics.json")
+    clean_config = load_report_json(output_dir / "resolved_config.json")
+    clean_artifact = load_report_json(artifact_meta)
     step = int(clean_best["step"])
     calibration_mode = str(clean_config.get("render", {}).get("eval_color_calibration", "none"))
     calibration_artifact = output_dir / f"eval_color_calibration_step_{step:04d}.json"
@@ -686,7 +675,7 @@ def audit(
     require_raw_quality: bool = False,
     allow_raw_step0_acceptance: bool = False,
 ) -> dict[str, Any]:
-    ex4dgs_best = load_json(EX4DGS_OUTPUT / "best_metrics.json")
+    ex4dgs_best = load_report_json(EX4DGS_OUTPUT / "best_metrics.json")
 
     candidates = [
         clean_candidate_metrics(
@@ -699,7 +688,7 @@ def audit(
     ]
     clean_metrics, artifact_metrics = max(candidates, key=lambda item: item[0]["heldout_eval_psnr"])
     selected_output_dir = ROOT / clean_metrics["output_dir"]
-    selected_clean_config = load_json(selected_output_dir / "resolved_config.json")
+    selected_clean_config = load_report_json(selected_output_dir / "resolved_config.json")
     post_initial_rows = post_initial_paper_quality_rows(
         selected_output_dir,
         selected_clean_config,

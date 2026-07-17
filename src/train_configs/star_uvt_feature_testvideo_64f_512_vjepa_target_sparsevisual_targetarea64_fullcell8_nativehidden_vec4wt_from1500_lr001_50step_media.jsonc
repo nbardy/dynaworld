@@ -1,0 +1,120 @@
+{
+  "arch": "star_uvt_feature_overfit",
+  "data": {
+    "video_path": "test_data/test_video_384_128_6fps.mp4",
+    "start_seconds": null,
+    "fps": null,
+    "duration_seconds": null,
+    "image_crop_mode": "center_square",
+    "target_size": 512,
+    "max_frames": 64
+  },
+  "features": {
+    "extractor": "vjepa_torchhub",
+    "model_id": "vjepa2_1_vit_base_384",
+    "cache_dir": "outputs/feature_cache/star_uvt_feature_targets/vjepa2_1_vitb_256crop_64f",
+    "sample_cache_key": "star-uvt-vjepa2-1-vitb-256crop-64f-v1",
+    "cache_version": 1,
+    "force_rebake": false,
+    "keep_in_memory": false,
+    "save_dtype": "float16",
+    "torch_dtype": "float32",
+    "layers": ["vjepa_tokens"],
+    "vjepa_feature_dim": 768,
+    "vjepa_pretrained": true,
+    "vjepa_crop_size": 256,
+    "vjepa_checkpoint_url": "https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitb_dist_vitG_384.pt"
+  },
+  "feature_target": {
+    "enabled": true,
+    "layer": "vjepa_tokens",
+    "token_grid_shape": [32, 16, 16],
+    "loss_type": "mse",
+    "loss_weight": 1.0,
+    "rgb_loss_weight": 0.0,
+    "rgb_probe_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_vjepa_rgb_probe_hidden64_lr01_1000step.pt",
+    "rgb_probe_loss_weight": 40.0,
+    "rgb_probe_target_rgb_adapter": "trilinear",
+    "channel_adapter": "truncate_or_pad",
+    "temporal_spatial_adapter": "trilinear",
+    "normalization": "channel_standardize",
+    "materialization": "target_grid",
+    "materialization_chunk_size": 2,
+    "image_vjp_mode": "analytic_sparse_grid_forward_batched"
+  },
+  "sparse_visual": {
+    "enabled": true,
+    "loss_weight": 1.0,
+    "pixel_source": "stratified_patch_grid",
+    "loss_basis": "target_area_mean",
+    "loss_vjp_mode": "native_hidden64_target_area_star_only_vec4_wt",
+    "sample_grid_shape": [64, 64, 64],
+    "patch_shape": [8, 8]
+  },
+  "train": {
+    "steps": 50,
+    "global_step_offset": 1500,
+    "lr": 0.001,
+    "device": "mps",
+    "seed": 43,
+    "frame_chunk_size": 2,
+    "resume_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_sparseforward_batchedvjp_lr001_resume50_from1450_lr005sparse_1500step.pt",
+    "resume_optimizer": false,
+    "resume_colorizer": false,
+    "trace_global_steps": [],
+    "require_loss_decrease": true,
+    "require_gradient_flow": true,
+    "require_no_tile_overflow": true
+  },
+  "feature_uvt": {
+    "tube_count": 8192,
+    "feature_dim": 32,
+    "render_mode": "feature_direct_gradcache_reduce_vec4",
+    "tile_t": 2,
+    "tile_capacity": 128,
+    "alpha_threshold": 0.00392156862745098,
+    "max_alpha": 0.99
+  },
+  "colorize": {
+    "hidden_dim": 64,
+    "activation": "sigmoid",
+    "pre_norm": false,
+    "weight_init": "kaiming",
+    "weight_init_gain": 1.0,
+    "init_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_vjepa_rgb_probe_hidden64_lr01_1000step.pt"
+  },
+  "output": {
+    "out_json": "outputs/benchmarks/2026-05-20_star_uvt_feature_targetgrid_sparsevisual_targetarea64_fullcell8_nativehidden_vec4wt_from1500_lr001_50step_media.json",
+    "checkpoint": "outputs/checkpoints/2026-05-20_star_uvt_feature_targetgrid_sparsevisual_targetarea64_fullcell8_nativehidden_vec4wt_from1500_lr001_50step.pt",
+    "contact_sheet": "outputs/media/2026-05-20_star_uvt_feature_targetgrid_sparsevisual_targetarea64_fullcell8_nativehidden_vec4wt_from1500_lr001_50step_contact.jpg",
+    "contact_sheet_frames": 8,
+    "contact_sheet_mode": "linspace",
+    "side_by_side_video": "outputs/media/2026-05-20_star_uvt_feature_targetgrid_sparsevisual_targetarea64_fullcell8_nativehidden_vec4wt_from1500_lr001_50step_sbs.mp4",
+    "side_by_side_fps": 6.0,
+    "rgb_probe_contact_sheet": "outputs/media/2026-05-20_star_uvt_feature_targetgrid_sparsevisual_targetarea64_fullcell8_nativehidden_vec4wt_from1500_lr001_50step_probe_contact.jpg",
+    "rgb_probe_side_by_side_video": "outputs/media/2026-05-20_star_uvt_feature_targetgrid_sparsevisual_targetarea64_fullcell8_nativehidden_vec4wt_from1500_lr001_50step_probe_sbs.mp4",
+    "rgb_probe_side_by_side_fps": 6.0
+  },
+  "logging": {
+    "wandb_enabled": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "star-uvt-targetgrid-sparsevisual-targetarea64-fullcell8-nativehidden-vec4wt-from1500-lr001-50step",
+    "wandb_tags": [
+      "star_uvt",
+      "feature_tubes",
+      "target_feature",
+      "sparse_visual_vjp",
+      "target_area_mean_visual_basis",
+      "native_hidden64_target_area_vjp",
+      "vec4_wt",
+      "fullcell8",
+      "vjepa_torchhub",
+      "target_grid",
+      "rgb_probe",
+      "from1500",
+      "visual_basis",
+      "50step"
+    ],
+    "wandb_mode": "offline"
+  }
+}

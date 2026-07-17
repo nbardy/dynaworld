@@ -5,22 +5,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def load_json(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise TypeError(f"{path} must contain a JSON object.")
-    return data
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
+try:
+    from .report_artifacts import PROJECT_ROOT, load_report_json, relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import PROJECT_ROOT, load_report_json, relative_to_project as rel, write_report_json
 
 
 def metric(metrics: dict[str, Any], key: str) -> float | None:
@@ -29,8 +17,8 @@ def metric(metrics: dict[str, Any], key: str) -> float | None:
 
 
 def powerfoam_row(output_dir: Path, *, label: str) -> dict[str, Any]:
-    best = load_json(output_dir / "best_metrics.json")
-    config = load_json(output_dir / "resolved_config.json")
+    best = load_report_json(output_dir / "best_metrics.json")
+    config = load_report_json(output_dir / "resolved_config.json")
     metrics = best["metrics"]
     calibration = str(config.get("render", {}).get("eval_color_calibration", "none"))
     raw_psnr = metric(metrics, "uncalibrated_heldout_eval_psnr")
@@ -68,8 +56,8 @@ def powerfoam_row(output_dir: Path, *, label: str) -> dict[str, Any]:
 
 
 def splat_row(output_dir: Path, *, config_path: Path) -> dict[str, Any]:
-    metrics = load_json(output_dir / "metrics.json")
-    config = load_json(output_dir / "config.json")
+    metrics = load_report_json(output_dir / "metrics.json")
+    config = load_report_json(output_dir / "config.json")
     return {
         "label": "matched_free_dynamic_3dgs",
         "representation": "free_dynamic_3dgs",
@@ -127,9 +115,8 @@ def main() -> None:
             "The calibrated PowerFoam row is not raw representation quality; compare raw_heldout_eval_* fields when judging raw PowerFoam.",
         ],
     }
-    output = ROOT / args.output
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output = PROJECT_ROOT / args.output
+    write_report_json(output, report)
     print(json.dumps(report, indent=2, sort_keys=True))
 
 

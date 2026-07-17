@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-from common import DYNAWORLD_ROOT, resolve_dynaworld_path
+from common import DYNAWORLD_ROOT, parse_csv_strings, resolve_dynaworld_path, write_json
 
 
 SUMMARY_COLUMNS = [
@@ -179,7 +179,7 @@ def main() -> None:
         key=lambda row: float(row.get(args.sort_by) or float("-inf")),
         reverse=not bool(args.ascending),
     )
-    columns = [column.strip() for column in args.columns.split(",") if column.strip()]
+    columns = parse_csv_strings(args.columns)
     table = markdown_table(rows, columns)
     print(table)
 
@@ -189,8 +189,7 @@ def main() -> None:
         out_md.write_text(table)
     if args.out_json:
         out_json = resolve_dynaworld_path(args.out_json)
-        out_json.parent.mkdir(parents=True, exist_ok=True)
-        out_json.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
+        write_json(out_json, rows)
 
 
 if __name__ == "__main__":

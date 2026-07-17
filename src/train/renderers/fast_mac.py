@@ -1,97 +1,43 @@
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 
+from external_paths import ensure_module_path, third_party_path
 from renderers.common import MIN_RENDER_DEPTH, project_gaussians_2d, project_gaussians_2d_batch
 from renderers.projection import project_gaussians_2d_camera, project_gaussians_2d_camera_batch
 
 FeatureBackground = float | tuple[float, ...]
 
-FAST_MAC_V5_DIR = Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v5"
-FAST_MAC_V5_FEATURES_DIR = (
-    Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v5_features"
+FAST_MAC_VARIANTS_DIR = third_party_path("fast-mac-gsplat") / "variants"
+
+
+def _fast_mac_variant_path(name: str) -> Path:
+    return FAST_MAC_VARIANTS_DIR / name
+
+
+FAST_MAC_V5_DIR = _fast_mac_variant_path("v5")
+FAST_MAC_V5_SOFTMAX_GS_DIR = _fast_mac_variant_path("v5_softmax_gs")
+FAST_MAC_V5_FEATURES_DIR = _fast_mac_variant_path("v5_features")
+FAST_MAC_V6_REFINED_DIR = _fast_mac_variant_path("v6_refined")
+FAST_MAC_V6_REFINED_FEATURES_DIR = _fast_mac_variant_path("v6_refined_features")
+FAST_MAC_V6_REFINED_FEATURES_F32_REDUCE_DIR = _fast_mac_variant_path("v6_refined_features_f32_reduce")
+FAST_MAC_V6_REFINED_FEATURES_F32_ACCUM_DIR = _fast_mac_variant_path("v6_refined_features_f32_accum")
+FAST_MAC_V6_REFINED_FEATURES_F32_GRADCACHE_DIR = _fast_mac_variant_path("v6_refined_features_f32_gradcache")
+FAST_MAC_V6_REFINED_FEATURES_F32_FIXEDBIN_DIR = _fast_mac_variant_path("v6_refined_features_f32_fixedbin")
+FAST_MAC_V6_REFINED_FEATURES_F32_ZERO_BG_DIR = _fast_mac_variant_path("v6_refined_features_f32_zero_bg")
+FAST_MAC_V9_FEATURES_GRADCACHE_ZERO_BG_DIR = _fast_mac_variant_path("v9_features_gradcache_zero_bg")
+FAST_MAC_V10_FEATURES_GRADCACHE_ZERO_BG_HOSTMETA_DIR = _fast_mac_variant_path(
+    "v10_features_gradcache_zero_bg_hostmeta"
 )
-FAST_MAC_V6_REFINED_DIR = (
-    Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v6_refined"
+FAST_MAC_V11_FEATURES_GRADCACHE_ZERO_BG_HOSTMETA_FIXEDBIN_DIR = _fast_mac_variant_path(
+    "v11_features_gradcache_zero_bg_hostmeta_fixedbin"
 )
-FAST_MAC_V6_REFINED_FEATURES_DIR = (
-    Path(__file__).resolve().parents[3] / "third_party" / "fast-mac-gsplat" / "variants" / "v6_refined_features"
-)
-FAST_MAC_V6_REFINED_FEATURES_F32_REDUCE_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v6_refined_features_f32_reduce"
-)
-FAST_MAC_V6_REFINED_FEATURES_F32_ACCUM_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v6_refined_features_f32_accum"
-)
-FAST_MAC_V6_REFINED_FEATURES_F32_GRADCACHE_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v6_refined_features_f32_gradcache"
-)
-FAST_MAC_V6_REFINED_FEATURES_F32_FIXEDBIN_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v6_refined_features_f32_fixedbin"
-)
-FAST_MAC_V6_REFINED_FEATURES_F32_ZERO_BG_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v6_refined_features_f32_zero_bg"
-)
-FAST_MAC_V9_FEATURES_GRADCACHE_ZERO_BG_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v9_features_gradcache_zero_bg"
-)
-FAST_MAC_V10_FEATURES_GRADCACHE_ZERO_BG_HOSTMETA_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v10_features_gradcache_zero_bg_hostmeta"
-)
-FAST_MAC_V11_FEATURES_GRADCACHE_ZERO_BG_HOSTMETA_FIXEDBIN_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v11_features_gradcache_zero_bg_hostmeta_fixedbin"
-)
-FAST_MAC_V13A_TEMPORAL_RECOMPUTE_STATE_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v13a_temporal_recompute_state"
-)
-FAST_MAC_V13B_RGB_GRAD_HANDOFF_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "third_party"
-    / "fast-mac-gsplat"
-    / "variants"
-    / "v13b_rgb_grad_handoff"
-)
+FAST_MAC_V13A_TEMPORAL_RECOMPUTE_STATE_DIR = _fast_mac_variant_path("v13a_temporal_recompute_state")
+FAST_MAC_V13B_RGB_GRAD_HANDOFF_DIR = _fast_mac_variant_path("v13b_rgb_grad_handoff")
 
 
 def _float_tuple(value: Any, *, field_name: str) -> tuple[float, ...]:
@@ -166,6 +112,11 @@ class FastMacRendererConfig:
     stop_count_mode: str = "adaptive"
     stop_count_dense_threshold: int = 64
     backward_state_strategy: str = "save"
+    depth_mode: str = "rank_depth"
+    softmax_gs_enabled: bool = False
+    softmax_gs_beta: float = 0.0
+    softmax_gs_gamma: float = 0.0
+    softmax_gs_tape_k: int = 0
 
     @classmethod
     def from_mapping(
@@ -180,7 +131,7 @@ class FastMacRendererConfig:
             rgb_variant=_normalize_choice(
                 values.get("rgb_variant", values.get("variant", cls.rgb_variant)),
                 field_name="fast_mac.rgb_variant",
-                choices={"v5", "v6_refined"},
+                choices={"v5", "v5_softmax_gs", "v6_refined"},
             ),
             feature_variant=_normalize_choice(
                 values.get("feature_variant", cls.feature_variant),
@@ -244,28 +195,36 @@ class FastMacRendererConfig:
                 field_name="fast_mac.backward_state_strategy",
                 choices={"save", "recompute"},
             ),
+            depth_mode=_normalize_choice(
+                values.get("depth_mode", cls.depth_mode),
+                field_name="fast_mac.depth_mode",
+                choices={"rank_depth", "center_camera_z"},
+            ),
+            softmax_gs_enabled=bool(values.get("softmax_gs_enabled", cls.softmax_gs_enabled)),
+            softmax_gs_beta=float(values.get("softmax_gs_beta", cls.softmax_gs_beta)),
+            softmax_gs_gamma=float(values.get("softmax_gs_gamma", cls.softmax_gs_gamma)),
+            softmax_gs_tape_k=int(values.get("softmax_gs_tape_k", cls.softmax_gs_tape_k)),
         )
 
 
 def _ensure_variant_on_path(variant_dir: Path, *, package_name: str, label: str) -> None:
-    if not variant_dir.exists():
-        raise RuntimeError(f"fast-mac-gsplat {label} directory not found: {variant_dir}")
-    existing_module = sys.modules.get(package_name)
-    if existing_module is not None:
-        origin_raw = getattr(existing_module, "__file__", None)
-        if origin_raw is not None:
-            origin = Path(origin_raw).resolve()
-            if variant_dir.resolve() not in origin.parents:
-                raise RuntimeError(
-                    f"fast-mac package {package_name!r} is already imported from {origin}, "
-                    f"not requested {label} directory {variant_dir}."
-                )
-    if str(variant_dir) not in sys.path:
-        sys.path.insert(0, str(variant_dir))
+    ensure_module_path(
+        package_name,
+        variant_dir,
+        missing_message=f"fast-mac-gsplat {label} directory not found: {variant_dir}",
+    )
 
 
 def _ensure_fast_mac_v5_on_path() -> None:
     _ensure_variant_on_path(FAST_MAC_V5_DIR, package_name="torch_gsplat_bridge_v5", label="v5")
+
+
+def _ensure_fast_mac_v5_softmax_gs_on_path() -> None:
+    _ensure_variant_on_path(
+        FAST_MAC_V5_SOFTMAX_GS_DIR,
+        package_name="torch_gsplat_bridge_v5_softmax_gs",
+        label="v5_softmax_gs",
+    )
 
 
 def _ensure_fast_mac_v5_features_on_path() -> None:
@@ -389,6 +348,30 @@ def _make_v5_config(config: FastMacRendererConfig, height: int, width: int):
         batch_strategy=config.batch_strategy,
         batch_launch_limit_tiles=config.batch_launch_limit_tiles,
         batch_launch_limit_gaussians=config.batch_launch_limit_gaussians,
+    )
+
+
+def _make_v5_softmax_gs_config(config: FastMacRendererConfig, height: int, width: int):
+    _ensure_fast_mac_v5_softmax_gs_on_path()
+    from torch_gsplat_bridge_v5_softmax_gs import RasterConfig
+
+    return RasterConfig(
+        height=height,
+        width=width,
+        tile_size=config.tile_size,
+        max_fast_pairs=config.max_fast_pairs,
+        alpha_threshold=config.alpha_threshold,
+        transmittance_threshold=config.transmittance_threshold,
+        background=config.background,
+        enable_overflow_fallback=config.enable_overflow_fallback,
+        inputs_sorted_by_depth=config.inputs_sorted_by_depth,
+        batch_strategy=config.batch_strategy,
+        batch_launch_limit_tiles=config.batch_launch_limit_tiles,
+        batch_launch_limit_gaussians=config.batch_launch_limit_gaussians,
+        softmax_gs_enabled=config.softmax_gs_enabled,
+        softmax_gs_beta=config.softmax_gs_beta,
+        softmax_gs_gamma=config.softmax_gs_gamma,
+        softmax_gs_tape_k=config.softmax_gs_tape_k,
     )
 
 
@@ -722,6 +705,20 @@ def _rasterize_rgb_projected(
             depths,
             _make_v5_config(config, height, width),
         )
+    if config.rgb_variant == "v5_softmax_gs":
+        _ensure_fast_mac_v5_softmax_gs_on_path()
+        from torch_gsplat_bridge_v5_softmax_gs import rasterize_projected_gaussians
+
+        if config.softmax_gs_enabled and config.depth_mode != "center_camera_z":
+            raise ValueError("fast_mac.depth_mode='center_camera_z' is required when Softmax-GS is enabled.")
+        return rasterize_projected_gaussians(
+            means2d,
+            conics,
+            colors,
+            projected_opacities,
+            depths,
+            _make_v5_softmax_gs_config(config, height, width),
+        )
     if config.rgb_variant == "v6_refined":
         _ensure_fast_mac_v6_refined_on_path()
         from torch_gsplat_bridge_v6 import rasterize_projected_gaussians
@@ -759,6 +756,62 @@ def _rank_depths(
     return depths.view(1, -1).expand(batch_size, -1).contiguous()
 
 
+def describe_fast_mac_depth_signal(config: FastMacRendererConfig) -> dict[str, object]:
+    return {
+        "kind": config.depth_mode,
+        "softmax_gs_ready": config.depth_mode == "center_camera_z",
+    }
+
+
+def _camera_centers(means3d: torch.Tensor, camera_to_world: torch.Tensor | None) -> torch.Tensor:
+    if camera_to_world is None:
+        return means3d
+    camera_to_world = camera_to_world.to(device=means3d.device, dtype=means3d.dtype)
+    rotation_cw = camera_to_world[:3, :3]
+    translation = camera_to_world[:3, 3]
+    return (means3d - translation.unsqueeze(0)) @ rotation_cw
+
+
+def _center_camera_depths(means3d: torch.Tensor, camera_to_world: torch.Tensor | None) -> torch.Tensor:
+    centers = _camera_centers(means3d, camera_to_world)
+    depths = centers[:, 2]
+    sorted_idx = torch.argsort(depths, descending=False, stable=True)
+    return depths[sorted_idx].contiguous()
+
+
+def _camera_centers_batch(means3d: torch.Tensor, camera_to_world: torch.Tensor | None) -> torch.Tensor:
+    if camera_to_world is None:
+        return means3d
+    camera_to_world = camera_to_world.to(device=means3d.device, dtype=means3d.dtype)
+    if camera_to_world.ndim == 2:
+        camera_to_world = camera_to_world.unsqueeze(0).expand(means3d.shape[0], -1, -1)
+    rotation_cw = camera_to_world[:, :3, :3]
+    translation = camera_to_world[:, :3, 3]
+    return (means3d - translation[:, None, :]) @ rotation_cw
+
+
+def _center_camera_depths_batch(means3d: torch.Tensor, camera_to_world: torch.Tensor | None) -> torch.Tensor:
+    centers = _camera_centers_batch(means3d, camera_to_world)
+    depths = centers[..., 2]
+    sorted_idx = torch.argsort(depths, dim=1, descending=False, stable=True)
+    return torch.gather(depths, dim=1, index=sorted_idx).contiguous()
+
+
+def _camera_to_world_from_camera(camera) -> torch.Tensor | None:
+    if camera is None:
+        return None
+    return camera.camera_to_world
+
+
+def _camera_to_world_from_cameras(cameras, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor | None:
+    if cameras is None:
+        return None
+    return torch.stack(
+        [camera.camera_to_world.to(device=device, dtype=dtype) for camera in cameras],
+        dim=0,
+    )
+
+
 def project_for_fast_mac(
     means3d: torch.Tensor,
     scales: torch.Tensor,
@@ -774,6 +827,7 @@ def project_for_fast_mac(
     projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
+    depth_mode: str = "rank_depth",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     if projection_mode == "camera_model":
         if camera is None:
@@ -803,7 +857,13 @@ def project_for_fast_mac(
         )
     else:
         raise ValueError(f"Unknown projection_mode: {projection_mode}")
-    depths = _rank_depths(means2d.shape[0], batch_size=None, device=means2d.device, dtype=means2d.dtype)
+    if depth_mode == "rank_depth":
+        depths = _rank_depths(means2d.shape[0], batch_size=None, device=means2d.device, dtype=means2d.dtype)
+    elif depth_mode == "center_camera_z":
+        depth_camera_to_world = camera_to_world if projection_mode == "legacy_pinhole" else _camera_to_world_from_camera(camera)
+        depths = _center_camera_depths(means3d, depth_camera_to_world)
+    else:
+        raise ValueError(f"Unknown fast_mac depth_mode: {depth_mode}")
     return (
         means2d.contiguous(),
         _conics_from_inv_cov(inv_cov2d),
@@ -828,6 +888,7 @@ def project_for_fast_mac_batch(
     projection_mode: str = "legacy_pinhole",
     camera_to_world: torch.Tensor | None = None,
     near_plane: float = MIN_RENDER_DEPTH,
+    depth_mode: str = "rank_depth",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     if projection_mode == "camera_model":
         if cameras is None:
@@ -857,12 +918,21 @@ def project_for_fast_mac_batch(
         )
     else:
         raise ValueError(f"Unknown projection_mode: {projection_mode}")
-    depths = _rank_depths(
-        means2d.shape[1],
-        batch_size=means2d.shape[0],
-        device=means2d.device,
-        dtype=means2d.dtype,
-    )
+    if depth_mode == "rank_depth":
+        depths = _rank_depths(
+            means2d.shape[1],
+            batch_size=means2d.shape[0],
+            device=means2d.device,
+            dtype=means2d.dtype,
+        )
+    elif depth_mode == "center_camera_z":
+        if projection_mode == "legacy_pinhole":
+            depth_camera_to_world = camera_to_world
+        else:
+            depth_camera_to_world = _camera_to_world_from_cameras(cameras, device=means3d.device, dtype=means3d.dtype)
+        depths = _center_camera_depths_batch(means3d, depth_camera_to_world)
+    else:
+        raise ValueError(f"Unknown fast_mac depth_mode: {depth_mode}")
     return (
         means2d.contiguous(),
         _conics_from_inv_cov(inv_cov2d),
@@ -906,6 +976,7 @@ def render_fast_mac_3dgs(
         projection_mode=projection_mode,
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
+        depth_mode=config.depth_mode,
     )
     # F=3 -> selected RGB variant, output clamped to [0,1] for direct loss. Returns (features, None).
     # F!=3 -> v5_features (raw F-channel feature map + accumulated alpha mask).
@@ -973,6 +1044,7 @@ def render_fast_mac_3dgs_batch(
         projection_mode=projection_mode,
         camera_to_world=camera_to_world.float() if camera_to_world is not None else None,
         near_plane=near_plane,
+        depth_mode=config.depth_mode,
     )
     # Returns (features, alpha_mask). Alpha is None for the F=3 RGB path
     # and a tensor of shape [B, H, W] for the F!=3 v5_features path.
@@ -1008,6 +1080,7 @@ def render_fast_mac_3dgs_batch(
 
 __all__ = [
     "FastMacRendererConfig",
+    "describe_fast_mac_depth_signal",
     "project_for_fast_mac",
     "project_for_fast_mac_batch",
     "render_fast_mac_3dgs",

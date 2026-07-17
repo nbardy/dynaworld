@@ -8,60 +8,25 @@ from typing import Any
 import torch
 
 from config_utils import load_config_file
+from checkpoint_utils import load_checkpoint_mapping
 from diagnose_powerfoam_heldout_error import build_model, load_model_for_checkpoint
 from losses import ssim_per_image
-from train_powerfoam_metal import (
-    composite_powerfoam_background,
-    load_powerfoam_training_data,
-    reconstruction_eval_metrics,
-    render_samples,
-    resolve_config,
-    resolve_device,
+from pipeline.diagnostics import reconstruction_eval_metrics
+from powerfoam_eval_color import (
+    apply_channel_affine,
+    apply_rgb_matrix_affine,
+    fit_channel_affine,
+    fit_rgb_matrix_affine,
 )
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(ROOT))
-    except ValueError:
-        return str(path)
-
-
-def flatten_pixels(images: torch.Tensor) -> torch.Tensor:
-    return images.permute(0, 2, 3, 1).reshape(-1, images.shape[1]).to(dtype=torch.float32)
-
-
-def add_bias_column(values: torch.Tensor) -> torch.Tensor:
-    return torch.cat([values, torch.ones(values.shape[0], 1, dtype=values.dtype)], dim=1)
-
-
-def fit_rgb_matrix(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    return torch.linalg.lstsq(add_bias_column(flatten_pixels(rendered)), flatten_pixels(target)).solution
-
-
-def apply_rgb_matrix(rendered: torch.Tensor, transform: torch.Tensor) -> torch.Tensor:
-    shape = rendered.shape
-    corrected = add_bias_column(flatten_pixels(rendered)) @ transform
-    return corrected.reshape(shape[0], shape[2], shape[3], shape[1]).permute(0, 3, 1, 2).clamp(0.0, 1.0)
-
-
-def fit_channel_affine(rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    rows = []
-    for channel in range(rendered.shape[1]):
-        x = flatten_pixels(rendered[:, channel : channel + 1])
-        y = flatten_pixels(target[:, channel : channel + 1])
-        rows.append(torch.linalg.lstsq(add_bias_column(x), y).solution[:, 0])
-    return torch.stack(rows, dim=0)
-
-
-def apply_channel_affine(rendered: torch.Tensor, transform: torch.Tensor) -> torch.Tensor:
-    corrected = rendered.clone()
-    for channel, row in enumerate(transform):
-        corrected[:, channel] = rendered[:, channel] * row[0] + row[1]
-    return corrected.clamp(0.0, 1.0)
+from powerfoam_eval_render import render_powerfoam_samples
+from powerfoam_metal_config import resolve_config
+from powerfoam_objectives import composite_powerfoam_background
+from powerfoam_training_data import load_powerfoam_training_data
+try:
+    from .report_artifacts import relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import relative_to_project as rel, write_report_json
+from train_devices import resolve_torch_device
 
 
 def color_ssim_loss(rendered: torch.Tensor, target: torch.Tensor, cfg: dict[str, Any]) -> torch.Tensor:
@@ -126,7 +91,7 @@ def render_raw_split(
     *,
     batch_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    rendered, alpha = render_samples(model, frame_indices, rays=rays, batch_size=batch_size)
+    rendered, alpha = render_powerfoam_samples(model, frame_indices, rays=rays, batch_size=batch_size)
     return rendered.detach().cpu().to(dtype=torch.float32), alpha.detach().cpu().to(dtype=torch.float32)
 
 
@@ -188,8 +153,8 @@ def background_row(
         ),
         (
             "train_fit_rgb_matrix_affine",
-            fit_rgb_matrix(train_render, train_target),
-            apply_rgb_matrix,
+            fit_rgb_matrix_affine(train_render, train_target),
+            apply_rgb_matrix_affine,
         ),
         (
             "heldout_oracle_channel_affine",
@@ -198,8 +163,8 @@ def background_row(
         ),
         (
             "heldout_oracle_rgb_matrix_affine",
-            fit_rgb_matrix(heldout_render, heldout_target),
-            apply_rgb_matrix,
+            fit_rgb_matrix_affine(heldout_render, heldout_target),
+            apply_rgb_matrix_affine,
         ),
     ]
     if int(opt_steps) > 0:
@@ -253,7 +218,7 @@ def build_report(
     opt_ssim_weights: list[float],
     background_names: set[str] | None,
 ) -> dict[str, Any]:
-    device = resolve_device(device_name)
+    device = resolve_torch_device(device_name, auto_cuda=False)
     if checkpoint_path is None:
         cfg = resolve_config(load_config_file(config_path))
         training_data = load_powerfoam_training_data(cfg, device)
@@ -263,7 +228,7 @@ def build_report(
         checkpoint_label = "init"
     else:
         cfg, training_data, model = load_model_for_checkpoint(config_path, checkpoint_path, device)
-        checkpoint_step = int(torch.load(checkpoint_path, map_location="cpu").get("step", -1))
+        checkpoint_step = int(load_checkpoint_mapping(checkpoint_path, map_location="cpu").get("step", -1))
         checkpoint_label = rel(checkpoint_path)
     train_render_raw, train_alpha = render_raw_split(
         model,
@@ -364,8 +329,7 @@ def main() -> None:
         opt_ssim_weights=[float(weight) for weight in args.opt_ssim_weights],
         background_names=None if args.background_names is None else {str(name) for name in args.background_names},
     )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output, report)
     print(json.dumps({"output": rel(output), "checkpoint_step": report["checkpoint_step"]}, indent=2, sort_keys=True))
 
 

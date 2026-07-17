@@ -11,12 +11,27 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[2]
+try:
+    from .report_artifacts import (
+        PROJECT_ROOT,
+        ensure_train_path,
+        load_report_json,
+        relative_to_project as rel,
+        write_report_json,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import (
+        PROJECT_ROOT,
+        ensure_train_path,
+        load_report_json,
+        relative_to_project as rel,
+        write_report_json,
+    )
+
+ROOT = PROJECT_ROOT
 PYTHON = sys.executable
 LOCAL_PYTHON = ".venv/bin/python"
-SRC_TRAIN = ROOT / "src/train"
-if str(SRC_TRAIN) not in sys.path:
-    sys.path.insert(0, str(SRC_TRAIN))
+ensure_train_path()
 
 from config_utils import load_config_file  # noqa: E402
 
@@ -53,25 +68,9 @@ OFFICIAL_FIXTURE_EXPECTED_KEYS = {
 }
 
 
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
-
-
 def command_to_string(command: list[str], env: dict[str, str]) -> str:
     prefixes = [f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())]
     return " ".join([*prefixes, *(shlex.quote(part) for part in command)])
-
-
-def load_json_object(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(path)
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise TypeError(f"{path} must contain a JSON object.")
-    return payload
 
 
 def require_checks(name: str, checks: list[dict[str, object]]) -> None:
@@ -126,7 +125,7 @@ def require_canonical_official_fixture_for_tests(path: Path) -> None:
 def validate_official_fixture(path: Path) -> None:
     if not path.exists():
         require_checks("official_fixture", [{"name": "fixture_exists", "passed": False, "evidence": rel(path)}])
-    fixture = load_json_object(path)
+    fixture = load_report_json(path)
     metadata = fixture.get("metadata", {})
     expected = fixture.get("expected", {})
     checks = [
@@ -288,7 +287,7 @@ def aliked_training_command(config_path: Path) -> tuple[list[str], dict[str, str
     return (
         [
             PYTHON,
-            "src/train/train_powerfoam_metal.py",
+            "src/train/train.py",
             rel(config_path),
         ],
         {"PYTHONPATH": "src/train:third_party/powerfoam-metal"},
@@ -483,9 +482,7 @@ def load_aliked_artifact_summary(point_cloud: Path, matcher_type: str) -> dict[s
         raise FileNotFoundError(point_cloud)
     if not summary_path.exists():
         raise FileNotFoundError(f"{summary_path} is required beside {point_cloud}.")
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    if not isinstance(summary, dict):
-        raise TypeError(f"{summary_path} must contain a JSON object.")
+    summary = load_report_json(summary_path)
     point_count = int(summary.get("point_count", 0))
     if point_count <= 0:
         raise ValueError(f"{summary_path} has point_count={point_count}; refusing to prepare a training run.")
@@ -613,7 +610,7 @@ def validate_aliked_training_run(
     cfg = load_config_file(config_path)
     best_path = train_output_dir / "best_metrics.json"
     resolved_path = train_output_dir / "resolved_config.json"
-    best = load_json_object(best_path) if best_path.exists() else {}
+    best = load_report_json(best_path) if best_path.exists() else {}
     metrics = best.get("metrics", {}) if isinstance(best, dict) else {}
     checks = [
         *pre_checks,
@@ -708,8 +705,7 @@ def write_aliked_train_config(
     )
     if dry_run:
         return
-    config_output.parent.mkdir(parents=True, exist_ok=True)
-    config_output.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    write_report_json(config_output, cfg, sort_keys=False)
 
 
 def main() -> None:

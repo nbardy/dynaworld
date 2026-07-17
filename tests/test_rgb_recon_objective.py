@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from objective.objective import RGBReconObjective
+from objective.objective import RGBReconObjective, colorize_and_compose_feature_rgb
 from objective.loss import objective_spec_from_loss_config
 from objective.types import (
     BackgroundSample,
@@ -35,6 +35,11 @@ class ConstantColorizer:
 
     def __call__(self, features: torch.Tensor, view_dirs: torch.Tensor | None = None) -> torch.Tensor:
         return features.new_full((features.shape[0], 3, features.shape[-2], features.shape[-1]), self.value)
+
+
+class FirstThreeChannelColorizer:
+    def __call__(self, features: torch.Tensor, view_dirs: torch.Tensor | None = None) -> torch.Tensor:
+        return features[:, :3]
 
 
 def test_f3_legacy_path_passes_rgb_through_without_alpha_composition() -> None:
@@ -78,6 +83,56 @@ def test_alpha_composition_uses_colorized_rgb_and_background() -> None:
 
     assert torch.allclose(rendered.rgb, torch.full((1, 3, 2, 2), 0.625))
     assert torch.allclose(loss.per_image, torch.tensor([0.625]))
+
+
+def test_tensor_helper_composes_rgb_background_after_colorizer() -> None:
+    feature = torch.zeros(1, 8, 2, 2)
+    alpha = torch.full((1, 2, 2), 0.25)
+    background = BackgroundSample(
+        rgb=torch.full((1, 3, 1, 1), 0.6),
+        mode="fixed_rgb",
+        phase="train",
+    )
+
+    rgb = colorize_and_compose_feature_rgb(feature, alpha, ConstantColorizer(0.2), background)
+
+    assert torch.allclose(rgb, torch.full((1, 3, 2, 2), 0.5))
+
+
+def test_tensor_helper_composes_feature_background_before_colorizer() -> None:
+    feature = torch.zeros(1, 3, 2, 2)
+    alpha = torch.zeros(1, 2, 2)
+    background = BackgroundSample(
+        rgb=None,
+        mode="none",
+        phase="train",
+        feature=torch.full((1, 3, 1, 1), 0.7),
+        feature_mode="fixed_zero",
+    )
+
+    rgb = colorize_and_compose_feature_rgb(feature, alpha, FirstThreeChannelColorizer(), background)
+
+    assert torch.allclose(rgb, torch.full((1, 3, 2, 2), 0.7))
+
+
+def test_feature_training_background_requires_alpha_when_guarded() -> None:
+    frames = torch.zeros(1, 3, 2, 2)
+    rasterized = RasterizedView(
+        view=_target(frames),
+        features=torch.zeros(1, 8, 2, 2),
+        alpha=None,
+    )
+    background = BackgroundSample(
+        rgb=torch.ones(1, 3, 1, 1),
+        mode="random_rgb",
+        phase="train",
+    )
+    objective = RGBReconObjective(ObjectiveSpec(version="test"), colorizer=ConstantColorizer(0.25))
+
+    rendered = objective.compose_rasterized(rasterized, phase="train", background=background)
+
+    with pytest.raises(ValueError, match="requires alpha-aware render output"):
+        objective.require_alpha_for_feature_background(rendered)
 
 
 def test_background_policy_random_train_white_eval() -> None:

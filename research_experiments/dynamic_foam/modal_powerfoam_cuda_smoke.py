@@ -8,6 +8,14 @@ from typing import Any
 
 import modal
 
+try:
+    from .report_artifacts import load_report_json, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    dynamic_foam_dir = Path(__file__).resolve().parent
+    if str(dynamic_foam_dir) not in sys.path:
+        sys.path.insert(0, str(dynamic_foam_dir))
+    from report_artifacts import load_report_json, write_report_json
+
 APP_NAME = "dynaworld-powerfoam-cuda-smoke"
 
 
@@ -170,7 +178,7 @@ def run_remote_smoke(payload: dict[str, Any]) -> dict[str, Any]:
     summary_path = output_dir / "summary.json"
     if not summary_path.exists():
         raise RuntimeError(f"runner did not write {summary_path}; output:\n{completed.stdout}")
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary = load_report_json(summary_path)
     return {
         "return_code": completed.returncode,
         "stdout_tail": completed.stdout[-8000:],
@@ -180,11 +188,7 @@ def run_remote_smoke(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_returned_files(result: dict[str, Any], local_output_dir: Path, *, copy_official_fixture: bool) -> None:
-    local_output_dir.mkdir(parents=True, exist_ok=True)
-    (local_output_dir / "modal_return.json").write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_report_json(local_output_dir / "modal_return.json", result)
     for relative, text in result.get("files", {}).items():
         destination = local_output_dir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)

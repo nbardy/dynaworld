@@ -16,6 +16,7 @@ ViewRole = Literal["source", "train", "heldout", "debug"]
 CameraRole = Literal["condition", "anchor", "target", "heldout", "debug"]
 CameraOwner = Literal["model", "target", "external_rig", "none"]
 BackgroundMode = Literal["white", "black", "fixed_rgb", "random_rgb", "none"]
+FeatureBackgroundMode = Literal["none", "fixed_zero", "random_feature"]
 BackgroundSampleScope = Literal["step", "view", "frame", "pixel"]
 ReconstructionLossKind = Literal["mse", "l1", "l1_mse", "standard_gs"]
 DSSIMBackend = Literal["torch", "metal"]
@@ -76,8 +77,13 @@ class BackgroundSpec:
     eval_mode: BackgroundMode = "white"
     preview_mode: BackgroundMode | None = None
     export_mode: BackgroundMode | None = None
+    feature_train_mode: FeatureBackgroundMode = "none"
+    feature_eval_mode: FeatureBackgroundMode = "none"
+    feature_preview_mode: FeatureBackgroundMode | None = None
+    feature_export_mode: FeatureBackgroundMode | None = None
     fixed_rgb: tuple[float, float, float] = (1.0, 1.0, 1.0)
     sample_scope: BackgroundSampleScope = "step"
+    feature_sample_scope: BackgroundSampleScope = "step"
     apply_when_alpha_missing: bool = False
 
 
@@ -86,7 +92,9 @@ class BackgroundSample:
     rgb: torch.Tensor | None  # Broadcastable to [K, 3, H, W], or None for no bg.
     mode: BackgroundMode
     phase: RunPhase
+    feature: torch.Tensor | None = None  # Broadcastable to [K, F, H, W], or None for no feature bg.
     step: int | None = None
+    feature_mode: FeatureBackgroundMode = "none"
 
 
 @dataclass(frozen=True)
@@ -162,6 +170,7 @@ class RenderedView:
             background=replace(
                 self.background,
                 rgb=None if self.background.rgb is None else self.background.rgb.detach().cpu(),
+                feature=None if self.background.feature is None else self.background.feature.detach().cpu(),
             ),
         )
 

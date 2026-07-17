@@ -1,0 +1,57 @@
+{
+  "arch": "star_uvt_feature_overfit",
+  "data": {
+    "video_path": "test_data/test_video_small_128_4fps.mp4",
+    "start_seconds": null,
+    "fps": null,
+    "duration_seconds": null,
+    "image_crop_mode": "center_square",
+    "target_size": 64,
+    "max_frames": 8
+  },
+  "train": {
+    "steps": 20,
+    "lr": 0.02,
+    "device": "mps",
+    "seed": 41,
+    "frame_chunk_size": 2,
+    "require_loss_decrease": true,
+    "require_gradient_flow": true,
+    "require_no_tile_overflow": true
+  },
+  "feature_uvt": {
+    "tube_count": 512,
+    "feature_dim": 32,
+    "tile_t": 2,
+    "tile_capacity": 128,
+    "alpha_threshold": 0.00392156862745098,
+    "max_alpha": 0.99
+  },
+  "colorize": {
+    "hidden_dim": null,
+    "activation": "sigmoid",
+    "pre_norm": true,
+    "weight_init": "kaiming",
+    "weight_init_gain": 4.0
+  },
+  "output": {
+    "out_json": "outputs/benchmarks/2026-05-18_star_uvt_feature_firstclass_testvideo_8f_64px_512t_f32_chunk2_20step.json",
+    "contact_sheet": "outputs/benchmarks/2026-05-18_star_uvt_feature_firstclass_testvideo_8f_64px_512t_f32_chunk2_contact.png",
+    "contact_sheet_frames": 8,
+    "contact_sheet_mode": "first",
+    "side_by_side_video": "outputs/benchmarks/2026-05-18_star_uvt_feature_firstclass_testvideo_8f_64px_512t_f32_chunk2_side_by_side.mp4",
+    "side_by_side_fps": 4.0
+  },
+  "logging": {
+    "wandb_enabled": false,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "star-uvt-feature-firstclass-testvideo-8f-64px-512t-f32-20step",
+    "wandb_tags": [
+      "star_uvt",
+      "feature_tubes",
+      "firstclass_trainer",
+      "direct_atomic"
+    ],
+    "wandb_mode": "offline"
+  }
+}

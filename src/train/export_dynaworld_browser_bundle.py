@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,19 +8,26 @@ from typing import Any
 
 import torch
 
+from checkpoint_utils import load_torch_checkpoint
 from config_utils import load_config_file
 from fast_attn import fast_attn_context, pick_device
 from model_factories import build_model_from_config
-from sequence_data import load_camera_sequence, load_manifest_sequences, load_uncalibrated_sequence, resolve_frames_dir
-from pipeline.render import prepare_clip
-from train_video_token_implicit_dynamic import resolve_config
+from sequence_data import (
+    load_camera_sequence,
+    load_manifest_sequences,
+    load_uncalibrated_sequence,
+    prepare_clip,
+    resolve_frames_dir,
+)
+from train_artifacts import write_json
+from trainer_registry import resolve_config_for_arch
 
 
 EXPORT_BUNDLE_VERSION = "dynaworld_token_head_bundle/v2"
 
 
 def _load_state_dict(checkpoint_path: Path) -> dict[str, torch.Tensor]:
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    payload = load_torch_checkpoint(checkpoint_path, map_location="cpu", weights_only=True)
     if isinstance(payload, dict) and "state_dict" in payload and isinstance(payload["state_dict"], dict):
         state_dict = payload["state_dict"]
     elif isinstance(payload, dict) and payload and all(torch.is_tensor(value) for value in payload.values()):
@@ -195,11 +201,9 @@ def _load_model_input(
                 "This config uses a precomputed feature backend but has no 'features' section. "
                 "Use the precomputed-feature trainer config or add the features block."
             )
-        from train_precomputed_feature_implicit_dynamic import PrecomputedFeatureImplicitTrainer
         from video_feature_cache import VideoFeatureCache
 
-        feature_resolved = PrecomputedFeatureImplicitTrainer.resolve_config(resolved)
-        feature_cache = VideoFeatureCache(feature_resolved["features"], device)
+        feature_cache = VideoFeatureCache(resolved["features"], device)
         return feature_cache.load_or_bake(sequence_data)
     del clip_times
     return clip_frames
@@ -327,7 +331,7 @@ def export_browser_bundle_from_model(
         "tensors": tensors,
     }
     manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    write_json(manifest_path, manifest, sort_keys=False)
     print(f"Wrote browser bundle manifest to {manifest_path}")
     return manifest_path
 
@@ -340,7 +344,7 @@ def export_browser_bundle(
     sequence_index: int,
     window_start: int,
 ) -> Path:
-    resolved = resolve_config(load_config_file(config_path))
+    resolved = resolve_config_for_arch(load_config_file(config_path), config_path)
     device = pick_device()
     print(f"Using device: {device}")
 

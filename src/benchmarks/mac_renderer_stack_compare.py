@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,18 +8,19 @@ from typing import Callable
 
 import torch
 
-BENCHMARK_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BENCHMARK_DIR.parents[1]
+from benchmark_bootstrap import PROJECT_ROOT, TRAIN_ROOT, ensure_sys_path
+
 FAST_MAC_DIR = PROJECT_ROOT / "third_party" / "fast-mac-gsplat"
 FAST_MAC_V3_DIR = FAST_MAC_DIR / "variants" / "v3"
 FAST_MAC_V5_DIR = FAST_MAC_DIR / "variants" / "v5"
 FAST_MAC_V6_DIR = FAST_MAC_DIR / "variants" / "v6"
 TAICHI_SPLATTING_DIR = PROJECT_ROOT / "third_party" / "taichi-splatting"
 
-for path in (FAST_MAC_V6_DIR, FAST_MAC_V5_DIR, FAST_MAC_V3_DIR, FAST_MAC_DIR, TAICHI_SPLATTING_DIR):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+ensure_sys_path(FAST_MAC_V6_DIR, FAST_MAC_V5_DIR, FAST_MAC_V3_DIR, FAST_MAC_DIR, TAICHI_SPLATTING_DIR, TRAIN_ROOT)
 
+from train_artifacts import write_csv
+from train_devices import sync_torch_device
+from renderer_benchmark_cli import parse_csv_strings
 from torch_gsplat_bridge_fast import RasterConfig as RasterConfigV2
 from torch_gsplat_bridge_fast import rasterize_projected_gaussians as rasterize_v2
 from torch_gsplat_bridge_v3 import RasterConfig as RasterConfigV3
@@ -73,8 +72,7 @@ class BenchRow:
 
 
 def sync_mps() -> None:
-    if torch.backends.mps.is_available():
-        torch.mps.synchronize()
+    sync_torch_device(torch.device("mps"))
 
 
 def sync_taichi() -> None:
@@ -480,15 +478,6 @@ def run_case(
     ]
 
 
-def write_csv(path: Path, rows: list[BenchRow]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(BenchRow.__dataclass_fields__.keys()))
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row.__dict__)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare direct Torch, Taichi/Metal, and fast-mac projected rasterizers."
@@ -528,7 +517,7 @@ def main() -> None:
         f"backward={args.backward}"
     )
     taichi_render = make_taichi_renderer(args.height, args.width, args.taichi_tile_size)
-    requested_renderers = {part.strip() for part in args.renderers.split(",") if part.strip()}
+    requested_renderers = set(parse_csv_strings(args.renderers))
     all_rows: list[BenchRow] = []
     for i, case in enumerate(cases):
         print(f"\ncase={case.name} sigma=[{case.sigma_min}, {case.sigma_max}]")
@@ -552,7 +541,7 @@ def main() -> None:
         all_rows.extend(rows)
 
     if args.csv is not None:
-        write_csv(args.csv, all_rows)
+        write_csv(args.csv, (row.__dict__ for row in all_rows), fieldnames=list(BenchRow.__dataclass_fields__.keys()))
         print(f"\nwrote {args.csv}")
 
 

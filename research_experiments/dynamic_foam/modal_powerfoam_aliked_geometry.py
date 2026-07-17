@@ -9,6 +9,14 @@ from typing import Any
 
 import modal
 
+try:
+    from .report_artifacts import parse_frame_indices, relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution/importlib loading
+    dynamic_foam_dir = Path(__file__).resolve().parent
+    if str(dynamic_foam_dir) not in sys.path:
+        sys.path.insert(0, str(dynamic_foam_dir))
+    from report_artifacts import parse_frame_indices, relative_to_project as rel, write_report_json
+
 APP_NAME = "dynaworld-powerfoam-aliked-geometry"
 SAMPLE_ID = "deepview_03_Dog_camera_0001_to_camera_0040"
 HELDOUT_CAMERA = "camera_0040"
@@ -64,13 +72,6 @@ def default_aliked_output(matcher_type: str) -> Path:
         / "research_experiments/dynamic_foam/artifacts/"
         f"deepview_03_dog_8cam_pycolmap_known_pose_frames0_4_8_12_1024px_true_multiframe_opencv_fisheye_aliked_n16rot_{matcher_type}_minucam2.ply"
     )
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(ROOT))
-    except ValueError:
-        return str(path)
 
 
 def add_scene_files(image: modal.Image, camera_names: list[str]) -> modal.Image:
@@ -176,7 +177,7 @@ def write_remote_inputs(*, run_dir: Path, train_cameras: list[str], heldout_came
     cfg["data"]["multicam_heldout_cameras"] = None
     cfg["data"]["multicam_anchor_camera"] = ANCHOR_CAMERA
     cfg["data"]["multicam_condition_camera"] = ANCHOR_CAMERA
-    config_path.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(config_path, cfg)
     return config_path
 
 
@@ -254,13 +255,6 @@ def probe_train_cameras(camera_set: str) -> list[str]:
     if camera_set == "full8":
         return list(TRAIN_CAMERAS)
     raise ValueError(f"Unknown probe camera set {camera_set!r}; choices: {sorted(PROBE_CAMERA_SET_CHOICES)}")
-
-
-def parse_frame_indices(raw: str) -> list[int]:
-    values = [value.strip() for value in raw.split(",") if value.strip()]
-    if not values:
-        raise ValueError("At least one frame index is required.")
-    return [int(value) for value in values]
 
 
 def parse_bool(raw: str | bool) -> bool:
@@ -420,8 +414,7 @@ def run_remote_full(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_local_result(result: dict[str, Any], output_dir: Path, name: str, *, copy_artifact: bool) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / f"{name}.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output_dir / f"{name}.json", result)
     returned = output_dir / "returned_files"
     for relative, text in result.get("files", {}).items():
         if relative.endswith(".json") and text.lstrip().startswith("{"):
@@ -491,8 +484,7 @@ def write_plan(
             ),
         ],
     }
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output_dir / "plan.json", plan)
 
 
 @app.local_entrypoint()

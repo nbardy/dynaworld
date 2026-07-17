@@ -10,19 +10,16 @@ import torch
 import torch.nn.functional as F
 
 from config_utils import load_config_file
-from train_powerfoam_metal import reconstruction_eval_metrics, resolve_config, resolve_device
+from checkpoint_utils import load_checkpoint_mapping
+from pipeline.diagnostics import reconstruction_eval_metrics
+from powerfoam_metal_config import resolve_config
+try:
+    from .report_artifacts import relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import relative_to_project as rel, write_report_json
+from train_devices import resolve_torch_device
 
 from diagnose_powerfoam_heldout_error import load_model_for_checkpoint, render_split
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(ROOT))
-    except ValueError:
-        return str(path)
 
 
 def scalar(value: torch.Tensor) -> float:
@@ -172,8 +169,9 @@ def main() -> None:
     cfg_preview = resolve_config(load_config_file(args.config))
     checkpoint = args.checkpoint or (cfg_preview["logging"]["output_dir"] / "checkpoint_best.pt")
     output = args.output or (cfg_preview["logging"]["output_dir"] / "heldout_camera_perturbations.json")
-    device = resolve_device(str(args.device))
+    device = resolve_torch_device(str(args.device), auto_cuda=False)
     cfg, training_data, model = load_model_for_checkpoint(args.config, checkpoint, device)
+    checkpoint_payload = load_checkpoint_mapping(checkpoint, map_location="cpu")
     if training_data["heldout_targets"] is None or training_data["heldout_rays"] is None:
         raise ValueError("Camera perturbation probe requires a heldout split with rays.")
 
@@ -205,7 +203,7 @@ def main() -> None:
         "schema_version": "powerfoam_camera_perturbation_probe_v1",
         "config": rel(args.config),
         "checkpoint": rel(checkpoint),
-        "checkpoint_step": int(torch.load(checkpoint, map_location="cpu").get("step", -1)),
+        "checkpoint_step": int(checkpoint_payload.get("step", -1)),
         "output_dir": rel(cfg["logging"]["output_dir"]),
         "heldout_views": training_data["heldout_views"],
         "frames": [int(frame) for frame in frame_indices.detach().cpu().tolist()],
@@ -219,8 +217,7 @@ def main() -> None:
         },
         "candidates": rows,
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output, report)
     print(
         json.dumps(
             {

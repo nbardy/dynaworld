@@ -100,6 +100,53 @@ class FeedForward(nn.Module):
         return self.net(value)
 
 
+_MPS_MANUAL_CROSS_ATTN_TOKEN_LIMIT = 32768
+
+
+def _manual_batch_first_mha(mha, query, key, value):
+    if not getattr(mha, "batch_first", False):
+        raise ValueError("Manual MHA fallback expects batch_first=True.")
+    if query.ndim != 3 or key.ndim != 3 or value.ndim != 3:
+        raise ValueError("Manual MHA fallback expects rank-3 query/key/value tensors.")
+    if mha.in_proj_weight is None:
+        raise ValueError("Manual MHA fallback expects a combined qkv projection.")
+    if getattr(mha, "bias_k", None) is not None or getattr(mha, "bias_v", None) is not None:
+        raise ValueError("Manual MHA fallback does not support bias_k/bias_v.")
+    if getattr(mha, "add_zero_attn", False):
+        raise ValueError("Manual MHA fallback does not support add_zero_attn.")
+
+    embed_dim = int(mha.embed_dim)
+    num_heads = int(mha.num_heads)
+    head_dim = embed_dim // num_heads
+    in_proj_bias = mha.in_proj_bias
+    q_bias = k_bias = v_bias = None
+    if in_proj_bias is not None:
+        q_bias = in_proj_bias[:embed_dim]
+        k_bias = in_proj_bias[embed_dim : 2 * embed_dim]
+        v_bias = in_proj_bias[2 * embed_dim :]
+
+    q_proj = F.linear(query, mha.in_proj_weight[:embed_dim], q_bias)
+    k_proj = F.linear(key, mha.in_proj_weight[embed_dim : 2 * embed_dim], k_bias)
+    v_proj = F.linear(value, mha.in_proj_weight[2 * embed_dim :], v_bias)
+
+    batch_size, query_tokens, _ = q_proj.shape
+    key_tokens = k_proj.shape[1]
+    q_proj = q_proj.view(batch_size, query_tokens, num_heads, head_dim).transpose(1, 2)
+    k_proj = k_proj.view(batch_size, key_tokens, num_heads, head_dim).transpose(1, 2)
+    v_proj = v_proj.view(batch_size, key_tokens, num_heads, head_dim).transpose(1, 2)
+
+    scores = torch.matmul(q_proj, k_proj.transpose(-2, -1)) * (head_dim**-0.5)
+    weights = torch.softmax(scores, dim=-1)
+    if float(mha.dropout) > 0.0:
+        weights = F.dropout(weights, p=float(mha.dropout), training=mha.training)
+    output = torch.matmul(weights, v_proj).transpose(1, 2).reshape(batch_size, query_tokens, embed_dim)
+    return mha.out_proj(output)
+
+
+def _needs_mps_manual_cross_attn(query, memory):
+    return query.device.type == "mps" and int(memory.shape[1]) > _MPS_MANUAL_CROSS_ATTN_TOKEN_LIMIT
+
+
 class TransformerBlock(nn.Module):
     def __init__(self, dim, num_heads=8, mlp_ratio=4.0):
         super().__init__()
@@ -132,7 +179,10 @@ class QueryCrossAttentionBlock(nn.Module):
         queries = queries + self_output
         cross_query = self.query_cross_norm(queries)
         cross_memory = self.memory_norm(memory)
-        cross_output, _ = self.cross_attn(cross_query, cross_memory, cross_memory, need_weights=False)
+        if _needs_mps_manual_cross_attn(cross_query, cross_memory):
+            cross_output = _manual_batch_first_mha(self.cross_attn, cross_query, cross_memory, cross_memory)
+        else:
+            cross_output, _ = self.cross_attn(cross_query, cross_memory, cross_memory, need_weights=False)
         queries = queries + cross_output
         return queries + self.ffn(self.ffn_norm(queries))
 
@@ -664,6 +714,7 @@ class TorchHubVJEPAVideoEncoder(nn.Module):
         feature_dim=None,
         freeze=True,
         pretrained=True,
+        dtype="auto",
         crop_size=None,
         checkpoint_url=None,
         checkpoint_key=None,
@@ -696,6 +747,9 @@ class TorchHubVJEPAVideoEncoder(nn.Module):
                 checkpoint_url=checkpoint_url,
                 checkpoint_key=checkpoint_key,
             )
+        load_dtype = _resolve_vjepa_dtype(dtype)
+        if load_dtype is not None:
+            self.encoder.to(dtype=load_dtype)
         self.encoder.eval()
         if self.freeze:
             for parameter in self.encoder.parameters():
@@ -809,6 +863,7 @@ def build_video_encoder(
             feature_dim=vjepa_feature_dim,
             freeze=vjepa_freeze,
             pretrained=vjepa_pretrained,
+            dtype=vjepa_dtype,
             crop_size=vjepa_crop_size,
             checkpoint_url=vjepa_checkpoint_url,
         )

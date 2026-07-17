@@ -5,28 +5,29 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from .report_artifacts import (
+        PROJECT_ROOT,
+        load_report_json,
+        load_report_jsonl,
+        relative_to_project as rel,
+        write_report_json,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import (
+        PROJECT_ROOT,
+        load_report_json,
+        load_report_jsonl,
+        relative_to_project as rel,
+        write_report_json,
+    )
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CUDA_SUMMARY = ROOT / "outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/summary.json"
+
+DEFAULT_CUDA_SUMMARY = PROJECT_ROOT / "outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/summary.json"
 DEFAULT_METAL_OUTPUT = (
-    ROOT / "outputs/powerfoam_metal/local_mac_powerfoam_metal_cuda_micro_match_randominit_64_4f_256cells_5step"
+    PROJECT_ROOT / "outputs/powerfoam_metal/local_mac_powerfoam_metal_cuda_micro_match_randominit_64_4f_256cells_5step"
 )
-DEFAULT_OUTPUT = ROOT / "outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/cuda_vs_metal_summary.json"
-
-
-def load_json(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise TypeError(f"{path} must contain a JSON object")
-    return data
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(ROOT))
-    except ValueError:
-        return str(path)
-
+DEFAULT_OUTPUT = PROJECT_ROOT / "outputs/powerfoam_cuda_smokes/cuda_micro_blackbg_20260506/cuda_vs_metal_summary.json"
 
 def run_by_name(summary: dict[str, Any], name: str) -> dict[str, Any]:
     for run in summary.get("runs", []):
@@ -50,9 +51,9 @@ def cuda_lane(summary: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def metal_lane(metal_output: Path) -> dict[str, Any]:
-    best = load_json(metal_output / "best_metrics.json")
-    resolved = load_json(metal_output / "resolved_config.json")
-    train_history = read_jsonl(metal_output / "train_metrics_history.jsonl")
+    best = load_report_json(metal_output / "best_metrics.json")
+    resolved = load_report_json(metal_output / "resolved_config.json")
+    train_history = load_report_jsonl(metal_output / "train_metrics_history.jsonl", missing_ok=True)
     metrics = best.get("metrics", {})
     return {
         "name": "powerfoam_metal_micro_match",
@@ -83,19 +84,6 @@ def metal_lane(metal_output: Path) -> dict[str, Any]:
             "device": resolved.get("train", {}).get("device"),
         },
     }
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            row = json.loads(line)
-            if isinstance(row, dict):
-                rows.append(row)
-    return rows
-
 
 def diff_eval(a: dict[str, Any], b: dict[str, Any]) -> dict[str, float | None]:
     a_eval = a.get("eval", {})
@@ -172,11 +160,10 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
 
-    cuda_summary = load_json(args.cuda_summary)
+    cuda_summary = load_report_json(args.cuda_summary)
     metal = metal_lane(args.metal_output)
     report = build_report(cuda_summary, metal, cuda_path=args.cuda_summary, metal_output=args.metal_output)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(args.output, report)
     print(json.dumps({"output": rel(args.output), "status": report["status"]}, indent=2, sort_keys=True))
 
 

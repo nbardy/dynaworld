@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from vjepa_benchmark_common import ROOT, parse_nonempty_csv, parse_positive_int_csv
+from train_artifacts import append_jsonl, write_jsonl
 
-ROOT = Path(__file__).resolve().parents[2]
+
 VARIANTS_ROOT = ROOT / "third_party" / "fast-mac-gsplat" / "variants"
 
 
@@ -47,19 +49,8 @@ VARIANTS: dict[str, VariantSpec] = {
 }
 
 
-def parse_csv_ints(value: str) -> list[int]:
-    values = [int(item.strip()) for item in value.split(",") if item.strip()]
-    if not values:
-        raise argparse.ArgumentTypeError("expected at least one integer")
-    if min(values) < 1:
-        raise argparse.ArgumentTypeError("all values must be positive")
-    return values
-
-
-def parse_csv_strings(value: str) -> list[str]:
-    values = [item.strip() for item in value.split(",") if item.strip()]
-    if not values:
-        raise argparse.ArgumentTypeError("expected at least one value")
+def parse_variant_csv(value: str) -> list[str]:
+    values = parse_nonempty_csv(value)
     unknown = [item for item in values if item not in VARIANTS]
     if unknown:
         raise argparse.ArgumentTypeError(f"unknown variants: {', '.join(unknown)}")
@@ -224,11 +215,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run fixed high-res fast-mac variant timing matrix.")
     parser.add_argument(
         "--variants",
-        type=parse_csv_strings,
-        default=parse_csv_strings(",".join(VARIANTS)),
+        type=parse_variant_csv,
+        default=parse_variant_csv(",".join(VARIANTS)),
     )
-    parser.add_argument("--resolutions", type=parse_csv_ints, default=parse_csv_ints("512,2048,4096"))
-    parser.add_argument("--gaussians", type=parse_csv_ints, default=parse_csv_ints("8192,65536"))
+    parser.add_argument("--resolutions", type=parse_positive_int_csv, default=parse_positive_int_csv("512,2048,4096"))
+    parser.add_argument("--gaussians", type=parse_positive_int_csv, default=parse_positive_int_csv("8192,65536"))
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--case", type=str, default="medium_sigma_3_8")
     parser.add_argument("--seed", type=int, default=0)
@@ -239,35 +230,33 @@ def main() -> None:
     parser.add_argument("--output-jsonl", type=Path, required=True)
     args = parser.parse_args()
 
-    args.output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-    with args.output_jsonl.open("w", encoding="utf-8") as handle:
-        for variant_name in args.variants:
-            spec = VARIANTS[variant_name]
-            for resolution in args.resolutions:
-                for gaussians in args.gaussians:
-                    row = run_case(
-                        spec,
-                        resolution=resolution,
-                        gaussians=gaussians,
-                        batch_size=args.batch_size,
-                        case=args.case,
-                        seed=args.seed,
-                        warmup=args.warmup,
-                        iters=args.iters,
-                        feature_dim=args.feature_dim,
-                        timeout=args.timeout,
+    write_jsonl(args.output_jsonl, ())
+    for variant_name in args.variants:
+        spec = VARIANTS[variant_name]
+        for resolution in args.resolutions:
+            for gaussians in args.gaussians:
+                row = run_case(
+                    spec,
+                    resolution=resolution,
+                    gaussians=gaussians,
+                    batch_size=args.batch_size,
+                    case=args.case,
+                    seed=args.seed,
+                    warmup=args.warmup,
+                    iters=args.iters,
+                    feature_dim=args.feature_dim,
+                    timeout=args.timeout,
+                )
+                append_jsonl(args.output_jsonl, row)
+                if row["status"] == "ok":
+                    print(
+                        f"{variant_name:24s} r={resolution:4d} g={gaussians:6d} "
+                        f"median={row.get('median_ms', row.get('total_median_ms', 0.0)):9.3f} "
+                        f"fwd={row.get('forward_ms', row.get('forward_median_ms', 0.0)):9.3f} "
+                        f"bwd={row.get('backward_ms', row.get('backward_median_ms', 0.0)):9.3f}"
                     )
-                    handle.write(json.dumps(row, sort_keys=True) + "\n")
-                    handle.flush()
-                    if row["status"] == "ok":
-                        print(
-                            f"{variant_name:24s} r={resolution:4d} g={gaussians:6d} "
-                            f"median={row.get('median_ms', row.get('total_median_ms', 0.0)):9.3f} "
-                            f"fwd={row.get('forward_ms', row.get('forward_median_ms', 0.0)):9.3f} "
-                            f"bwd={row.get('backward_ms', row.get('backward_median_ms', 0.0)):9.3f}"
-                        )
-                    else:
-                        print(f"{variant_name:24s} r={resolution:4d} g={gaussians:6d} status={row['status']}")
+                else:
+                    print(f"{variant_name:24s} r={resolution:4d} g={gaussians:6d} status={row['status']}")
     print(f"wrote {args.output_jsonl}")
 
 

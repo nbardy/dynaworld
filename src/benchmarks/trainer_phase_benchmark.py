@@ -1,49 +1,40 @@
 from __future__ import annotations
 
 import argparse
-import gc
 import json
-import os
-import random
 import statistics
-import sys
-import threading
-import time
-from collections import defaultdict
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import torch
 
-os.environ.setdefault("WANDB_MODE", "disabled")
-os.environ.setdefault("WANDB_SILENT", "true")
+from benchmark_bootstrap import ROOT
 
-ROOT = Path(__file__).resolve().parents[2]
-TRAIN_ROOT = ROOT / "src" / "train"
-if str(TRAIN_ROOT) not in sys.path:
-    sys.path.insert(0, str(TRAIN_ROOT))
+from config_utils import load_config_file
+from benchmark_compare import seed_everything
+from benchmark_memory import run_with_memory_sampling
+from fixed_render_graph import (
+    FixedRenderCase,
+    PhaseTimer,
+    RasterGraph,
+    clone_sequence_for_fixed_render,
+    fast_mac_project_and_rasterize,
+    iter_target_chunks,
+    multicam_sample_and_encode,
+    prepare_fixed_render_case,
+    singlecam_sample_and_encode,
+)
+from objective.loss import resize_target_for_render
+from objective.types import BackgroundSample, RasterizedView
+from objective.v12a_fused_l1 import fused_no_norm_l1_mean_loss
+from pipeline.losses import build_bank_rate_loss, build_camera_loss
+from runtime_types import GaussianSequence
+from train_artifacts import write_json
+from trainer_capabilities import trainer_uses_multicam_phase
+from train_logging import finish_wandb_run, set_default_wandb_mode
+from trainer_registry import instantiate_trainer_for_config
 
-from config_utils import load_config_file  # noqa: E402
-from objective.loss import resize_target_for_render  # noqa: E402
-from objective.types import BackgroundSample, RasterizedView  # noqa: E402
-from objective.v12a_fused_l1 import fused_no_norm_l1_mean_loss  # noqa: E402
-from pipeline.losses import build_bank_rate_loss, build_camera_loss  # noqa: E402
-from pipeline.render import _viewport_cameras, gaussian_sequence_slice  # noqa: E402
-from renderers.fast_mac import (  # noqa: E402
-    FastMacRendererConfig,
-    _rasterize_features_projected,
-    _rasterize_rgb_projected,
-    project_for_fast_mac_batch,
-)
-from rendering import _camera_scalar_vector, _resolve_camera_projection_mode  # noqa: E402
-from runtime_types import GaussianSequence  # noqa: E402
-from train_multicam_precomputed_feature_implicit_dynamic import (  # noqa: E402
-    MulticamPrecomputedFeatureImplicitTrainer,
-)
-from train_precomputed_feature_implicit_dynamic import PrecomputedFeatureImplicitTrainer  # noqa: E402
-from train_video_token_implicit_dynamic import trainer_class_for_config  # noqa: E402
+set_default_wandb_mode("disabled", silent=True)
 
 
 TRAIN_STEP_PHASES = (
@@ -70,321 +61,10 @@ FIXED_RENDER_PHASES = (
 )
 
 
-def sync_device(device: torch.device) -> None:
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-    elif device.type == "mps" and hasattr(torch, "mps"):
-        torch.mps.synchronize()
-
-
-def device_memory_stats(device: torch.device) -> dict[str, int]:
-    if device.type == "mps" and hasattr(torch, "mps"):
-        return {
-            "current_allocated_bytes": int(torch.mps.current_allocated_memory()),
-            "driver_allocated_bytes": int(torch.mps.driver_allocated_memory()),
-        }
-    if device.type == "cuda":
-        return {
-            "current_allocated_bytes": int(torch.cuda.memory_allocated(device)),
-            "driver_allocated_bytes": int(torch.cuda.memory_reserved(device)),
-        }
-    return {}
-
-
-def clear_device_cache(device: torch.device) -> None:
-    gc.collect()
-    if device.type == "mps" and hasattr(torch, "mps"):
-        torch.mps.empty_cache()
-    elif device.type == "cuda":
-        torch.cuda.empty_cache()
-    sync_device(device)
-
-
-class DeviceMemorySampler:
-    def __init__(self, device: torch.device, *, interval_ms: float) -> None:
-        self.device = device
-        self.interval_s = float(interval_ms) / 1000.0
-        self.stop_event = threading.Event()
-        self.thread: threading.Thread | None = None
-        self.max_current_allocated_bytes = 0
-        self.max_driver_allocated_bytes = 0
-        self.samples = 0
-        self.enabled = self.interval_s > 0.0 and bool(device_memory_stats(device))
-
-    def _sample_once(self) -> None:
-        stats = device_memory_stats(self.device)
-        if not stats:
-            return
-        self.max_current_allocated_bytes = max(
-            self.max_current_allocated_bytes,
-            int(stats["current_allocated_bytes"]),
-        )
-        self.max_driver_allocated_bytes = max(
-            self.max_driver_allocated_bytes,
-            int(stats["driver_allocated_bytes"]),
-        )
-        self.samples += 1
-
-    def _run(self) -> None:
-        while not self.stop_event.is_set():
-            self._sample_once()
-            self.stop_event.wait(self.interval_s)
-        self._sample_once()
-
-    def __enter__(self) -> "DeviceMemorySampler":
-        if self.enabled:
-            self._sample_once()
-            self.thread = threading.Thread(target=self._run, name="device-memory-sampler", daemon=True)
-            self.thread.start()
-        return self
-
-    def __exit__(self, _exc_type, _exc, _tb) -> None:
-        if not self.enabled:
-            return
-        self.stop_event.set()
-        if self.thread is not None:
-            self.thread.join()
-        self._sample_once()
-
-    def stats(self) -> dict[str, int]:
-        if not self.enabled:
-            return {}
-        return {
-            "sampled_peak_current_allocated_bytes": int(self.max_current_allocated_bytes),
-            "sampled_peak_driver_allocated_bytes": int(self.max_driver_allocated_bytes),
-            "memory_sample_count": int(self.samples),
-        }
-
-
-def run_with_memory_sampling(
-    device: torch.device,
-    *,
-    interval_ms: float,
-    clear_cache: bool,
-    fn,
-) -> dict[str, float | int]:
-    if clear_cache:
-        clear_device_cache(device)
-    start_stats = device_memory_stats(device)
-    start_stats = {f"start_{key}": value for key, value in start_stats.items()}
-    with DeviceMemorySampler(device, interval_ms=interval_ms) as sampler:
-        sample = fn()
-    end_stats = device_memory_stats(device)
-    end_stats = {f"end_{key}": value for key, value in end_stats.items()}
-    return {**sample, **start_stats, **end_stats, **sampler.stats()}
-
-
-class PhaseTimer:
-    def __init__(self, device: torch.device) -> None:
-        self.device = device
-        self.elapsed_ms: dict[str, float] = defaultdict(float)
-
-    @contextmanager
-    def measure(self, phase: str):
-        sync_device(self.device)
-        start = time.perf_counter()
-        try:
-            yield
-        finally:
-            sync_device(self.device)
-            self.elapsed_ms[phase] += (time.perf_counter() - start) * 1000.0
-
-
-@dataclass(frozen=True)
-class RasterGraph:
-    features: torch.Tensor
-    alpha: torch.Tensor | None
-    projected: tuple[torch.Tensor, ...]
-    projection_inputs: tuple[torch.Tensor, ...]
-
-
 @dataclass(frozen=True)
 class ChunkRecord:
     loss: torch.Tensor
     raster: RasterGraph
-
-
-@dataclass(frozen=True)
-class FixedRenderChunk:
-    sequence: GaussianSequence
-    target: Any
-    background: Any | None = None
-
-
-@dataclass(frozen=True)
-class FixedRenderCase:
-    chunks: tuple[FixedRenderChunk, ...]
-    background: BackgroundSample | None
-    total_frames: int
-    setup_phases_ms: dict[str, float]
-    temporal_chunk_size: int | None = None
-
-
-def trainer_for_config(config: dict[str, Any]):
-    if "multicam_manifest" in config.get("data", {}) or "train_views_per_step" in config.get("train", {}):
-        return MulticamPrecomputedFeatureImplicitTrainer(config)
-    backend = str(config.get("model", {}).get("video_encoder_backend", "")).lower()
-    if "features" in config or backend in {"precomputed", "precomputed_ltx"}:
-        return PrecomputedFeatureImplicitTrainer(config)
-    return trainer_class_for_config(config)(config)
-
-
-def fast_mac_project_and_rasterize(
-    trainer,
-    sequence: GaussianSequence,
-    cameras: tuple[Any, ...],
-    timer: PhaseTimer,
-) -> RasterGraph:
-    if trainer.renderer_mode != "fast_mac":
-        raise ValueError(
-            f"trainer_phase_benchmark currently splits project/raster only for renderer='fast_mac'; "
-            f"resolved renderer_mode={trainer.renderer_mode!r}."
-        )
-    if sequence.frame_count != len(cameras):
-        raise ValueError(f"Expected {sequence.frame_count} cameras, got {len(cameras)}.")
-
-    cfg = trainer.cfg
-    height = int(cfg["render"]["render_size"])
-    width = int(cfg["render"]["render_size"])
-    render_cameras = _viewport_cameras(cameras, input_size=int(cfg["model"]["size"]), render_size=height)
-    device = sequence.xyz.device
-    projection_mode = _resolve_camera_projection_mode(render_cameras, cfg["render"]["camera_projection"])
-    fx = _camera_scalar_vector(render_cameras, "fx", device)
-    fy = _camera_scalar_vector(render_cameras, "fy", device)
-    cx = _camera_scalar_vector(render_cameras, "cx", device)
-    cy = _camera_scalar_vector(render_cameras, "cy", device)
-    camera_to_world = torch.stack(
-        [camera.camera_to_world.to(device=device, dtype=torch.float32) for camera in render_cameras],
-        dim=0,
-    )
-
-    xyz = sequence.xyz.float()
-    scales = sequence.scales.float()
-    quats = sequence.quats.float()
-    opacities = sequence.opacities.float()
-    colors_in = sequence.rgbs.float()
-    with timer.measure("project"):
-        means2d, conics, colors, projected_opacities, depths = project_for_fast_mac_batch(
-            xyz,
-            scales,
-            quats,
-            opacities,
-            colors_in,
-            fx,
-            fy,
-            cx,
-            cy,
-            cameras=render_cameras,
-            projection_mode=projection_mode,
-            camera_to_world=camera_to_world,
-            near_plane=cfg["render"]["near_plane"],
-        )
-
-    fast_mac_config = FastMacRendererConfig.from_mapping(
-        cfg["render"]["fast_mac"],
-        fallback_tile_size=cfg["render"]["tile_size"],
-        fallback_alpha_threshold=cfg["render"]["alpha_threshold"],
-    )
-    feature_dim = int(colors.shape[-1])
-    with timer.measure("raster_forward"):
-        if feature_dim == 3:
-            image_bhwc = _rasterize_rgb_projected(
-                means2d,
-                conics,
-                colors,
-                projected_opacities,
-                depths,
-                fast_mac_config,
-                height,
-                width,
-            )
-            features = image_bhwc.clamp(0.0, 1.0).permute(0, 3, 1, 2).contiguous()
-            alpha = None
-        else:
-            rasterize_out = _rasterize_features_projected(
-                means2d,
-                conics,
-                colors,
-                projected_opacities,
-                depths,
-                fast_mac_config,
-                height,
-                width,
-                feature_dim,
-            )
-            image_bhwf, alpha = rasterize_out
-            features = image_bhwf.permute(0, 3, 1, 2).contiguous()
-    return RasterGraph(
-        features=features,
-        alpha=alpha,
-        projected=(means2d, conics, colors, projected_opacities, depths),
-        projection_inputs=(xyz, scales, quats, opacities, colors_in, fx, fy, cx, cy, camera_to_world),
-    )
-
-
-def singlecam_sample_and_encode(trainer, timer: PhaseTimer):
-    with timer.measure("sample"):
-        sampled = trainer.sample_clip()
-    if len(sampled) == 4:
-        sequence_data, clip_frames, clip_times, clip_cameras = sampled
-        with timer.measure("encode"):
-            decoded = trainer.forward_known_clip(clip_frames, clip_times, clip_cameras)
-        frame_count = int(clip_frames.shape[1])
-        targets = [
-            trainer.make_target_view(
-                view_id="benchmark_train_clip",
-                frames=clip_frames[0],
-                frame_indices=torch.arange(frame_count, device=trainer.device),
-                frame_times=clip_times.reshape(-1),
-                cameras=clip_cameras,
-                role="train",
-                camera_owner="external_rig",
-            )
-        ]
-        return sequence_data, clip_frames, clip_times, decoded, targets
-
-    sequence_data, clip_frames, clip_times = sampled
-    with timer.measure("encode"):
-        model_input = trainer.model_input_for_clip(sequence_data, clip_frames, clip_times)
-        decoded = trainer.forward_clip(model_input, clip_times)
-    if decoded.cameras is None:
-        raise ValueError("Implicit-camera decode did not produce cameras.")
-    frame_count = int(clip_frames.shape[1])
-    targets = [
-        trainer.make_target_view(
-            view_id="benchmark_train_clip",
-            frames=clip_frames[0],
-            frame_indices=torch.arange(frame_count, device=trainer.device),
-            frame_times=clip_times.reshape(-1),
-            cameras=tuple(decoded.cameras),
-            role="train",
-            camera_owner="model",
-        )
-    ]
-    return sequence_data, clip_frames, clip_times, decoded, targets
-
-
-def multicam_sample_and_encode(trainer, timer: PhaseTimer):
-    with timer.measure("sample"):
-        sequence_data, clip_indices, clip_frames, clip_times, views = trainer.sample_multicam_clip()
-    with timer.measure("encode"):
-        decoded = trainer._decode_clip(sequence_data, clip_frames, clip_times)
-    targets = []
-    for view in views:
-        view_i = int(view)
-        targets.append(
-            trainer.make_target_view(
-                view_id=f"benchmark_train_view_{view_i}",
-                frames=trainer.multicam_bundle.train_frames[view_i, clip_indices],
-                frame_indices=clip_indices,
-                frame_times=trainer.frame_times_for_indices(clip_indices),
-                cameras=trainer.camera_rig.cameras_for_view(view_i, clip_indices),
-                role="train",
-                camera_owner="external_rig",
-                camera_name=trainer.multicam_bundle.train_camera_names[view_i],
-            )
-        )
-    return sequence_data, clip_frames, clip_times, decoded, targets
 
 
 def build_regularizer_loss(trainer, decoded: GaussianSequence, clip_times: torch.Tensor, *, multicam: bool):
@@ -399,36 +79,6 @@ def build_regularizer_loss(trainer, decoded: GaussianSequence, clip_times: torch
         trainer.loss_cfg,
     )
     return camera_loss + bank_rate_loss
-
-
-def iter_target_chunks(
-    trainer,
-    decoded: GaussianSequence,
-    target,
-    *,
-    use_microbatch: bool,
-    chunk_size_override: int | None = None,
-):
-    frame_count = target.frame_count
-    if chunk_size_override is not None:
-        chunk_size = min(max(1, int(chunk_size_override)), frame_count)
-    else:
-        chunk_size = trainer.temporal_recon_chunk_size(frame_count) if use_microbatch else frame_count
-    for chunk_start in range(0, frame_count, chunk_size):
-        chunk_end = min(chunk_start + chunk_size, frame_count)
-        chunk_sequence = gaussian_sequence_slice(decoded, chunk_start, chunk_end)
-        chunk_target = trainer.make_target_view(
-            view_id=target.view_id,
-            frames=target.frames[chunk_start:chunk_end],
-            frame_indices=target.frame_indices[chunk_start:chunk_end],
-            frame_times=target.frame_times.reshape(-1)[chunk_start:chunk_end],
-            cameras=tuple(target.cameras[chunk_start:chunk_end]),
-            role=target.role,
-            camera_owner=target.camera_owner,
-            camera_name=target.camera_name,
-            metrics_prefix=target.metrics_prefix,
-        )
-        yield chunk_start, chunk_end, chunk_sequence, chunk_target
 
 
 def _v12a_fused_l1_chunk_loss(
@@ -520,95 +170,6 @@ def build_step_graph(
     return chunk_records, regularizer_loss
 
 
-def _detach_sequence_for_fixed_render(sequence: GaussianSequence) -> GaussianSequence:
-    return GaussianSequence(
-        xyz=sequence.xyz.detach(),
-        scales=sequence.scales.detach(),
-        quats=sequence.quats.detach(),
-        opacities=sequence.opacities.detach(),
-        rgbs=sequence.rgbs.detach(),
-        cameras=sequence.cameras,
-        camera_state=None,
-        auxiliary=sequence.auxiliary,
-    )
-
-
-def _clone_sequence_for_fixed_render(sequence: GaussianSequence, *, freeze_colors: bool) -> GaussianSequence:
-    def leaf(tensor: torch.Tensor, *, requires_grad: bool = True) -> torch.Tensor:
-        out = tensor.detach().clone()
-        return out.requires_grad_(requires_grad)
-
-    return GaussianSequence(
-        xyz=leaf(sequence.xyz),
-        scales=leaf(sequence.scales),
-        quats=leaf(sequence.quats),
-        opacities=leaf(sequence.opacities),
-        rgbs=leaf(sequence.rgbs, requires_grad=not freeze_colors),
-        cameras=sequence.cameras,
-        camera_state=None,
-        auxiliary=sequence.auxiliary,
-    )
-
-
-def _background_for_chunk(background: BackgroundSample, *, chunk_start: int, chunk_end: int) -> BackgroundSample:
-    if background.rgb is None:
-        return background
-    rgb = background.rgb
-    chunk_len = int(chunk_end - chunk_start)
-    if int(rgb.shape[0]) not in {1, chunk_len}:
-        if int(rgb.shape[0]) < chunk_end:
-            raise ValueError(
-                f"Cannot slice background with shape {tuple(rgb.shape)} for chunk [{chunk_start}, {chunk_end})."
-            )
-        rgb = rgb[chunk_start:chunk_end]
-    return BackgroundSample(rgb=rgb, mode=background.mode, phase=background.phase, step=background.step)
-
-
-def prepare_fixed_render_case(
-    trainer,
-    *,
-    multicam: bool,
-    temporal_chunk_size: int | None = None,
-) -> FixedRenderCase:
-    setup_timer = PhaseTimer(trainer.device)
-    if multicam:
-        _sequence_data, _clip_frames, _clip_times, decoded, targets = multicam_sample_and_encode(trainer, setup_timer)
-    else:
-        _sequence_data, _clip_frames, _clip_times, decoded, targets = singlecam_sample_and_encode(trainer, setup_timer)
-
-    use_microbatch = not multicam
-    total_frames = sum(target.frame_count for target in targets)
-    background = trainer.rgb_objective.sample_background(
-        phase="train",
-        like=targets[0].frames,
-        frame_count=targets[0].frame_count,
-    )
-    chunks = []
-    for target in targets:
-        for chunk_start, chunk_end, chunk_sequence, chunk_target in iter_target_chunks(
-            trainer,
-            decoded,
-            target,
-            use_microbatch=use_microbatch,
-            chunk_size_override=temporal_chunk_size,
-        ):
-            chunk_background = _background_for_chunk(background, chunk_start=chunk_start, chunk_end=chunk_end)
-            chunks.append(
-                FixedRenderChunk(
-                    sequence=_detach_sequence_for_fixed_render(chunk_sequence),
-                    target=chunk_target,
-                    background=chunk_background,
-                )
-            )
-    return FixedRenderCase(
-        chunks=tuple(chunks),
-        background=background.detach() if torch.is_tensor(background) else background,
-        total_frames=total_frames,
-        setup_phases_ms={phase: float(setup_timer.elapsed_ms.get(phase, 0.0)) for phase in ("sample", "encode")},
-        temporal_chunk_size=temporal_chunk_size,
-    )
-
-
 def benchmark_fixed_render_case(
     trainer,
     fixed_case: FixedRenderCase,
@@ -624,7 +185,7 @@ def benchmark_fixed_render_case(
     losses: list[torch.Tensor] = []
     for fixed_chunk in fixed_case.chunks:
         chunk_background = fixed_chunk.background if fixed_chunk.background is not None else fixed_case.background
-        chunk_sequence = _clone_sequence_for_fixed_render(fixed_chunk.sequence, freeze_colors=freeze_colors)
+        chunk_sequence = clone_sequence_for_fixed_render(fixed_chunk.sequence, freeze_colors=freeze_colors)
         raster_graph = fast_mac_project_and_rasterize(
             trainer,
             chunk_sequence,
@@ -904,8 +465,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.seed is not None:
-        random.seed(int(args.seed))
-        torch.manual_seed(int(args.seed))
+        seed_everything(int(args.seed))
     if int(args.fixed_render_temporal_chunk_size) < 0:
         raise ValueError("--fixed-render-temporal-chunk-size must be >= 0.")
     if not args.fixed_render_graph and (
@@ -916,8 +476,8 @@ def main() -> None:
         )
 
     config = load_config_file(args.config)
-    trainer = trainer_for_config(config)
-    multicam = isinstance(trainer, MulticamPrecomputedFeatureImplicitTrainer)
+    trainer = instantiate_trainer_for_config(config, args.config)
+    multicam = trainer_uses_multicam_phase(trainer)
     samples: list[dict[str, float]] = []
     try:
         temporal_chunk_size = int(args.fixed_render_temporal_chunk_size)
@@ -1054,13 +614,10 @@ def main() -> None:
             print_table(breakdown_summary, BACKWARD_BREAKDOWN_PHASES, title="Backward breakdown probes")
             print("Note: breakdown probes are separate VJPs and will not sum exactly to autograd_backward_total.")
         if args.json_output is not None:
-            args.json_output.parent.mkdir(parents=True, exist_ok=True)
-            args.json_output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            write_json(args.json_output, payload)
             print(f"wrote {args.json_output}")
     finally:
-        import wandb
-
-        wandb.finish()
+        finish_wandb_run()
 
 
 if __name__ == "__main__":

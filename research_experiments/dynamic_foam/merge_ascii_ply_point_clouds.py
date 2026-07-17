@@ -8,6 +8,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from .report_artifacts import write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import write_report_json
+
 
 PLY_PROPERTIES = (
     "property float x",
@@ -123,9 +128,7 @@ def main() -> None:
 
     write_ascii_xyzrgb_ply(args.output, all_rows)
     summary = build_summary(args.output, sources, all_rows)
-    with args.output.with_suffix(".json").open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
-        f.write("\n")
+    write_report_json(args.output.with_suffix(".json"), summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 

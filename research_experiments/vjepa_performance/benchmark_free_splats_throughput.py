@@ -1,68 +1,35 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import statistics
-import sys
-import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import torch
-import wandb
 
+from vjepa_benchmark_common import (
+    ROOT,
+    apply_video_benchmark_shape,
+    effective_splat_count,
+    parse_positive_int_csv,
+    quiet_training_logging,
+    set_total_splat_count,
+    timed,
+    timing_stats,
+)
 
-ROOT = Path(__file__).resolve().parents[2]
-os.chdir(ROOT)
-sys.path.insert(0, str(ROOT / "src" / "train"))
-
-from config_utils import load_config_file  # noqa: E402
-from pipeline.losses import build_bank_rate_loss, build_camera_loss  # noqa: E402
-from pipeline.render import gaussian_sequence_slice  # noqa: E402
-from train_video_token_implicit_dynamic import trainer_class_for_config  # noqa: E402
+from config_utils import load_config_file
+from pipeline.losses import build_bank_rate_loss, build_camera_loss
+from pipeline.render import gaussian_sequence_slice
+from train_artifacts import write_jsonl
+from train_logging import finish_wandb_run, set_default_wandb_mode
+from trainer_registry import instantiate_trainer_for_config
 
 
 DEFAULT_CONFIG = (
     ROOT
     / "src/train_configs/local_mac_compare_free_splats_16f_implicit_camera_128_fast_mac_8192splats.jsonc"
 )
-
-
-def sync(device: torch.device) -> None:
-    if device.type == "cuda" and torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif device.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
-        torch.mps.synchronize()
-
-
-def timed(name: str, device: torch.device, fn: Callable[[], Any]) -> tuple[str, float, Any]:
-    sync(device)
-    start = time.perf_counter()
-    value = fn()
-    sync(device)
-    return name, time.perf_counter() - start, value
-
-
-def parse_int_csv(value: str) -> list[int]:
-    items = [int(item.strip()) for item in value.split(",") if item.strip()]
-    if not items:
-        raise argparse.ArgumentTypeError("expected at least one integer")
-    if min(items) < 1:
-        raise argparse.ArgumentTypeError("all values must be >= 1")
-    return items
-
-
-def summarize(values: list[float]) -> dict[str, float]:
-    if not values:
-        return {}
-    return {
-        "mean": float(statistics.mean(values)),
-        "median": float(statistics.median(values)),
-        "min": float(min(values)),
-        "max": float(max(values)),
-    }
 
 
 def prepare_config(
@@ -74,22 +41,12 @@ def prepare_config(
     source_frame_count: int | None,
 ) -> dict[str, Any]:
     cfg = deepcopy(base_cfg)
-    cfg["model"]["size"] = int(render_size)
-    cfg["model"]["train_frame_count"] = int(clip_length)
-    if splat_count is not None:
-        tokens = int(cfg["model"]["tokens"])
-        if int(splat_count) % tokens != 0:
-            raise ValueError(f"splat_count={splat_count} must be divisible by model.tokens={tokens}.")
-        cfg["model"]["gaussians_per_token"] = int(splat_count) // tokens
-    cfg["render"]["render_size"] = int(render_size)
-    cfg["train"]["steps"] = 1
-    cfg["logging"]["log_every"] = 1_000_000
-    cfg["logging"]["image_log_every"] = 1_000_000
-    cfg["logging"]["video_log_every"] = 1_000_000
-    cfg["logging"]["always_log_last_step"] = False
+    apply_video_benchmark_shape(cfg, render_size=render_size, clip_length=clip_length, steps=1)
+    set_total_splat_count(cfg, splat_count)
+    quiet_training_logging(cfg)
     cfg["logging"]["wandb_run_name"] = (
         f"splat-throughput-{cfg['model']['variant']}-r{render_size}-f{clip_length}-g"
-        f"{cfg['model']['tokens'] * cfg['model']['gaussians_per_token']}"
+        f"{effective_splat_count(cfg)}"
         + ("-single-source-frame" if source_frame_count == 1 else "")
     )
     if source_frame_count is not None:
@@ -225,6 +182,7 @@ def benchmark_step(trainer) -> dict[str, float]:
 def run_case(
     base_cfg: dict[str, Any],
     *,
+    config_path: Path,
     render_size: int,
     clip_length: int,
     splat_count: int | None,
@@ -239,7 +197,7 @@ def run_case(
         splat_count=splat_count,
         source_frame_count=source_frame_count,
     )
-    trainer = trainer_class_for_config(cfg)(cfg)
+    trainer = instantiate_trainer_for_config(cfg, config_path)
     rows: list[dict[str, float]] = []
     try:
         for _ in range(warmup):
@@ -247,7 +205,7 @@ def run_case(
         for _ in range(steps):
             rows.append(benchmark_step(trainer))
     finally:
-        wandb.finish()
+        finish_wandb_run()
 
     timing_keys = [key for key in rows[0] if key not in {"loss", "recon_loss_value"}] if rows else []
     step_totals = [sum(row[key] for key in timing_keys) for row in rows]
@@ -276,7 +234,7 @@ def run_case(
         "ms_per_frame": float(1000.0 * elapsed_total / frames) if frames > 0 else 0.0,
         "last_loss": rows[-1]["loss"] if rows else None,
         "last_recon_loss": rows[-1]["recon_loss_value"] if rows else None,
-        "timings": {key: summarize([row[key] for row in rows]) for key in timing_keys},
+        "timings": {key: timing_stats([row[key] for row in rows]) for key in timing_keys},
     }
     return result
 
@@ -305,11 +263,11 @@ def print_result(result: dict[str, Any]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark direct free-splats frame throughput.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--render-sizes", type=parse_int_csv, default=parse_int_csv("64,128,256"))
-    parser.add_argument("--clip-lengths", type=parse_int_csv, default=parse_int_csv("1,4,16"))
+    parser.add_argument("--render-sizes", type=parse_positive_int_csv, default=parse_positive_int_csv("64,128,256"))
+    parser.add_argument("--clip-lengths", type=parse_positive_int_csv, default=parse_positive_int_csv("1,4,16"))
     parser.add_argument(
         "--splat-counts",
-        type=parse_int_csv,
+        type=parse_positive_int_csv,
         default=None,
         help="Optional total splat counts. Each must divide model.tokens.",
     )
@@ -322,7 +280,7 @@ def main() -> None:
     if args.steps < 1 or args.warmup < 0:
         raise SystemExit("--steps must be >= 1 and --warmup must be >= 0")
 
-    os.environ.setdefault("WANDB_MODE", "disabled")
+    set_default_wandb_mode("disabled", silent=None)
     base_cfg = load_config_file(args.config)
 
     results = []
@@ -330,7 +288,7 @@ def main() -> None:
     if args.include_single_source_frame:
         source_frame_cases.append(1)
     splat_counts = args.splat_counts or [
-        int(base_cfg["model"]["tokens"]) * int(base_cfg["model"]["gaussians_per_token"])
+        effective_splat_count(base_cfg)
     ]
     for source_frame_count in source_frame_cases:
         for splat_count in splat_counts:
@@ -340,6 +298,7 @@ def main() -> None:
                         continue
                     result = run_case(
                         base_cfg,
+                        config_path=args.config,
                         render_size=render_size,
                         clip_length=clip_length,
                         splat_count=splat_count,
@@ -351,10 +310,7 @@ def main() -> None:
                     results.append(result)
 
     if args.output_jsonl is not None:
-        args.output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-        with args.output_jsonl.open("w", encoding="utf-8") as handle:
-            for result in results:
-                handle.write(json.dumps(result, sort_keys=True) + "\n")
+        write_jsonl(args.output_jsonl, results)
         print(f"wrote {args.output_jsonl}")
 
 

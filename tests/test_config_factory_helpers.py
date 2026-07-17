@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -14,7 +18,7 @@ from model_factories import (
     model_class_for_variant,
     validated_model_kwargs,
 )
-from train_video_token_implicit_dynamic import resolve_config
+from trainer_registry import resolve_config_for_arch as resolve_config
 
 
 F32_SINGLE_CAM_CONFIG = "src/train_configs/local_mac_unconditioned_tokens_features_F32_alpha_400step.jsonc"
@@ -138,6 +142,52 @@ def test_resolve_config_accepts_explicit_bf16_amp_dtype() -> None:
     resolved = resolve_config(cfg)
 
     assert resolved["train"]["amp_dtype"] == "bf16"
+
+
+def test_resolve_config_defaults_train_seed() -> None:
+    cfg = load_config_file(F32_MULTICAM_CONFIG)
+    cfg["train"].pop("seed", None)
+
+    resolved = resolve_config(cfg)
+
+    assert resolved["train"]["seed"] == 17
+
+
+def test_resolve_config_accepts_explicit_train_seed() -> None:
+    cfg = load_config_file(F32_MULTICAM_CONFIG)
+    cfg["train"]["seed"] = 123
+
+    resolved = resolve_config(cfg)
+
+    assert resolved["train"]["seed"] == 123
+
+
+def test_resolve_config_accepts_manifest_prefetch_and_wandb_mode() -> None:
+    cfg = load_config_file(F32_MULTICAM_CONFIG)
+    cfg["data"]["train_manifest_prefetch"] = 2
+    cfg["logging"]["wandb_mode"] = "online"
+
+    resolved = resolve_config(cfg)
+
+    assert resolved["data"]["train_manifest_prefetch"] == 2
+    assert resolved["logging"]["wandb_mode"] == "online"
+
+
+def test_train_router_accepts_star_uvt_video_overfit_config() -> None:
+    path = Path(__file__).resolve().parents[1] / "src" / "train" / "train.py"
+    spec = importlib.util.spec_from_file_location("dynaworld_train_entry_star_uvt_test", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load train module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    entry = module.trainer_entry_for_config(
+        "src/train_configs/star_uvt_highmotion_hlaZbH_64f_256_directatomic_200step.jsonc"
+    )
+
+    assert entry.module == "star_uvt_video_trainer"
+    assert entry.runner == "run_training"
 
 
 def _tiny_precomputed_token_layout_model(active_detail_level: int) -> DynamicVideoTokenGSImplicitCamera:

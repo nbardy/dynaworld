@@ -1,0 +1,91 @@
+{
+  // First-class 512px STAR UVT overfit route.
+  // Mirrors the best May 17 harness recipe:
+  // 256px coarse direct_atomic for 200 steps -> promote tubes -> 512px fine for 50 steps.
+  "arch": "star_uvt_video_overfit",
+  "data": {
+    "video_path": "data/youtube_curated_spans/raw/hlaZbH_OFBU_seg_003_s00131000_e00138000.mp4",
+    "start_seconds": 2.0,
+    "fps": 29.97002997002997,
+    "duration_seconds": null,
+    "image_crop_mode": "center_square",
+    "target_size": 512,
+    "max_frames": 64
+  },
+  "train": {
+    "steps": 50,
+    "lr": 0.12,
+    "device": "mps",
+    "seed": 5,
+    "render_benchmark_repeats": 5,
+    "require_loss_decrease": true
+  },
+  "uvt": {
+    "tube_count": 32768,
+    "init_mode": "video_samples",
+    "spatial_precision": 0.125,
+    "temporal_precision": 2.0,
+    "opacity": 0.7,
+    "sample_mode": "stratified",
+    "velocity_init": "zero",
+    "velocity_search_radius": 4,
+    "velocity_patch_radius": 1,
+    "velocity_min_improvement_ratio": 0.9,
+    "final_lr": null,
+    "final_lr_start_step": null,
+    "coarse_target_size": 256,
+    "coarse_steps": 200,
+    "coarse_lr": null,
+    "appearance_refine_steps": 0,
+    "appearance_lr": 0.04,
+    "temporal_split_step": null,
+    "temporal_split_offset": 0.5,
+    "temporal_split_precision_scale": 2.0,
+    "temporal_split_opacity_scale": 1.0,
+    "temporal_split_depth_offset": 0.0001,
+    "temporal_split_lr": null,
+    "render_backend": "metal_tile",
+    "reduction_mode": "index_add",
+    "sample_emission_mode": "direct_atomic",
+    "tile_t": 1,
+    "tile_capacity": 256,
+    "tile_load_reg_weight": 0.0,
+    "tile_load_target": 0.0,
+    "skip_uvt": false
+  },
+  "per_frame": {
+    "splats": 8,
+    "lr": 0.12,
+    "init_mode": "random",
+    "render_backend": "dense",
+    "fast_max_pairs": 2048,
+    "spatial_precision": 0.25,
+    "opacity": 0.35,
+    "sample_mode": "random",
+    "skip_per_frame": true
+  },
+  "output": {
+    "out_json": "star_uvt/results/may17_firstclass_highmotion_hlaZbH_start2_512_64f_32768t_cap256_directatomic_multires256c200_50fine.json",
+    "contact_sheet": "star_uvt/results/may17_firstclass_highmotion_hlaZbH_start2_512_64f_32768t_cap256_directatomic_multires256c200_50fine.png",
+    "contact_sheet_frames": 8,
+    "contact_sheet_mode": "linspace",
+    "side_by_side_video": "star_uvt/results/may17_firstclass_highmotion_hlaZbH_start2_512_64f_32768t_cap256_directatomic_multires256c200_50fine.mp4",
+    "side_by_side_fps": 29.97002997002997
+  },
+  "logging": {
+    "wandb_enabled": true,
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "star-uvt-highmotion-hlaZbH-64f-512-directatomic-multires256c200-50fine-firstclass",
+    "wandb_tags": [
+      "star-uvt",
+      "firstclass-trainer",
+      "highmotion",
+      "64f",
+      "512px",
+      "multires-256c200-512f50",
+      "direct-atomic",
+      "overfit"
+    ],
+    "wandb_mode": "online"
+  }
+}

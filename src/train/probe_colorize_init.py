@@ -27,8 +27,11 @@ import torch
 
 from config_utils import load_config_file
 from init_diagnostics import format_colorize_init_summary, post_colorize_image_diagnostics
-from model_factories import build_model_from_config
+from model_factories import build_colorizer, build_model_from_config
 from pipeline.render import colorize_view_dirs_for_features, render_clip_sequence
+from train_cli import parse_csv_ints
+from train_devices import resolve_torch_device
+from trainer_registry import resolve_config_for_arch
 
 
 def _build_model_and_colorize(config_path: Path, seed: int) -> tuple[torch.nn.Module, torch.nn.Module | None, dict[str, Any]]:
@@ -36,28 +39,11 @@ def _build_model_and_colorize(config_path: Path, seed: int) -> tuple[torch.nn.Mo
     torch.manual_seed(seed)
     config = load_config_file(config_path)
 
-    import train_video_token_implicit_dynamic as trainer
-
-    resolved = trainer.resolve_config(config)
+    resolved = resolve_config_for_arch(config, config_path)
     model = build_model_from_config(resolved).eval()
 
-    colorize_module: torch.nn.Module | None = None
-    colorize_cfg = resolved.get("colorize")
-    if colorize_cfg is not None:
-        from colorize import FeatureToColor, normalize_view_condition
-
-        feature_dim = int(resolved["model"]["feature_dim"])
-        view_condition = normalize_view_condition(colorize_cfg.get("view_condition", "none"))
-        colorize_module = FeatureToColor(
-            feature_dim=feature_dim,
-            hidden_dim=colorize_cfg.get("hidden_dim"),
-            activation=colorize_cfg.get("activation", "sigmoid"),
-            pre_norm=bool(colorize_cfg.get("pre_norm", False)),
-            weight_init=str(colorize_cfg.get("weight_init", "kaiming")).lower(),
-            weight_init_gain=float(colorize_cfg.get("weight_init_gain", 1.0)),
-            view_condition=view_condition,
-        )
-        colorize_module.eval()
+    colorizer = build_colorizer(resolved.get("colorize"), feature_dim=int(resolved["model"]["feature_dim"]))
+    colorize_module = None if colorizer.module is None else colorizer.module.eval()
     return model, colorize_module, resolved
 
 
@@ -144,21 +130,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _resolve_device(name: str) -> torch.device:
-    name = name.lower()
-    if name == "auto":
-        if torch.backends.mps.is_available():
-            return torch.device("mps")
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
-    return torch.device(name)
-
-
 def main() -> None:
     args = parse_args()
-    seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
-    device = _resolve_device(args.device)
+    seeds = parse_csv_ints(args.seeds)
+    device = resolve_torch_device(args.device.lower(), auto_cuda=True)
     print(f"Device: {device}")
     print(f"Config: {args.config}")
     print(f"Seeds: {seeds}")

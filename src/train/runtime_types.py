@@ -18,6 +18,7 @@ FrameSource = Literal[
     "camera_json",
     "summary_video",
     "explicit_video",
+    "explicit_video_window",
     "summary_sampled",
     "all_frames",
 ]
@@ -56,6 +57,7 @@ class SequenceData:
     frame_times: Tensor
     video_fps: float
     frame_source: FrameSource
+    image_crop_mode: str = "resize"
     frame_paths: tuple[Path, ...] = ()
     cameras: tuple[CameraSpec, ...] | None = None
     records: tuple[Mapping[str, Any], ...] = ()
@@ -81,6 +83,7 @@ class SequenceData:
             frame_times=self.frame_times.to(device=device),
             video_fps=self.video_fps,
             frame_source=self.frame_source,
+            image_crop_mode=self.image_crop_mode,
             frame_paths=self.frame_paths,
             cameras=cameras,
             records=self.records,
@@ -114,6 +117,13 @@ class ClipBatch:
     def as_video_batch(self) -> Tensor:
         """Return [1, K, 3, H, W] for video-token models."""
         return self.frames.unsqueeze(0)
+
+    def as_time_batch(self, device: torch.device | str | None = None) -> Tensor:
+        """Return [1, K] normalized times for video-token models."""
+        times = self.frame_times.to(dtype=torch.float32)
+        if device is not None:
+            times = times.to(device=device)
+        return times.reshape(1, -1)
 
 
 @dataclass(frozen=True)
@@ -223,6 +233,35 @@ class GaussianSequence:
         )
 
 
+@dataclass(frozen=True)
+class RasterizedClip:
+    """Trainer-side raster output before RGB objective composition.
+
+    Features are [T, F, H, W]. Alpha is [T, H, W] when the active renderer can
+    expose it, otherwise None for legacy renderers.
+    """
+
+    features: Tensor
+    alpha: Tensor | None
+
+
+@dataclass(frozen=True)
+class RenderedClip:
+    """Full-sequence validation render bundle stitched from chunked eval.
+
+    This is distinct from `objective.types.RenderedView`, which represents one
+    target view through rasterization, colorization, background composition, and
+    loss. `RenderedClip` is the runtime payload returned by validation sequence
+    rendering.
+    """
+
+    rgb_sequence: Tensor
+    camera_state: CameraState | None
+    temporal_metrics: dict[str, float]
+    feature_sequence: Tensor | None
+    alpha_sequence: Tensor | None
+
+
 @dataclass
 class StepResult:
     source_path: Path | None
@@ -238,3 +277,51 @@ class StepResult:
     camera_global_loss: Tensor
     bank_rate_loss: Tensor
     bank_rate_terms: dict[str, Tensor]
+    aux_loss_terms: dict[str, Tensor] = field(default_factory=dict)
+
+
+def _detached_or_zero(value: Tensor | None, zero: Tensor) -> Tensor:
+    if value is None:
+        return zero
+    return value.detach()
+
+
+def _detached_terms(terms: Mapping[str, Tensor] | None) -> dict[str, Tensor]:
+    if terms is None:
+        return {}
+    return {key: value.detach() for key, value in terms.items()}
+
+
+def build_step_result(
+    *,
+    sequence_data: SequenceData,
+    clip_frames: Tensor,
+    preview_render: Tensor | None,
+    preview_features: Tensor | None,
+    camera_state: CameraState | None,
+    loss: Tensor,
+    recon_loss: Tensor,
+    bank_rate_loss: Tensor,
+    bank_rate_terms: Mapping[str, Tensor] | None = None,
+    camera_motion_loss: Tensor | None = None,
+    camera_temporal_loss: Tensor | None = None,
+    camera_global_loss: Tensor | None = None,
+    aux_loss_terms: Mapping[str, Tensor] | None = None,
+) -> StepResult:
+    zero = clip_frames.new_zeros(())
+    return StepResult(
+        source_path=sequence_data.source_path,
+        sequence_frame_count=sequence_data.frame_count,
+        clip_frames=clip_frames,
+        preview_render=preview_render,
+        preview_features=preview_features,
+        camera_state=camera_state,
+        loss=loss.detach(),
+        recon_loss=recon_loss.detach(),
+        camera_motion_loss=_detached_or_zero(camera_motion_loss, zero),
+        camera_temporal_loss=_detached_or_zero(camera_temporal_loss, zero),
+        camera_global_loss=_detached_or_zero(camera_global_loss, zero),
+        bank_rate_loss=bank_rate_loss.detach(),
+        bank_rate_terms=_detached_terms(bank_rate_terms),
+        aux_loss_terms=_detached_terms(aux_loss_terms),
+    )

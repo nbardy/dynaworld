@@ -1,0 +1,178 @@
+{
+  "arch": "star_uvt_feature_overfit",
+  "colorize": {
+    "activation": "sigmoid",
+    "hidden_dim": 64,
+    "init_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_vjepa_rgb_probe_hidden64_lr01_1000step.pt",
+    "pre_norm": false,
+    "weight_init": "kaiming",
+    "weight_init_gain": 1.0
+  },
+  "data": {
+    "duration_seconds": null,
+    "fps": null,
+    "image_crop_mode": "center_square",
+    "max_frames": 64,
+    "start_seconds": null,
+    "target_size": 512,
+    "video_path": "test_data/test_video_384_128_6fps.mp4"
+  },
+  "dense_alpha": {
+    "enabled": false
+  },
+  "feature_target": {
+    "channel_adapter": "truncate_or_pad",
+    "enabled": true,
+    "image_vjp_mode": "analytic_sparse_grid_forward_batched",
+    "layer": "vjepa_tokens",
+    "loss_type": "mse",
+    "loss_weight": 1.0,
+    "materialization": "target_grid",
+    "materialization_chunk_size": 2,
+    "normalization": "channel_standardize",
+    "rgb_loss_weight": 0.0,
+    "rgb_probe_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_vjepa_rgb_probe_hidden64_lr01_1000step.pt",
+    "rgb_probe_loss_weight": 40.0,
+    "rgb_probe_target_rgb_adapter": "trilinear",
+    "temporal_spatial_adapter": "trilinear",
+    "token_grid_shape": [
+      32,
+      16,
+      16
+    ]
+  },
+  "feature_uvt": {
+    "alpha_threshold": 0.00392156862745098,
+    "feature_dim": 32,
+    "max_alpha": 0.99,
+    "render_mode": "feature_direct_gradcache_reduce_vec4",
+    "tile_capacity": 128,
+    "tile_t": 2,
+    "tube_count": 8192
+  },
+  "features": {
+    "cache_dir": "outputs/feature_cache/star_uvt_feature_targets/vjepa2_1_vitb_256crop_64f",
+    "cache_version": 1,
+    "extractor": "vjepa_torchhub",
+    "force_rebake": false,
+    "keep_in_memory": false,
+    "layers": [
+      "vjepa_tokens"
+    ],
+    "model_id": "vjepa2_1_vit_base_384",
+    "sample_cache_key": "star-uvt-vjepa2-1-vitb-256crop-64f-v1",
+    "save_dtype": "float16",
+    "torch_dtype": "float32",
+    "vjepa_checkpoint_url": "https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitb_dist_vitG_384.pt",
+    "vjepa_crop_size": 256,
+    "vjepa_feature_dim": 768,
+    "vjepa_pretrained": true
+  },
+  "logging": {
+    "wandb_enabled": true,
+    "wandb_mode": "offline",
+    "wandb_project": "dynaworld",
+    "wandb_run_name": "star-uvt-birthsplit-multicenter-k16-n16-r40-o04-footprintresidualcapslack-targetinit-targetarea2w05-binfix-prefixalpha-20step",
+    "wandb_tags": [
+      "star_uvt",
+      "feature_tubes",
+      "target_feature",
+      "support_birth_split",
+      "support_target_area",
+      "support_prefix_alpha",
+      "targetarea2w05",
+      "prefixalpha085w2",
+      "binfix",
+      "multicenter_k16",
+      "vjepa_torchhub",
+      "target_grid",
+      "rgb_probe",
+      "from1500",
+      "20step",
+      "cap_slack_footprint_residual_uncovered_brightness",
+      "tile_overflow_repair4g2",
+      "tile_slack",
+      "residual_score",
+      "footprint_score",
+      "target_group_mean_feature_init",
+      "n16",
+      "r40",
+      "o0.4",
+      "cap128",
+      "support_pressure_reduction"
+    ]
+  },
+  "output": {
+    "checkpoint": "outputs/checkpoints/2026-05-28_star_uvt_feature_targetgrid_birthsplit16_multicenter_k16_r40_o04_footprintresidualcapslack_targetinit_targetarea2w05_binfix_prefixalpha085w2_from1500_lr001_20step.pt",
+    "contact_sheet": "outputs/media/2026-05-28_star_uvt_birthsplit_multicenter_k16_n16_r40_o04_footprintresidualcapslack_targetinit_targetarea2w05_binfix_prefixalpha085w2_20step_contact.png",
+    "contact_sheet_frames": 8,
+    "contact_sheet_mode": "linspace",
+    "out_json": "outputs/benchmarks/2026-05-28_star_uvt_birthsplit_multicenter_k16_n16_r40_o04_footprintresidualcapslack_targetinit_targetarea2w05_binfix_prefixalpha085w2_20step_media.json",
+    "rgb_probe_contact_sheet": "outputs/media/2026-05-28_star_uvt_birthsplit_multicenter_k16_n16_r40_o04_footprintresidualcapslack_targetinit_targetarea2w05_binfix_prefixalpha085w2_20step_rgb_probe_contact.png",
+    "rgb_probe_side_by_side_fps": 6.0,
+    "rgb_probe_side_by_side_video": "outputs/media/2026-05-28_star_uvt_birthsplit_multicenter_k16_n16_r40_o04_footprintresidualcapslack_targetinit_targetarea2w05_binfix_prefixalpha085w2_20step_rgb_probe_side_by_side.mp4",
+    "side_by_side_fps": 6.0,
+    "side_by_side_video": "outputs/media/2026-05-28_star_uvt_birthsplit_multicenter_k16_n16_r40_o04_footprintresidualcapslack_targetinit_targetarea2w05_binfix_prefixalpha085w2_20step_side_by_side.mp4"
+  },
+  "sparse_visual": {
+    "enabled": false
+  },
+  "support_birth_split": {
+    "center_count": 16,
+    "center_strategy": "farthest_xy",
+    "enabled": true,
+    "frame_stride": 1,
+    "grid_stride": 8,
+    "max_points": 2048,
+    "opacity": 0.4,
+    "prefix_alpha_loss_weight": 2.0,
+    "prefix_alpha_max_points": 512,
+    "prefix_alpha_target": 0.85,
+    "reallocate_tubes": 16,
+    "support_precision_radius_px": 40.0,
+    "support_radius_across_px": 40.0,
+    "support_radius_along_px": 40.0,
+    "support_radius_px": 40.0,
+    "support_shape": "isotropic",
+    "target_area_composition": "black",
+    "target_area_loss_weight": 0.5,
+    "target_area_max_points": 1024,
+    "target_area_patch_shape": [
+      2,
+      2
+    ],
+    "target_area_vjp_mode": "manual_hidden64_star_only",
+    "target_point_source": "cap_slack_footprint_residual_uncovered_brightness",
+    "target_top_fraction": 0.02,
+    "temporal_radius_frames": 64.0,
+    "feature_init_mode": "target_group_mean",
+    "tile_overflow_repair_enabled": true,
+    "tile_overflow_repair_guard_refs": 2,
+    "tile_overflow_repair_max_drops": 4,
+    "tile_overflow_repair_opacity": 0.00001,
+    "tube_allocation": "uniform",
+    "tube_selection": "lowest_opacity"
+  },
+  "train": {
+    "device": "mps",
+    "frame_chunk_size": 2,
+    "global_step_offset": 1500,
+    "lr": 0.001,
+    "require_gradient_flow": true,
+    "require_loss_decrease": true,
+    "require_no_tile_overflow": true,
+    "resume_checkpoint": "outputs/checkpoints/2026-05-19_star_uvt_feature_targetgrid_sparseforward_batchedvjp_lr001_resume50_from1450_lr005sparse_1500step.pt",
+    "resume_colorizer": false,
+    "resume_optimizer": false,
+    "seed": 43,
+    "steps": 20,
+    "trace_global_steps": [
+      1500,
+      1510,
+      1519
+    ]
+  },
+  "visibility_proxy": {
+    "enabled": false
+  }
+}

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import itertools
-import json
 import math
-import sys
 import time
 from copy import deepcopy
 from dataclasses import dataclass
@@ -15,21 +12,30 @@ from typing import Any, Callable
 import torch
 import torch.nn.functional as F
 
-BENCHMARK_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BENCHMARK_DIR.parents[1]
-TRAIN_DIR = PROJECT_ROOT / "src" / "train"
+from benchmark_bootstrap import BENCHMARK_DIR, PROJECT_ROOT, ensure_sys_path
+
 VENDORED_TAICHI_SPLATTING_DIR = PROJECT_ROOT / "third_party" / "taichi-splatting"
-if str(TRAIN_DIR) not in sys.path:
-    sys.path.insert(0, str(TRAIN_DIR))
-if str(BENCHMARK_DIR) not in sys.path:
-    sys.path.insert(0, str(BENCHMARK_DIR))
-if VENDORED_TAICHI_SPLATTING_DIR.exists() and str(VENDORED_TAICHI_SPLATTING_DIR) not in sys.path:
-    sys.path.insert(0, str(VENDORED_TAICHI_SPLATTING_DIR))
+ensure_sys_path(BENCHMARK_DIR)
+ensure_sys_path(VENDORED_TAICHI_SPLATTING_DIR, require_exists=True)
 
 from camera import CameraSpec
 from config_utils import load_config_file
 from memory_efficient_splat_rasterizer import MemoryEfficientGaussianRasterizer, RasterizeConfig
 from raw_metal_mlx_bridge import RawMetalUnavailable, import_raw_metal, render_projected_torch
+from renderer_benchmark_cli import (
+    apply_save_image_cli_overrides,
+    deep_merge,
+    normalize_resolution,
+    parse_csv_ints,
+    parse_csv_resolutions,
+    parse_csv_strings,
+    resolve_image_save_target,
+    resolve_project_path,
+    row_matches_image_save_target,
+    safe_filename_part,
+    save_chw_image,
+    torch_dtype_from_name,
+)
 from renderers.common import project_gaussians_2d
 from renderers.overlap_metrics import (
     custom_rect_overlap_stats,
@@ -40,6 +46,8 @@ from renderers.overlap_metrics import (
 )
 from rendering import build_or_reuse_grid, render_gaussian_frame
 from runtime_types import GaussianFrame
+from train_artifacts import write_csv, write_jsonl
+from train_devices import resolve_torch_device, sync_torch_device
 from vectorized_sparse_splat_rasterizer import SparseRasterConfig, VectorizedSparseGaussianRasterizer
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -154,79 +162,17 @@ class RendererSpec:
     sync: Callable[[torch.device], None] | None = None
 
 
-def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    merged = deepcopy(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def normalize_resolution(value: Any) -> tuple[int, int]:
-    if isinstance(value, int):
-        if value < 1:
-            raise ValueError(f"Resolution must be positive, got {value}.")
-        return value, value
-    if isinstance(value, str):
-        if "x" in value:
-            left, right = value.lower().split("x", 1)
-            return normalize_resolution([int(left), int(right)])
-        return normalize_resolution(int(value))
-    if isinstance(value, (list, tuple)) and len(value) == 2:
-        height, width = int(value[0]), int(value[1])
-        if height < 1 or width < 1:
-            raise ValueError(f"Resolution must be positive, got {height}x{width}.")
-        return height, width
-    raise ValueError(f"Expected resolution as int, 'HxW', or [height, width], got {value!r}.")
-
-
-def parse_csv_ints(value: str) -> list[int]:
-    return [int(part.strip()) for part in value.split(",") if part.strip()]
-
-
-def parse_csv_resolutions(value: str) -> list[tuple[int, int]]:
-    return [normalize_resolution(part.strip()) for part in value.split(",") if part.strip()]
-
-
-def pick_device(requested: str) -> torch.device:
-    if requested != "auto":
-        return torch.device(requested)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def sync_device(device: torch.device) -> None:
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-    elif device.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
-        torch.mps.synchronize()
-
-
 def sync_renderer(renderer: RendererSpec, device: torch.device) -> None:
     if renderer.sync is not None:
         renderer.sync(device)
     else:
-        sync_device(device)
-
-
-def dtype_from_name(name: str) -> torch.dtype:
-    if name == "input":
-        raise ValueError("'input' is a Taichi precision sentinel, not a torch dtype.")
-    try:
-        return getattr(torch, name)
-    except AttributeError as exc:
-        raise ValueError(f"Unknown torch dtype: {name}") from exc
+        sync_torch_device(device)
 
 
 def optional_dtype_from_name(name: str, fallback: torch.dtype) -> torch.dtype:
     if name == "input":
         return fallback
-    return dtype_from_name(name)
+    return torch_dtype_from_name(name, input_sentinel_error=True)
 
 
 def make_camera(height: int, width: int, device: torch.device, dtype: torch.dtype, cfg: dict[str, Any]) -> CameraSpec:
@@ -730,7 +676,7 @@ def build_raw_metal_renderer(device: torch.device, config: dict[str, Any]) -> Re
             available=False,
             skip_reason="raw_metal uses the MLX benchmark bridge, which is forward-only in the Torch throughput harness",
         )
-    if dtype_from_name(str(config["dtype"])) != torch.float32:
+    if torch_dtype_from_name(str(config["dtype"]), input_sentinel_error=True) != torch.float32:
         return RendererSpec(
             renderer_name,
             render=lambda _case, _config: torch.empty(0),
@@ -787,7 +733,7 @@ def build_taichi_renderer(
     taichi_cfg = deep_merge(config["taichi"], override or {})
     variant = resolve_taichi_variant(device, taichi_cfg)
     precision_cfg = taichi_cfg.get("precision", {})
-    input_dtype = dtype_from_name(str(config["dtype"]))
+    input_dtype = torch_dtype_from_name(str(config["dtype"]), input_sentinel_error=True)
     compute_dtype = optional_dtype_from_name(str(precision_cfg.get("compute_dtype", "input")), input_dtype)
     use_depth16 = bool(taichi_cfg.get("use_depth16", False))
     sort_backend = str(taichi_cfg.get("sort_backend", "auto"))
@@ -867,9 +813,9 @@ def build_taichi_renderer(
         return image_hwc.permute(2, 0, 1).contiguous()
 
     def sync_taichi(_device: torch.device) -> None:
-        sync_device(device)
+        sync_torch_device(device)
         TaichiQueue.run_sync(ti.sync)
-        sync_device(device)
+        sync_torch_device(device)
 
     return RendererSpec(renderer_name, render=render_taichi, sync=sync_taichi)
 
@@ -1052,63 +998,7 @@ def output_comparison(reference: torch.Tensor | None, output: torch.Tensor | Non
     }
 
 
-def safe_filename_part(value: Any) -> str:
-    text = str(value).strip().replace(" ", "_")
-    return "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in text)
-
-
-def resolve_output_path(path_value: str | Path) -> Path:
-    path = Path(path_value)
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
-    return path
-
-
-def image_save_target(
-    config: dict[str, Any], resolutions: list[tuple[int, int]], splat_counts: list[int]
-) -> tuple[set[tuple[int, int]], set[int], int]:
-    save_config = config.get("save_images", {})
-    if bool(save_config.get("largest_resolution_only", True)):
-        max_area = max(height * width for height, width in resolutions)
-        target_resolutions = {(height, width) for height, width in resolutions if height * width == max_area}
-    else:
-        target_resolutions = set(resolutions)
-
-    if bool(save_config.get("largest_splat_count_only", True)):
-        target_splat_counts = {max(splat_counts)}
-    else:
-        target_splat_counts = set(splat_counts)
-
-    return target_resolutions, target_splat_counts, int(save_config.get("set_index", 0))
-
-
-def should_save_image(
-    row: dict[str, Any],
-    target_resolutions: set[tuple[int, int]],
-    target_splat_counts: set[int],
-    target_set_index: int,
-) -> bool:
-    return (
-        row["status"] == "ok"
-        and (int(row["height"]), int(row["width"])) in target_resolutions
-        and int(row["splat_count"]) in target_splat_counts
-        and int(row["set_index"]) == target_set_index
-    )
-
-
 def save_render_image(output: torch.Tensor, row: dict[str, Any], directory: Path) -> Path:
-    from PIL import Image
-
-    image = output.detach()
-    if image.ndim != 3:
-        raise ValueError(f"Expected renderer output as CHW image, got shape {tuple(image.shape)}.")
-    if image.shape[0] == 1:
-        image = image.repeat(3, 1, 1)
-    elif image.shape[0] > 3:
-        image = image[:3]
-
-    image_hwc = image.clamp(0.0, 1.0).nan_to_num(0.0).permute(1, 2, 0).mul(255.0).round().to(torch.uint8).cpu().numpy()
-    directory.mkdir(parents=True, exist_ok=True)
     filename = (
         f"{safe_filename_part(row['renderer'])}"
         f"__{int(row['height'])}x{int(row['width'])}"
@@ -1116,25 +1006,17 @@ def save_render_image(output: torch.Tensor, row: dict[str, Any], directory: Path
         f"__set{int(row['set_index'])}.png"
     )
     path = directory / filename
-    Image.fromarray(image_hwc).save(path)
-    return path
+    return save_chw_image(output, path, label="renderer output")
 
 
 def write_outputs(rows: list[dict[str, Any]], jsonl_path: Path | None, csv_path: Path | None) -> None:
     serializable_rows = [{key: value for key, value in row.items() if key != "output"} for row in rows]
     if jsonl_path is not None:
-        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        with jsonl_path.open("w") as handle:
-            for row in serializable_rows:
-                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        write_jsonl(jsonl_path, serializable_rows)
 
     if csv_path is not None:
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
         fieldnames = sorted({key for row in serializable_rows for key in row.keys()})
-        with csv_path.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(serializable_rows)
+        write_csv(csv_path, serializable_rows, fieldnames=fieldnames)
 
 
 def print_row(row: dict[str, Any]) -> None:
@@ -1304,8 +1186,8 @@ def print_overlap_summary(rows: list[dict[str, Any]]) -> None:
 def run_benchmark(
     config: dict[str, Any], jsonl_path: Path | None, csv_path: Path | None, fail_fast: bool
 ) -> list[dict[str, Any]]:
-    device = pick_device(str(config["device"]))
-    dtype = dtype_from_name(str(config["dtype"]))
+    device = resolve_torch_device(str(config["device"]), auto_cuda=True, auto_prefer_cuda=True)
+    dtype = torch_dtype_from_name(str(config["dtype"]), input_sentinel_error=True)
     resolutions = [normalize_resolution(value) for value in config["resolutions"]]
     splat_counts = [int(value) for value in config["splat_counts"]]
     requested_renderers = [str(name) for name in config["renderers"]]
@@ -1322,8 +1204,11 @@ def run_benchmark(
     base_seed = int(config["seed"])
     save_config = config.get("save_images", {})
     save_images = bool(save_config.get("enabled", False))
-    image_directory = resolve_output_path(save_config.get("directory", "benchmark_outputs/splat_renderer_images"))
-    target_resolutions, target_splat_counts, target_set_index = image_save_target(config, resolutions, splat_counts)
+    image_directory = resolve_project_path(
+        save_config.get("directory", "benchmark_outputs/splat_renderer_images"),
+        PROJECT_ROOT,
+    )
+    image_target = resolve_image_save_target(save_config, resolutions, splat_counts)
     for height, width in resolutions:
         for splat_count in splat_counts:
             for set_index in range(int(config["sets_per_case"])):
@@ -1371,9 +1256,7 @@ def run_benchmark(
                                 else {}
                             )
                             row.update(comparison)
-                            if save_images and should_save_image(
-                                row, target_resolutions, target_splat_counts, target_set_index
-                            ):
+                            if save_images and row_matches_image_save_target(row, image_target, required_status="ok"):
                                 saved_path = save_render_image(result["output"], row, image_directory)
                                 row["saved_image_path"] = str(saved_path)
                     except Exception as exc:
@@ -1428,7 +1311,7 @@ def apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> dic
     if args.dtype is not None:
         cfg["dtype"] = args.dtype
     if args.renderers is not None:
-        cfg["renderers"] = [part.strip() for part in args.renderers.split(",") if part.strip()]
+        cfg["renderers"] = parse_csv_strings(args.renderers)
     if args.resolutions is not None:
         cfg["resolutions"] = parse_csv_resolutions(args.resolutions)
     if args.splat_counts is not None:
@@ -1441,17 +1324,15 @@ def apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> dic
         cfg["timed_iters"] = args.timed_iters
     if args.forward_only:
         cfg["backward"] = False
-    if args.save_images is not None:
-        cfg.setdefault("save_images", {})
-        cfg["save_images"]["enabled"] = True
-        cfg["save_images"]["directory"] = str(args.save_images)
-    if args.no_save_images:
-        cfg.setdefault("save_images", {})
-        cfg["save_images"]["enabled"] = False
+    apply_save_image_cli_overrides(
+        cfg,
+        save_images=args.save_images,
+        no_save_images=bool(args.no_save_images),
+    )
     if args.overlap_variants is not None:
         cfg.setdefault("overlap_stats", {})
         cfg["overlap_stats"]["enabled"] = True
-        cfg["overlap_stats"]["variants"] = [part.strip() for part in args.overlap_variants.split(",") if part.strip()]
+        cfg["overlap_stats"]["variants"] = parse_csv_strings(args.overlap_variants)
     if args.no_overlap_stats:
         cfg.setdefault("overlap_stats", {})
         cfg["overlap_stats"]["enabled"] = False

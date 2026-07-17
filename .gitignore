@@ -4,6 +4,7 @@ __pycache__/
 
 .desloppify/
 scorecard.png
+.playwright-cli/
 
 .venv/
 .dust3r_probe_frames/
@@ -11,6 +12,7 @@ tea_debug.log
 wandb/
 benchmark_outputs/
 data/feature_cache/
+data/frame_cache/
 
 test_data/dust3r_outputs/
 
@@ -74,12 +76,29 @@ data/external/vivo/
 # Local synthetic/render outputs. Rehydrate or regenerate from scripts/configs.
 data/blender_synthetic/
 outputs/
+output/
+
+# Local experiment media and sweep payloads. Preserve scripts, compact verifier
+# fixtures, and curated notes; regenerate these bulky products when needed.
+star_uvt/results/
+research_experiments/world_foam_lane2/results/
 
 # Large local research corpora. Keep curated notes and indexes tracked.
 research_notes/blur_dof_motion_papers/pdfs/
 research_notes/blur_dof_motion_papers/text/
 research_notes/foam_papers/pdfs/
 research_notes/foam_papers/text/
+research_notes/gaussian_splatting_papers/pdfs/
+research_notes/gaussian_splatting_papers/text/
+research_notes/gaussian_splatting_papers/media/
+research_notes/gaussian_splatting_papers/sources/
+
+# Superseded raw theory dumps. Their durable conclusions live in the Gauged
+# UVT atlas and WorldFoam paper packets.
+research_experiments/star_uvt_notes.md
+research_notes/world_foam_branching.md
+research_notes/world_foam_reformulation.md
+research_notes/world_foam_exploration_polish.md
 
 third_party/dust3r/croco/
 

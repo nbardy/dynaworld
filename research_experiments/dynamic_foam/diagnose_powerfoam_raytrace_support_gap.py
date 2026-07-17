@@ -8,31 +8,41 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+try:
+    from .report_artifacts import (
+        DYNAMIC_FOAM_ROOT,
+        ensure_sys_path,
+        ensure_train_path,
+        load_report_json,
+        relative_to_project as rel,
+        write_report_json,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import (
+        DYNAMIC_FOAM_ROOT,
+        ensure_sys_path,
+        ensure_train_path,
+        load_report_json,
+        relative_to_project as rel,
+        write_report_json,
+    )
+
+ensure_train_path()
+ensure_sys_path(DYNAMIC_FOAM_ROOT)
+
 from config_utils import load_config_file
+from checkpoint_utils import load_checkpoint_mapping, model_state_dict_from_checkpoint
 from multicam_video_data import camera_from_K_w2c
+from powerfoam_direct import POWERFOAM_SOFTPLUS_BETA
+from powerfoam_metal_config import resolve_config
 from renderers.projection import project_points_camera
-from train_powerfoam_metal import POWERFOAM_SOFTPLUS_BETA, resolve_config
 from verify_powerfoam_clean_init_coverage import multicam_matrices
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
 
 
 def scalar(value: torch.Tensor | float | int) -> float:
     if isinstance(value, torch.Tensor):
         return float(value.detach().cpu().item())
     return float(value)
-
-
-def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def decode_checkpoint_points(state: dict[str, torch.Tensor], cfg: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -177,8 +187,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     cfg = resolve_config(load_config_file(args.config))
     checkpoint = args.checkpoint or (cfg["logging"]["output_dir"] / "checkpoint_best.pt")
     error_report_path = args.error_report or (cfg["logging"]["output_dir"] / "heldout_error_diagnostics.json")
-    error_report = load_json(error_report_path) if error_report_path.exists() else None
-    state = torch.load(checkpoint, map_location="cpu")["model"]
+    error_report = load_report_json(error_report_path) if error_report_path.exists() else None
+    checkpoint_payload = load_checkpoint_mapping(checkpoint, map_location="cpu")
+    state = model_state_dict_from_checkpoint(checkpoint_payload)
     points, radii = decode_checkpoint_points(state, cfg)
     train_K, train_w2c, heldout_K, heldout_w2c, camera_meta = multicam_matrices(cfg)
     train_distortions = (
@@ -251,8 +262,7 @@ def main() -> None:
     report = build_report(args)
     cfg = resolve_config(load_config_file(args.config))
     output = args.output or (cfg["logging"]["output_dir"] / "raytrace_support_gap_diagnostics.json")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output, report)
     print(json.dumps({"output": rel(output), "support_gap_views": report["support_gap_views"]}, indent=2))
 
 

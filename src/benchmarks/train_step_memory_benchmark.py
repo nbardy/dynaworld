@@ -2,31 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import random
 import statistics
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import torch
 
-os.environ.setdefault("WANDB_MODE", "disabled")
-os.environ.setdefault("WANDB_SILENT", "true")
+import benchmark_bootstrap
 
-ROOT = Path(__file__).resolve().parents[2]
-TRAIN_ROOT = ROOT / "src" / "train"
-if str(TRAIN_ROOT) not in sys.path:
-    sys.path.insert(0, str(TRAIN_ROOT))
+from config_utils import load_config_file
+from benchmark_compare import seed_everything
+from benchmark_memory import clear_device_cache, run_with_memory_sampling
+from train_artifacts import write_json
+from train_devices import sync_torch_device as sync_device
+from train_logging import finish_wandb_run, set_default_wandb_mode
+from trainer_registry import instantiate_trainer_for_config
 
-from config_utils import load_config_file  # noqa: E402
-from trainer_phase_benchmark import clear_device_cache, run_with_memory_sampling, sync_device, trainer_for_config  # noqa: E402
-
-
-def _seed_everything(seed: int) -> None:
-    random.seed(seed)
-    torch.manual_seed(seed)
+set_default_wandb_mode("disabled", silent=True)
 
 
 def _float_tensor(value: torch.Tensor | float | int | None) -> float | None:
@@ -89,8 +82,8 @@ def main() -> None:
     parser.add_argument("--json-output", type=Path, default=None)
     args = parser.parse_args()
 
-    _seed_everything(int(args.seed))
-    trainer = trainer_for_config(load_config_file(args.config))
+    seed_everything(int(args.seed))
+    trainer = instantiate_trainer_for_config(load_config_file(args.config), args.config)
     for _ in range(max(0, int(args.warmup))):
         _time_step(trainer, keep_preview=bool(args.keep_preview))
     samples = []
@@ -122,14 +115,11 @@ def main() -> None:
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     if args.json_output is not None:
-        args.json_output.parent.mkdir(parents=True, exist_ok=True)
-        args.json_output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        write_json(args.json_output, payload)
         print(f"wrote {args.json_output}")
     clear_device_cache(trainer.device)
 
-    import wandb
-
-    wandb.finish()
+    finish_wandb_run()
 
 
 if __name__ == "__main__":

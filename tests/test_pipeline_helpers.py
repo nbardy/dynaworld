@@ -5,13 +5,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from pipeline.render import gaussian_sequence_slice, prepare_clip, stack_complete_frame_list
+from pipeline.render import gaussian_sequence_slice, stack_complete_frame_list
 from pipeline.validation_media import (
     compose_multicam_feature_gt_render_grid,
     compose_gt_pred_alpha_pca_grid,
     render_diagnostics_payload,
 )
-from runtime_types import GaussianSequence, SequenceData
+from runtime_types import GaussianSequence, RasterizedClip, RenderedClip, SequenceData
+from sequence_data import prepare_clip
 
 
 def test_compose_gt_pred_alpha_pca_grid_returns_only_diagnostic_composites() -> None:
@@ -81,7 +82,7 @@ def test_prepare_clip_returns_batched_frames_and_normalized_times() -> None:
     frames = torch.arange(5 * 3 * 2 * 2, dtype=torch.float32).reshape(5, 3, 2, 2)
     sequence = SequenceData(
         frames=frames,
-        frame_times=torch.linspace(0.0, 1.0, 5).reshape(5, 1),
+        frame_times=torch.tensor([0.0, 0.12, 0.25, 0.75, 1.0]).reshape(5, 1),
         frame_source="unit",
         video_fps=4.0,
         source_path=Path("sample.mp4"),
@@ -92,7 +93,7 @@ def test_prepare_clip_returns_batched_frames_and_normalized_times() -> None:
     clip_frames, clip_times = prepare_clip(sequence, indices)
 
     assert torch.equal(clip_frames, frames[indices].unsqueeze(0))
-    assert torch.allclose(clip_times, torch.tensor([[0.25, 0.75]]))
+    assert torch.allclose(clip_times, torch.tensor([[0.12, 0.75]]))
 
 
 def test_stack_complete_frame_list_rejects_missing_frames() -> None:
@@ -118,3 +119,20 @@ def test_gaussian_sequence_slice_preserves_auxiliary_and_slices_cameras() -> Non
     assert sliced.xyz.shape == (2, 2, 3)
     assert sliced.cameras == ("c1", "c2")
     assert sliced.auxiliary == {"tag": "kept"}
+
+
+def test_render_clip_payload_types_live_in_runtime_types() -> None:
+    features = torch.ones(2, 4, 3, 3)
+    alpha = torch.full((2, 3, 3), 0.5)
+    rasterized = RasterizedClip(features=features, alpha=alpha)
+    rendered = RenderedClip(
+        rgb_sequence=torch.zeros(2, 3, 3, 3),
+        camera_state=None,
+        temporal_metrics={"Eval/DecodedXYZAdjacentL2": 0.0},
+        feature_sequence=features,
+        alpha_sequence=alpha,
+    )
+
+    assert rasterized.features is features
+    assert rendered.feature_sequence is features
+    assert rendered.alpha_sequence is alpha

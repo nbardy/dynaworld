@@ -3,19 +3,21 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import torch
 
 from config_utils import load_config_file
-from runtime_types import SequenceData
-from train_multicam_relative_pose_implicit_dynamic import (
+from multicam_relative_pose_trainer import (
     MulticamRelativePoseImplicitTrainer,
     first_frame_repeated_sequence,
     normalize_multires_render_probabilities,
     normalize_multires_render_sizes,
     normalize_multires_token_detail_levels,
 )
+from runtime_types import SequenceData
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -84,7 +86,68 @@ def _trainer_entry_for_config(config_path: Path):
 def test_multicam_relative_pose_arch_dispatches_to_trainer() -> None:
     entry = _trainer_entry_for_config(JOINT_CONFIG)
 
-    assert entry.module == "train_multicam_relative_pose_implicit_dynamic"
+    assert entry.module == "multicam_relative_pose_trainer"
+
+
+def test_relative_pose_val_log_skips_when_wandb_disabled() -> None:
+    def fail_payload(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("disabled W&B run should not build a payload")
+
+    trainer = SimpleNamespace(
+        wandb_run=None,
+        log_gate_flags=lambda _step: (True, True, True),
+        scalar_payload=fail_payload,
+        validation_video_payload=fail_payload,
+    )
+
+    MulticamRelativePoseImplicitTrainer.val_log(trainer, 0, SimpleNamespace())
+
+
+def test_relative_pose_scalar_payload_uses_result_render_size() -> None:
+    trainer = object.__new__(MulticamRelativePoseImplicitTrainer)
+    trainer.cfg = {
+        "model": {"train_frame_count": 2, "size": 32},
+        "render": {"render_size": 128},
+        "camera": {"rig_regularization_weight": 0.0},
+    }
+    trainer.train_cfg = {
+        "render_size_schedule": None,
+        "train_views_per_step": 2,
+        "camera_swap_mode": "none",
+        "camera_swap_pairs_per_step": 0,
+        "heldout_eval_camera_mode": "predicted_relpose",
+        "trainable_scope": "all",
+        "relpose_pose_loss_weight": 0.5,
+    }
+    trainer.render_size = 128
+    trainer.base_render_size = 256
+    trainer.train_sequence_count = 1
+    trainer.eval_sequences = []
+    trainer.multires_render_sizes = [64, 128, 256]
+    trainer.multires_render_probability_by_size = {}
+    trainer.multicam_bundle = SimpleNamespace(train_view_count=2)
+    trainer.camera_rig = SimpleNamespace(metrics=lambda: {})
+    trainer.last_camera_swap_counts = None
+    trainer.profile_timing_payload = lambda: {}
+    result = SimpleNamespace(
+        loss=torch.tensor(1.0),
+        recon_loss=torch.tensor(0.7),
+        camera_motion_loss=torch.tensor(0.0),
+        camera_temporal_loss=torch.tensor(0.0),
+        camera_global_loss=torch.tensor(0.0),
+        bank_rate_loss=torch.tensor(0.0),
+        sequence_frame_count=2,
+        camera_state=None,
+        bank_rate_terms={},
+        aux_loss_terms={},
+        render_size=64,
+    )
+
+    payload = MulticamRelativePoseImplicitTrainer.scalar_payload(trainer, result)
+
+    assert payload["RenderSize"] == 64
+    assert payload["Render/BaseSize"] == 256
+    assert payload["Render/MultiResChoiceCount"] == 3
 
 
 def test_joint_full_relpose_config_resolves_predicted_heldout_mode() -> None:

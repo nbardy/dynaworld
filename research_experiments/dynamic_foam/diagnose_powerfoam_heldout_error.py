@@ -10,28 +10,19 @@ import torch
 import torch.nn.functional as F
 
 from config_utils import load_config_file
-from train_powerfoam_metal import (
-    MetalPowerFoamVideo,
-    composite_fixed_background,
-    load_powerfoam_point_cloud_initialization,
-    load_powerfoam_training_data,
-    make_raster_config,
-    normals_from_ray_depth,
-    render_samples,
-    resolve_config,
-    resolve_device,
-    save_png,
-)
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
+from powerfoam_eval_render import render_powerfoam_samples
+from powerfoam_metal_config import resolve_config
+from powerfoam_objectives import composite_fixed_background, normals_from_ray_depth
+from powerfoam_point_cloud import load_powerfoam_point_cloud_initialization
+from powerfoam_raster_config import make_powerfoam_metal_raster_config as make_raster_config
+from powerfoam_training_data import load_powerfoam_training_data
+try:
+    from .report_artifacts import relative_to_project as rel, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import relative_to_project as rel, write_report_json
+from train_devices import resolve_torch_device
+from powerfoam_metal_trainer import MetalPowerFoamVideo
+from video_io import save_png
 
 
 def scalar(value: torch.Tensor | float | int) -> float:
@@ -263,7 +254,7 @@ def render_split(
     *,
     batch_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    rendered, alpha = render_samples(model, frame_indices, rays=rays, batch_size=batch_size)
+    rendered, alpha = render_powerfoam_samples(model, frame_indices, rays=rays, batch_size=batch_size)
     rendered = composite_fixed_background(rendered, alpha, cfg["render"])
     return rendered.clamp(0.0, 1.0), alpha.clamp(0.0, 1.0)
 
@@ -803,8 +794,8 @@ def load_model_for_checkpoint(config_path: Path, checkpoint_path: Path, device: 
     cfg = resolve_config(load_config_file(config_path))
     training_data = load_powerfoam_training_data(cfg, device)
     model = build_model(cfg, training_data, device)
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint["model"], strict=True)
+    checkpoint = load_checkpoint_mapping(checkpoint_path, map_location=device)
+    model.load_state_dict(model_state_dict_from_checkpoint(checkpoint), strict=True)
     model.eval()
     return cfg, training_data, model
 
@@ -824,8 +815,9 @@ def main() -> None:
     cfg_preview = resolve_config(load_config_file(args.config))
     checkpoint = args.checkpoint or (cfg_preview["logging"]["output_dir"] / "checkpoint_best.pt")
     output = args.output or (cfg_preview["logging"]["output_dir"] / "heldout_error_diagnostics.json")
-    device = resolve_device(str(args.device))
+    device = resolve_torch_device(str(args.device), auto_cuda=False)
     cfg, training_data, model = load_model_for_checkpoint(args.config, checkpoint, device)
+    checkpoint_payload = load_checkpoint_mapping(checkpoint, map_location="cpu")
     train_summary = None
     if not bool(args.heldout_only):
         train_render, train_alpha = render_split(
@@ -883,7 +875,7 @@ def main() -> None:
     report = {
         "config": rel(args.config),
         "checkpoint": rel(checkpoint),
-        "checkpoint_step": int(torch.load(checkpoint, map_location="cpu").get("step", -1)),
+        "checkpoint_step": int(checkpoint_payload.get("step", -1)),
         "output_dir": rel(cfg["logging"]["output_dir"]),
         "train_views": training_data["train_views"],
         "heldout_views": training_data["heldout_views"],
@@ -906,8 +898,7 @@ def main() -> None:
                 else heldout_summary["target_luma_low_alpha"] / max(train_summary["target_luma_low_alpha"], 1.0e-8)
             ),
         }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(output, report)
     print(json.dumps({"output": rel(output), "heldout": heldout_summary, "train": train_summary}, indent=2, sort_keys=True))
 
 

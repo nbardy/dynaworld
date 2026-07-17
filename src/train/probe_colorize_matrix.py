@@ -28,8 +28,11 @@ import torch
 
 from config_utils import load_config_file
 from init_diagnostics import post_colorize_image_diagnostics
-from model_factories import build_model_from_config
+from model_factories import build_colorizer, build_model_from_config
 from pipeline.render import render_clip_sequence
+from train_cli import parse_csv_ints
+from train_devices import resolve_torch_device
+from trainer_registry import resolve_config_for_arch
 
 
 # (label, pre_norm, weight_init, gain, hidden_dim)
@@ -72,8 +75,7 @@ def render_features_once(config_path: Path, seed: int, device: torch.device) -> 
     torch.manual_seed(seed)
     config = load_config_file(config_path)
 
-    import train_video_token_implicit_dynamic as trainer
-    resolved = trainer.resolve_config(config)
+    resolved = resolve_config_for_arch(config, config_path)
     feature_dim = int(resolved["model"]["feature_dim"])
     if feature_dim == 3:
         raise ValueError(
@@ -108,21 +110,20 @@ def metrics_for_cell(
     cell_seed: int,
     device: torch.device,
 ) -> dict[str, float]:
-    from colorize import FeatureToColor
-
     torch.manual_seed(cell_seed)  # consistent colorize init across runs of the same cell
-    colorize = (
-        FeatureToColor(
-            feature_dim=feature_dim,
-            hidden_dim=hidden_dim,
-            activation="sigmoid",
-            pre_norm=pre_norm,
-            weight_init=weight_init,
-            weight_init_gain=gain,
-        )
-        .eval()
-        .to(device)
+    colorizer = build_colorizer(
+        {
+            "hidden_dim": hidden_dim,
+            "activation": "sigmoid",
+            "pre_norm": pre_norm,
+            "weight_init": weight_init,
+            "weight_init_gain": gain,
+        },
+        feature_dim=feature_dim,
     )
+    if colorizer.module is None:
+        raise RuntimeError("colorize matrix probe requires feature_dim != 3")
+    colorize = colorizer.module.eval().to(device)
     rgb, logits = colorize.forward_with_logits(features)
     return post_colorize_image_diagnostics(rgb, logits=logits)
 
@@ -143,21 +144,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _resolve_device(name: str) -> torch.device:
-    name = name.lower()
-    if name == "auto":
-        if torch.backends.mps.is_available():
-            return torch.device("mps")
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
-    return torch.device(name)
-
-
 def main() -> None:
     args = parse_args()
-    seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
-    device = _resolve_device(args.device)
+    seeds = parse_csv_ints(args.seeds)
+    device = resolve_torch_device(args.device.lower(), auto_cuda=True)
     print(f"device={device}, config={args.config}, seeds={seeds}")
 
     seed_features: dict[int, torch.Tensor] = {}

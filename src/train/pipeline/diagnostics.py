@@ -29,6 +29,59 @@ from runtime_types import CameraState, GaussianSequence
 DECODED_TEMPORAL_FIELDS: tuple[str, ...] = ("xyz", "scales", "opacities", "rgbs")
 
 
+def reconstruction_l1_mse_metrics(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    prefix: str,
+) -> dict[str, float]:
+    """Shared full-clip L1/MSE metrics with trainer-controlled key prefix."""
+
+    delta = prediction.float() - target.float()
+    return {
+        f"{prefix}_l1": float(delta.abs().mean().item()),
+        f"{prefix}_mse": float(delta.square().mean().item()),
+    }
+
+
+def reconstruction_eval_metrics(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    cfg: dict[str, Any],
+    *,
+    prefix: str,
+) -> dict[str, float]:
+    """Shared full-clip L1/MSE/PSNR/SSIM metrics for eval artifacts.
+
+    PowerFoam-style trainers store these in snake_case result JSONs, so this
+    helper keeps caller-selected prefixes instead of returning W&B display keys.
+    """
+
+    prediction = prediction.float()
+    target = target.float()
+    delta = prediction - target
+    l1 = delta.abs().mean()
+    mse = delta.square().mean()
+    psnr = -10.0 * torch.log10(mse.clamp_min(1.0e-12))
+    window_size = min(int(cfg["losses"]["ssim_window_size"]), int(prediction.shape[-1]), int(prediction.shape[-2]))
+    if window_size % 2 == 0:
+        window_size -= 1
+    window_size = max(window_size, 1)
+    ssim = ssim_per_image(
+        prediction,
+        target,
+        window_size=window_size,
+        c1=float(cfg["losses"]["ssim_c1"]),
+        c2=float(cfg["losses"]["ssim_c2"]),
+    ).mean()
+    return {
+        f"{prefix}_l1": float(l1.item()),
+        f"{prefix}_mse": float(mse.item()),
+        f"{prefix}_psnr": float(psnr.item()),
+        f"{prefix}_ssim": float(ssim.item()),
+    }
+
+
 def eval_metric_payload(
     prediction: torch.Tensor,
     target: torch.Tensor,
@@ -172,6 +225,56 @@ def decoded_temporal_payload(buffers: dict[str, list[torch.Tensor | None]]) -> d
         "Eval/DecodedOpacityToFirstL1": float(opacity_to_first_l1.item()),
         "Eval/DecodedRGBAdjacentL1": float(rgb_adjacent_l1.item()),
         "Eval/DecodedRGBToFirstL1": float(rgb_to_first_l1.item()),
+    }
+
+
+def decoded_temporal_payload_from_sequence(decoded: GaussianSequence) -> dict[str, float]:
+    """Decoded-temporal metrics for a fully decoded sequence.
+
+    Full validation render paths already hold the whole ``GaussianSequence`` in
+    memory, so they do not need the streaming buffer interface used by
+    overlapping clip eval. This helper keeps both paths on the same field list
+    and detach-to-CPU policy.
+    """
+
+    return decoded_temporal_payload(
+        {
+            field_name: [
+                getattr(decoded, field_name)[index].detach().cpu()
+                for index in range(int(decoded.frame_count))
+            ]
+            for field_name in DECODED_TEMPORAL_FIELDS
+        }
+    )
+
+
+def camera_state_summary_metrics(camera_state: CameraState) -> dict[str, float]:
+    """Compact camera-state scalars shared by progress and W&B payloads."""
+
+    return {
+        "fov_degrees": float(camera_state.fov_degrees.item()),
+        "radius": float(camera_state.radius.item()),
+        "rotation_delta_mean_degrees": float(
+            torch.rad2deg(torch.linalg.norm(camera_state.rotation_delta, dim=-1)).mean().item()
+        ),
+        "translation_delta_mean": float(torch.linalg.norm(camera_state.translation_delta, dim=-1).mean().item()),
+    }
+
+
+def camera_state_payload(camera_state: CameraState, *, key_prefix: str = "Camera/") -> dict[str, float]:
+    """Camera-state W&B scalars with caller-selected key prefix.
+
+    `key_prefix="Camera/"` produces train-step keys such as
+    `Camera/FOVDegrees`; `key_prefix="Camera/Eval"` preserves the existing
+    eval keys such as `Camera/EvalFOVDegrees`.
+    """
+
+    metrics = camera_state_summary_metrics(camera_state)
+    return {
+        f"{key_prefix}FOVDegrees": metrics["fov_degrees"],
+        f"{key_prefix}Radius": metrics["radius"],
+        f"{key_prefix}RotationDeltaMeanDegrees": metrics["rotation_delta_mean_degrees"],
+        f"{key_prefix}TranslationDeltaMean": metrics["translation_delta_mean"],
     }
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,12 +12,11 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageDraw
 
-BENCHMARK_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BENCHMARK_DIR.parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
+from benchmark_bootstrap import PROJECT_ROOT
+from renderer_benchmark_cli import safe_filename_part
 from src.train.postprocess_dof import depth_aware_defocus_blur as torch_depth_aware_defocus_blur
+from src.train.train_artifacts import write_json
+from src.train.train_devices import resolve_torch_device, sync_torch_device
 
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "depth_aware_dof_demo"
 DEFAULT_FRAME_CANDIDATES = [
@@ -40,17 +38,6 @@ class BlurResult:
     depth: torch.Tensor
     coc: torch.Tensor
     blurred: torch.Tensor
-
-
-def pick_metal_device() -> torch.device:
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def sync_device(device: torch.device) -> None:
-    if device.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
-        torch.mps.synchronize()
 
 
 def load_rgb(path: Path, size: int) -> torch.Tensor:
@@ -145,19 +132,19 @@ def run_one(rgb: torch.Tensor, device: torch.device, aperture: float, radii: tup
 
     for _ in range(warmup):
         result = depth_aware_defocus_blur(rgb_device, focus_depth.detach(), aperture, radii)
-        sync_device(device)
+        sync_torch_device(device)
 
     start = time.perf_counter()
     result = None
     for _ in range(iters):
         result = depth_aware_defocus_blur(rgb_device, focus_depth.detach(), aperture, radii)
-    sync_device(device)
+    sync_torch_device(device)
     elapsed_ms = (time.perf_counter() - start) * 1000.0 / max(iters, 1)
 
     grad_result = depth_aware_defocus_blur(rgb_grad, focus_depth, aperture, radii)
     grad_loss = grad_result.blurred.square().mean() + 0.01 * grad_result.coc.mean()
     grad_loss.backward()
-    sync_device(device)
+    sync_torch_device(device)
 
     if result is None:
         raise RuntimeError("No blur result was produced.")
@@ -216,10 +203,6 @@ def save_comparison(
     strip.save(output_path)
 
 
-def safe_stem(path: Path) -> str:
-    return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in path.stem)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Depth-aware defocus blur demo using Torch CPU and PyTorch MPS.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
@@ -236,7 +219,7 @@ def main() -> None:
     args = parse_args()
     output_dir = args.output_dir if args.output_dir.is_absolute() else PROJECT_ROOT / args.output_dir
     radii = (0.0, 1.5, 3.0, 5.0, 8.0)
-    accel_device = pick_metal_device()
+    accel_device = resolve_torch_device("auto", auto_cuda=False)
     accel_label = "mps" if accel_device.type == "mps" else "cpu_fallback"
     cases = load_cases(args.frames, size=args.size, limit=args.limit)
 
@@ -268,7 +251,7 @@ def main() -> None:
         )
         max_abs_diff = float((accel_result_cpu.blurred - cpu_result.blurred).abs().max())
         mean_abs_diff = float((accel_result_cpu.blurred - cpu_result.blurred).abs().mean())
-        output_path = output_dir / f"{index:02d}_{safe_stem(case.path)}_{accel_label}_comparison.png"
+        output_path = output_dir / f"{index:02d}_{safe_filename_part(case.path.stem, allow_dot=False)}_{accel_label}_comparison.png"
         save_comparison(output_path, case.rgb, cpu_result, accel_result_cpu, accel_label)
 
         row = {
@@ -285,7 +268,7 @@ def main() -> None:
         print(json.dumps(row, indent=2))
 
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    write_json(summary_path, summary)
     print(f"Wrote {len(summary)} comparisons and summary to {output_dir}")
 
 

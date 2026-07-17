@@ -74,6 +74,13 @@ def require_config_sections(config: dict[str, Any], sections: tuple[str, ...]) -
             raise KeyError(f"Missing required config section: {section}")
 
 
+def require_config_keys(section_name: str, section: Mapping[str, Any], keys: Sequence[str]) -> None:
+    missing = [key for key in keys if key not in section]
+    if missing:
+        joined = ", ".join(missing)
+        raise KeyError(f"Missing required {section_name} config key(s): {joined}")
+
+
 def path_or_none(value: str | Path | None) -> Path | None:
     if value is None:
         return None
@@ -115,6 +122,7 @@ __all__ = [
     "format_key_values",
     "load_config_file",
     "path_or_none",
+    "require_config_keys",
     "require_config_sections",
     "resolved_config",
     "select_keys",

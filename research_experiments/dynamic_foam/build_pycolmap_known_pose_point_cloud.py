@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -15,17 +14,33 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import numpy as np
 import torch
-import pycolmap
 from PIL import Image
 
+try:
+    from .report_artifacts import ensure_train_path, validate_frame_indices, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import ensure_train_path, validate_frame_indices, write_report_json
 
-ROOT = Path(__file__).resolve().parents[2]
-TRAIN_SRC = ROOT / "src" / "train"
-if str(TRAIN_SRC) not in sys.path:
-    sys.path.insert(0, str(TRAIN_SRC))
+ensure_train_path()
 
 from config_utils import apply_defaults, load_config_file, resolved_config
 from multicam_video_data import load_multicam_video_bundle
+
+pycolmap: Any | None = None
+
+
+def require_pycolmap() -> Any:
+    global pycolmap
+    if pycolmap is None:
+        try:
+            import pycolmap as imported_pycolmap  # type: ignore
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "build_pycolmap_known_pose_point_cloud.py requires pycolmap for execution. "
+                "Install pycolmap or run this script in the Modal/Colmap environment."
+            ) from exc
+        pycolmap = imported_pycolmap
+    return pycolmap
 
 
 GEOMETRY_DATA_DEFAULTS = {
@@ -118,12 +133,7 @@ def parse_frame_indices(args: argparse.Namespace, *, frame_count: int) -> list[i
         indices = [int(args.frame_index)]
     else:
         indices = [int(index) for index in args.frame_indices]
-    if not indices:
-        raise ValueError("At least one frame index is required.")
-    for frame_index in indices:
-        if frame_index < 0 or frame_index >= frame_count:
-            raise IndexError(f"frame index {frame_index} out of range for {frame_count} frames.")
-    return indices
+    return validate_frame_indices(indices, frame_count=frame_count)
 
 
 def image_name_for(camera_name: str, frame_index: int, *, multi_frame: bool) -> str:
@@ -534,6 +544,7 @@ def run_colmap_cli_backend(
 
 
 def build_pycolmap_cloud(args: argparse.Namespace) -> dict[str, Any]:
+    require_pycolmap()
     require_onnx_opt_in(args)
     cfg = resolve_geometry_config(load_config_file(args.config))
     if args.train_cameras:
@@ -868,7 +879,7 @@ def build_pycolmap_cloud(args: argparse.Namespace) -> dict[str, Any]:
         **backend_extra,
     }
     summary_database.close()
-    Path(args.output).with_suffix(".json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(Path(args.output).with_suffix(".json"), summary)
     if temp_ctx is not None:
         temp_ctx.cleanup()
     return summary

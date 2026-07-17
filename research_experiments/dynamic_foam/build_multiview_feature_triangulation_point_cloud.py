@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -11,15 +10,15 @@ import cv2
 import numpy as np
 import torch
 
+try:
+    from .report_artifacts import ensure_train_path, parse_frame_indices, write_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import ensure_train_path, parse_frame_indices, write_report_json
 
-ROOT = Path(__file__).resolve().parents[2]
-TRAIN_SRC = ROOT / "src" / "train"
-if str(TRAIN_SRC) not in sys.path:
-    sys.path.insert(0, str(TRAIN_SRC))
-
+ensure_train_path()
 from config_utils import load_config_file
 from multicam_video_data import load_multicam_video_bundle
-from train_powerfoam_metal import resolve_config
+from powerfoam_metal_config import resolve_config
 
 
 def image_to_gray_u8(image: torch.Tensor) -> np.ndarray:
@@ -239,18 +238,6 @@ def write_ascii_ply(path: Path, points: torch.Tensor, colors: torch.Tensor) -> N
             )
 
 
-def parse_frame_indices(raw: str, frame_count: int) -> list[int]:
-    if str(raw).lower() == "all":
-        return list(range(frame_count))
-    out = [int(item.strip()) for item in str(raw).split(",") if item.strip()]
-    if not out:
-        raise ValueError("At least one frame index is required.")
-    for frame_index in out:
-        if frame_index < 0 or frame_index >= frame_count:
-            raise IndexError(f"frame index {frame_index} out of range for {frame_count} frames.")
-    return out
-
-
 def build_feature_triangulation_cloud(args: argparse.Namespace) -> dict[str, Any]:
     cfg = resolve_config(load_config_file(args.config))
     if str(cfg["data"]["frame_source"]) != "multicam_val":
@@ -264,7 +251,7 @@ def build_feature_triangulation_cloud(args: argparse.Namespace) -> dict[str, Any
     )
     if bundle.train_view_count < 2:
         raise ValueError("Feature triangulation requires at least two train cameras.")
-    frame_indices = parse_frame_indices(str(args.frame_indices), bundle.frame_count)
+    frame_indices = parse_frame_indices(str(args.frame_indices), frame_count=bundle.frame_count, allow_all=True)
     xy_extent = float(args.xy_extent if args.xy_extent is not None else cfg["model"]["xy_extent"])
     z_min = float(args.z_min if args.z_min is not None else cfg["model"]["z_min"])
     z_max = float(args.z_max if args.z_max is not None else cfg["model"]["z_max"])
@@ -322,10 +309,7 @@ def build_feature_triangulation_cloud(args: argparse.Namespace) -> dict[str, Any
             "point_count": 0,
             "pairs": pair_stats,
         }
-        Path(args.output).with_suffix(".json").write_text(
-            json.dumps(summary, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_report_json(Path(args.output).with_suffix(".json"), summary)
         raise RuntimeError("Feature triangulation produced no valid points; wrote diagnostic JSON next to output path.")
 
     points = torch.cat(all_points, dim=0)
@@ -366,7 +350,7 @@ def build_feature_triangulation_cloud(args: argparse.Namespace) -> dict[str, Any
         "pairs": pair_stats,
     }
     summary_path = Path(args.output).with_suffix(".json")
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report_json(summary_path, summary)
     return summary
 
 

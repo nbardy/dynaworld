@@ -6,8 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from .report_artifacts import PROJECT_ROOT, load_report_json
+except ImportError:  # pragma: no cover - direct script execution
+    from report_artifacts import PROJECT_ROOT, load_report_json
 
-ROOT = Path(__file__).resolve().parents[2]
+
+ROOT = PROJECT_ROOT
 EXPECTED_OFFICIAL_COMMIT = "96392252ebd0059fe6ca98881b62e12295d9242f"
 DYNAMIC_PATCHES = {
     "feature": ROOT / "research_experiments/dynamic_foam/cuda_forks/dynamic_feature_foam.patch",
@@ -24,11 +29,9 @@ def sha256_file(path: Path) -> str:
 
 
 def load_summary(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = load_report_json(path)
     if "summary" in data and isinstance(data["summary"], dict):
         return data["summary"]
-    if not isinstance(data, dict):
-        raise TypeError(f"{path} must contain a JSON object.")
     return data
 
 

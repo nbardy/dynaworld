@@ -1,30 +1,27 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import statistics
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
 import torch
-import wandb
 
-
-ROOT = Path(__file__).resolve().parents[2]
-os.chdir(ROOT)
-
-import sys  # noqa: E402
-
-sys.path.insert(0, str(ROOT / "src" / "train"))
-
-from config_utils import load_config_file  # noqa: E402
-from pipeline.losses import build_bank_rate_loss  # noqa: E402
-from train_multicam_precomputed_feature_implicit_dynamic import (  # noqa: E402
-    MulticamPrecomputedFeatureImplicitTrainer,
+from vjepa_benchmark_common import (
+    ROOT,
+    apply_video_benchmark_shape,
+    format_timing_stats as summarize,
+    quiet_training_logging,
+    sync_torch_device as sync,
+    timed,
 )
+
+from config_utils import load_config_file
+from pipeline.losses import build_bank_rate_loss
+from train_artifacts import write_json
+from train_logging import finish_wandb_run, set_default_wandb_mode
+from trainer_registry import instantiate_trainer_for_config
 
 
 DEFAULT_CONFIG = (
@@ -34,35 +31,8 @@ DEFAULT_CONFIG = (
 )
 
 
-def sync(device: torch.device) -> None:
-    if device.type == "cuda" and torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif device.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
-        torch.mps.synchronize()
-
-
-def timed(name: str, device: torch.device, fn: Callable):
-    sync(device)
-    start = time.perf_counter()
-    value = fn()
-    sync(device)
-    return name, time.perf_counter() - start, value
-
-
 def tensor_mib(tensor: torch.Tensor) -> float:
     return float(tensor.numel() * tensor.element_size()) / (1024.0 * 1024.0)
-
-
-def summarize(values: list[float]) -> str:
-    if not values:
-        return "n/a"
-    if len(values) == 1:
-        return f"{values[0]:.6f}s"
-    return (
-        f"mean={statistics.mean(values):.6f}s "
-        f"median={statistics.median(values):.6f}s "
-        f"min={min(values):.6f}s max={max(values):.6f}s"
-    )
 
 
 def prepare_config(args: argparse.Namespace) -> dict:
@@ -74,14 +44,12 @@ def prepare_config(args: argparse.Namespace) -> dict:
     if args.no_camera_refine_with_decode_time:
         cfg["model"]["camera_refine_with_decode_time"] = False
     cfg["logging"]["wandb_run_name"] = f"vjepa-perf-benchmark-{Path(args.config).stem}"
-    cfg["logging"]["image_log_every"] = 1_000_000
-    cfg["logging"]["video_log_every"] = 1_000_000
-    cfg["logging"]["always_log_last_step"] = False
-    cfg["train"]["steps"] = int(args.steps)
+    quiet_training_logging(cfg, log_every=None)
+    apply_video_benchmark_shape(cfg, steps=args.steps)
     return cfg
 
 
-def print_feature_summary(trainer: MulticamPrecomputedFeatureImplicitTrainer) -> None:
+def print_feature_summary(trainer: Any) -> None:
     features = trainer.model_input_for_clip(
         trainer.sequence_data,
         trainer.sequence_data.frames.unsqueeze(0),
@@ -105,12 +73,12 @@ def print_feature_summary(trainer: MulticamPrecomputedFeatureImplicitTrainer) ->
     print(f"projected_features: shape={tuple(projected.shape)} dtype={projected.dtype} size={tensor_mib(projected):.2f} MiB")
 
 
-def _project_video_features(trainer: MulticamPrecomputedFeatureImplicitTrainer, features):
+def _project_video_features(trainer: Any, features):
     with trainer.autocast_context():
         return trainer.model.video_encoder(features)
 
 
-def benchmark_step(trainer: MulticamPrecomputedFeatureImplicitTrainer) -> dict[str, float]:
+def benchmark_step(trainer: Any) -> dict[str, float]:
     timings: dict[str, float] = {}
     trainer.optimizer.zero_grad(set_to_none=True)
 
@@ -200,10 +168,11 @@ def main() -> None:
     parser.add_argument("--output-json", type=Path, default=None)
     args = parser.parse_args()
 
-    os.environ.setdefault("WANDB_MODE", "disabled")
+    set_default_wandb_mode("disabled", silent=None)
 
     init_start = time.perf_counter()
-    trainer = MulticamPrecomputedFeatureImplicitTrainer(prepare_config(args))
+    prepared_config = prepare_config(args)
+    trainer = instantiate_trainer_for_config(prepared_config, args.config)
     sync(trainer.device)
     init_elapsed = time.perf_counter() - init_start
     print(f"trainer_init_total: {init_elapsed:.6f}s")
@@ -224,7 +193,7 @@ def main() -> None:
             )
             print(f"bench_step_{index + 1}: loss={row['loss']:.6f} recon={row['recon_loss']:.6f} {phase_text}")
     finally:
-        wandb.finish()
+        finish_wandb_run()
 
     keys = [key for key in rows[0] if key not in {"loss", "recon_loss"}] if rows else []
     print("summary:")
@@ -237,7 +206,6 @@ def main() -> None:
         ]
         print(f"  measured_step_total: {summarize(total_step)}")
         if args.output_json is not None:
-            args.output_json.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "config": str(args.config),
                 "steps": int(args.steps),
@@ -252,7 +220,7 @@ def main() -> None:
                 "summary": {key: summarize([row[key] for row in rows]) for key in keys},
                 "measured_step_total_summary": summarize(total_step),
             }
-            args.output_json.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            write_json(args.output_json, payload)
             print(f"wrote {args.output_json}")
 
 

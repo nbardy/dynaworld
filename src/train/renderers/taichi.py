@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 import torch
 
+from external_paths import ensure_sys_path, third_party_path
 from renderers.common import MIN_RENDER_DEPTH, project_gaussians_2d, project_gaussians_2d_batch
 from renderers.projection import project_gaussians_2d_camera, project_gaussians_2d_camera_batch
 
-VENDORED_TAICHI_SPLATTING_DIR = Path(__file__).resolve().parents[3] / "third_party" / "taichi-splatting"
+VENDORED_TAICHI_SPLATTING_DIR = third_party_path("taichi-splatting")
 
 
 @dataclass(frozen=True)
@@ -51,8 +50,7 @@ class TaichiRendererConfig:
 
 
 def _ensure_vendored_taichi_splatting_on_path() -> None:
-    if VENDORED_TAICHI_SPLATTING_DIR.exists() and str(VENDORED_TAICHI_SPLATTING_DIR) not in sys.path:
-        sys.path.insert(0, str(VENDORED_TAICHI_SPLATTING_DIR))
+    ensure_sys_path(VENDORED_TAICHI_SPLATTING_DIR, require_exists=True)
 
 
 def _resolve_kernel_variant(device: torch.device, variant: str) -> str:

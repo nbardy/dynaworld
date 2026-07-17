@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import math
-import sys
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,19 +10,29 @@ from typing import Any, Callable
 
 import torch
 
-BENCHMARK_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BENCHMARK_DIR.parents[1]
-TRAIN_DIR = PROJECT_ROOT / "src" / "train"
+from benchmark_bootstrap import BENCHMARK_DIR, PROJECT_ROOT, ensure_sys_path
+
 VENDORED_TAICHI_SPLATTING_DIR = PROJECT_ROOT / "third_party" / "taichi-splatting"
-if str(TRAIN_DIR) not in sys.path:
-    sys.path.insert(0, str(TRAIN_DIR))
-if str(BENCHMARK_DIR) not in sys.path:
-    sys.path.insert(0, str(BENCHMARK_DIR))
-if VENDORED_TAICHI_SPLATTING_DIR.exists() and str(VENDORED_TAICHI_SPLATTING_DIR) not in sys.path:
-    sys.path.insert(0, str(VENDORED_TAICHI_SPLATTING_DIR))
+ensure_sys_path(BENCHMARK_DIR)
+ensure_sys_path(VENDORED_TAICHI_SPLATTING_DIR, require_exists=True)
 
 from config_utils import load_config_file
 from raw_metal_mlx_bridge import RawMetalUnavailable, import_raw_metal, run_packed_accuracy
+from renderer_benchmark_cli import (
+    apply_save_image_cli_overrides,
+    deep_merge,
+    normalize_resolution,
+    parse_csv_ints,
+    parse_csv_resolutions,
+    parse_csv_strings,
+    resolve_image_save_target,
+    resolve_project_path,
+    row_matches_image_save_target,
+    safe_filename_part,
+    save_chw_image,
+    torch_dtype_from_name,
+)
+from train_devices import resolve_torch_device, sync_torch_device
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "device": "auto",
@@ -109,82 +118,6 @@ class AccuracyRendererSpec:
     dtype: torch.dtype
     available: bool = True
     skip_reason: str = ""
-
-
-def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    merged = deepcopy(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def normalize_resolution(value: Any) -> tuple[int, int]:
-    if isinstance(value, int):
-        if value < 1:
-            raise ValueError(f"Resolution must be positive, got {value}.")
-        return value, value
-    if isinstance(value, str):
-        if "x" in value:
-            left, right = value.lower().split("x", 1)
-            return normalize_resolution([int(left), int(right)])
-        return normalize_resolution(int(value))
-    if isinstance(value, (list, tuple)) and len(value) == 2:
-        height, width = int(value[0]), int(value[1])
-        if height < 1 or width < 1:
-            raise ValueError(f"Resolution must be positive, got {height}x{width}.")
-        return height, width
-    raise ValueError(f"Expected resolution as int, 'HxW', or [height, width], got {value!r}.")
-
-
-def parse_csv_ints(value: str) -> list[int]:
-    return [int(part.strip()) for part in value.split(",") if part.strip()]
-
-
-def parse_csv_resolutions(value: str) -> list[tuple[int, int]]:
-    return [normalize_resolution(part.strip()) for part in value.split(",") if part.strip()]
-
-
-def parse_csv_strings(value: str) -> list[str]:
-    return [part.strip() for part in value.split(",") if part.strip()]
-
-
-def dtype_from_name(name: str) -> torch.dtype:
-    try:
-        return getattr(torch, name)
-    except AttributeError as exc:
-        raise ValueError(f"Unknown torch dtype: {name}") from exc
-
-
-def pick_device(requested: str) -> torch.device:
-    if requested != "auto":
-        return torch.device(requested)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def sync_torch_device(device: torch.device) -> None:
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-    elif device.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
-        torch.mps.synchronize()
-
-
-def resolve_output_path(path_value: str | Path) -> Path:
-    path = Path(path_value)
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
-    return path
-
-
-def safe_filename_part(value: Any) -> str:
-    text = str(value).strip().replace(" ", "_")
-    return "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in text)
 
 
 def make_accuracy_case(
@@ -472,21 +405,6 @@ def within_tolerance(row: dict[str, Any], tolerances: dict[str, Any]) -> bool:
     return all(value <= float(tolerances[name]) for name, value in checks.items())
 
 
-def save_chw_image(output: torch.Tensor, path: Path) -> None:
-    from PIL import Image
-
-    image = output.detach()
-    if image.ndim != 3:
-        raise ValueError(f"Expected CHW image, got shape {tuple(image.shape)}.")
-    if image.shape[0] == 1:
-        image = image.repeat(3, 1, 1)
-    elif image.shape[0] > 3:
-        image = image[:3]
-    array = image.clamp(0.0, 1.0).nan_to_num(0.0).permute(1, 2, 0).mul(255.0).round().to(torch.uint8).cpu().numpy()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(array).save(path)
-
-
 def save_case_images(
     reference: torch.Tensor,
     candidate: torch.Tensor,
@@ -503,39 +421,15 @@ def save_case_images(
     return [str(ref_path), str(taichi_path), str(diff_path)]
 
 
-def image_save_target(
-    config: dict[str, Any], resolutions: list[tuple[int, int]], splat_counts: list[int]
-) -> tuple[set[tuple[int, int]], set[int], int]:
-    save_config = config.get("save_images", {})
-    if bool(save_config.get("largest_resolution_only", True)):
-        max_area = max(height * width for height, width in resolutions)
-        target_resolutions = {(height, width) for height, width in resolutions if height * width == max_area}
-    else:
-        target_resolutions = set(resolutions)
-
-    if bool(save_config.get("largest_splat_count_only", True)):
-        target_splat_counts = {max(splat_counts)}
-    else:
-        target_splat_counts = set(splat_counts)
-
-    return target_resolutions, target_splat_counts, int(save_config.get("set_index", 0))
-
-
-def should_save_image(
-    row: dict[str, Any], target_resolutions: set[tuple[int, int]], target_splat_counts: set[int], target_set_index: int
-) -> bool:
-    return (
-        (int(row["height"]), int(row["width"])) in target_resolutions
-        and int(row["splat_count"]) in target_splat_counts
-        and int(row["set_index"]) == target_set_index
-    )
-
-
 def run_accuracy(config: dict[str, Any], fail_on_mismatch: bool) -> list[dict[str, Any]]:
-    device = pick_device(str(config["device"]))
-    dtype = dtype_from_name(str(config["dtype"]))
-    baseline_device = pick_device(str(config["baseline_device"]))
-    baseline_dtype = dtype_from_name(str(config["baseline_dtype"]))
+    device = resolve_torch_device(str(config["device"]), auto_cuda=True, auto_prefer_cuda=True)
+    dtype = torch_dtype_from_name(str(config["dtype"]))
+    baseline_device = resolve_torch_device(
+        str(config["baseline_device"]),
+        auto_cuda=True,
+        auto_prefer_cuda=True,
+    )
+    baseline_dtype = torch_dtype_from_name(str(config["baseline_dtype"]))
     resolutions = [normalize_resolution(value) for value in config["resolutions"]]
     splat_counts = [int(value) for value in config["splat_counts"]]
     requested_renderers = [str(name) for name in config["renderers"]]
@@ -546,8 +440,11 @@ def run_accuracy(config: dict[str, Any], fail_on_mismatch: bool) -> list[dict[st
 
     save_config = config.get("save_images", {})
     save_images = bool(save_config.get("enabled", False))
-    image_directory = resolve_output_path(save_config.get("directory", "benchmark_outputs/splat_accuracy_images"))
-    target_resolutions, target_splat_counts, target_set_index = image_save_target(config, resolutions, splat_counts)
+    image_directory = resolve_project_path(
+        save_config.get("directory", "benchmark_outputs/splat_accuracy_images"),
+        PROJECT_ROOT,
+    )
+    image_target = resolve_image_save_target(save_config, resolutions, splat_counts)
 
     print(f"device={device} dtype={dtype} baseline_device={baseline_device} baseline_dtype={baseline_dtype}")
     print(f"renderers={requested_renderers}")
@@ -614,9 +511,7 @@ def run_accuracy(config: dict[str, Any], fail_on_mismatch: bool) -> list[dict[st
                     row.update(compare_tensors(reference_case.features.grad, result.feature_grad, "feature_grad"))
                     row["passed"] = within_tolerance(row, config["tolerances"])
 
-                    if save_images and should_save_image(
-                        row, target_resolutions, target_splat_counts, target_set_index
-                    ):
+                    if save_images and row_matches_image_save_target(row, image_target):
                         row["saved_image_paths"] = save_case_images(
                             reference_output.cpu(), result.output.cpu(), row, image_directory
                         )
@@ -724,13 +619,11 @@ def apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> dic
         cfg["splat_counts"] = parse_csv_ints(args.splat_counts)
     if args.sets_per_case is not None:
         cfg["sets_per_case"] = args.sets_per_case
-    if args.save_images is not None:
-        cfg.setdefault("save_images", {})
-        cfg["save_images"]["enabled"] = True
-        cfg["save_images"]["directory"] = str(args.save_images)
-    if args.no_save_images:
-        cfg.setdefault("save_images", {})
-        cfg["save_images"]["enabled"] = False
+    apply_save_image_cli_overrides(
+        cfg,
+        save_images=args.save_images,
+        no_save_images=bool(args.no_save_images),
+    )
     return cfg
 
 

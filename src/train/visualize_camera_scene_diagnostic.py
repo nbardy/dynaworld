@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,9 +10,14 @@ from typing import Any
 import torch
 
 from camera import CameraSpec
+from checkpoint_utils import load_torch_checkpoint, model_state_dict_from_checkpoint
 from config_utils import load_config_file
+from dynamic_powerfoam_camera import build_camera_decoder
+from dynamic_powerfoam_metal_config import TOKEN_RBF_FEATURE_MODE
 from model_factories import build_model_from_config
-from train_video_token_implicit_dynamic import resolve_config as resolve_video_token_config
+from powerfoam_raster_config import make_dynamic_powerfoam_metal_raster_config
+from train_logging import set_default_wandb_mode
+from trainer_registry import instantiate_trainer_for_config, resolve_config_for_arch
 
 
 @dataclass(frozen=True)
@@ -23,21 +27,8 @@ class FrustumLines:
     directions: torch.Tensor
 
 
-def _checkpoint_state(checkpoint: Any) -> dict[str, torch.Tensor]:
-    if isinstance(checkpoint, dict) and isinstance(checkpoint.get("model"), dict):
-        return checkpoint["model"]
-    if isinstance(checkpoint, dict) and all(torch.is_tensor(value) for value in checkpoint.values()):
-        return checkpoint
-    raise ValueError("Expected a checkpoint dict with a 'model' state_dict or a raw state_dict.")
-
-
 def _resolve_config_by_arch(config: dict[str, Any]) -> dict[str, Any]:
-    arch = str(config.get("arch", ""))
-    if arch == "dynamic_powerfoam_metal":
-        import train_dynamic_powerfoam_metal as dynamic_powerfoam
-
-        return dynamic_powerfoam.resolve_config(config)
-    return resolve_video_token_config(config)
+    return resolve_config_for_arch(config)
 
 
 def _normalized_model_cfg(config: dict[str, Any]) -> dict[str, Any]:
@@ -96,8 +87,8 @@ def _decoded_scene_from_model(
     if str(resolved.get("arch", "")) == "dynamic_powerfoam_metal":
         return _decoded_dynamic_powerfoam_scene(resolved, checkpoint_path, frame_count=frame_count, device=device)
     model = build_model_from_config(resolved).to(device)
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(_checkpoint_state(checkpoint), strict=True)
+    checkpoint = load_torch_checkpoint(checkpoint_path, map_location=device)
+    model.load_state_dict(model_state_dict_from_checkpoint(checkpoint), strict=True)
     model.eval()
     decode_times = torch.linspace(0.0, 1.0, int(frame_count), device=device).reshape(1, -1)
     with torch.no_grad():
@@ -127,16 +118,14 @@ def _decoded_multicam_relative_pose_scene(
 ) -> tuple[torch.Tensor, tuple[CameraSpec, ...]]:
     # Trainer construction initializes W&B in the shared base class. Keep this
     # diagnostic side-effect-free unless the caller explicitly overrides it.
-    os.environ.setdefault("WANDB_MODE", "disabled")
-    os.environ.setdefault("WANDB_SILENT", "true")
+    set_default_wandb_mode("disabled", silent=True)
 
     from camera_swap_sampling import CameraSwapPair, build_heldout_camera_swap_pairs
     from relative_pose import cameras_with_se3_transform
-    from train_multicam_relative_pose_implicit_dynamic import MulticamRelativePoseImplicitTrainer
 
-    trainer = MulticamRelativePoseImplicitTrainer(copy.deepcopy(cfg))
-    checkpoint = torch.load(checkpoint_path, map_location=trainer.device)
-    state = _checkpoint_state(checkpoint)
+    trainer = instantiate_trainer_for_config(copy.deepcopy(cfg))
+    checkpoint = load_torch_checkpoint(checkpoint_path, map_location=trainer.device)
+    state = model_state_dict_from_checkpoint(checkpoint)
     trainer.model.load_state_dict(state, strict=True)
     if trainer.colorize is not None and isinstance(checkpoint, dict) and "colorizer" in checkpoint:
         trainer.colorize.load_state_dict(checkpoint["colorizer"])
@@ -198,9 +187,9 @@ def _decoded_dynamic_powerfoam_scene(
     frame_count: int,
     device: torch.device,
 ) -> tuple[torch.Tensor, tuple[CameraSpec, ...]]:
-    import train_dynamic_powerfoam_metal as dynamic_powerfoam
+    from dynamic_powerfoam_metal_trainer import DynamicMetalPowerFoamVideo, TokenDynamicPowerFoamFeatures
 
-    camera_decoder = dynamic_powerfoam.build_camera_decoder(cfg, frame_count=int(frame_count))
+    camera_decoder = build_camera_decoder(cfg, frame_count=int(frame_count))
     model_kwargs = {
         "frame_count": int(frame_count),
         "cell_count": int(cfg["model"]["cells"]),
@@ -233,11 +222,11 @@ def _decoded_dynamic_powerfoam_scene(
         "init_frames": None,
         "image_init_depth": None if cfg["model"]["image_init_depth"] is None else float(cfg["model"]["image_init_depth"]),
         "image_init_jitter": float(cfg["model"]["image_init_jitter"]),
-        "raster_config": dynamic_powerfoam.make_raster_config(cfg["render"]),
+        "raster_config": make_dynamic_powerfoam_metal_raster_config(cfg["render"]),
         "camera_decoder": camera_decoder,
     }
-    if str(cfg["model"]["dynamic_mode"]) == dynamic_powerfoam.TOKEN_RBF_FEATURE_MODE:
-        model = dynamic_powerfoam.TokenDynamicPowerFoamFeatures(
+    if str(cfg["model"]["dynamic_mode"]) == TOKEN_RBF_FEATURE_MODE:
+        model = TokenDynamicPowerFoamFeatures(
             **model_kwargs,
             feature_dim=int(cfg["model"]["feature_dim"]),
             feature_init_noise=float(cfg["model"]["feature_init_noise"]),
@@ -260,13 +249,13 @@ def _decoded_dynamic_powerfoam_scene(
             dynamic_cell_fraction=float(cfg["model"]["dynamic_cell_fraction"]),
         )
     else:
-        model = dynamic_powerfoam.DynamicMetalPowerFoamVideo(
+        model = DynamicMetalPowerFoamVideo(
             **model_kwargs,
             dynamic_mode=str(cfg["model"]["dynamic_mode"]),
         )
     model = model.to(device)
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    incompat = model.load_state_dict(_checkpoint_state(checkpoint), strict=False)
+    checkpoint = load_torch_checkpoint(checkpoint_path, map_location=device)
+    incompat = model.load_state_dict(model_state_dict_from_checkpoint(checkpoint), strict=False)
     unexpected = list(incompat.unexpected_keys)
     if unexpected:
         raise RuntimeError(f"Unexpected checkpoint keys for dynamic_powerfoam_metal model: {unexpected[:8]}")
@@ -287,8 +276,8 @@ def load_scene(
 ) -> tuple[torch.Tensor, tuple[CameraSpec, ...], dict[str, Any]]:
     config = load_config_file(config_path)
     frame_count = _infer_frame_count(config, frame_count)
-    checkpoint_cpu = torch.load(checkpoint_path, map_location="cpu")
-    state = _checkpoint_state(checkpoint_cpu)
+    checkpoint_cpu = load_torch_checkpoint(checkpoint_path, map_location="cpu")
+    state = model_state_dict_from_checkpoint(checkpoint_cpu)
     model_cfg = _normalized_model_cfg(config)
     points = _decode_points_from_state_dict(state, model_cfg)
     cameras: tuple[CameraSpec, ...] = ()

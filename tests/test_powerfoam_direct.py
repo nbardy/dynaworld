@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -15,6 +16,7 @@ from torch.nn import functional as F
 
 import checkpoint_utils
 from checkpoint_utils import atomic_torch_save
+from external_paths import ensure_third_party_path
 from powerfoam_direct import (
     DirectPowerFoamVideo,
     POWERFOAM_SOFTPLUS_BETA,
@@ -25,13 +27,33 @@ from powerfoam_direct import (
     quaternion_frames,
     render_powerfoam_torch,
 )
-from camera import CameraSpec, build_look_at_camera_to_world
-from train_powerfoam_direct import (
-    LOSS_DEFAULTS,
-    flatten_multiview_powerfoam_samples,
-    powerfoam_rays_from_camera_grid,
+from powerfoam_adjacency import build_csr_adjacency, csr_adjacency_stats
+from powerfoam_direct_config import LOSS_DEFAULTS as DIRECT_LOSS_DEFAULTS
+from powerfoam_eval_render import rendered_alpha_from_powerfoam_output
+from powerfoam_geometry import make_pinhole_rays, powerfoam_rays_from_camera, powerfoam_rays_from_camera_grid
+from powerfoam_metal_config import LOSS_DEFAULTS as METAL_LOSS_DEFAULTS
+from powerfoam_metal_config import RENDER_DEFAULTS, TRAIN_DEFAULTS
+from powerfoam_objectives import (
+    composite_powerfoam_background,
+    normals_from_ray_depth,
+    powerfoam_contribution_loss,
+    powerfoam_normal_distance_loss,
+    powerfoam_normal_map_loss,
+    powerfoam_ssim_loss,
     scheduled_loss_weights,
+    training_background_tensor,
 )
+from powerfoam_point_cloud import load_powerfoam_point_cloud_initialization
+from powerfoam_raster_config import make_powerfoam_metal_raster_config as make_raster_config
+from powerfoam_training import flatten_multiview_powerfoam_samples
+from camera import CameraSpec, build_look_at_camera_to_world
+
+
+def _import_powerfoam_metal_height_sv_rasterizer():
+    ensure_third_party_path("powerfoam-metal")
+    from torch_powerfoam_metal import FoamRasterConfig, rasterize_power_foam_quaternion_height_sv_texel_surface
+
+    return FoamRasterConfig, rasterize_power_foam_quaternion_height_sv_texel_surface
 
 
 POWERFOAM_UPSTREAM_COMMIT = "96392252ebd0059fe6ca98881b62e12295d9242f"
@@ -65,6 +87,18 @@ DIRECT_OFFICIAL_CUDA_GRAD_KEYS = (
     ("grad_texel_sv_axis", "texel_sv_axis"),
     ("grad_texel_sv_rgb", "texel_sv_rgb"),
 )
+
+
+def test_powerfoam_eval_render_accepts_structured_result() -> None:
+    rendered = torch.rand(2, 3, 4, 4)
+    alpha = torch.rand(2, 1, 4, 4)
+
+    extracted_rendered, extracted_alpha = rendered_alpha_from_powerfoam_output(
+        SimpleNamespace(rendered=rendered, alpha=alpha)
+    )
+
+    assert extracted_rendered is rendered
+    assert extracted_alpha is alpha
 
 
 def test_powerfoam_metal_save_mp4_uses_quicktime_compatible_h264(tmp_path: Path):
@@ -338,7 +372,9 @@ def _assert_metal_height_sv_fixture_forward_and_shared_backward(
     if not torch.backends.mps.is_available():
         pytest.skip("MPS is required for the PowerFoam Metal fixture check")
     try:
-        from train_powerfoam_metal import FoamRasterConfig, rasterize_power_foam_quaternion_height_sv_texel_surface
+        FoamRasterConfig, rasterize_power_foam_quaternion_height_sv_texel_surface = (
+            _import_powerfoam_metal_height_sv_rasterizer()
+        )
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
 
@@ -699,7 +735,9 @@ def test_powerfoam_metal_loads_canonical_origin_parity_fixture() -> None:
     if not torch.backends.mps.is_available():
         pytest.skip("MPS is required for the PowerFoam Metal fixture check")
     try:
-        from train_powerfoam_metal import FoamRasterConfig, rasterize_power_foam_quaternion_height_sv_texel_surface
+        FoamRasterConfig, rasterize_power_foam_quaternion_height_sv_texel_surface = (
+            _import_powerfoam_metal_height_sv_rasterizer()
+        )
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
 
@@ -822,96 +860,90 @@ def test_powerfoam_texel_sites_are_radius_scaled_and_sv_color_detaches_geometry(
 def test_powerfoam_direct_config_dispatches_to_trainer() -> None:
     trainer_entry_for_config = _load_dynaworld_train_module().trainer_entry_for_config
     entry = trainer_entry_for_config("src/train_configs/local_mac_powerfoam_direct_128_smoke.jsonc")
-    assert entry.module == "train_powerfoam_direct"
+    assert entry.module == "powerfoam_direct_trainer"
     metal_entry = trainer_entry_for_config("src/train_configs/local_mac_powerfoam_metal_video_64_smoke.jsonc")
-    assert metal_entry.module == "train_powerfoam_metal"
+    assert metal_entry.module == "powerfoam_metal_trainer"
     metal_256_entry = trainer_entry_for_config("src/train_configs/local_mac_powerfoam_metal_video_256_smoke.jsonc")
-    assert metal_256_entry.module == "train_powerfoam_metal"
+    assert metal_256_entry.module == "powerfoam_metal_trainer"
     metal_1024_entry = trainer_entry_for_config("src/train_configs/local_mac_powerfoam_metal_video_1024_smoke.jsonc")
-    assert metal_1024_entry.module == "train_powerfoam_metal"
+    assert metal_1024_entry.module == "powerfoam_metal_trainer"
     metal_linear_entry = trainer_entry_for_config("src/train_configs/local_mac_powerfoam_metal_linear_video_1024_smoke.jsonc")
-    assert metal_linear_entry.module == "train_powerfoam_metal"
+    assert metal_linear_entry.module == "powerfoam_metal_trainer"
     metal_surface_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_surface_linear_video_1024_smoke.jsonc"
     )
-    assert metal_surface_entry.module == "train_powerfoam_metal"
+    assert metal_surface_entry.module == "powerfoam_metal_trainer"
     metal_oriented_surface_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_oriented_surface_linear_video_1024_smoke.jsonc"
     )
-    assert metal_oriented_surface_entry.module == "train_powerfoam_metal"
+    assert metal_oriented_surface_entry.module == "powerfoam_metal_trainer"
     metal_texel_surface_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_oriented_texel_surface_video_1024_smoke.jsonc"
     )
-    assert metal_texel_surface_entry.module == "train_powerfoam_metal"
+    assert metal_texel_surface_entry.module == "powerfoam_metal_trainer"
     metal_texel_random_color_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_oriented_texel_surface_random_color_video_1024_smoke.jsonc"
     )
-    assert metal_texel_random_color_entry.module == "train_powerfoam_metal"
+    assert metal_texel_random_color_entry.module == "powerfoam_metal_trainer"
     metal_quaternion_texel_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_quaternion_texel_surface_video_1024_smoke.jsonc"
     )
-    assert metal_quaternion_texel_entry.module == "train_powerfoam_metal"
+    assert metal_quaternion_texel_entry.module == "powerfoam_metal_trainer"
     metal_quaternion_height_texel_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_quaternion_height_texel_surface_video_1024_smoke.jsonc"
     )
-    assert metal_quaternion_height_texel_entry.module == "train_powerfoam_metal"
+    assert metal_quaternion_height_texel_entry.module == "powerfoam_metal_trainer"
     metal_quaternion_height_sv_texel_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_quaternion_height_sv_texel_surface_video_1024_smoke.jsonc"
     )
-    assert metal_quaternion_height_sv_texel_entry.module == "train_powerfoam_metal"
+    assert metal_quaternion_height_sv_texel_entry.module == "powerfoam_metal_trainer"
     metal_quaternion_height_sv_texel_tiled_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_quaternion_height_sv_texel_surface_tiled_video_1024_smoke.jsonc"
     )
-    assert metal_quaternion_height_sv_texel_tiled_entry.module == "train_powerfoam_metal"
+    assert metal_quaternion_height_sv_texel_tiled_entry.module == "powerfoam_metal_trainer"
     metal_point_cloud_init_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_point_cloud_init_quaternion_height_sv_tiled_32_smoke.jsonc"
     )
-    assert metal_point_cloud_init_entry.module == "train_powerfoam_metal"
+    assert metal_point_cloud_init_entry.module == "powerfoam_metal_trainer"
     metal_official_lr_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_official_lr_schedule_quaternion_height_sv_tiled_32_smoke.jsonc"
     )
-    assert metal_official_lr_entry.module == "train_powerfoam_metal"
+    assert metal_official_lr_entry.module == "powerfoam_metal_trainer"
     metal_multicam_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_powerfoam_metal_multicam_deepview_3cam_train2_test1_quaternion_height_sv_tiled_32_smoke.jsonc"
     )
-    assert metal_multicam_entry.module == "train_powerfoam_metal"
+    assert metal_multicam_entry.module == "powerfoam_metal_trainer"
     dynamic_gauge_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_dynamic_gauge_foam_video_1024_smoke.jsonc"
     )
-    assert dynamic_gauge_entry.module == "train_dynamic_gauge_foam"
+    assert dynamic_gauge_entry.module == "dynamic_gauge_foam_trainer"
     dynamic_powerfoam_smooth_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_dynamic_powerfoam_metal_per_frame_smooth_1024_smoke.jsonc"
     )
-    assert dynamic_powerfoam_smooth_entry.module == "train_dynamic_powerfoam_metal"
+    assert dynamic_powerfoam_smooth_entry.module == "dynamic_powerfoam_metal_trainer"
     dynamic_powerfoam_rbf_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_dynamic_powerfoam_metal_rbf_1024_smoke.jsonc"
     )
-    assert dynamic_powerfoam_rbf_entry.module == "train_dynamic_powerfoam_metal"
+    assert dynamic_powerfoam_rbf_entry.module == "dynamic_powerfoam_metal_trainer"
     token_dynamic_powerfoam_feature_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_token_dynamic_powerfoam_features_F16_1024_smoke.jsonc"
     )
-    assert token_dynamic_powerfoam_feature_entry.module == "train_dynamic_powerfoam_metal"
+    assert token_dynamic_powerfoam_feature_entry.module == "dynamic_powerfoam_metal_trainer"
     token_dynamic_powerfoam_feature_f32_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_token_dynamic_powerfoam_features_F32_1024_smoke.jsonc"
     )
-    assert token_dynamic_powerfoam_feature_f32_entry.module == "train_dynamic_powerfoam_metal"
+    assert token_dynamic_powerfoam_feature_f32_entry.module == "dynamic_powerfoam_metal_trainer"
     token_dynamic_powerfoam_motion_probe_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_token_dynamic_powerfoam_features_F32_1024_motion_probe.jsonc"
     )
-    assert token_dynamic_powerfoam_motion_probe_entry.module == "train_dynamic_powerfoam_metal"
+    assert token_dynamic_powerfoam_motion_probe_entry.module == "dynamic_powerfoam_metal_trainer"
     token_dynamic_powerfoam_512px_entry = trainer_entry_for_config(
         "src/train_configs/local_mac_token_dynamic_powerfoam_features_F32_1024_512px_smoke.jsonc"
     )
-    assert token_dynamic_powerfoam_512px_entry.module == "train_dynamic_powerfoam_metal"
+    assert token_dynamic_powerfoam_512px_entry.module == "dynamic_powerfoam_metal_trainer"
 
 
 def test_powerfoam_metal_camera_rays_include_camera_pose() -> None:
-    try:
-        from camera import CameraSpec
-        from train_powerfoam_metal import powerfoam_rays_from_camera
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     c2w = torch.eye(4, dtype=torch.float32)
     c2w[:3, 3] = torch.tensor([1.0, 2.0, 3.0])
     camera = CameraSpec(
@@ -930,11 +962,6 @@ def test_powerfoam_metal_camera_rays_include_camera_pose() -> None:
 
 
 def test_powerfoam_metal_multiview_flatten_shares_frame_indices_across_views() -> None:
-    try:
-        from train_powerfoam_metal import flatten_multiview_powerfoam_samples
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     frames = torch.arange(2 * 3 * 3 * 2 * 2, dtype=torch.float32).reshape(2, 3, 3, 2, 2)
     rays = torch.zeros(2, 3, 2, 2, 6, dtype=torch.float32)
 
@@ -947,13 +974,8 @@ def test_powerfoam_metal_multiview_flatten_shares_frame_indices_across_views() -
 
 
 def test_powerfoam_metal_ssim_loss_is_zero_for_identical_images() -> None:
-    try:
-        from train_powerfoam_metal import LOSS_DEFAULTS, powerfoam_ssim_loss
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     image = torch.rand(2, 3, 6, 6)
-    loss_cfg = dict(LOSS_DEFAULTS)
+    loss_cfg = dict(METAL_LOSS_DEFAULTS)
     loss_cfg["ssim_window_size"] = 11
 
     loss = powerfoam_ssim_loss(image, image, loss_cfg)
@@ -962,11 +984,6 @@ def test_powerfoam_metal_ssim_loss_is_zero_for_identical_images() -> None:
 
 
 def test_powerfoam_metal_background_compositing_uses_alpha() -> None:
-    try:
-        from train_powerfoam_metal import composite_powerfoam_background, training_background_tensor
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     rendered = torch.zeros(2, 3, 2, 2)
     alpha = torch.tensor(
         [
@@ -989,12 +1006,7 @@ def test_powerfoam_metal_background_compositing_uses_alpha() -> None:
 
 def test_powerfoam_metal_point_cloud_init_loads_ply_static_geometry(tmp_path: Path) -> None:
     try:
-        from train_powerfoam_metal import (
-            MetalPowerFoamVideo,
-            RENDER_DEFAULTS,
-            load_powerfoam_point_cloud_initialization,
-            make_raster_config,
-        )
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
 
@@ -1079,11 +1091,6 @@ def test_powerfoam_metal_point_cloud_init_loads_ply_static_geometry(tmp_path: Pa
 
 
 def test_powerfoam_point_cloud_init_applies_world_to_model_transform(tmp_path: Path) -> None:
-    try:
-        from train_powerfoam_metal import load_powerfoam_point_cloud_initialization
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     ply_path = tmp_path / "world.ply"
     ply_path.write_text(
         "\n".join(
@@ -1125,11 +1132,6 @@ def test_powerfoam_point_cloud_init_applies_world_to_model_transform(tmp_path: P
 
 
 def test_powerfoam_point_cloud_init_can_keep_ply_order_for_ranked_points(tmp_path: Path) -> None:
-    try:
-        from train_powerfoam_metal import load_powerfoam_point_cloud_initialization
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     ply_path = tmp_path / "ranked.ply"
     ply_path.write_text(
         "\n".join(
@@ -1171,11 +1173,6 @@ def test_powerfoam_point_cloud_init_can_keep_ply_order_for_ranked_points(tmp_pat
 
 
 def test_powerfoam_point_cloud_init_filters_train_visible_points(tmp_path: Path) -> None:
-    try:
-        from train_powerfoam_metal import load_powerfoam_point_cloud_initialization
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     ply_path = tmp_path / "points.ply"
     ply_path.write_text(
         "\n".join(
@@ -1223,11 +1220,6 @@ def test_powerfoam_point_cloud_init_filters_train_visible_points(tmp_path: Path)
 
 
 def test_powerfoam_point_cloud_init_jitters_duplicate_backfill(tmp_path: Path) -> None:
-    try:
-        from train_powerfoam_metal import load_powerfoam_point_cloud_initialization
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     ply_path = tmp_path / "single_point.ply"
     ply_path.write_text(
         "\n".join(
@@ -1273,14 +1265,7 @@ def test_powerfoam_point_cloud_init_jitters_duplicate_backfill(tmp_path: Path) -
 
 def test_powerfoam_metal_synthetic_posed_views_overfit_shared_state() -> None:
     try:
-        from camera import CameraSpec, build_look_at_camera_to_world
-        from train_powerfoam_metal import (
-            MetalPowerFoamVideo,
-            RENDER_DEFAULTS,
-            TRAIN_DEFAULTS,
-            make_raster_config,
-            powerfoam_rays_from_camera,
-        )
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
     if not torch.backends.mps.is_available():
@@ -1403,14 +1388,7 @@ def test_powerfoam_metal_synthetic_posed_views_overfit_shared_state() -> None:
 
 def test_powerfoam_metal_height_sv_raytrace_overfits_tiny_material() -> None:
     try:
-        from camera import CameraSpec, build_look_at_camera_to_world
-        from train_powerfoam_metal import (
-            MetalPowerFoamVideo,
-            RENDER_DEFAULTS,
-            TRAIN_DEFAULTS,
-            make_raster_config,
-            powerfoam_rays_from_camera,
-        )
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
     if not torch.backends.mps.is_available():
@@ -1536,11 +1514,6 @@ def test_powerfoam_metal_height_sv_raytrace_overfits_tiny_material() -> None:
 
 
 def test_powerfoam_metal_knn_adjacency_has_fixed_degree_and_no_self_edges() -> None:
-    try:
-        from train_powerfoam_metal import build_csr_adjacency
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     points = torch.tensor(
         [
             [0.0, 0.0, 1.0],
@@ -1651,11 +1624,6 @@ def _single_center_ray_render(
 
 
 def test_powerfoam_metal_cech_aabb_is_dense_overlap_superset() -> None:
-    try:
-        from train_powerfoam_metal import build_csr_adjacency, csr_adjacency_stats
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     generator = torch.Generator().manual_seed(23)
     points = torch.randn(14, 3, generator=generator) * 0.45
     points[:, 2] += 2.0
@@ -1671,11 +1639,6 @@ def test_powerfoam_metal_cech_aabb_is_dense_overlap_superset() -> None:
 
 
 def test_powerfoam_metal_cech_aabb_fixes_knn_missed_power_face() -> None:
-    try:
-        from train_powerfoam_metal import build_csr_adjacency
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     points = torch.tensor(
         [
             [0.0, 0.0, 2.0],
@@ -1708,8 +1671,7 @@ def test_powerfoam_metal_regular_triangulation_matches_unweighted_delaunay_edges
         pytest.skip("regular_triangulation adjacency requires scipy")
     try:
         from scipy.spatial import Delaunay
-        from train_powerfoam_metal import build_csr_adjacency
-    except Exception as exc:  # pragma: no cover - depends on local optional scipy / Metal import path.
+    except Exception as exc:  # pragma: no cover - depends on local optional scipy import path.
         pytest.skip(f"regular triangulation unavailable: {exc}")
 
     points = torch.tensor(
@@ -1742,7 +1704,7 @@ def test_powerfoam_metal_regular_triangulation_matches_unweighted_delaunay_edges
 
 def test_powerfoam_metal_resample_uses_ema_and_preserves_optimizer_state() -> None:
     try:
-        from train_powerfoam_metal import MetalPowerFoamVideo, make_raster_config, RENDER_DEFAULTS, TRAIN_DEFAULTS
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
 
@@ -1791,7 +1753,7 @@ def test_powerfoam_metal_resample_uses_ema_and_preserves_optimizer_state() -> No
 
 def test_powerfoam_metal_resample_prunes_invalid_cells() -> None:
     try:
-        from train_powerfoam_metal import MetalPowerFoamVideo, make_raster_config, RENDER_DEFAULTS, TRAIN_DEFAULTS
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
 
@@ -1822,8 +1784,10 @@ def test_camera_facing_quaternion_points_normals_toward_camera() -> None:
 
 
 def test_powerfoam_regularizer_weights_use_official_exp_decay_shape() -> None:
-    start = scheduled_loss_weights(LOSS_DEFAULTS, step=0, total_steps=100)
-    end = scheduled_loss_weights(LOSS_DEFAULTS, step=100, total_steps=100)
+    start = scheduled_loss_weights(DIRECT_LOSS_DEFAULTS, step=0, total_steps=100)
+    end = scheduled_loss_weights(DIRECT_LOSS_DEFAULTS, step=100, total_steps=100)
+    assert start["rgb_mse_sum_weight"] == DIRECT_LOSS_DEFAULTS["rgb_mse_sum_weight"]
+    assert start["normal_map_weight"] == 0.0
     assert abs(start["normal_weight"] - 0.1) < 1.0e-8
     assert abs(end["normal_weight"] - 0.01) < 1.0e-8
     assert abs(end["contribution_weight"] - 0.0001) < 1.0e-8
@@ -1831,15 +1795,8 @@ def test_powerfoam_regularizer_weights_use_official_exp_decay_shape() -> None:
 
 
 def test_powerfoam_metal_lr_schedule_uses_official_cosine_shape_and_warmups() -> None:
-    try:
-        from train_powerfoam_metal import (
-            TRAIN_DEFAULTS,
-            cosine_scheduled_lr,
-            powerfoam_group_lr_metadata,
-            update_powerfoam_learning_rates,
-        )
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
+    from powerfoam_metal_config import TRAIN_DEFAULTS
+    from powerfoam_optim import cosine_scheduled_lr, powerfoam_group_lr_metadata, update_powerfoam_learning_rates
 
     assert abs(cosine_scheduled_lr(1.0e-3, 5.0e-5, 50, 100) - 5.25e-4) < 1.0e-10
 
@@ -1878,11 +1835,6 @@ def test_powerfoam_metal_lr_schedule_uses_official_cosine_shape_and_warmups() ->
 
 
 def test_powerfoam_metal_contribution_loss_uses_differentiable_alpha_sum() -> None:
-    try:
-        from train_powerfoam_metal import LOSS_DEFAULTS as METAL_LOSS_DEFAULTS, powerfoam_contribution_loss, scheduled_loss_weights
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     alpha = torch.tensor([[[0.0, 0.5], [0.75, 1.0]]], dtype=torch.float32, requires_grad=True)
     loss = powerfoam_contribution_loss(alpha)
     assert abs(float(loss.detach()) - 0.5625) < 1.0e-8
@@ -1904,11 +1856,6 @@ def test_powerfoam_metal_contribution_loss_uses_differentiable_alpha_sum() -> No
 
 
 def test_powerfoam_normals_from_ray_depth_orients_against_rays() -> None:
-    try:
-        from train_powerfoam_metal import make_pinhole_rays, normals_from_ray_depth
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     rays = make_pinhole_rays(7, 7, 55.0, torch.device("cpu"))
     depth = 2.0 / rays[..., 5].clamp_min(1.0e-6)
     normals, mask = normals_from_ray_depth(depth, rays)
@@ -1919,11 +1866,6 @@ def test_powerfoam_normals_from_ray_depth_orients_against_rays() -> None:
 
 
 def test_powerfoam_normal_map_loss_masks_invalid_pixels() -> None:
-    try:
-        from train_powerfoam_metal import powerfoam_normal_map_loss
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
-
     rendered = torch.zeros(1, 2, 2, 3, requires_grad=True)
     target = torch.zeros_like(rendered)
     rendered.data[0, 0, 0, 0] = 10.0
@@ -1939,12 +1881,7 @@ def test_powerfoam_normal_map_loss_masks_invalid_pixels() -> None:
 
 def test_powerfoam_metal_normal_distance_loss_backprops_through_tiled_primitive() -> None:
     try:
-        from train_powerfoam_metal import (
-            MetalPowerFoamVideo,
-            RENDER_DEFAULTS,
-            make_raster_config,
-            powerfoam_normal_distance_loss,
-        )
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
     if not torch.backends.mps.is_available():
@@ -1988,7 +1925,7 @@ def test_powerfoam_metal_normal_distance_loss_backprops_through_tiled_primitive(
 
 def test_powerfoam_metal_raytrace_rendered_normal_backprops() -> None:
     try:
-        from train_powerfoam_metal import MetalPowerFoamVideo, RENDER_DEFAULTS, make_raster_config
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
     if not torch.backends.mps.is_available():
@@ -2037,7 +1974,7 @@ def test_powerfoam_metal_raytrace_rendered_normal_backprops() -> None:
 
 def test_powerfoam_metal_raytrace_height_sv_backward_supports_9_texel_sites() -> None:
     try:
-        from train_powerfoam_metal import MetalPowerFoamVideo, RENDER_DEFAULTS, make_raster_config
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
     if not torch.backends.mps.is_available():
@@ -2084,13 +2021,7 @@ def test_powerfoam_metal_raytrace_height_sv_backward_supports_9_texel_sites() ->
 
 def test_powerfoam_metal_normal_map_loss_uses_aux_median_depth_without_metric3d() -> None:
     try:
-        from train_powerfoam_metal import (
-            MetalPowerFoamVideo,
-            RENDER_DEFAULTS,
-            make_raster_config,
-            normals_from_ray_depth,
-            powerfoam_normal_map_loss,
-        )
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
     if not torch.backends.mps.is_available():
@@ -2137,13 +2068,7 @@ def test_powerfoam_metal_normal_map_loss_uses_aux_median_depth_without_metric3d(
 
 def test_powerfoam_metal_interpenetration_loss_is_differentiable() -> None:
     try:
-        from train_powerfoam_metal import (
-            LOSS_DEFAULTS as METAL_LOSS_DEFAULTS,
-            MetalPowerFoamVideo,
-            RENDER_DEFAULTS,
-            make_raster_config,
-            scheduled_loss_weights,
-        )
+        from powerfoam_metal_trainer import MetalPowerFoamVideo
     except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
         pytest.skip(f"powerfoam_metal unavailable: {exc}")
 
@@ -2176,10 +2101,8 @@ def test_powerfoam_metal_interpenetration_loss_is_differentiable() -> None:
 
 
 def test_powerfoam_metal_resample_schedule_matches_official_geometric_growth() -> None:
-    try:
-        from train_powerfoam_metal import MODEL_DEFAULTS, scheduled_resample_target_cells, should_resample_powerfoam_step
-    except Exception as exc:  # pragma: no cover - depends on local Metal extension build.
-        pytest.skip(f"powerfoam_metal unavailable: {exc}")
+    from powerfoam_metal_config import MODEL_DEFAULTS
+    from powerfoam_resampling import scheduled_resample_target_cells, should_resample_powerfoam_step
 
     model_cfg = dict(MODEL_DEFAULTS)
     model_cfg.update(

@@ -4,17 +4,12 @@ import argparse
 import json
 import math
 from pathlib import Path
-import sys
 from typing import Any, Callable
 
 import torch
 
 
-EXPERIMENT_DIR = Path(__file__).resolve().parent
-DYNAWORLD_ROOT = Path(__file__).resolve().parents[2]
-if str(EXPERIMENT_DIR) not in sys.path:
-    sys.path.insert(0, str(EXPERIMENT_DIR))
-
+from common import DYNAWORLD_ROOT, save_rgb_mp4, write_columns_legend  # noqa: E402
 from train import (  # noqa: E402
     MaterialSurfelField,
     RenderConfig,
@@ -516,23 +511,10 @@ def save_probe_strip(
     canvas = torch.cat(rows, dim=0)
     path.parent.mkdir(parents=True, exist_ok=True)
     tensor_to_uint8_image(canvas).save(path)
-    path.with_name(path.stem + "_columns.txt").write_text(
-        "columns: target | base_render | probe_render | abs_probe_minus_base | probe_alpha\n"
+    write_columns_legend(
+        path,
+        ("target", "base_render", "probe_render", "abs_probe_minus_base", "probe_alpha"),
     )
-
-
-def save_rgb_mp4(path: Path, video: torch.Tensor, fps: float = 4.0) -> None:
-    import cv2
-
-    frames_u8 = (video.detach().cpu().clamp(0, 1) * 255.0).to(torch.uint8).numpy()
-    _, H, W, _ = frames_u8.shape
-    path.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (W, H))
-    if not writer.isOpened():
-        raise RuntimeError(f"Could not open video writer for {path}")
-    for frame in frames_u8:
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    writer.release()
 
 
 def normalize_to_rgb(values: torch.Tensor, valid: torch.Tensor | None = None) -> torch.Tensor:
@@ -601,8 +583,9 @@ def save_diagnostic_strips(
         alpha_rgb = alpha[..., None].expand_as(xmap_rgb)
         depth_rgb = normalize_to_rgb(rendered["depth"][index], valid=alpha > alpha_min)
         xmap_rows.append(torch.cat([xmap_rgb, depth_rgb, alpha_rgb], dim=1))
-    tensor_to_uint8_image(torch.cat(xmap_rows, dim=0)).save(output_dir / "xmap_depth_alpha.png")
-    (output_dir / "xmap_depth_alpha_columns.txt").write_text("columns: xmap_rgb | depth | alpha\n")
+    xmap_path = output_dir / "xmap_depth_alpha.png"
+    tensor_to_uint8_image(torch.cat(xmap_rows, dim=0)).save(xmap_path)
+    write_columns_legend(xmap_path, ("xmap_rgb", "depth", "alpha"))
 
     if "flow" in rendered:
         flow_rows = []
@@ -613,8 +596,9 @@ def save_diagnostic_strips(
             mag_rgb = normalize_to_rgb(rendered["flow"][index].norm(dim=-1))
             flow_rows.append(torch.cat([flow_rgb, mag_rgb], dim=1))
         if flow_rows:
-            tensor_to_uint8_image(torch.cat(flow_rows, dim=0)).save(output_dir / "flow.png")
-            (output_dir / "flow_columns.txt").write_text("columns: flow_hsv | flow_magnitude\n")
+            flow_path = output_dir / "flow.png"
+            tensor_to_uint8_image(torch.cat(flow_rows, dim=0)).save(flow_path)
+            write_columns_legend(flow_path, ("flow_hsv", "flow_magnitude"))
 
 
 def run_probe(

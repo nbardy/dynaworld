@@ -23,7 +23,7 @@ Samples:
 Smoke the loader:
 
 ```bash
-PYTHONPATH=src/train uv run python research_experiments/multicam_train2_holdout1/smoke_load_split.py
+uv run python -m research_experiments.multicam_train2_holdout1.smoke_load_split
 ```
 
 Notes:
