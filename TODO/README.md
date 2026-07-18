@@ -19,13 +19,16 @@ table. Do not repeat the
 alpha-background ablation: its current renderer/resolution-specific decision
 is already recorded in `EXPERIMENTS.md` and the May 21 loose notes.
 
-2026-07-17 closeout decision: stop adding umbrella Gauged UVT/fiber-bundle
-theory. Keep World Tubes as the primary compiled camera-program implementation
-and paper lane. Keep WorldFoam as a parked retained-depth optical-transfer
-challenger, not a parallel default. The next admissible World Tubes work is
-camera-triplet/scene breadth, orbit/visibility stress that falsifies a current
-certificate, or measured native-kernel overhead. The next admissible WorldFoam
-work requires broader heldout quality or native optical-transfer parity.
+2026-07-19 naming correction: Gauged UVT's camera-gauge/ray-fiber mathematics
+is retained as the shared framework. Stop only umbrella theory and new aliases
+that lack a replayable falsifier. World Tubes is the primary method/paper,
+projective STAR UVT is its implementation, and WorldFoam is a real second-paper
+retained-depth operator ordering that is parked as an engineering priority.
+The canonical map is `../research_notes/renderer_lane_taxonomy.md`. The next
+World Tubes work is camera-triplet/scene breadth under the shared paper
+protocol, or an orbit/visibility/native-overhead case that falsifies a current
+certificate. The next WorldFoam systems work requires broader heldout quality
+or native optical-transfer parity.
 
 As of 2026-05-28:
 

@@ -41,14 +41,17 @@ and the routed strategic docs it names before proposing a new direction.
 
 ## Current Project State
 
-As of 2026-07-17, the open-ended Gauged UVT theory iteration lane is closed.
-Its durable implementation and paper surface is **World Tubes**: the
-camera-ray bundle invariant, event-certified projective gauge domains,
-compiled interval atlas, visibility strata, and direct adjoint path remain
-mainline. **WorldFoam** remains a parked retained-depth challenger because
-visibility does not commute with depth pushforward; reopen it only for a
-broader heldout-quality win or native optical-transfer parity. The closeout
-evidence and repository-accounting decision are recorded in
+As of 2026-07-19, the camera-gauge and ray-fiber mathematics is retained, not
+closed. The stopped lane is only open-ended theory/name proliferation without
+a measured compiler failure. Its primary method and paper surface is **World
+Tubes**, implemented by projective **STAR UVT**: the camera-ray bundle
+invariant, event-certified gauge domains, compiled interval atlas, visibility
+strata, and direct adjoint path remain mainline. **WorldFoam** is a real
+second-paper retained-depth operator ordering, but is parked as an engineering
+priority until broader heldout quality or native optical-transfer parity
+justifies another systems push. The canonical naming and lane map is
+`research_notes/renderer_lane_taxonomy.md`. The original closeout evidence and
+repository-accounting decision are recorded in
 `agent_notes/loose_notes/2026-07-17_23-59-22_world_tubes_lane_closeout_and_repo_integration.md`.
 
 As of 2026-07-11, the first matched real-dataset paper table is complete on

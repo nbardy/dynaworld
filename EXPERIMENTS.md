@@ -14,8 +14,8 @@ benchmark claims still belong there.
 
 ## World Tubes / WorldFoam Paper Runner Ablation Lane
 
-Status: **Promoted/closed for theory iteration; World Tubes breadth next,
-WorldFoam parked**
+Status: **Promoted; shared gauge math retained, name proliferation stopped;
+World Tubes breadth next, WorldFoam engineering parked**
 
 Purpose: turn the World Tubes and WorldFoam paper ideas into reproducible
 runner artifacts that can feed ablation tables, quality comparisons, and
@@ -23,16 +23,19 @@ failure-mode figures without hand-curated claims.
 
 Current decision:
 
-- Close the open-ended Gauged UVT/fiber-bundle theory iteration. The invariant
+- Retain the Gauged UVT camera-ray bundle framework. Close only open-ended
+  theory/name proliferation without a replayable failure. The invariant
   `UVT trace = pi_* Gamma^* world_primitive`, projective gauge domains,
-  interval atlas, visibility strata, and compiled adjoint are preserved as the
-  World Tubes mainline.
+  interval atlas, visibility strata, and compiled adjoint are the mathematical
+  core of the World Tubes mainline.
 - Treat WorldFoam as a distinct retained-depth optical-transfer challenger,
   not a competing default implementation. Reopen native WorldFoam work only
   after a broader heldout-quality win or a direct Metal optical-transfer parity
   gate.
 - Do not add another local chart/gauge formalism unless a current orbit,
   visibility, or denominator certificate is falsified by a replayable case.
+- Use `research_notes/renderer_lane_taxonomy.md` as the canonical distinction
+  between Gauged UVT, World Tubes, STAR UVT, WorldFoam, and PowerFoam.
 
 - Use report/verifier modules as the paper-runner contract: each runner writes
   `summary.json` and `summary.md`, exposes `summarize(...)`,
