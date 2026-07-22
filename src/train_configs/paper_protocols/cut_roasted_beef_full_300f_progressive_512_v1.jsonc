@@ -1,0 +1,45 @@
+{
+  "name": "cut_roasted_beef_full_300f_progressive_512_v1",
+  "enabled": true,
+  "dataset": {
+    "manifest": "src/dataset_configs/neural3d_cut_roasted_beef_train2_holdout1_full_300f_manifest.jsonl",
+    "sample_id": "neural3d_cut_roasted_beef_train_cam14_cam18_holdout_cam16_full_300f",
+    "train_cameras": ["cam14", "cam18"],
+    "heldout_cameras": ["cam16"],
+    "frame_count": 300,
+    "fps": 30.0
+  },
+  "steps": 600,
+  "max_train_seconds": 86400.0,
+  "frames_per_step": 4,
+  "same_time_count": 2,
+  "local_time_count": 1,
+  "local_time_radius": 8,
+  "sampler_seed_offset": 7001,
+  "stages": [
+    {
+      "label": "bootstrap_128w",
+      "until_step": 160,
+      "image_size": [96, 128],
+      "primitive_count": 256,
+      "frames_per_step": 4,
+      "lr_multiplier": 1.0
+    },
+    {
+      "label": "geometry_256w",
+      "until_step": 360,
+      "image_size": [192, 256],
+      "primitive_count": 512,
+      "frames_per_step": 4,
+      "lr_multiplier": 0.65
+    },
+    {
+      "label": "detail_512w",
+      "until_step": 600,
+      "image_size": [384, 512],
+      "primitive_count": 1024,
+      "frames_per_step": 4,
+      "lr_multiplier": 0.35
+    }
+  ]
+}

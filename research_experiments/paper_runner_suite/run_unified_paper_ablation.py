@@ -98,6 +98,12 @@ def display_path(path: str | Path) -> str:
         return str(resolved)
 
 
+def paper_scene_tag(protocol: PaperTrainingProtocol) -> str:
+    """Return a stable scene tag without hard-coding the first paper scene."""
+    scene_id = protocol.dataset.sample_id.split("_train_", 1)[0]
+    return f"scene-{scene_id}"
+
+
 def load_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -319,7 +325,7 @@ def powerfoam_config(
             "wandb_run_name": f"paper-{protocol.name}-worldfoam-seed{seed}",
             "wandb_tags": [
                 "paper-ablation-v1",
-                "coffee_martini",
+                paper_scene_tag(protocol),
                 "full-temporal" if protocol.dataset.frame_count == 300 else "mechanical-smoke",
                 "worldfoam",
                 "powerfoam-metal",
@@ -510,7 +516,7 @@ def _comparison_wandb_log(
     run = wandb.init(
         project="dynaworld",
         name=f"paper-{protocol.name}-{lane_name}-seed{seed}",
-        tags=["paper-ablation-v1", "coffee_martini", protocol.name, lane_name, f"seed-{seed}"],
+        tags=["paper-ablation-v1", paper_scene_tag(protocol), protocol.name, lane_name, f"seed-{seed}"],
         mode=wandb_mode,
         id=f"pa{run_id}",
         resume="allow",

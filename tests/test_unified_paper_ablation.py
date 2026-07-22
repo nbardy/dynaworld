@@ -12,6 +12,7 @@ from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     build_dry_run_manifest,
     comparison_command,
     kernel_specs,
+    paper_scene_tag,
     powerfoam_config,
     require_clean_provenance,
     source_provenance,
@@ -78,6 +79,18 @@ def test_unified_powerfoam_config_uses_the_same_protocol(tmp_path: Path) -> None
     assert cfg["logging"]["wandb_enabled"] is True
     assert cfg["logging"]["wandb_mode"] == "offline"
     assert cfg["logging"]["wandb_resume"] == "allow"
+    assert "scene-neural3d_coffee_martini" in cfg["logging"]["wandb_tags"]
+
+
+def test_paper_scene_tag_is_derived_from_each_protocol() -> None:
+    _, coffee = _protocol()
+    raw = load_config_file(
+        ROOT / "src" / "train_configs" / "paper_protocols" / "cook_spinach_full_300f_progressive_512_v1.jsonc"
+    )
+    spinach = resolve_paper_training_protocol(raw)
+
+    assert paper_scene_tag(coffee) == "scene-neural3d_coffee_martini"
+    assert paper_scene_tag(spinach) == "scene-neural3d_cook_spinach"
 
 
 def test_worldfoam_initializer_cannot_leak_coffee_geometry_into_breadth_rows(tmp_path: Path) -> None:
