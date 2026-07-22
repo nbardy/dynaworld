@@ -14,6 +14,7 @@ from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     kernel_specs,
     load_final_powerfoam_metrics,
     paper_camera_rig_init,
+    paper_world_tubes_camera_policy,
     paper_scene_tag,
     powerfoam_config,
     require_clean_provenance,
@@ -126,7 +127,9 @@ def test_dnerf_protocol_routes_both_trainers_through_the_posed_trajectory_adapte
     assert paper_camera_rig_init(protocol) == "dnerf"
     assert _value_after(command, "--camera-rig-init") == "dnerf"
     assert _value_after(command, "--uvt-camera-projection") == "legacy_pinhole"
-    assert _value_after(command, "--uvt-camera-sequence-mode") == "projective_first_order"
+    assert paper_world_tubes_camera_policy(protocol) == ("legacy_pinhole", "segmented", 1)
+    assert _value_after(command, "--uvt-camera-sequence-mode") == "segmented"
+    assert _value_after(command, "--uvt-segment-frames") == "1"
     assert cfg["camera"]["rig_init"] == "dnerf"
     assert cfg["data"]["multicam_train_cameras"] == ["train_trajectory"]
     assert cfg["data"]["multicam_heldout_camera"] == "test_trajectory"
@@ -296,6 +299,7 @@ def test_paper_evidence_is_fail_closed_and_keeps_trace_diagnostics() -> None:
             "rows": [
                 {
                     "stats": {
+                        "projected_trace_count": 256,
                         "uvt_tile_tube_pairs": 20,
                         "summed_per_frame_tile_splat_pairs": 40,
                         "effective_pair_ratio_after_unstable_fallback": 0.5,
@@ -312,6 +316,7 @@ def test_paper_evidence_is_fail_closed_and_keeps_trace_diagnostics() -> None:
     assert evidence["quality"]["heldout_eval_lpips"] == 0.25
     assert evidence["cost"]["serialized_checkpoint_bytes"] == 1_024
     assert evidence["diagnostics"]["active_trace_count"] == 256
+    assert evidence["diagnostics"]["compiled_trace_count_mean"] == 256
 
     del lane["metrics"]["heldout_eval_lpips"]
     with pytest.raises(ValueError, match="heldout_eval_lpips"):

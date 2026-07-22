@@ -215,6 +215,19 @@ def paper_camera_rig_init(protocol: PaperTrainingProtocol) -> str:
     return "dnerf" if str(record.get("dataset", "")).lower() == "dnerf" else "neural_3d_video"
 
 
+def paper_world_tubes_camera_policy(protocol: PaperTrainingProtocol) -> tuple[str, str, int]:
+    _manifest_path, record = paper_dataset_record(protocol)
+    if str(record.get("dataset", "")).lower() != "dnerf":
+        return "dataset_lens", "static_view", 4
+    mode = str(record.get("world_tubes_camera_sequence_mode", ""))
+    segment_frames = int(record.get("world_tubes_segment_frames", 0))
+    if mode != "segmented" or segment_frames != 1:
+        raise ValueError(
+            "D-NeRF paper rows require the declared one-frame gauged fallback because official poses are discontinuous"
+        )
+    return "legacy_pinhole", mode, segment_frames
+
+
 def validate_manifest(protocol: PaperTrainingProtocol) -> dict[str, Any]:
     manifest_path, record = paper_dataset_record(protocol)
     is_dnerf = str(record.get("dataset", "")).lower() == "dnerf"
@@ -292,7 +305,7 @@ def comparison_command(
     python: str = sys.executable,
 ) -> list[str]:
     camera_rig_init = paper_camera_rig_init(protocol)
-    moving_camera = camera_rig_init == "dnerf"
+    camera_projection, camera_sequence_mode, segment_frames = paper_world_tubes_camera_policy(protocol)
     return [
         python,
         str(COMPARE_SCRIPT),
@@ -317,9 +330,11 @@ def comparison_command(
         "--uvt-backward-policy",
         backward_policy,
         "--uvt-camera-projection",
-        "legacy_pinhole" if moving_camera else "dataset_lens",
+        camera_projection,
         "--uvt-camera-sequence-mode",
-        "projective_first_order" if moving_camera else "static_view",
+        camera_sequence_mode,
+        "--uvt-segment-frames",
+        str(segment_frames),
         "--uvt-init-views",
         "all_train",
         "--uvt-init-sampling",
@@ -447,16 +462,39 @@ def representation_diagnostics(
         rows = lane.get("metal_stats", {}).get("rows", [])
         if not rows:
             raise ValueError("World Tubes did not report metal trace diagnostics")
+        unstable_fraction = _mean_stat(rows, "unstable_tile_fraction")
+        sequence_mode = str(lane.get("camera_sequence_mode", "static_view"))
+        segment_frames = int(lane.get("segment_frames", frame_count))
+        projected_counts = [
+            float(row["stats"]["projected_trace_count"])
+            for row in rows
+            if "projected_trace_count" in row.get("stats", {})
+        ]
+        if projected_counts:
+            compiled_trace_count = sum(projected_counts) / float(len(projected_counts))
+        elif sequence_mode == "static_view":
+            # Submission rows recorded before the explicit counter are exactly
+            # one projected trace per active tube under the static chart.
+            compiled_trace_count = float(lane["tube_count"])
+        else:
+            raise ValueError("moving-camera World Tubes diagnostics are missing projected_trace_count")
         return {
             "active_trace_count": int(lane["tube_count"]),
+            "compiled_trace_count_mean": compiled_trace_count,
             "tile_trace_pairs_mean": _mean_stat(rows, "uvt_tile_tube_pairs"),
             "per_frame_tile_trace_pairs_mean": _mean_stat(rows, "summed_per_frame_tile_splat_pairs"),
             "effective_pair_ratio_after_fallback_mean": _mean_stat(
                 rows, "effective_pair_ratio_after_unstable_fallback"
             ),
-            "unstable_tile_fraction_mean": _mean_stat(rows, "unstable_tile_fraction"),
+            "unstable_tile_fraction_mean": unstable_fraction,
+            "fallback_fraction_mean": unstable_fraction,
             "overflow_tile_count_mean": _mean_stat(rows, "overflow_tile_count"),
             "metal_buffer_bytes_mean": _mean_stat(rows, "metal_buffer_memory"),
+            "camera_chart_mode": sequence_mode,
+            "camera_chart_count": (
+                math.ceil(int(frame_count) / segment_frames) if sequence_mode == "segmented" else 1
+            ),
+            "camera_chart_fallback_fraction": 1.0 if sequence_mode == "segmented" else 0.0,
         }
     if lane_name == "dynamic_3dgs":
         active = int(lane["splat_count"])
