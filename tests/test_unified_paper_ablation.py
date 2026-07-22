@@ -13,6 +13,7 @@ from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     comparison_command,
     kernel_specs,
     load_final_powerfoam_metrics,
+    paper_camera_rig_init,
     paper_scene_tag,
     powerfoam_config,
     require_clean_provenance,
@@ -92,6 +93,43 @@ def test_paper_scene_tag_is_derived_from_each_protocol() -> None:
 
     assert paper_scene_tag(coffee) == "scene-neural3d_coffee_martini"
     assert paper_scene_tag(spinach) == "scene-neural3d_cook_spinach"
+
+
+def test_dnerf_protocol_routes_both_trainers_through_the_posed_trajectory_adapter(tmp_path: Path) -> None:
+    path = (
+        ROOT
+        / "src"
+        / "train_configs"
+        / "paper_protocols"
+        / "dnerf_bouncingballs_matched_20f_progressive_512_v1.jsonc"
+    )
+    raw = load_config_file(path)
+    protocol = resolve_paper_training_protocol(raw)
+    command = comparison_command(
+        path,
+        protocol,
+        17,
+        tmp_path / "compare",
+        backward_policy="fast_exploration",
+        device="mps",
+        python="python",
+    )
+    cfg = powerfoam_config(
+        raw,
+        protocol,
+        17,
+        tmp_path / "worldfoam",
+        wandb_mode="offline",
+        worldfoam_initializer="video",
+    )
+
+    assert paper_camera_rig_init(protocol) == "dnerf"
+    assert _value_after(command, "--camera-rig-init") == "dnerf"
+    assert _value_after(command, "--uvt-camera-projection") == "legacy_pinhole"
+    assert _value_after(command, "--uvt-camera-sequence-mode") == "projective_first_order"
+    assert cfg["camera"]["rig_init"] == "dnerf"
+    assert cfg["data"]["multicam_train_cameras"] == ["train_trajectory"]
+    assert cfg["data"]["multicam_heldout_camera"] == "test_trajectory"
 
 
 def test_worldfoam_paper_metrics_are_from_the_final_checkpoint(tmp_path: Path) -> None:

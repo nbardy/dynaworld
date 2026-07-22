@@ -1,0 +1,29 @@
+{
+  "name": "dnerf_bouncingballs_protocol_smoke_2step",
+  "enabled": true,
+  "dataset": {
+    "manifest": "src/dataset_configs/dnerf_bouncingballs_train_trajectory_holdout_test_20f_manifest.jsonl",
+    "sample_id": "dnerf_bouncingballs_train_trajectory_holdout_test_20f",
+    "train_cameras": ["train_trajectory"],
+    "heldout_cameras": ["test_trajectory"],
+    "frame_count": 4,
+    "fps": 20.0
+  },
+  "steps": 2,
+  "max_train_seconds": 300.0,
+  "frames_per_step": 2,
+  "same_time_count": 1,
+  "local_time_count": 1,
+  "local_time_radius": 1,
+  "sampler_seed_offset": 7001,
+  "stages": [
+    {
+      "label": "mechanical_smoke",
+      "until_step": 2,
+      "image_size": [64, 64],
+      "primitive_count": 64,
+      "frames_per_step": 2,
+      "lr_multiplier": 1.0
+    }
+  ]
+}

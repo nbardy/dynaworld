@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -115,6 +116,82 @@ def test_load_multicam_video_bundle_preserves_train_heldout_and_condition_contra
     assert len(camera_grid) == 2
     assert len(camera_grid[0]) == 2
     assert camera_grid[0][0].camera_to_world.shape == (4, 4)
+
+
+def test_load_multicam_video_bundle_uses_official_dnerf_matched_trajectories(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from PIL import Image
+
+    scene_dir = tmp_path / "bouncingballs"
+    (scene_dir / "train").mkdir(parents=True)
+    (scene_dir / "test").mkdir()
+
+    def transform(*, x: float = 0.0, y: float = 0.0) -> list[list[float]]:
+        matrix = torch.eye(4)
+        matrix[0, 3] = x
+        matrix[1, 3] = y
+        return matrix.tolist()
+
+    train_frames = [
+        {"file_path": "./train/r_000", "time": 0.0, "transform_matrix": transform()},
+        {"file_path": "./train/r_001", "time": 1.0, "transform_matrix": transform(x=1.0)},
+    ]
+    test_frames = [
+        {"file_path": "./test/r_000", "time": 0.0, "transform_matrix": transform(y=2.0)},
+        {"file_path": "./test/r_001", "time": 1.0, "transform_matrix": transform(x=1.0, y=2.0)},
+    ]
+    for split, frames in (("train", train_frames), ("test", test_frames)):
+        (scene_dir / f"transforms_{split}.json").write_text(
+            json.dumps({"camera_angle_x": 0.7, "frames": frames}),
+            encoding="utf-8",
+        )
+        for index in range(2):
+            image = Image.new("RGBA", (2, 2), (255, 0, 0, 255))
+            image.putpixel((0, 0), (255, 255, 255, 0))
+            image.save(scene_dir / split / f"r_{index:03d}.png")
+
+    record = {
+        "dataset": "dnerf",
+        "sample_id": "dnerf_fixture",
+        "dataset_scene_dir": str(scene_dir),
+        "source_camera": "train_trajectory",
+        "target_camera": "test_trajectory",
+        "train_cameras": ["train_trajectory"],
+        "heldout_cameras": ["test_trajectory"],
+        "anchor_camera": "train_trajectory",
+        "condition_camera": "train_trajectory",
+        "frame_count": 2,
+        "fps": 2.0,
+        "dnerf_camera_splits": {"train_trajectory": "train", "test_trajectory": "test"},
+        "dnerf_frame_indices": {"train_trajectory": [0, 1], "test_trajectory": [0, 1]},
+        "dnerf_times": [0.0, 1.0],
+        "dnerf_background": [0.0, 0.0, 0.0],
+        "sample_layout": "matched_posed_trajectories",
+    }
+    monkeypatch.setattr(multicam_video_data, "select_multicam_record", lambda _data_cfg: record)
+
+    bundle = load_multicam_video_bundle(
+        data_cfg={"max_frames": 2},
+        camera_cfg={"rig_init": "dnerf"},
+        target_size=(2, 2),
+        device=torch.device("cpu"),
+    )
+
+    assert bundle.train_frames.shape == (1, 2, 3, 2, 2)
+    assert bundle.heldout_frames is not None and bundle.heldout_frames.shape == (1, 2, 3, 2, 2)
+    assert torch.equal(bundle.train_frames[0, 0, :, 0, 0], torch.zeros(3))
+    assert torch.equal(bundle.condition_sequence.frame_times[:, 0], torch.tensor([0.0, 1.0]))
+    assert not torch.allclose(bundle.train_w2c[0, 0], bundle.train_w2c[0, 1])
+    assert bundle.heldout_w2c is not None
+    assert not torch.allclose(bundle.train_w2c[0, 0], bundle.heldout_w2c[0, 0])
+    assert bundle.pose_source == "dnerf_matched_time_blender_to_opencv_relative_pinhole"
+    assert bundle.metadata["sample_layout"] == "matched_posed_trajectories"
+
+    record["dnerf_times"] = [0.0, 0.5]
+    with pytest.raises(ValueError, match="do not match the declared paired times"):
+        multicam_video_data.dnerf_camera_frames(record, "test_trajectory")
 
 
 def test_load_multicam_video_bundle_preserves_deepview_lens_metadata(

@@ -195,7 +195,7 @@ def kernel_specs(backward_policy: str) -> dict[str, MetalKernelSpec]:
     }
 
 
-def validate_manifest(protocol: PaperTrainingProtocol) -> dict[str, Any]:
+def paper_dataset_record(protocol: PaperTrainingProtocol) -> tuple[Path, dict[str, Any]]:
     manifest_path = resolve_root_path(protocol.dataset.manifest)
     if not manifest_path.exists():
         raise FileNotFoundError(f"paper manifest does not exist: {manifest_path}")
@@ -207,32 +207,77 @@ def validate_manifest(protocol: PaperTrainingProtocol) -> dict[str, Any]:
     matches = [record for record in records if record.get("sample_id") == protocol.dataset.sample_id]
     if len(matches) != 1:
         raise ValueError(f"expected one manifest row for {protocol.dataset.sample_id}, found {len(matches)}")
-    record = matches[0]
+    return manifest_path, matches[0]
+
+
+def paper_camera_rig_init(protocol: PaperTrainingProtocol) -> str:
+    _manifest_path, record = paper_dataset_record(protocol)
+    return "dnerf" if str(record.get("dataset", "")).lower() == "dnerf" else "neural_3d_video"
+
+
+def validate_manifest(protocol: PaperTrainingProtocol) -> dict[str, Any]:
+    manifest_path, record = paper_dataset_record(protocol)
+    is_dnerf = str(record.get("dataset", "")).lower() == "dnerf"
     checks = {
         "train_cameras": tuple(record.get("train_cameras", ())) == protocol.dataset.train_cameras,
         "heldout_cameras": tuple(record.get("heldout_cameras", ())) == protocol.dataset.heldout_cameras,
         "frame_count_available": int(record.get("frame_count", -1)) >= protocol.dataset.frame_count,
         "fps": float(record.get("fps", -1.0)) == protocol.dataset.fps,
-        "start_at_zero": float(record.get("source_start_seconds", -1.0)) == 0.0,
+        "start_at_zero": (
+            bool(record.get("dnerf_times")) and float(record["dnerf_times"][0]) == 0.0
+            if is_dnerf
+            else float(record.get("source_start_seconds", -1.0)) == 0.0
+        ),
     }
     failed = [name for name, passed in checks.items() if not passed]
     if failed:
         raise ValueError(f"paper manifest contract failed: {', '.join(failed)}")
     scene_dir = resolve_root_path(record["dataset_scene_dir"])
-    camera_paths = {
-        camera: scene_dir / f"{camera}.mp4"
-        for camera in (*protocol.dataset.train_cameras, *protocol.dataset.heldout_cameras)
-    }
-    missing = [str(path) for path in camera_paths.values() if not path.exists()]
-    if missing:
-        raise FileNotFoundError(f"paper camera videos are missing: {missing}")
+    if is_dnerf:
+        split_map = record.get("dnerf_camera_splits", {})
+        index_map = record.get("dnerf_frame_indices", {})
+        camera_paths: dict[str, Path] = {}
+        image_paths: dict[str, list[Path]] = {}
+        for camera in (*protocol.dataset.train_cameras, *protocol.dataset.heldout_cameras):
+            split = split_map.get(camera)
+            indices = index_map.get(camera)
+            if not isinstance(split, str) or not isinstance(indices, list):
+                raise ValueError(f"D-NeRF manifest is missing split/indices for {camera}")
+            transforms_path = scene_dir / f"transforms_{split}.json"
+            camera_paths[camera] = transforms_path
+            payload = load_json(transforms_path)
+            frames = payload.get("frames", [])
+            image_paths[camera] = [
+                (scene_dir / str(frames[int(index)]["file_path"])).with_suffix(".png")
+                for index in indices[: protocol.dataset.frame_count]
+            ]
+        missing = [
+            str(path)
+            for path in (*camera_paths.values(), *(path for paths in image_paths.values() for path in paths))
+            if not path.exists()
+        ]
+        if missing:
+            raise FileNotFoundError(f"paper D-NeRF inputs are missing: {missing}")
+    else:
+        camera_paths = {
+            camera: scene_dir / f"{camera}.mp4"
+            for camera in (*protocol.dataset.train_cameras, *protocol.dataset.heldout_cameras)
+        }
+        missing = [str(path) for path in camera_paths.values() if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"paper camera videos are missing: {missing}")
     return {
         "manifest": display_path(manifest_path),
         "sample_id": protocol.dataset.sample_id,
+        "dataset": record.get("dataset"),
         "checks": checks,
-        "camera_videos": {camera: display_path(path) for camera, path in camera_paths.items()},
+        "camera_inputs": {camera: display_path(path) for camera, path in camera_paths.items()},
+        "camera_videos": (
+            None if is_dnerf else {camera: display_path(path) for camera, path in camera_paths.items()}
+        ),
         "source_image_size": record.get("source_image_size"),
         "duration_seconds": record.get("duration_seconds"),
+        "sample_layout": record.get("sample_layout", "synchronized_multicamera"),
     }
 
 
@@ -246,6 +291,8 @@ def comparison_command(
     device: str,
     python: str = sys.executable,
 ) -> list[str]:
+    camera_rig_init = paper_camera_rig_init(protocol)
+    moving_camera = camera_rig_init == "dnerf"
     return [
         python,
         str(COMPARE_SCRIPT),
@@ -270,7 +317,9 @@ def comparison_command(
         "--uvt-backward-policy",
         backward_policy,
         "--uvt-camera-projection",
-        "dataset_lens",
+        "legacy_pinhole" if moving_camera else "dataset_lens",
+        "--uvt-camera-sequence-mode",
+        "projective_first_order" if moving_camera else "static_view",
         "--uvt-init-views",
         "all_train",
         "--uvt-init-sampling",
@@ -289,6 +338,8 @@ def comparison_command(
         "dataset_lens",
         "--paper-protocol",
         str(protocol_path),
+        "--camera-rig-init",
+        camera_rig_init,
         "--out-dir",
         str(out_dir),
     ]
@@ -304,6 +355,7 @@ def powerfoam_config(
     worldfoam_initializer: str = DEFAULT_WORLDFOAM_INITIALIZER,
 ) -> dict[str, Any]:
     cfg = copy.deepcopy(load_config_file(BASE_CONFIG))
+    cfg["camera"]["rig_init"] = paper_camera_rig_init(protocol)
     if worldfoam_initializer == "video":
         cfg["model"]["init_point_cloud_path"] = None
     elif worldfoam_initializer != DEFAULT_WORLDFOAM_INITIALIZER:

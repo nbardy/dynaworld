@@ -64,6 +64,7 @@ class MulticamVideoBundle:
 
 
 CAMXTIME_DATASETS = {"camxtime", "camxtime_full_grid", "camxtime_eval_gt"}
+DNERF_DATASETS = {"dnerf"}
 CAMXTIME_TRAJECTORY_VIDEOS = {
     "moving_forward",
     "moving_backward",
@@ -71,6 +72,125 @@ CAMXTIME_TRAJECTORY_VIDEOS = {
     "moving_bullettime",
     "moving_slowmo",
 }
+
+
+def dnerf_scene_dir(record: dict[str, Any]) -> Path:
+    scene_dir = record.get("dnerf_scene_dir") or record.get("dataset_scene_dir")
+    if not scene_dir:
+        raise ValueError(f"D-NeRF record {record.get('sample_id')!r} is missing its scene directory.")
+    return Path(scene_dir)
+
+
+def dnerf_camera_split(record: dict[str, Any], camera_name: str) -> str:
+    mapping = record.get("dnerf_camera_splits")
+    if not isinstance(mapping, dict) or camera_name not in mapping:
+        raise ValueError(
+            f"D-NeRF camera {camera_name!r} has no split mapping on record {record.get('sample_id')!r}."
+        )
+    return str(mapping[camera_name])
+
+
+def dnerf_camera_frames(record: dict[str, Any], camera_name: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    split = dnerf_camera_split(record, camera_name)
+    payload = load_json(dnerf_scene_dir(record) / f"transforms_{split}.json")
+    raw_frames = payload.get("frames")
+    index_mapping = record.get("dnerf_frame_indices")
+    if not isinstance(raw_frames, list) or not isinstance(index_mapping, dict) or camera_name not in index_mapping:
+        raise ValueError(f"D-NeRF record {record.get('sample_id')!r} has no indexed frames for {camera_name!r}.")
+    frames = [raw_frames[int(index)] for index in index_mapping[camera_name]]
+    expected_times = [float(value) for value in record.get("dnerf_times", ())]
+    actual_times = [float(frame["time"]) for frame in frames]
+    if len(actual_times) != len(expected_times) or any(
+        not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-9)
+        for actual, expected in zip(actual_times, expected_times)
+    ):
+        raise ValueError(f"D-NeRF {camera_name!r} frames do not match the declared paired times.")
+    return payload, frames
+
+
+def dnerf_image_path(record: dict[str, Any], frame: dict[str, Any]) -> Path:
+    path = dnerf_scene_dir(record) / str(frame["file_path"])
+    return path if path.suffix else path.with_suffix(".png")
+
+
+def load_dnerf_camera_frames(
+    record: dict[str, Any],
+    camera_name: str,
+    *,
+    target_size: ImageSizeLike,
+    device: torch.device,
+    frame_count: int,
+) -> torch.Tensor:
+    import numpy as np  # noqa: WPS433 -- ingestion-only dependency.
+    from PIL import Image  # noqa: WPS433 -- ingestion-only dependency.
+
+    _payload, frames = dnerf_camera_frames(record, camera_name)
+    if isinstance(target_size, int):
+        height = width = int(target_size)
+    elif isinstance(target_size, (tuple, list)) and len(target_size) == 2:
+        height, width = (int(value) for value in target_size)
+    else:
+        raise ValueError("target_size must be an integer or [height, width]")
+    background = tuple(int(round(255.0 * float(value))) for value in record.get("dnerf_background", [0, 0, 0]))
+    tensors = []
+    for frame in frames[: int(frame_count)]:
+        with Image.open(dnerf_image_path(record, frame)) as image:
+            rgba = image.convert("RGBA")
+            canvas = Image.new("RGBA", rgba.size, (*background, 255))
+            rgb = Image.alpha_composite(canvas, rgba).convert("RGB")
+            rgb = rgb.resize((width, height), resample=Image.Resampling.BILINEAR)
+            array = np.asarray(rgb, dtype=np.float32) / 255.0
+        tensors.append(torch.from_numpy(array).permute(2, 0, 1).contiguous())
+    if len(tensors) != int(frame_count):
+        raise ValueError(f"D-NeRF {camera_name!r} has {len(tensors)} frames; expected {frame_count}.")
+    return torch.stack(tensors, dim=0).to(device=device)
+
+
+def dnerf_c2w(frame: dict[str, Any], *, device: torch.device) -> torch.Tensor:
+    c2w = torch.tensor(frame["transform_matrix"], dtype=torch.float32, device=device)
+    if c2w.shape != (4, 4):
+        raise ValueError("D-NeRF transform_matrix must be 4x4.")
+    return c2w @ torch.diag(torch.tensor([1.0, -1.0, -1.0, 1.0], device=device))
+
+
+def make_dnerf_matched_trajectory_cameras(
+    record: dict[str, Any],
+    *,
+    train_cameras: list[str],
+    heldout_cameras: list[str],
+    frame_positions: list[int],
+    H: int,
+    W: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    if len(train_cameras) != 1 or len(heldout_cameras) != 1:
+        raise ValueError("The controlled D-NeRF adapter requires one train and one heldout trajectory.")
+    train_payload, train_frames = dnerf_camera_frames(record, train_cameras[0])
+    heldout_payload, heldout_frames = dnerf_camera_frames(record, heldout_cameras[0])
+    train_frames = [train_frames[index] for index in frame_positions]
+    heldout_frames = [heldout_frames[index] for index in frame_positions]
+    anchor_c2w = dnerf_c2w(train_frames[0], device=device)
+
+    def trajectory(payload: dict[str, Any], frames: list[dict[str, Any]]) -> tuple[torch.Tensor, torch.Tensor]:
+        K = make_fixed_pinhole_K(
+            H=H,
+            W=W,
+            fov_degrees=math.degrees(float(payload["camera_angle_x"])),
+            device=device,
+        )
+        w2c = torch.stack([torch.linalg.inv(dnerf_c2w(frame, device=device)) @ anchor_c2w for frame in frames])
+        return K.unsqueeze(0), w2c.unsqueeze(0)
+
+    train_K, train_w2c = trajectory(train_payload, train_frames)
+    heldout_K, heldout_w2c = trajectory(heldout_payload, heldout_frames)
+    return (
+        train_K,
+        train_w2c,
+        heldout_K,
+        heldout_w2c,
+        anchor_c2w,
+        "dnerf_matched_time_blender_to_opencv_relative_pinhole",
+    )
 
 
 def make_fixed_pinhole_K(*, H: int, W: int, fov_degrees: float, device: torch.device) -> torch.Tensor:
@@ -1108,7 +1228,9 @@ def camera_start_seconds(record: dict[str, Any], camera_name: str) -> float:
 
 def video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
     dataset = str(record.get("dataset") or "")
-    if dataset == "deepview_video":
+    if dataset in DNERF_DATASETS:
+        return dnerf_scene_dir(record) / f"transforms_{dnerf_camera_split(record, camera_name)}.json"
+    elif dataset == "deepview_video":
         return deepview_video_path_for_camera(record, camera_name)
     elif dataset == "aist_dance_db":
         return aist_video_path_for_camera(record, camera_name)
@@ -1138,6 +1260,14 @@ def load_camera_video(
     device: torch.device,
     frame_count: int | None = None,
 ) -> torch.Tensor:
+    if str(record.get("dataset") or "") in DNERF_DATASETS:
+        return load_dnerf_camera_frames(
+            record,
+            camera_name,
+            target_size=target_size,
+            device=device,
+            frame_count=int(frame_count if frame_count is not None else record["frame_count"]),
+        ).contiguous()
     video_path = video_path_for_camera(record, camera_name)
     start_seconds = camera_start_seconds(record, camera_name)
     frames = load_multicam_val_camera_frames(
@@ -1449,13 +1579,31 @@ def load_multicam_video_bundle(
     train_frames = select_configured_multiview_frames(train_frames, data_cfg.get("frame_indices"))
     heldout_frames = select_configured_multiview_frames(heldout_frames, data_cfg.get("frame_indices"))
 
+    frame_positions = list(range(camera_frame_count))
+    if data_cfg.get("frame_indices") is not None:
+        frame_positions = [frame_positions[int(index)] for index in data_cfg["frame_indices"]]
+
     _, T, _, H, W = train_frames.shape
     rig_init = str(camera_cfg.get("rig_init", "deepview")).lower()
     train_lens_models = None
     train_distortions = None
     heldout_lens_models = None
     heldout_distortions = None
-    if rig_init == "deepview":
+    if rig_init == "dnerf":
+        if str(record.get("dataset") or "") not in DNERF_DATASETS:
+            raise ValueError(f"camera.rig_init=dnerf requires a D-NeRF record; got {record.get('dataset')!r}.")
+        train_K, train_w2c, heldout_K, heldout_w2c, anchor_c2w, pose_source = (
+            make_dnerf_matched_trajectory_cameras(
+                record,
+                train_cameras=train_cameras,
+                heldout_cameras=heldout_cameras,
+                frame_positions=frame_positions,
+                H=H,
+                W=W,
+                device=device,
+            )
+        )
+    elif rig_init == "deepview":
         if record.get("dataset") != "deepview_video":
             raise ValueError(
                 f"camera.rig_init=deepview requires a DeepView record; got dataset={record.get('dataset')!r}."
@@ -1579,12 +1727,22 @@ def load_multicam_video_bundle(
         )
     else:
         raise ValueError(
-            "camera.rig_init must be one of: deepview, aist, neural_3d_video, vivo, camxtime, orthogonal_origin"
+            "camera.rig_init must be one of: dnerf, deepview, aist, neural_3d_video, vivo, camxtime, "
+            "orthogonal_origin"
         )
 
     condition_index = train_cameras.index(condition_camera)
-    frame_times = torch.arange(T, dtype=torch.float32, device=device).unsqueeze(-1) / float(record.get("fps", 4.0))
-    normalized_times = normalize_frame_times(frame_times)
+    if rig_init == "dnerf":
+        normalized_times = torch.tensor(
+            [float(record["dnerf_times"][index]) for index in frame_positions],
+            dtype=torch.float32,
+            device=device,
+        ).unsqueeze(-1)
+    else:
+        frame_times = torch.arange(T, dtype=torch.float32, device=device).unsqueeze(-1) / float(
+            record.get("fps", 4.0)
+        )
+        normalized_times = normalize_frame_times(frame_times)
     all_frame_count = int(record.get("frame_count", T))
     train_sequences = tuple(
         SequenceData(
@@ -1635,5 +1793,6 @@ def load_multicam_video_bundle(
             "heldout_cameras": heldout_cameras,
             "anchor_camera": anchor_camera,
             "condition_camera": condition_camera,
+            "sample_layout": record.get("sample_layout", "synchronized_multicamera"),
         },
     )
