@@ -121,6 +121,17 @@ matrix.
 
 ## Manuscript
 
+The two currently packaged raster figures retain their accepted source
+artifacts:
+
+```text
+figures/real_video_equivalence.jpg
+  <- outputs/benchmarks/2026-07-08_star_uvt_projective_decisive_demo_fixture/real_video_media/contact_sheet.jpg
+
+figures/coffee_progressive_heldout_psnr.png
+  <- outputs/benchmarks/2026-07-22_world_tubes_submission_matrix_clean_v1/accepted_existing_evidence/heldout_psnr.svg
+```
+
 ```bash
 pandoc research_notes/gauged_uvt_trace_atlas/paper/WORLD_TUBES_PAPER_DRAFT.md \
   --standalone --from gfm --to latex \

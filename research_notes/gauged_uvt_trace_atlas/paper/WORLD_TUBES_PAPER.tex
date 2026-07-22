@@ -85,6 +85,21 @@
 % Allow footnotes in longtable head/foot
 \IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
 \makesavenoteenv{longtable}
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales image to fit in text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi% select the smaller of both
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
+}
+% Set default figure placement to htbp
+\def\fps@figure{htbp}
+\makeatother
 \setlength{\emergencystretch}{3em} % prevent overfull lines
 \providecommand{\tightlist}{%
   \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
@@ -944,6 +959,8 @@ Current internal evidence:
 \end{Highlighting}
 \end{Shaded}
 
+\pandocbounded{\includegraphics[keepaspectratio,alt={Qualitative real-video tether for the accepted projective decisive-demo artifact. Columns compare the target, compiled World Tubes render, and error views at sampled times; the figure is a correctness/media tether rather than a public-dataset quality claim.}]{research_notes/gauged_uvt_trace_atlas/paper/figures/real_video_equivalence.jpg}}
+
 \subsubsection{5.5 Public dataset
 comparison}\label{55-public-dataset-comparison}
 
@@ -1029,7 +1046,11 @@ Metrics:
 
 \subsection{6. Tables and figures}\label{6-tables-and-figures}
 
-Planned paper figures:
+Two accepted figures are packaged with the manuscript: the real-video
+equivalence contact sheet above and the partial progressive Coffee
+Martini heldout-PSNR comparison below. They are derived from
+verifier-accepted source artifacts. The remaining submission figures
+are:
 
 \begin{enumerate}
 \def\labelenumi{\arabic{enumi}.}
@@ -1055,9 +1076,6 @@ Planned paper figures:
   ratio.
 \item
   \textbf{Camera-family chart:} Q-grid replay vs shared family atlas.
-\item
-  \textbf{Quality tether chart:} compiled vs baseline loss/PSNR/media
-  deltas.
 \item
   \textbf{Fallback stress chart:} fallback fraction vs visibility
   density.
@@ -1166,6 +1184,8 @@ Dynamic 3DGS & \texttt{4.9110\ +/-\ 0.0001} & \texttt{0.28267} &
 \texttt{20.557} & \texttt{17.206} \\
 \end{longtable}
 }
+
+\pandocbounded{\includegraphics[keepaspectratio,alt={Heldout PSNR for the three accepted full-300-frame progressive Coffee Martini seeds. The figure does not include the missing fixed, sampler, camera-triplet, scene-breadth, or D-NeRF controls.}]{research_notes/gauged_uvt_trace_atlas/paper/figures/coffee_progressive_heldout_psnr.png}}
 
 These are accepted evidence rows, but not a complete public comparison.
 The absolute reconstruction quality is low and the metrics disagree:

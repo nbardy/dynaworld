@@ -684,6 +684,11 @@ zero support rebins / stale refreshes in accepted rows
 compiled trainer replacement gap: 0
 ```
 
+![Qualitative real-video tether for the accepted projective decisive-demo
+artifact. Columns compare the target, compiled World Tubes render, and error
+views at sampled times; the figure is a correctness/media tether rather than a
+public-dataset quality claim.](research_notes/gauged_uvt_trace_atlas/paper/figures/real_video_equivalence.jpg)
+
 ### 5.5 Public dataset comparison
 
 The paper should evaluate public data in two ways:
@@ -751,7 +756,10 @@ speed lost to fallback
 
 ## 6. Tables and figures
 
-Planned paper figures:
+Two accepted figures are packaged with the manuscript: the real-video
+equivalence contact sheet above and the partial progressive Coffee Martini
+heldout-PSNR comparison below. They are derived from verifier-accepted source
+artifacts. The remaining submission figures are:
 
 1. **Concept figure:** per-frame dynamic GS replay vs world-tube trace atlas.
 2. **Bundle diagram:** `B = Omega x T`, ray fibers, `Gamma`, pullback, pushforward.
@@ -760,8 +768,7 @@ Planned paper figures:
 5. **System diagram:** compile, atlas, Metal interval forward, direct VJP.
 6. **Scaling chart:** frame count vs payload/bin/forward/backward ratio.
 7. **Camera-family chart:** Q-grid replay vs shared family atlas.
-8. **Quality tether chart:** compiled vs baseline loss/PSNR/media deltas.
-9. **Fallback stress chart:** fallback fraction vs visibility density.
+8. **Fallback stress chart:** fallback fraction vs visibility density.
 
 Core tables:
 
@@ -820,6 +827,10 @@ WorldFoam retain substantial per-frame state.
 | World Tubes | `5.9153 +/- 0.0053` | `0.03549` | `0.98305` | `0.45120` | `78.33 +/- 21.00` | `3.114` | `0.060` |
 | WorldFoam | `5.6159 +/- 0.0083` | `0.00460` | `0.97054` | `0.47221` | `361.82 +/- 55.90` | `15.794` | `116.748` |
 | Dynamic 3DGS | `4.9110 +/- 0.0001` | `0.28267` | `0.90228` | `0.52139` | `79.44 +/- 6.59` | `20.557` | `17.206` |
+
+![Heldout PSNR for the three accepted full-300-frame progressive Coffee
+Martini seeds. The figure does not include the missing fixed, sampler,
+camera-triplet, scene-breadth, or D-NeRF controls.](research_notes/gauged_uvt_trace_atlas/paper/figures/coffee_progressive_heldout_psnr.png)
 
 These are accepted evidence rows, but not a complete public comparison. The
 absolute reconstruction quality is low and the metrics disagree: World Tubes
