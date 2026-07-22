@@ -1534,7 +1534,9 @@ def load_multicam_video_bundle(
     camera_cfg: dict[str, Any],
     target_size: ImageSizeLike,
     device: torch.device,
+    frame_device: torch.device | None = None,
 ) -> MulticamVideoBundle:
+    resolved_frame_device = device if frame_device is None else frame_device
     record = select_multicam_record(data_cfg)
     train_raw = data_cfg.get("multicam_train_cameras") or record.get("train_cameras")
     if train_raw:
@@ -1560,14 +1562,26 @@ def load_multicam_video_bundle(
     camera_frame_count = requested_camera_frame_count(data_cfg, record)
     train_frames = torch.stack(
         [
-            load_camera_video(record, camera, target_size=target_size, device=device, frame_count=camera_frame_count)
+            load_camera_video(
+                record,
+                camera,
+                target_size=target_size,
+                device=resolved_frame_device,
+                frame_count=camera_frame_count,
+            )
             for camera in train_cameras
         ],
         dim=0,
     )
     heldout_frames = torch.stack(
         [
-            load_camera_video(record, camera, target_size=target_size, device=device, frame_count=camera_frame_count)
+            load_camera_video(
+                record,
+                camera,
+                target_size=target_size,
+                device=resolved_frame_device,
+                frame_count=camera_frame_count,
+            )
             for camera in heldout_cameras
         ],
         dim=0,

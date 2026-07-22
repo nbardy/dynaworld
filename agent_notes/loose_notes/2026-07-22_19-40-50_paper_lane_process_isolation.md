@@ -39,6 +39,32 @@ step is streaming targets/rays/evaluation (or moving execution to a larger
 machine). The three already complete progressive Coffee Martini seeds remain
 valid; the interrupted fixed row does not.
 
+## Follow-up: bounded target/ray/evaluation residency
+
+After the operator reported that the workstation had been destabilized more
+than once, work continued in a strict source-only lane. No Python test runner,
+Torch import, dataset load, trainer, or MPS command was launched.
+
+The unverified follow-up changes are deliberately narrower than a claim of
+"streaming complete":
+
+- paper-mode STAR loads decoded target frames into host memory, moves only the
+  sampled/resized target batch to the compute device, removes full-video
+  progressive-stage caches, evaluates in bounded frame chunks, and caps media
+  retention;
+- paper-mode WorldFoam keeps decoded targets on the host, stores only compact
+  camera specifications, generates rays for the requested samples, and
+  streams reconstruction and auxiliary metrics in bounded chunks;
+- the unified runner passes the bounded evaluation settings through each
+  isolated STAR child.
+
+The decoded videos remain eager in host memory, and none of these changes bound
+model parameters, optimizer state, or renderer scratch allocations. They are
+therefore containment work only. The local MPS guard remains closed. The first
+allowed runtime action, if the user explicitly approves it later, is one
+single-lane micro-profile with conservative dimensions and external resident-
+memory observation. It is not a publication-scale control row.
+
 ## Existing-evidence packaging
 
 After the isolation commit, the matrix runner gained a no-execution

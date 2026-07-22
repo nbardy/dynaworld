@@ -15,8 +15,15 @@ Publication-scale local MPS execution is blocked: the interrupted fixed row
 drove the host into unified-memory compression/swap pressure. The runner now
 uses one child process per representation and resumes completed lane reports,
 but this has not been profiled at full scale and does not authorize another
-run. Keep the incident-calibrated guard closed until streaming or a larger
-machine is available. No browser, V-JEPA, feature-token, Softmax,
+run. A subsequent source-only pass changes paper-mode STAR and WorldFoam to
+keep target videos in host memory, generate PowerFoam rays per selected batch,
+discard full-resolution stage caches, and accumulate evaluation in bounded
+chunks with capped media retention. These changes are not runtime-verified and
+do not establish a safe peak-memory bound: STAR still uses an eager host video,
+and model/optimizer/kernel allocations remain substantial. Keep the
+incident-calibrated guard closed until an explicitly approved, externally
+monitored micro-profile proves the new resident-memory envelope or execution
+moves to a larger machine. No browser, V-JEPA, feature-token, Softmax,
 direct-serial, new-gauge, native-WorldFoam, or external-SOTA work should
 preempt the paper chain.
 

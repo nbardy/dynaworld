@@ -68,6 +68,8 @@ def _isolated_reports() -> dict:
         "uvt_segment_frames": 4,
         "uvt_backward_policy": {"name": "fast_exploration"},
         "splat_camera_projection": "dataset_lens",
+        "eval_chunk_frames": 2,
+        "eval_media_max_frames": 32,
     }
     return {
         "world_tubes": {
@@ -106,6 +108,8 @@ def test_unified_command_selects_the_practical_metal_lanes(tmp_path: Path) -> No
     assert _value_after(command, "--max-steps") == "2"
     assert _value_after(command, "--uvt-tubes") == "256"
     assert _value_after(command, "--splat-count") == "256"
+    assert _value_after(command, "--eval-chunk-frames") == "2"
+    assert _value_after(command, "--eval-media-max-frames") == "32"
     assert _value_after(command, "--only-lane") == "combined"
     assert "--allow-paper-local-mps-execution" not in command
 

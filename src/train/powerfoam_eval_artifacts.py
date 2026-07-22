@@ -34,12 +34,91 @@ def _media_positions(frame_count: int, max_frames: int) -> set[int]:
     return set(torch.linspace(0, frame_count - 1, steps=count).round().to(torch.long).tolist())
 
 
+def _chunk_rays(
+    rays: torch.Tensor | None,
+    ray_provider: Any | None,
+    start: int,
+    stop: int,
+) -> torch.Tensor | None:
+    if rays is not None and ray_provider is not None:
+        raise ValueError("provide materialized rays or a ray provider, not both")
+    if ray_provider is not None:
+        return ray_provider.select(torch.arange(start, stop, dtype=torch.long))
+    return None if rays is None else rays[start:stop]
+
+
+@torch.no_grad()
+def _stream_aux_metrics(
+    model: Any,
+    targets: torch.Tensor,
+    frame_indices: torch.Tensor,
+    rays: torch.Tensor | None,
+    ray_provider: Any | None,
+    cfg: dict[str, Any],
+) -> dict[str, float]:
+    weighted_keys = (
+        "aux_mean_contrib",
+        "aux_mean_point_error",
+        "aux_mean_visible_cells_per_frame",
+        "aux_mean_normal_distance",
+        "aux_mean_normal_norm",
+        "aux_median_depth_valid_fraction",
+    )
+    maximum_keys = ("aux_max_contrib", "aux_max_point_error")
+    totals = {key: 0.0 for key in weighted_keys}
+    maxima = {key: -float("inf") for key in maximum_keys}
+    visible_events = 0.0
+    possible_events = 0.0
+    median_depth_sum = 0.0
+    median_depth_weight = 0.0
+    sample_count = 0
+    found = False
+    batch_size = powerfoam_eval_batch_size(cfg)
+    for start in range(0, int(frame_indices.numel()), batch_size):
+        stop = min(start + batch_size, int(frame_indices.numel()))
+        count = stop - start
+        chunk = model.aux_metrics(
+            frame_indices[start:stop],
+            targets[start:stop],
+            rays=_chunk_rays(rays, ray_provider, start, stop),
+        )
+        if not chunk:
+            continue
+        found = True
+        sample_count += count
+        for key in weighted_keys:
+            totals[key] += float(chunk[key]) * count
+        for key in maximum_keys:
+            maxima[key] = max(maxima[key], float(chunk[key]))
+        visible_events += float(chunk["aux_visible_cell_frame_events"])
+        possible = float(chunk["aux_possible_cell_frame_events"])
+        possible_events += possible
+        valid_weight = possible * float(chunk["aux_median_depth_valid_fraction"])
+        if "aux_mean_median_depth" in chunk and valid_weight > 0.0:
+            median_depth_sum += float(chunk["aux_mean_median_depth"]) * valid_weight
+            median_depth_weight += valid_weight
+    if not found:
+        return {}
+    metrics = {key: value / float(sample_count) for key, value in totals.items()}
+    metrics.update(maxima)
+    metrics["aux_visible_cell_frame_events"] = visible_events
+    metrics["aux_possible_cell_frame_events"] = possible_events
+    metrics["aux_visible_fraction"] = visible_events / possible_events if possible_events else 0.0
+    ema_frames = frame_indices.to(device=model.contrib_ema.device, dtype=torch.long)
+    metrics["aux_mean_contrib_ema"] = float(model.contrib_ema[ema_frames].mean().detach().cpu())
+    metrics["aux_mean_point_error_ema"] = float(model.point_error_ema[ema_frames].mean().detach().cpu())
+    if median_depth_weight > 0.0:
+        metrics["aux_mean_median_depth"] = median_depth_sum / median_depth_weight
+    return metrics
+
+
 @torch.no_grad()
 def _stream_eval_split(
     model: Any,
     targets: torch.Tensor,
     frame_indices: torch.Tensor,
     rays: torch.Tensor | None,
+    ray_provider: Any | None,
     cfg: dict[str, Any],
     *,
     prefix: str,
@@ -58,7 +137,7 @@ def _stream_eval_split(
     lpips_count = 0
     for start in range(0, int(frame_indices.numel()), batch_size):
         stop = min(start + batch_size, int(frame_indices.numel()))
-        chunk_rays = None if rays is None else rays[start:stop]
+        chunk_rays = _chunk_rays(rays, ray_provider, start, stop)
         renders, alphas = render_powerfoam_samples(
             model,
             frame_indices[start:stop],
@@ -100,9 +179,11 @@ def log_powerfoam_artifacts(
     *,
     frame_indices: torch.Tensor | None = None,
     rays: torch.Tensor | None = None,
+    ray_provider: Any | None = None,
     heldout_targets: torch.Tensor | None = None,
     heldout_frame_indices: torch.Tensor | None = None,
     heldout_rays: torch.Tensor | None = None,
+    heldout_ray_provider: Any | None = None,
 ) -> dict[str, float]:
     model.eval()
     device = next(model.parameters()).device
@@ -120,6 +201,7 @@ def log_powerfoam_artifacts(
             targets,
             frame_indices,
             rays,
+            ray_provider,
             cfg,
             prefix="eval",
             include_lpips=False,
@@ -132,7 +214,11 @@ def log_powerfoam_artifacts(
             model,
             frame_indices,
             batch_size=powerfoam_eval_batch_size(cfg),
-            rays=rays,
+            rays=(
+                ray_provider.select(torch.arange(frame_indices.numel(), dtype=torch.long))
+                if ray_provider is not None
+                else rays
+            ),
         )
         renders = composite_fixed_background(renders, alphas, cfg["render"])
         targets_cpu = targets.detach().cpu()
@@ -142,7 +228,10 @@ def log_powerfoam_artifacts(
         metrics = reconstruction_eval_metrics(renders, targets_cpu, cfg, prefix="eval")
         if calibration is not None:
             metrics.update(reconstruction_eval_metrics(raw_renders, targets_cpu, cfg, prefix="uncalibrated_eval"))
-    metrics.update(model.aux_metrics(frame_indices, targets, rays=rays))
+    if stream_paper_eval:
+        metrics.update(_stream_aux_metrics(model, targets, frame_indices, rays, ray_provider, cfg))
+    else:
+        metrics.update(model.aux_metrics(frame_indices, targets, rays=rays))
     heldout_renders = None
     heldout_alphas = None
     heldout_targets_cpu = None
@@ -153,6 +242,7 @@ def log_powerfoam_artifacts(
                 heldout_targets,
                 heldout_frame_indices,
                 heldout_rays,
+                heldout_ray_provider,
                 cfg,
                 prefix="heldout_eval",
                 include_lpips=int(step) == int(cfg["train"]["steps"]),
@@ -166,7 +256,13 @@ def log_powerfoam_artifacts(
                 model,
                 heldout_frame_indices,
                 batch_size=powerfoam_eval_batch_size(cfg),
-                rays=heldout_rays,
+                rays=(
+                    heldout_ray_provider.select(
+                        torch.arange(heldout_frame_indices.numel(), dtype=torch.long)
+                    )
+                    if heldout_ray_provider is not None
+                    else heldout_rays
+                ),
             )
             heldout_renders = composite_fixed_background(heldout_renders, heldout_alphas, cfg["render"])
             heldout_targets_cpu = heldout_targets.detach().cpu()

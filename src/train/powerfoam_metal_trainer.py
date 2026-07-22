@@ -1325,9 +1325,11 @@ def run_training(config: dict[str, Any]) -> None:
     targets = training_data["targets"]
     sample_frame_indices = training_data["sample_frame_indices"]
     sample_rays = training_data["sample_rays"]
+    sample_ray_provider = training_data["sample_ray_provider"]
     heldout_targets = training_data["heldout_targets"]
     heldout_frame_indices = training_data["heldout_frame_indices"]
     heldout_rays = training_data["heldout_rays"]
+    heldout_ray_provider = training_data["heldout_ray_provider"]
     cfg["video_fps"] = float(training_data["video_fps"])
     loaded_image_size = normalize_image_size(targets.shape[-2:])
     paper_enabled = bool(cfg["paper_protocol"]["enabled"])
@@ -1468,9 +1470,11 @@ def run_training(config: dict[str, Any]) -> None:
             wandb_run,
             frame_indices=sample_frame_indices,
             rays=sample_rays,
+            ray_provider=sample_ray_provider,
             heldout_targets=heldout_targets,
             heldout_frame_indices=heldout_frame_indices,
             heldout_rays=heldout_rays,
+            heldout_ray_provider=heldout_ray_provider,
         )
         best_metric_value: float | None = maybe_save_best_powerfoam_checkpoint(
             model,
@@ -1535,13 +1539,18 @@ def run_training(config: dict[str, Any]) -> None:
                     param_group["lr"] *= paper_stage.lr_multiplier
                 lr_by_group = {name: value * paper_stage.lr_multiplier for name, value in lr_by_group.items()}
             frame_indices = sample_frame_indices[sample_indices]
-            target = targets[sample_indices]
-            batch_rays = None if sample_rays is None else sample_rays[sample_indices]
+            target = targets.index_select(0, sample_indices.to(device=targets.device, dtype=torch.long))
+            batch_rays = (
+                sample_ray_provider.select(sample_indices)
+                if sample_ray_provider is not None
+                else (None if sample_rays is None else sample_rays[sample_indices])
+            )
             if paper_stage.image_size != loaded_image_size:
                 target = resize_video_frames(target, paper_stage.image_size)
                 if batch_rays is None:
                     raise RuntimeError("progressive PowerFoam stages require calibrated per-sample rays")
                 batch_rays = resize_ray_grids(batch_rays, paper_stage.image_size)
+            target = target.to(device=device, dtype=torch.float32)
             loss_weights = scheduled_loss_weights(cfg["losses"], step - 1, int(cfg["train"]["steps"]))
             need_normal_distance = loss_weights["normal_weight"] > 0.0
             need_normal_map = loss_weights["normal_map_weight"] > 0.0
@@ -1692,9 +1701,11 @@ def run_training(config: dict[str, Any]) -> None:
                     wandb_run,
                     frame_indices=sample_frame_indices,
                     rays=sample_rays,
+                    ray_provider=sample_ray_provider,
                     heldout_targets=heldout_targets,
                     heldout_frame_indices=heldout_frame_indices,
                     heldout_rays=heldout_rays,
+                    heldout_ray_provider=heldout_ray_provider,
                 )
                 best_metric_value = maybe_save_best_powerfoam_checkpoint(
                     model,
@@ -1757,6 +1768,13 @@ def run_training(config: dict[str, Any]) -> None:
                 "same_time_count": int(cfg["paper_protocol"]["same_time_count"]),
                 "local_time_count": int(cfg["paper_protocol"]["local_time_count"]),
                 "local_time_radius": int(cfg["paper_protocol"]["local_time_radius"]),
+            },
+            "memory_policy": {
+                "targets": "host_eager_sampled_to_device" if sample_ray_provider is not None else "device_eager",
+                "rays": "sampled_on_demand" if sample_ray_provider is not None else "materialized",
+                "evaluation": "chunked",
+                "evaluation_chunk_frames": int(cfg["train"]["frames_per_step"]),
+                "evaluation_media_max_frames": cfg["logging"]["eval_media_max_frames"],
             },
             "stages": [stage.as_dict() for stage in paper_stages],
             "cost": paper_costs.snapshot(

@@ -436,6 +436,10 @@ def comparison_command(
         "dataset_lens",
         "--paper-protocol",
         str(protocol_path),
+        "--eval-chunk-frames",
+        str(max(stage.frames_per_step for stage in protocol.stages)),
+        "--eval-media-max-frames",
+        "32",
         "--camera-rig-init",
         camera_rig_init,
         "--out-dir",
@@ -783,6 +787,8 @@ def merge_comparison_lane_reports(
         "uvt_segment_frames",
         "uvt_backward_policy",
         "splat_camera_projection",
+        "eval_chunk_frames",
+        "eval_media_max_frames",
     )
     reference_name = "world_tubes"
     reference_meta = lane_reports[reference_name].get("meta")

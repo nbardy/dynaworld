@@ -170,6 +170,20 @@ Latest evidence:
   again inside each MPS child. This is containment work only: the conservative
   incident-calibrated high-risk guard remains unchanged until streaming or
   off-machine profiling supplies stronger evidence.
+- Post-incident source work now removes several avoidable residency
+  multipliers without authorizing execution. Paper-mode STAR retains the
+  decoded target video on the host, transfers only sampled/resized target
+  batches, no longer caches a resized full video per progressive stage, and
+  evaluates both World Tubes and dynamic 3DGS in bounded frame chunks while
+  retaining at most 32 media frames. Paper-mode WorldFoam likewise retains
+  targets on the host, constructs calibrated rays only for the selected batch,
+  and streams reconstruction/auxiliary evaluation. This is a partial memory
+  architecture, not true disk streaming: decoded targets are still eager on
+  the host, and representation/optimizer/Metal working sets are unchanged.
+  It has received static review only after the workstation incident; no Torch,
+  dataset, trainer, or MPS process was launched. The next runtime action still
+  requires explicit user approval and must be a single-lane, tightly capped,
+  externally monitored micro-profile—not a missing paper row.
 - CPU-only aggregation of the existing clean-source summaries accepted exactly
   the three progressive seeds and emitted 9 lane rows under
   `outputs/benchmarks/2026-07-22_world_tubes_submission_matrix_clean_v1/accepted_existing_evidence/`.

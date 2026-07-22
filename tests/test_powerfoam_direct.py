@@ -46,6 +46,7 @@ from powerfoam_objectives import (
 from powerfoam_point_cloud import load_powerfoam_point_cloud_initialization
 from powerfoam_raster_config import make_powerfoam_metal_raster_config as make_raster_config
 from powerfoam_training import flatten_multiview_powerfoam_samples
+from powerfoam_training_data import PowerFoamRayProvider
 from camera import CameraSpec, build_look_at_camera_to_world
 
 
@@ -579,6 +580,34 @@ def test_powerfoam_direct_sv_color_uses_ray_origin() -> None:
     side_rgb = result.rendered[1, :, 0, 0]
     assert front_rgb[0] > front_rgb[1]
     assert side_rgb[1] > side_rgb[0]
+
+
+def test_powerfoam_paper_ray_provider_matches_materialized_view_major_grid() -> None:
+    device = torch.device("cpu")
+    image_size = 4
+    cameras = tuple(
+        tuple(
+            CameraSpec(
+                fx=4.0,
+                fy=4.0,
+                cx=2.0,
+                cy=2.0,
+                camera_to_world=build_look_at_camera_to_world(
+                    torch.tensor([0.25 * view, 0.1 * frame, -1.0], dtype=torch.float32)
+                ),
+            )
+            for frame in range(2)
+        )
+        for view in range(2)
+    )
+    expected = powerfoam_rays_from_camera_grid(
+        cameras, height=image_size, width=image_size, device=device
+    ).reshape(4, image_size, image_size, 6)
+    provider = PowerFoamRayProvider(cameras, image_size, image_size, device)
+
+    selected = provider.select(torch.tensor([3, 0, 2], dtype=torch.long))
+
+    assert torch.allclose(selected, expected[[3, 0, 2]])
 
 
 def test_powerfoam_direct_shared_state_accepts_posed_multiview_rays() -> None:
