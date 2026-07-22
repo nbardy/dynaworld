@@ -255,11 +255,53 @@ def write_artifacts(out_dir: Path, matrix_name: str, run_records: Sequence[Mappi
     return {name: single.display_path(path) for name, path in artifacts.items()}
 
 
+def collect_existing_records(
+    runs: Sequence[MatrixRun],
+    out_dir: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Load only complete fail-closed summaries; never infer completion from lane debris."""
+    records: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for run in runs:
+        raw_protocol = load_config_file(run.protocol_path)
+        protocol = resolve_paper_training_protocol(raw_protocol)
+        summary_path = out_dir / protocol.name / f"seed_{run.seed}" / "run_summary.json"
+        if not summary_path.exists():
+            missing.append(run.key)
+            continue
+        summary = single.load_json(summary_path)
+        if summary.get("status") != "complete":
+            raise ValueError(f"existing paper row is not complete: {run.key}")
+        if int(summary.get("seed", -1)) != run.seed:
+            raise ValueError(f"existing paper row seed drifted: {run.key}")
+        if summary.get("world_tubes_backward_policy") != run.backward_policy:
+            raise ValueError(f"existing paper row backward policy drifted: {run.key}")
+        if summary.get("worldfoam_initializer") != run.worldfoam_initializer:
+            raise ValueError(f"existing paper row WorldFoam initializer drifted: {run.key}")
+        source = summary.get("source")
+        if not isinstance(source, Mapping):
+            raise ValueError(f"existing paper row has no source provenance: {run.key}")
+        dirty = [key for key in ("repository_dirty", "star_uvt_dirty") if bool(source.get(key, True))]
+        if dirty:
+            raise ValueError(f"existing paper row has dirty source provenance ({', '.join(dirty)}): {run.key}")
+        if summary.get("protocol", {}).get("name") != protocol.name:
+            raise ValueError(f"existing paper row protocol drifted: {run.key}")
+        summary["run_summary_path"] = str(summary_path)
+        flatten_summary(run, summary)
+        records.append({"run": run.as_dict(), "summary": summary})
+    return records, missing
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--matrix", type=Path, default=DEFAULT_MATRIX)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--aggregate-existing",
+        action="store_true",
+        help="Package only complete clean-source run_summary.json files; never launch a trainer.",
+    )
     parser.add_argument("--reuse-existing", action="store_true")
     parser.add_argument("--device", default="mps")
     parser.add_argument("--wandb-mode", choices=("online", "offline"), default="online")
@@ -275,11 +317,33 @@ def main() -> None:
         help="Second acknowledgement for runs estimated above 60% of host physical memory.",
     )
     args = parser.parse_args()
+    if args.execute and args.aggregate_existing:
+        parser.error("--execute and --aggregate-existing are mutually exclusive")
 
     matrix_path = single.resolve_root_path(args.matrix)
     raw_matrix = load_config_file(matrix_path)
     runs = expand_matrix(raw_matrix)
     out_dir = single.resolve_root_path(args.out_dir)
+    if args.aggregate_existing:
+        records, missing = collect_existing_records(runs, out_dir)
+        if not records:
+            raise ValueError(f"no complete existing paper rows under {out_dir}")
+        artifact_dir = out_dir / "accepted_existing_evidence"
+        artifacts = write_artifacts(artifact_dir, str(raw_matrix["name"]), records)
+        result = {
+            "status": "complete_existing_evidence" if not missing else "partial_existing_evidence",
+            "execution": "none",
+            "matrix": raw_matrix["name"],
+            "expected_run_count": len(runs),
+            "accepted_run_count": len(records),
+            "accepted_lane_row_count": len(records) * len(LANE_ORDER),
+            "accepted_runs": [record["run"] for record in records],
+            "missing_runs": missing,
+            "artifacts": artifacts,
+        }
+        single.write_json(out_dir / "existing_evidence_summary.json", result)
+        print(json.dumps(serialize_config_value(result), indent=2, sort_keys=True))
+        return
     if not args.execute:
         print(
             json.dumps(

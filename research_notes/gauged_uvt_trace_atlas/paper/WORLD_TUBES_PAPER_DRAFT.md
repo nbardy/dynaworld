@@ -1,13 +1,15 @@
-# World Tubes in Gauged Camera Space:
-# Sublinear Frame Scaling for Dynamic Gaussian Splatting
-
-Draft date: 2026-07-22
+---
+title: "World Tubes in Gauged Camera Space: Sublinear Frame Scaling for Dynamic Gaussian Splatting"
+author: Anonymous
+date: 2026-07-22
+---
 
 Status: arXiv-style working manuscript with generated LaTeX. The certified
-correctness and same-representation scaling tables are populated; the public
-dataset matrix is still running. It should not be treated as a final submission
-until the public dataset experiments in
-`WORLD_TUBES_EXPERIMENT_PLAN.md` are run.
+correctness and same-representation scaling tables are populated, and the
+three-seed progressive Coffee Martini row is accepted. The remaining public
+matrix is paused after the local-memory incident. This is not a final
+submission until the pixel-matched/sampler controls and public-scene breadth
+in `WORLD_TUBES_EXPERIMENT_PLAN.md` are complete.
 
 ## Abstract
 
@@ -801,11 +803,31 @@ they are not substitutes for this same-representation comparison.
 ### 6.3 Public comparison status
 
 The shared progressive/fixed/global-shuffle Coffee Martini protocols, evidence
-schema, and matrix generator are complete. The first progressive seed-17
-World Tubes and dynamic-3DGS comparison has run, but the matching WorldFoam row,
-repeat seeds, additional camera triplets, two additional Neural3D scenes, and a
-controlled D-NeRF posed-frame row remain mandatory. No partial public table is
-presented as a submission result.
+schema, and matrix generator are complete. Three clean-source progressive-512
+runs (seeds 17, 29, and 43) completed for all representations on the full
+300-frame sequence. The table reports final checkpoints and equal optimizer,
+target-frame, and target-pixel budgets. Storage and parameter counts are not
+matched: World Tubes shares temporal trace state, while dynamic 3DGS and
+WorldFoam retain substantial per-frame state.
+
+| Representation | Heldout PSNR | SSIM | LPIPS | L1 | Train wall (s) | Peak driver (GB) | Checkpoint (MB) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| World Tubes | `5.9153 +/- 0.0053` | `0.03549` | `0.98305` | `0.45120` | `78.33 +/- 21.00` | `3.114` | `0.060` |
+| WorldFoam | `5.6159 +/- 0.0083` | `0.00460` | `0.97054` | `0.47221` | `361.82 +/- 55.90` | `15.794` | `116.748` |
+| Dynamic 3DGS | `4.9110 +/- 0.0001` | `0.28267` | `0.90228` | `0.52139` | `79.44 +/- 6.59` | `20.557` | `17.206` |
+
+These are accepted evidence rows, but not a complete public comparison. The
+absolute reconstruction quality is low and the metrics disagree: World Tubes
+has the best PSNR/L1, whereas dynamic 3DGS has the best SSIM/LPIPS. The
+pixel-matched fixed control, global-shuffle control, additional camera
+triplets, two additional Neural3D scenes, and controlled D-NeRF row remain
+mandatory before submission claims are frozen.
+
+The next fixed-512 run was killed after severe unified-memory compression and
+swap pressure destabilized the local workstation. Its partial outputs are
+excluded. The runner now isolates representations in child processes and is
+fail-closed on local MPS, but full-scale local execution remains unauthorized
+until targets/rays/evaluation are streamed or a larger machine is used.
 
 ## 7. Discussion and limitations
 

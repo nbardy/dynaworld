@@ -7,6 +7,7 @@ from config_utils import load_config_file
 from research_experiments.paper_runner_suite.run_unified_paper_matrix import (
     DEFAULT_MATRIX,
     MatrixRun,
+    collect_existing_records,
     expand_matrix,
     flatten_summary,
     write_artifacts,
@@ -57,6 +58,15 @@ def _evidence(offset: float) -> dict:
 def _summary() -> dict:
     return {
         "status": "complete",
+        "seed": 17,
+        "world_tubes_backward_policy": "fast_exploration",
+        "worldfoam_initializer": "base_config",
+        "source": {
+            "repository_commit": "a" * 40,
+            "repository_dirty": False,
+            "star_uvt_commit": "b" * 40,
+            "star_uvt_dirty": False,
+        },
         "protocol": {
             "name": "smoke",
             "dataset": {
@@ -124,3 +134,36 @@ def test_matrix_artifacts_are_generated_from_validated_evidence(tmp_path: Path) 
     assert len(payload["rows"]) == 3
     assert len(payload["aggregated"]) == 3
     assert "LPIPS" in (tmp_path / "paper_table.tex").read_text(encoding="utf-8")
+
+
+def test_existing_evidence_collection_ignores_partial_lane_debris(tmp_path: Path) -> None:
+    protocol_path = (
+        DEFAULT_MATRIX.parent / "coffee_martini_protocol_smoke_2step.jsonc"
+    )
+    protocol = load_config_file(protocol_path)
+    protocol_name = protocol["name"]
+    complete = MatrixRun(
+        role="mechanical_smoke",
+        protocol_path=protocol_path,
+        seed=17,
+        backward_policy="fast_exploration",
+    )
+    incomplete = MatrixRun(
+        role="mechanical_smoke",
+        protocol_path=protocol_path,
+        seed=29,
+        backward_policy="fast_exploration",
+    )
+    summary = _summary()
+    summary["protocol"]["name"] = protocol_name
+    complete_dir = tmp_path / protocol_name / "seed_17"
+    complete_dir.mkdir(parents=True)
+    (complete_dir / "run_summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    partial_dir = tmp_path / protocol_name / "seed_29" / "world_tubes_dynamic_3dgs"
+    partial_dir.mkdir(parents=True)
+    (partial_dir / "comparison_report.json").write_text("{}", encoding="utf-8")
+
+    records, missing = collect_existing_records([complete, incomplete], tmp_path)
+
+    assert [record["run"]["seed"] for record in records] == [17]
+    assert missing == [incomplete.key]

@@ -170,6 +170,12 @@ Latest evidence:
   again inside each MPS child. This is containment work only: the conservative
   incident-calibrated high-risk guard remains unchanged until streaming or
   off-machine profiling supplies stronger evidence.
+- CPU-only aggregation of the existing clean-source summaries accepted exactly
+  the three progressive seeds and emitted 9 lane rows under
+  `outputs/benchmarks/2026-07-22_world_tubes_submission_matrix_clean_v1/accepted_existing_evidence/`.
+  `existing_evidence_summary.json` remains `partial_existing_evidence` and
+  names the missing fixed seeds `17/29/43` plus global-shuffle seed `17`; no
+  lane debris from the killed fixed run entered the table.
 
 - Focused test:
   `PYTHONPATH=src/train uv run --with pytest python -m pytest tests/test_star_uvt_projective_decisive_demo_report.py -q`

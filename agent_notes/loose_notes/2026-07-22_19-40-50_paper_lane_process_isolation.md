@@ -38,3 +38,15 @@ Do not run another publication-scale local MPS row. The next safe engineering
 step is streaming targets/rays/evaluation (or moving execution to a larger
 machine). The three already complete progressive Coffee Martini seeds remain
 valid; the interrupted fixed row does not.
+
+## Existing-evidence packaging
+
+After the isolation commit, the matrix runner gained a no-execution
+`--aggregate-existing` mode. It accepts only complete `run_summary.json`
+artifacts with clean superproject/STAR provenance and matching seed, protocol,
+backward policy, and WorldFoam initializer. Running it on the interrupted
+submission directory accepted the three progressive seeds, rejected the four
+missing controls by absence, and produced 9 validated lane rows plus
+JSON/CSV/Markdown/LaTeX/SVG outputs. Those accepted aggregates were appended
+to `BASELINES.md` and inserted into the manuscript as an explicitly partial
+public table; no MPS process was launched.

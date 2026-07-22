@@ -15,6 +15,13 @@ The runner records both exact commits and fails early when
 
 ## Frozen Coffee Martini matrix
 
+The full 512-wide matrix is currently blocked on this 24GB unified-memory
+workstation after an operator-killed memory-pressure incident. The runner is
+fail-closed on local MPS and the command below will refuse to start unless an
+operator explicitly supplies both safety acknowledgements. Do not do that on
+the incident machine. Use streamed targets/rays/evaluation or a sufficiently
+provisioned Apple host.
+
 ```bash
 PYTHONPATH=src/train .venv/bin/python \
   research_experiments/paper_runner_suite/run_unified_paper_matrix.py \
@@ -30,6 +37,22 @@ The command must end with `matrix_summary.json`, `paper_rows.json`,
 `paper_rows.csv`, `paper_table.md`, `paper_table.tex`, and
 `heldout_psnr.svg`. Missing lane metrics fail the run instead of producing a
 partial table.
+
+Existing complete clean-source summaries can be aggregated without launching
+any renderer or touching MPS:
+
+```bash
+PYTHONPATH=src/train .venv/bin/python \
+  research_experiments/paper_runner_suite/run_unified_paper_matrix.py \
+  --aggregate-existing \
+  --matrix src/train_configs/paper_protocols/world_tubes_submission_matrix_v1.jsonc \
+  --out-dir outputs/benchmarks/2026-07-22_world_tubes_submission_matrix_clean_v1
+```
+
+This emits `existing_evidence_summary.json` and an
+`accepted_existing_evidence/` bundle. It accepts only complete
+`run_summary.json` files with clean repository and STAR provenance, so partial
+lane debris from an interrupted run cannot enter the table.
 
 ## Same-representation scaling and theorem table
 
@@ -57,17 +80,18 @@ PYTHONPATH=src:src/train .venv/bin/python src/dataset_pipeline/dnerf.py all \
   --config src/dataset_configs/dnerf_paper_breadth.jsonc
 ```
 
-D-NeRF rows require the posed-frame adapter described in
-`research_notes/data_contract.md`; they must not be injected into the
-synchronized multicamera matrix.
+D-NeRF uses the posed-frame adapter described in
+`research_notes/data_contract.md`. Official matched-time train/test poses are
+discontinuous, so the current honest policy is a separately labelled
+one-frame-per-chart gauged fallback; it must not be presented as the
+sublinear bounded-chart result or injected into the synchronized multicamera
+matrix.
 
 ## Manuscript
 
 ```bash
 pandoc research_notes/gauged_uvt_trace_atlas/paper/WORLD_TUBES_PAPER_DRAFT.md \
   --standalone --from gfm --to latex \
-  --metadata title='World Tubes in Gauged Camera Space: Sublinear Frame Scaling for Dynamic Gaussian Splatting' \
-  --metadata author='Anonymous' \
   --output research_notes/gauged_uvt_trace_atlas/paper/WORLD_TUBES_PAPER.tex
 ```
 
