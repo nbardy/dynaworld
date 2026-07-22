@@ -16,7 +16,6 @@ import wandb
 from config_utils import load_config_file, serialize_config_value
 from paper_training_protocol import apply_paper_dataset_contract, resolve_paper_training_protocol
 from paper_training_types import MetalKernelSpec, PaperTrainingProtocol
-from powerfoam_metal_trainer import run_training as run_powerfoam_training
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +35,9 @@ COMPARE_SCRIPT = (
     / "research_project"
     / "benchmarks"
     / "multicam_heldout_compare.py"
+)
+WORLDFOAM_LANE_SCRIPT = (
+    ROOT / "research_experiments" / "paper_runner_suite" / "run_worldfoam_paper_lane.py"
 )
 DEFAULT_PROTOCOL = (
     ROOT
@@ -170,12 +172,12 @@ def host_physical_memory_bytes() -> int:
 
 
 def local_mps_safety_estimate(protocol: PaperTrainingProtocol) -> dict[str, Any]:
-    """Conservatively estimate the combined eager three-lane MPS footprint.
+    """Retain the incident-calibrated eager upper bound as a fail-closed guard.
 
-    This is a launch guard, not a profiler. It includes the resident RGB bundle,
-    per-lane resized train-frame caches, per-lane RGB+alpha evaluation outputs,
-    and a 1.75x allocator/render-workspace factor calibrated against the
-    2026-07-22 fixed-512 incident (about 20 GiB observed process footprint).
+    Lane isolation now releases allocator state between representations, but it
+    has not been profiled safely at full scale. Until streaming or off-machine
+    evidence replaces this bound, keep the older combined estimate so the code
+    change cannot silently authorize the workload that crashed the host.
     """
 
     float_bytes = 4
@@ -194,7 +196,8 @@ def local_mps_safety_estimate(protocol: PaperTrainingProtocol) -> dict[str, Any]
     host_bytes = host_physical_memory_bytes()
     safety_limit_bytes = math.floor(0.60 * host_bytes)
     return {
-        "definition": "eager bundle + two lane stage caches + two lane RGB/alpha evals; 1.75x workspace factor",
+        "definition": "incident-calibrated legacy combined eager upper bound; intentionally not relaxed by unprofiled lane isolation",
+        "execution_model": "one_child_process_per_representation",
         "bundle_bytes": bundle_bytes,
         "stage_cache_bytes_per_lane": stage_cache_bytes_per_lane,
         "eval_bytes_per_lane": eval_bytes_per_lane,
@@ -378,11 +381,15 @@ def comparison_command(
     *,
     backward_policy: str,
     device: str,
+    only_lane: str = "combined",
+    allow_local_mps_execution: bool = False,
     python: str = sys.executable,
 ) -> list[str]:
+    if only_lane not in {"combined", *LANE_REPORT_KEYS}:
+        raise ValueError(f"unsupported comparison lane: {only_lane}")
     camera_rig_init = paper_camera_rig_init(protocol)
     camera_projection, camera_sequence_mode, segment_frames = paper_world_tubes_camera_policy(protocol)
-    return [
+    command = [
         python,
         str(COMPARE_SCRIPT),
         "--baseline-config",
@@ -433,7 +440,76 @@ def comparison_command(
         camera_rig_init,
         "--out-dir",
         str(out_dir),
+        "--only-lane",
+        only_lane,
     ]
+    if allow_local_mps_execution:
+        command.append("--allow-paper-local-mps-execution")
+    return command
+
+
+def comparison_lane_commands(
+    protocol_path: Path,
+    protocol: PaperTrainingProtocol,
+    seed: int,
+    comparison_dir: Path,
+    *,
+    backward_policy: str,
+    device: str,
+    allow_local_mps_execution: bool = False,
+    python: str = sys.executable,
+) -> dict[str, list[str]]:
+    """Build one process command per representation to bound allocator lifetime."""
+    return {
+        lane_name: comparison_command(
+            protocol_path,
+            protocol,
+            seed,
+            comparison_dir / lane_name,
+            backward_policy=backward_policy,
+            device=device,
+            only_lane=lane_name,
+            allow_local_mps_execution=allow_local_mps_execution,
+            python=python,
+        )
+        for lane_name in LANE_REPORT_KEYS
+    }
+
+
+def worldfoam_lane_command(
+    protocol_path: Path,
+    seed: int,
+    out_dir: Path,
+    *,
+    device: str,
+    wandb_mode: str,
+    worldfoam_initializer: str = DEFAULT_WORLDFOAM_INITIALIZER,
+    allow_local_mps_execution: bool = False,
+    allow_high_risk_local_mps: bool = False,
+    python: str = sys.executable,
+) -> list[str]:
+    command = [
+        python,
+        str(WORLDFOAM_LANE_SCRIPT),
+        "--execute",
+        "--protocol",
+        str(protocol_path),
+        "--seed",
+        str(seed),
+        "--out-dir",
+        str(out_dir),
+        "--device",
+        device,
+        "--wandb-mode",
+        wandb_mode,
+        "--worldfoam-initializer",
+        worldfoam_initializer,
+    ]
+    if allow_local_mps_execution:
+        command.append("--allow-local-mps-execution")
+    if allow_high_risk_local_mps:
+        command.append("--allow-high-risk-local-mps")
+    return command
 
 
 def powerfoam_config(
@@ -443,6 +519,7 @@ def powerfoam_config(
     out_dir: Path,
     *,
     wandb_mode: str,
+    device: str = "mps",
     worldfoam_initializer: str = DEFAULT_WORLDFOAM_INITIALIZER,
 ) -> dict[str, Any]:
     cfg = copy.deepcopy(load_config_file(BASE_CONFIG))
@@ -462,6 +539,7 @@ def powerfoam_config(
     cfg["train"]["steps"] = protocol.steps
     cfg["train"]["frames_per_step"] = max(stage.frames_per_step for stage in protocol.stages)
     cfg["train"]["seed"] = int(seed)
+    cfg["train"]["device"] = str(device)
     cfg["paper_protocol"] = copy.deepcopy(dict(raw_protocol))
     run_hash = hashlib.sha1(
         f"{protocol.name}:{seed}:worldfoam:evidence-v1-final-only".encode("utf-8")
@@ -679,6 +757,108 @@ def validate_comparison_report(
         build_lane_evidence(lane_name, lane, frame_count=protocol.dataset.frame_count)
 
 
+def merge_comparison_lane_reports(
+    lane_reports: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Merge isolated renderer reports, rejecting cross-lane protocol drift."""
+    if set(lane_reports) != set(LANE_REPORT_KEYS):
+        raise ValueError(
+            f"isolated comparison reports must contain {sorted(LANE_REPORT_KEYS)}, "
+            f"got {sorted(lane_reports)}"
+        )
+    meta_keys = (
+        "baseline_config",
+        "target_size",
+        "image_size",
+        "max_frames",
+        "frame_count",
+        "train_seconds",
+        "device",
+        "seed",
+        "train_cameras",
+        "heldout_cameras",
+        "pose_source",
+        "uvt_camera_projection",
+        "uvt_camera_sequence_mode",
+        "uvt_segment_frames",
+        "uvt_backward_policy",
+        "splat_camera_projection",
+    )
+    reference_name = "world_tubes"
+    reference_meta = lane_reports[reference_name].get("meta")
+    if not isinstance(reference_meta, Mapping):
+        raise ValueError(f"isolated {reference_name} report has no metadata")
+    for lane_name, report in lane_reports.items():
+        meta = report.get("meta")
+        if not isinstance(meta, Mapping):
+            raise ValueError(f"isolated {lane_name} report has no metadata")
+        if meta.get("only_lane") != lane_name:
+            raise ValueError(f"isolated {lane_name} report was produced as {meta.get('only_lane')!r}")
+        drift = [key for key in meta_keys if meta.get(key) != reference_meta.get(key)]
+        if drift:
+            raise ValueError(f"isolated {lane_name} report metadata drifted: {', '.join(drift)}")
+        report_key = LANE_REPORT_KEYS[lane_name]
+        if not isinstance(report.get(report_key), Mapping):
+            raise ValueError(f"isolated {lane_name} report is missing {report_key}")
+        foreign = [
+            key
+            for other_name, key in LANE_REPORT_KEYS.items()
+            if other_name != lane_name and report.get(key) is not None
+        ]
+        if foreign:
+            raise ValueError(f"isolated {lane_name} report unexpectedly contains {', '.join(foreign)}")
+
+    merged_meta = dict(reference_meta)
+    merged_meta.update(
+        {
+            "only_lane": "isolated_merged",
+            "skip_splats": False,
+            "execution_model": "one_child_process_per_representation",
+        }
+    )
+    return {
+        "meta": merged_meta,
+        "star_uvt": lane_reports["world_tubes"]["star_uvt"],
+        "star_uvt_selected": lane_reports["world_tubes"].get("star_uvt_selected"),
+        "free_dynamic_splats": lane_reports["dynamic_3dgs"]["free_dynamic_splats"],
+    }
+
+
+def materialize_isolated_comparison_report(
+    protocol_path: Path,
+    protocol: PaperTrainingProtocol,
+    seed: int,
+    comparison_dir: Path,
+    *,
+    backward_policy: str,
+    device: str,
+    reuse_existing: bool,
+    allow_local_mps_execution: bool = False,
+    python: str = sys.executable,
+) -> Path:
+    """Run only missing lane children, then form their shared report contract."""
+    comparison_report_path = comparison_dir / "comparison_report.json"
+    if reuse_existing and comparison_report_path.exists():
+        return comparison_report_path
+    lane_reports: dict[str, Mapping[str, Any]] = {}
+    for lane_name, command in comparison_lane_commands(
+        protocol_path,
+        protocol,
+        seed,
+        comparison_dir,
+        backward_policy=backward_policy,
+        device=device,
+        allow_local_mps_execution=allow_local_mps_execution,
+        python=python,
+    ).items():
+        lane_report_path = comparison_dir / lane_name / "comparison_report.json"
+        if not (reuse_existing and lane_report_path.exists()):
+            subprocess.run(command, cwd=ROOT, check=True)
+        lane_reports[lane_name] = load_json(lane_report_path)
+    write_json(comparison_report_path, merge_comparison_lane_reports(lane_reports))
+    return comparison_report_path
+
+
 def _comparison_wandb_log(
     report: Mapping[str, Any],
     protocol: PaperTrainingProtocol,
@@ -728,6 +908,8 @@ def _comparison_wandb_log(
     media_prefix = "star_uvt" if lane_name == "world_tubes" else "free_dynamic_splats"
     for split in ("train", "heldout"):
         path = report_dir / f"{media_prefix}_{split}_view0_side_by_side.mp4"
+        if not path.exists():
+            path = report_dir / lane_name / path.name
         if path.exists():
             payload[f"media/{split}_view"] = wandb.Video(str(path), format="mp4")
     run.log(payload, step=protocol.steps)
@@ -756,8 +938,10 @@ def build_dry_run_manifest(
         seed,
         seed_dir / "worldfoam",
         wandb_mode=wandb_mode,
+        device=device,
         worldfoam_initializer=worldfoam_initializer,
     )
+    comparison_dir = seed_dir / "world_tubes_dynamic_3dgs"
     return {
         "status": "dry_run",
         "execution_safety": local_mps_safety_estimate(protocol),
@@ -765,13 +949,21 @@ def build_dry_run_manifest(
         "protocol": protocol.as_dict(),
         "manifest_validation": validate_manifest(protocol),
         "kernels": {name: spec.as_dict() for name, spec in specs.items()},
-        "comparison_command": comparison_command(
+        "comparison_lane_commands": comparison_lane_commands(
             protocol_path,
             protocol,
             seed,
-            seed_dir / "world_tubes_dynamic_3dgs",
+            comparison_dir,
             backward_policy=backward_policy,
             device=device,
+        ),
+        "worldfoam_lane_command": worldfoam_lane_command(
+            protocol_path,
+            seed,
+            seed_dir / "worldfoam",
+            device=device,
+            wandb_mode=wandb_mode,
+            worldfoam_initializer=worldfoam_initializer,
         ),
         "powerfoam": {
             "initializer": worldfoam_initializer,
@@ -783,7 +975,13 @@ def build_dry_run_manifest(
         },
         "expected_artifacts": {
             "comparison_report": display_path(
-                seed_dir / "world_tubes_dynamic_3dgs" / "comparison_report.json"
+                comparison_dir / "comparison_report.json"
+            ),
+            "world_tubes_lane_report": display_path(
+                comparison_dir / "world_tubes" / "comparison_report.json"
+            ),
+            "dynamic_3dgs_lane_report": display_path(
+                comparison_dir / "dynamic_3dgs" / "comparison_report.json"
             ),
             "worldfoam_protocol_summary": display_path(seed_dir / "worldfoam" / "paper_protocol_summary.json"),
             "run_summary": display_path(seed_dir / "run_summary.json"),
@@ -820,19 +1018,16 @@ def execute(
     comparison_dir = seed_dir / "world_tubes_dynamic_3dgs"
     worldfoam_dir = seed_dir / "worldfoam"
     comparison_report_path = comparison_dir / "comparison_report.json"
-    if not (reuse_existing and comparison_report_path.exists()):
-        subprocess.run(
-            comparison_command(
-                protocol_path,
-                protocol,
-                seed,
-                comparison_dir,
-                backward_policy=backward_policy,
-                device=device,
-            ),
-            cwd=ROOT,
-            check=True,
-        )
+    materialize_isolated_comparison_report(
+        protocol_path,
+        protocol,
+        seed,
+        comparison_dir,
+        backward_policy=backward_policy,
+        device=device,
+        reuse_existing=reuse_existing,
+        allow_local_mps_execution=allow_local_mps_execution,
+    )
     comparison_report = load_json(comparison_report_path)
     validate_comparison_report(comparison_report, protocol, backward_policy=backward_policy)
 
@@ -850,15 +1045,19 @@ def execute(
 
     powerfoam_summary_path = worldfoam_dir / "paper_protocol_summary.json"
     if not (reuse_existing and powerfoam_summary_path.exists()):
-        run_powerfoam_training(
-            powerfoam_config(
-                raw_protocol,
-                protocol,
+        subprocess.run(
+            worldfoam_lane_command(
+                protocol_path,
                 seed,
                 worldfoam_dir,
+                device=device,
                 wandb_mode=wandb_mode,
                 worldfoam_initializer=worldfoam_initializer,
-            )
+                allow_local_mps_execution=allow_local_mps_execution,
+                allow_high_risk_local_mps=allow_high_risk_local_mps,
+            ),
+            cwd=ROOT,
+            check=True,
         )
     powerfoam_summary = load_json(powerfoam_summary_path)
     powerfoam_best = load_json(worldfoam_dir / "best_metrics.json")
@@ -910,6 +1109,7 @@ def execute(
                 seed,
                 worldfoam_dir,
                 wandb_mode=wandb_mode,
+                device=device,
                 worldfoam_initializer=worldfoam_initializer,
             )["logging"]["wandb_run_id"],
         },

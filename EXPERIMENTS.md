@@ -158,6 +158,18 @@ Latest evidence:
   driver memory; dynamic 3DGS is `4.9110/0.28266/0.90229`, `142.58s`, and
   `20.557GB`. The WorldFoam lane is still required before this becomes a
   complete row; do not add it to `BASELINES.md` yet.
+- The progressive-512 Coffee Martini rows for seeds `17/29/43` subsequently
+  completed all three representations under
+  `outputs/benchmarks/2026-07-22_world_tubes_submission_matrix_clean_v1/`.
+  The next fixed-512 row was manually killed after severe unified-memory,
+  compressor, swap, and `kernel_task` pressure destabilized the workstation;
+  that partial row is invalid. No publication-scale local MPS row may be
+  resumed without explicit approval. The unified runner now launches World
+  Tubes, dynamic 3DGS, and WorldFoam in separate resumable child processes,
+  validates metadata before merging lane reports, and requires authorization
+  again inside each MPS child. This is containment work only: the conservative
+  incident-calibrated high-risk guard remains unchanged until streaming or
+  off-machine profiling supplies stronger evidence.
 
 - Focused test:
   `PYTHONPATH=src/train uv run --with pytest python -m pytest tests/test_star_uvt_projective_decisive_demo_report.py -q`
@@ -238,7 +250,8 @@ Latest evidence:
 
 Next runner TODOs:
 
-- Unified paper-ablation software status: green. The 4-frame/two-stage MPS
+- Unified paper-ablation software status: green at the pre-incident smoke
+  scale only. The 4-frame/two-stage MPS
   smoke completed World Tubes, dynamic 3DGS, and WorldFoam with exact shared
   cost `4 frames / 30,720 pixels`; optimizer-update times were `0.298s`,
   `0.299s`, and `0.608s`, respectively. WorldFoam also completed its

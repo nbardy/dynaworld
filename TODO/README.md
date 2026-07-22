@@ -7,13 +7,18 @@ individual TODO files.
 
 2026-07-22 submission update: evidence schema v1, the fail-closed matrix
 runner, exact `F=4..128` replay-versus-compiled scaling, the verified theorem
-table, and a standalone LaTeX manuscript are now present. The first
-progressive-512 seed-17 World Tubes/dynamic-3DGS comparison is complete;
-WorldFoam and the rest of the frozen matrix remain. Additional Neural3D ingest
-is running, and D-NeRF has a controlled download/validation path but still
-needs a posed-frame evaluation adapter. No browser, V-JEPA, feature-token,
-Softmax, direct-serial, new-gauge, native-WorldFoam, or external-SOTA work
-should preempt this chain.
+table, and a standalone LaTeX manuscript are now present. All three
+progressive-512 Coffee Martini seeds completed before the local-memory
+incident. Fixed and global-shuffle rows remain. D-NeRF now has a posed-frame
+adapter and an explicitly labelled one-frame-per-chart gauged fallback.
+Publication-scale local MPS execution is blocked: the interrupted fixed row
+drove the host into unified-memory compression/swap pressure. The runner now
+uses one child process per representation and resumes completed lane reports,
+but this has not been profiled at full scale and does not authorize another
+run. Keep the incident-calibrated guard closed until streaming or a larger
+machine is available. No browser, V-JEPA, feature-token, Softmax,
+direct-serial, new-gauge, native-WorldFoam, or external-SOTA work should
+preempt the paper chain.
 
 2026-07-19 unified paper-ablation runner: the shared typed sampler/stage/cost
 protocol and all three Metal-backed adapters are implemented. Staged and

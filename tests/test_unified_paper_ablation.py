@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -11,9 +12,12 @@ from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     build_lane_evidence,
     build_dry_run_manifest,
     comparison_command,
+    comparison_lane_commands,
     kernel_specs,
     load_final_powerfoam_metrics,
     local_mps_safety_estimate,
+    materialize_isolated_comparison_report,
+    merge_comparison_lane_reports,
     paper_camera_rig_init,
     paper_world_tubes_camera_policy,
     paper_scene_tag,
@@ -23,6 +27,7 @@ from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     source_provenance,
     validate_lane_cost,
     validate_manifest,
+    worldfoam_lane_command,
 )
 
 
@@ -43,6 +48,41 @@ def _protocol(path: Path = SMOKE_PROTOCOL):
 
 def _value_after(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
+
+
+def _isolated_reports() -> dict:
+    meta = {
+        "baseline_config": "baseline.jsonc",
+        "target_size": [96, 128],
+        "image_size": [96, 128],
+        "max_frames": 4,
+        "frame_count": 4,
+        "train_seconds": 1.0,
+        "device": "mps",
+        "seed": 17,
+        "train_cameras": ["cam04", "cam09"],
+        "heldout_cameras": ["cam06"],
+        "pose_source": "dataset",
+        "uvt_camera_projection": "dataset_lens",
+        "uvt_camera_sequence_mode": "static_view",
+        "uvt_segment_frames": 4,
+        "uvt_backward_policy": {"name": "fast_exploration"},
+        "splat_camera_projection": "dataset_lens",
+    }
+    return {
+        "world_tubes": {
+            "meta": {**meta, "only_lane": "world_tubes"},
+            "star_uvt": {"lane": "world_tubes"},
+            "star_uvt_selected": {"checkpoint": "final"},
+            "free_dynamic_splats": None,
+        },
+        "dynamic_3dgs": {
+            "meta": {**meta, "only_lane": "dynamic_3dgs"},
+            "star_uvt": None,
+            "star_uvt_selected": None,
+            "free_dynamic_splats": {"lane": "dynamic_3dgs"},
+        },
+    }
 
 
 def test_unified_command_selects_the_practical_metal_lanes(tmp_path: Path) -> None:
@@ -66,6 +106,97 @@ def test_unified_command_selects_the_practical_metal_lanes(tmp_path: Path) -> No
     assert _value_after(command, "--max-steps") == "2"
     assert _value_after(command, "--uvt-tubes") == "256"
     assert _value_after(command, "--splat-count") == "256"
+    assert _value_after(command, "--only-lane") == "combined"
+    assert "--allow-paper-local-mps-execution" not in command
+
+
+def test_unified_commands_isolate_each_allocator_and_worldfoam_inherits_device(tmp_path: Path) -> None:
+    _, protocol = _protocol()
+    compare_dir = tmp_path / "compare"
+    commands = comparison_lane_commands(
+        SMOKE_PROTOCOL,
+        protocol,
+        29,
+        compare_dir,
+        backward_policy="fast_exploration",
+        device="cpu",
+        python="python",
+    )
+
+    assert set(commands) == {"world_tubes", "dynamic_3dgs"}
+    for lane_name, command in commands.items():
+        assert _value_after(command, "--only-lane") == lane_name
+        assert _value_after(command, "--out-dir") == str(compare_dir / lane_name)
+        assert _value_after(command, "--device") == "cpu"
+
+    worldfoam = worldfoam_lane_command(
+        SMOKE_PROTOCOL,
+        29,
+        tmp_path / "worldfoam",
+        device="cpu",
+        wandb_mode="offline",
+        python="python",
+    )
+    assert "--execute" in worldfoam
+    assert _value_after(worldfoam, "--device") == "cpu"
+    assert "--allow-local-mps-execution" not in worldfoam
+
+    approved = comparison_command(
+        SMOKE_PROTOCOL,
+        protocol,
+        29,
+        compare_dir,
+        backward_policy="fast_exploration",
+        device="mps",
+        only_lane="world_tubes",
+        allow_local_mps_execution=True,
+        python="python",
+    )
+    assert "--allow-paper-local-mps-execution" in approved
+
+
+def test_isolated_comparison_reports_merge_only_when_metadata_matches() -> None:
+    reports = _isolated_reports()
+
+    merged = merge_comparison_lane_reports(reports)
+    assert merged["star_uvt"]["lane"] == "world_tubes"
+    assert merged["free_dynamic_splats"]["lane"] == "dynamic_3dgs"
+    assert merged["meta"]["execution_model"] == "one_child_process_per_representation"
+
+    reports["dynamic_3dgs"]["meta"]["seed"] = 29
+    with pytest.raises(ValueError, match="metadata drifted: seed"):
+        merge_comparison_lane_reports(reports)
+
+
+def test_isolated_comparison_resume_reuses_completed_lane_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, protocol = _protocol()
+    comparison_dir = tmp_path / "compare"
+    for lane_name, report in _isolated_reports().items():
+        lane_dir = comparison_dir / lane_name
+        lane_dir.mkdir(parents=True)
+        (lane_dir / "comparison_report.json").write_text(json.dumps(report), encoding="utf-8")
+
+    def unexpected_run(*_args, **_kwargs):
+        raise AssertionError("completed isolated lane must not be relaunched")
+
+    monkeypatch.setattr("subprocess.run", unexpected_run)
+    report_path = materialize_isolated_comparison_report(
+        SMOKE_PROTOCOL,
+        protocol,
+        17,
+        comparison_dir,
+        backward_policy="fast_exploration",
+        device="mps",
+        reuse_existing=True,
+        python="python",
+    )
+
+    merged = json.loads(report_path.read_text(encoding="utf-8"))
+    assert merged["meta"]["only_lane"] == "isolated_merged"
+    assert merged["star_uvt"]["lane"] == "world_tubes"
+    assert merged["free_dynamic_splats"]["lane"] == "dynamic_3dgs"
 
 
 def test_unified_powerfoam_config_uses_the_same_protocol(tmp_path: Path) -> None:
@@ -78,6 +209,7 @@ def test_unified_powerfoam_config_uses_the_same_protocol(tmp_path: Path) -> None
     assert cfg["render"]["image_size"] == [96, 128]
     assert cfg["model"]["cells"] == 256
     assert cfg["train"]["steps"] == 2
+    assert cfg["train"]["device"] == "mps"
     assert cfg["logging"]["image_log_every"] == 2
     assert cfg["logging"]["video_log_every"] == 2
     assert cfg["paper_protocol"] == raw
@@ -253,6 +385,8 @@ def test_dry_run_declares_costs_kernels_and_artifacts(tmp_path: Path) -> None:
     assert manifest["kernels"]["world_tubes"]["backward"] == "direct_atomic+index_add"
     assert manifest["kernels"]["worldfoam"]["forward"] == "raytrace"
     assert manifest["kernels"]["dynamic_3dgs"]["forward"] == "fast_mac"
+    assert set(manifest["comparison_lane_commands"]) == {"world_tubes", "dynamic_3dgs"}
+    assert "--execute" in manifest["worldfoam_lane_command"]
     assert manifest["expected_artifacts"]["run_summary"].endswith("run_summary.json")
 
 
