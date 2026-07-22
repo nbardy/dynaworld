@@ -184,6 +184,14 @@ Latest evidence:
   dataset, trainer, or MPS process was launched. The next runtime action still
   requires explicit user approval and must be a single-lane, tightly capped,
   externally monitored micro-profile—not a missing paper row.
+- The submission workload is now unified in
+  `src/train_configs/paper_protocols/world_tubes_full_public_matrix_v1.jsonc`.
+  Its 21 expanded keys cover the seven primary Coffee/control rows, six
+  alternate-triplet rows, six additional-Neural3D rows, one controlled D-NeRF
+  row, and one separately labelled deterministic correctness/timing audit.
+  Three progressive rows are accepted and 18 results remain. The manifest and
+  one-command entrypoint in the paper reproduction guide are orchestration
+  contracts only; they do not authorize execution on the incident host.
 - CPU-only aggregation of the existing clean-source summaries accepted exactly
   the three progressive seeds and emitted 9 lane rows under
   `outputs/benchmarks/2026-07-22_world_tubes_submission_matrix_clean_v1/accepted_existing_evidence/`.

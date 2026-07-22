@@ -35,8 +35,8 @@
 ## P0: Produce Paper Rows
 
 1. Finish the structured progressive 512-wide protocol for seeds 17/29/43.
-   Seed 17 completed the World Tubes and dynamic-3DGS 600-step comparison on
-   2026-07-22; its WorldFoam lane was still running when this note was updated.
+   **Complete:** all three clean-source seeds are accepted across World Tubes,
+   WorldFoam, and dynamic 3DGS.
 2. Run the exact target-pixel-matched fixed-512 control for the same seeds.
 3. Run the global-shuffle sampler control; broaden repeats only if the first
    seed shows a meaningful effect.
@@ -57,17 +57,26 @@ PYTHONPATH=src/train:third_party/powerfoam-metal .venv/bin/python \
   --wandb-mode online
 ```
 
-## P1: Native-Resolution Promotion
+Publication-scale execution is fail-closed on the incident workstation. The
+fixed-512 attempt was killed under severe unified-memory pressure; its partial
+outputs are invalid. The full 21-row public workload is frozen in
+`src/train_configs/paper_protocols/world_tubes_full_public_matrix_v1.jsonc`,
+with 3 accepted and 18 results missing.
+
+## P1: Bounded Residency Before Any Native-Resolution Promotion
 
 The eager path is not acceptable for 2704x2028 because all-frame float targets
 and per-sample ray grids scale to tens of gigabytes. Implement in this order:
 
-1. Load camera/calibration metadata independently from image tensors.
-2. Decode only the sampled K source frames at the active stage resolution with
-   a bounded CPU cache.
-3. Generate calibrated ray grids only for those K samples.
-4. Stream train/heldout evaluation in bounded chunks and accumulate metrics on
-   CPU without retaining full rendered videos in device memory.
+1. **Partial:** camera/calibration tensors can live on the compute device while
+   paper targets remain host-resident.
+2. **Missing:** decode only the sampled K source frames at the active stage
+   resolution with a bounded CPU cache. Current decoded target videos are
+   still host-eager.
+3. **Implemented, runtime-unverified:** generate calibrated PowerFoam ray grids
+   only for selected samples.
+4. **Implemented, runtime-unverified:** stream train/heldout evaluation in
+   bounded chunks and retain only capped media frames.
 5. Reuse the current/driver device-memory sampler already present in the common
    cost ledger.
 6. Pass a one-step all-300-frame native-resolution MPS smoke before creating a

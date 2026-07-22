@@ -11,6 +11,11 @@ matrix is paused after the local-memory incident. This is not a final
 submission until the pixel-matched/sampler controls and public-scene breadth
 in `WORLD_TUBES_EXPERIMENT_PLAN.md` are complete.
 
+The frozen public workload now has one 21-row manifest: seven primary Coffee
+Martini/control rows, six alternate-triplet rows, six additional-Neural3D rows,
+one controlled D-NeRF row, and one separately labelled deterministic audit.
+Only the three primary progressive rows are currently accepted.
+
 ## Abstract
 
 Dynamic Gaussian splatting methods render a time-varying scene by evaluating

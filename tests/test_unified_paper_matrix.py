@@ -93,6 +93,22 @@ def test_submission_matrix_expands_to_the_frozen_seven_runs() -> None:
     assert all(run.worldfoam_initializer == "base_config" for run in runs)
 
 
+def test_full_public_matrix_unifies_controls_triplets_scenes_and_dnerf() -> None:
+    matrix = DEFAULT_MATRIX.parent / "world_tubes_full_public_matrix_v1.jsonc"
+    runs = expand_matrix(load_config_file(matrix))
+
+    assert len(runs) == 21
+    assert sum(run.role == "primary_progressive" for run in runs) == 3
+    assert sum(run.role == "pixel_matched_control" for run in runs) == 3
+    assert sum(run.role == "sampler_control" for run in runs) == 1
+    assert sum(run.role == "camera_split_breadth" for run in runs) == 6
+    assert sum(run.role == "scene_breadth" for run in runs) == 6
+    assert sum(run.role == "controlled_dnerf_breadth" for run in runs) == 1
+    assert sum(run.role == "deterministic_correctness_timing" for run in runs) == 1
+    deterministic = next(run for run in runs if run.role == "deterministic_correctness_timing")
+    assert deterministic.backward_policy == "deterministic_quality"
+
+
 def test_matrix_can_select_scene_specific_worldfoam_initialization() -> None:
     protocol = DEFAULT_MATRIX.parent / "coffee_martini_protocol_smoke_2step.jsonc"
     runs = expand_matrix(

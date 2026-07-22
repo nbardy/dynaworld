@@ -27,6 +27,14 @@ moves to a larger machine. No browser, V-JEPA, feature-token, Softmax,
 direct-serial, new-gauge, native-WorldFoam, or external-SOTA work should
 preempt the paper chain.
 
+The complete public workload is now frozen as the 21-row
+`src/train_configs/paper_protocols/world_tubes_full_public_matrix_v1.jsonc`:
+seven Coffee progressive/control rows, six alternate Coffee triplet rows, six
+additional-Neural3D-scene rows, one controlled D-NeRF row, and one separately
+labelled deterministic audit. Three progressive rows are accepted; 18 results
+remain. This unifies the queue and reproduction entrypoint but does not change
+the execution prohibition on the incident host.
+
 2026-07-19 unified paper-ablation runner: the shared typed sampler/stage/cost
 protocol and all three Metal-backed adapters are implemented. Staged and
 all-300-frame MPS smokes are green. The shortest remaining chain is recorded in
