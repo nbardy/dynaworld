@@ -12,6 +12,7 @@ from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     build_dry_run_manifest,
     comparison_command,
     kernel_specs,
+    load_final_powerfoam_metrics,
     paper_scene_tag,
     powerfoam_config,
     require_clean_provenance,
@@ -91,6 +92,21 @@ def test_paper_scene_tag_is_derived_from_each_protocol() -> None:
 
     assert paper_scene_tag(coffee) == "scene-neural3d_coffee_martini"
     assert paper_scene_tag(spinach) == "scene-neural3d_cook_spinach"
+
+
+def test_worldfoam_paper_metrics_are_from_the_final_checkpoint(tmp_path: Path) -> None:
+    history = tmp_path / "eval_metrics_history.jsonl"
+    history.write_text(
+        '{"step":0,"metrics":{"heldout_eval_psnr":9.0}}\n'
+        '{"step":600,"metrics":{"heldout_eval_psnr":8.0,"heldout_eval_lpips":0.3}}\n',
+        encoding="utf-8",
+    )
+
+    metrics = load_final_powerfoam_metrics(history, expected_step=600)
+
+    assert metrics == {"heldout_eval_psnr": 8.0, "heldout_eval_lpips": 0.3}
+    with pytest.raises(ValueError, match="no evaluation at final step"):
+        load_final_powerfoam_metrics(history, expected_step=601)
 
 
 def test_worldfoam_initializer_cannot_leak_coffee_geometry_into_breadth_rows(tmp_path: Path) -> None:

@@ -111,6 +111,25 @@ def load_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def load_final_powerfoam_metrics(path: Path, *, expected_step: int) -> dict[str, Any]:
+    """Load the final-checkpoint evaluation, never an earlier best checkpoint."""
+    if not path.exists():
+        raise FileNotFoundError(f"WorldFoam evaluation history is missing: {path}")
+    matches = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if int(row.get("step", -1)) == int(expected_step):
+            matches.append(row)
+    if not matches:
+        raise ValueError(f"WorldFoam has no evaluation at final step {expected_step}: {path}")
+    metrics = matches[-1].get("metrics")
+    if not isinstance(metrics, dict):
+        raise ValueError(f"WorldFoam final evaluation has no metrics object: {path}")
+    return metrics
+
+
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -668,6 +687,10 @@ def execute(
         )
     powerfoam_summary = load_json(powerfoam_summary_path)
     powerfoam_best = load_json(worldfoam_dir / "best_metrics.json")
+    powerfoam_final_metrics = load_final_powerfoam_metrics(
+        worldfoam_dir / "eval_metrics_history.jsonl",
+        expected_step=protocol.steps,
+    )
     validate_lane_cost(
         "worldfoam",
         {
@@ -691,14 +714,15 @@ def execute(
         for lane_name, report_key in LANE_REPORT_KEYS.items()
     }
     lanes["worldfoam"] = {
-        "metrics": powerfoam_best["metrics"],
+        "metrics": powerfoam_final_metrics,
+        "reported_checkpoint": "final",
         "best_metric_name": powerfoam_best["best_metric_name"],
         "best_metric_value": powerfoam_best["best_metric_value"],
         "paper_protocol": powerfoam_summary,
         "evidence": build_lane_evidence(
             "worldfoam",
             {
-                "metrics": powerfoam_best["metrics"],
+                "metrics": powerfoam_final_metrics,
                 "paper_protocol": powerfoam_summary,
             },
             frame_count=protocol.dataset.frame_count,
