@@ -13,10 +13,12 @@ from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     comparison_command,
     kernel_specs,
     load_final_powerfoam_metrics,
+    local_mps_safety_estimate,
     paper_camera_rig_init,
     paper_world_tubes_camera_policy,
     paper_scene_tag,
     powerfoam_config,
+    require_execution_safety_acknowledgement,
     require_clean_provenance,
     source_provenance,
     validate_lane_cost,
@@ -186,6 +188,36 @@ def test_submission_source_gate_records_both_repository_revisions() -> None:
                 "star_uvt_dirty": False,
             }
         )
+
+
+def test_local_mps_execution_is_fail_closed_and_full_protocol_needs_second_acknowledgement() -> None:
+    _, smoke = _protocol()
+    full_raw = load_config_file(DEFAULT_PROTOCOL)
+    full = resolve_paper_training_protocol(full_raw)
+
+    assert local_mps_safety_estimate(smoke)["high_risk"] is False
+    assert local_mps_safety_estimate(full)["high_risk"] is True
+    with pytest.raises(RuntimeError, match="allow-local-mps-execution"):
+        require_execution_safety_acknowledgement(
+            smoke,
+            device="mps",
+            allow_local_mps_execution=False,
+            allow_high_risk_local_mps=False,
+        )
+    with pytest.raises(RuntimeError, match="allow-high-risk-local-mps"):
+        require_execution_safety_acknowledgement(
+            full,
+            device="mps",
+            allow_local_mps_execution=True,
+            allow_high_risk_local_mps=False,
+        )
+    estimate = require_execution_safety_acknowledgement(
+        full,
+        device="cpu",
+        allow_local_mps_execution=False,
+        allow_high_risk_local_mps=False,
+    )
+    assert estimate["estimated_peak_bytes"] > estimate["safety_limit_bytes"]
 
 
 def test_checked_in_full_protocol_manifest_is_all_300_frames() -> None:

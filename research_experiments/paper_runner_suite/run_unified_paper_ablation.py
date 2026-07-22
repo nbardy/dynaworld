@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -156,6 +157,81 @@ def require_clean_provenance(provenance: Mapping[str, Any]) -> None:
     dirty = [key for key in ("repository_dirty", "star_uvt_dirty") if bool(provenance[key])]
     if dirty:
         raise RuntimeError(f"paper submission runs require clean source state; dirty flags: {dirty}")
+
+
+def host_physical_memory_bytes() -> int:
+    if sys.platform == "darwin":
+        return int(subprocess.check_output(("sysctl", "-n", "hw.memsize"), text=True).strip())
+    if hasattr(os, "sysconf"):
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        page_count = int(os.sysconf("SC_PHYS_PAGES"))
+        return page_size * page_count
+    raise RuntimeError("cannot determine host physical memory for paper-run safety preflight")
+
+
+def local_mps_safety_estimate(protocol: PaperTrainingProtocol) -> dict[str, Any]:
+    """Conservatively estimate the combined eager three-lane MPS footprint.
+
+    This is a launch guard, not a profiler. It includes the resident RGB bundle,
+    per-lane resized train-frame caches, per-lane RGB+alpha evaluation outputs,
+    and a 1.75x allocator/render-workspace factor calibrated against the
+    2026-07-22 fixed-512 incident (about 20 GiB observed process footprint).
+    """
+
+    float_bytes = 4
+    rgb_channels = 3
+    rendered_channels = 4
+    frames = protocol.dataset.frame_count
+    train_views = len(protocol.dataset.train_cameras)
+    total_views = train_views + len(protocol.dataset.heldout_cameras)
+    final_pixels = protocol.final_stage.image_size.pixels
+    stage_pixels = sum(stage.image_size.pixels for stage in protocol.stages)
+    bundle_bytes = total_views * frames * final_pixels * rgb_channels * float_bytes
+    stage_cache_bytes_per_lane = train_views * frames * stage_pixels * rgb_channels * float_bytes
+    eval_bytes_per_lane = total_views * frames * final_pixels * rendered_channels * float_bytes
+    raw_combined_bytes = bundle_bytes + 2 * stage_cache_bytes_per_lane + 2 * eval_bytes_per_lane
+    estimated_peak_bytes = math.ceil(1.75 * raw_combined_bytes)
+    host_bytes = host_physical_memory_bytes()
+    safety_limit_bytes = math.floor(0.60 * host_bytes)
+    return {
+        "definition": "eager bundle + two lane stage caches + two lane RGB/alpha evals; 1.75x workspace factor",
+        "bundle_bytes": bundle_bytes,
+        "stage_cache_bytes_per_lane": stage_cache_bytes_per_lane,
+        "eval_bytes_per_lane": eval_bytes_per_lane,
+        "raw_combined_bytes": raw_combined_bytes,
+        "estimated_peak_bytes": estimated_peak_bytes,
+        "host_physical_memory_bytes": host_bytes,
+        "safety_limit_bytes": safety_limit_bytes,
+        "estimated_peak_gib": estimated_peak_bytes / float(1 << 30),
+        "host_physical_memory_gib": host_bytes / float(1 << 30),
+        "high_risk": estimated_peak_bytes > safety_limit_bytes,
+        "incident_reference": "agent_notes/loose_notes/2026-07-22_19-26-04_mps_memory_pressure_kernel_task_incident.md",
+    }
+
+
+def require_execution_safety_acknowledgement(
+    protocol: PaperTrainingProtocol,
+    *,
+    device: str,
+    allow_local_mps_execution: bool,
+    allow_high_risk_local_mps: bool,
+) -> dict[str, Any]:
+    estimate = local_mps_safety_estimate(protocol)
+    if str(device).lower() != "mps":
+        return estimate
+    if not allow_local_mps_execution:
+        raise RuntimeError(
+            "Local MPS execution is fail-closed after the 2026-07-22 memory-pressure incident. "
+            "Do not enable it without explicit user approval; then pass --allow-local-mps-execution."
+        )
+    if bool(estimate["high_risk"]) and not allow_high_risk_local_mps:
+        raise RuntimeError(
+            f"Estimated local MPS peak is {estimate['estimated_peak_gib']:.2f} GiB on a "
+            f"{estimate['host_physical_memory_gib']:.2f} GiB host. Paper-scale execution remains blocked; "
+            "use streamed/lane-isolated execution or, only after explicit approval, pass "
+            "--allow-high-risk-local-mps."
+        )
+    return estimate
 
 
 def kernel_specs(backward_policy: str) -> dict[str, MetalKernelSpec]:
@@ -684,6 +760,7 @@ def build_dry_run_manifest(
     )
     return {
         "status": "dry_run",
+        "execution_safety": local_mps_safety_estimate(protocol),
         "protocol_path": display_path(protocol_path),
         "protocol": protocol.as_dict(),
         "manifest_validation": validate_manifest(protocol),
@@ -727,7 +804,15 @@ def execute(
     reuse_existing: bool,
     worldfoam_initializer: str = DEFAULT_WORLDFOAM_INITIALIZER,
     require_clean_source: bool = False,
+    allow_local_mps_execution: bool = False,
+    allow_high_risk_local_mps: bool = False,
 ) -> dict[str, Any]:
+    execution_safety = require_execution_safety_acknowledgement(
+        protocol,
+        device=device,
+        allow_local_mps_execution=allow_local_mps_execution,
+        allow_high_risk_local_mps=allow_high_risk_local_mps,
+    )
     provenance = source_provenance()
     if require_clean_source:
         require_clean_provenance(provenance)
@@ -840,6 +925,7 @@ def execute(
         "worldfoam_dir": display_path(worldfoam_dir),
         "worldfoam_initializer": worldfoam_initializer,
         "source": provenance,
+        "execution_safety": execution_safety,
         "lanes": lanes,
     }
     write_json(seed_dir / "run_summary.json", summary)
@@ -866,6 +952,16 @@ def main() -> None:
         help="Use 'base_config', 'video', or a scene-specific point-cloud path.",
     )
     parser.add_argument("--require-clean-source", action="store_true")
+    parser.add_argument(
+        "--allow-local-mps-execution",
+        action="store_true",
+        help="Enable only after explicit user approval; local MPS execution is otherwise fail-closed.",
+    )
+    parser.add_argument(
+        "--allow-high-risk-local-mps",
+        action="store_true",
+        help="Second acknowledgement for a preflight estimate above 60% of host physical memory.",
+    )
     args = parser.parse_args()
 
     protocol_path = resolve_root_path(args.protocol)
@@ -898,6 +994,8 @@ def main() -> None:
         reuse_existing=args.reuse_existing,
         worldfoam_initializer=args.worldfoam_initializer,
         require_clean_source=args.require_clean_source,
+        allow_local_mps_execution=args.allow_local_mps_execution,
+        allow_high_risk_local_mps=args.allow_high_risk_local_mps,
     )
     print(json.dumps(serialize_config_value(summary), indent=2, sort_keys=True))
 

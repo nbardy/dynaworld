@@ -264,6 +264,16 @@ def main() -> None:
     parser.add_argument("--device", default="mps")
     parser.add_argument("--wandb-mode", choices=("online", "offline"), default="online")
     parser.add_argument("--require-clean-source", action="store_true")
+    parser.add_argument(
+        "--allow-local-mps-execution",
+        action="store_true",
+        help="Enable only after explicit user approval; local MPS execution is otherwise fail-closed.",
+    )
+    parser.add_argument(
+        "--allow-high-risk-local-mps",
+        action="store_true",
+        help="Second acknowledgement for runs estimated above 60% of host physical memory.",
+    )
     args = parser.parse_args()
 
     matrix_path = single.resolve_root_path(args.matrix)
@@ -304,6 +314,8 @@ def main() -> None:
             reuse_existing=args.reuse_existing,
             worldfoam_initializer=run.worldfoam_initializer,
             require_clean_source=args.require_clean_source,
+            allow_local_mps_execution=args.allow_local_mps_execution,
+            allow_high_risk_local_mps=args.allow_high_risk_local_mps,
         )
         summary["run_summary_path"] = str(
             out_dir / protocol.name / f"seed_{run.seed}" / "run_summary.json"
