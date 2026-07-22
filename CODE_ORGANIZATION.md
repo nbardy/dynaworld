@@ -21,6 +21,22 @@ The repo should have these boundaries:
 | Loss/composition | Shared helper module | One source for `alpha * colorize + bg`, metric payloads, and feature RGB composition. |
 | Logging/media | `src/train/train_logging.py`, `src/train/wandb_media.py`, and `src/train/pipeline/validation_media.py` | W&B setup/cadence/scalars, low-level media constructors, and trainer validation media payloads. |
 | Research forks | `research_experiments/`, `star_uvt/`, `third_party/*/variants/` | Isolated experiments with result JSONs and notes. |
+| Paper ablation protocol | `src/train/paper_training_types.py`, `src/train/paper_training_protocol.py` | Shared typed dataset, space-time sampling, stage, and cost contracts; representation-specific trainers retain their kernels and model state. |
+
+The paper runner follows the same small-helper rule: it is an orchestrator over
+three explicit adapters, not a replacement trainer hierarchy. World Tubes
+keeps STAR UVT projection/Metal autograd, WorldFoam keeps PowerFoam Metal and
+state-preserving resampling, and dynamic 3DGS keeps fast-mac. Only data order,
+stage schedule, target/raster cost accounting, and report validation are
+shared.
+
+The World Tubes boundary must also preserve the distinction between the STAR
+UVT representation/backend and the gauged camera-path compiler layered on it.
+Do not simplify away the camera-ray pullback, depth-fiber marginalization plus
+conditional-depth metadata, projective gauge domains, visibility-order event
+strata, or certified local fallback. Those mechanisms are the large-motion
+overlap repair and a primary paper contribution, not legacy wrappers around
+STAR UVT.
 
 ## Dedupe Priorities
 

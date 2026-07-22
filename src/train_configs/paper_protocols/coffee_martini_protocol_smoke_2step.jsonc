@@ -1,0 +1,37 @@
+{
+  "name": "coffee_martini_protocol_smoke_2step",
+  "enabled": true,
+  "dataset": {
+    "manifest": "src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl",
+    "sample_id": "neural3d_coffee_martini_train_cam04_cam09_holdout_cam06_full_300f",
+    "train_cameras": ["cam04", "cam09"],
+    "heldout_cameras": ["cam06"],
+    "frame_count": 4,
+    "fps": 30.0
+  },
+  "steps": 2,
+  "max_train_seconds": 300.0,
+  "frames_per_step": 2,
+  "same_time_count": 2,
+  "local_time_count": 0,
+  "local_time_radius": 0,
+  "sampler_seed_offset": 7001,
+  "stages": [
+    {
+      "label": "smoke_64w",
+      "until_step": 1,
+      "image_size": [48, 64],
+      "primitive_count": 128,
+      "frames_per_step": 2,
+      "lr_multiplier": 1.0
+    },
+    {
+      "label": "smoke_128w",
+      "until_step": 2,
+      "image_size": [96, 128],
+      "primitive_count": 256,
+      "frames_per_step": 2,
+      "lr_multiplier": 0.5
+    }
+  ]
+}

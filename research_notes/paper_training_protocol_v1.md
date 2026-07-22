@@ -103,3 +103,17 @@ count and total stored state.
 
 The existing 128px/16-frame/40-step result remains a correctness and runner
 smoke. It is not relabeled as the full-sequence paper experiment.
+
+## Implementation Status (2026-07-19)
+
+The shared protocol and all three adapters are implemented. World Tubes uses
+the existing temporal-window STAR Metal kernel at each selected global time,
+so K-frame paper updates rasterize K frames rather than whole sequences. A
+two-stage 4-frame MPS smoke and a low-resolution all-300-frame MPS smoke pass
+with exact cost validation.
+
+The configured primary row ends at 384x512 and uses the current eager
+multicamera bundle. Native 2028x2704 targets are deliberately not claimed:
+they require on-demand K-frame decode/ray generation and streamed evaluation.
+The executable remaining-work contract is
+`TODO/unified_paper_ablation_pipeline.md`.

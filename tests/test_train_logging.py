@@ -164,6 +164,7 @@ def test_init_wandb_run_uses_shared_logging_config(monkeypatch: Any) -> None:
             "wandb_tags": ["trainer"],
             "wandb_mode": "offline",
             "wandb_run_id": "stable123",
+            "wandb_resume": "allow",
         },
         "output": {"checkpoint": Path("outputs/checkpoint.pt")},
     }
@@ -176,12 +177,33 @@ def test_init_wandb_run_uses_shared_logging_config(monkeypatch: Any) -> None:
             "tags": ["trainer"],
             "mode": "offline",
             "id": "stable123",
+            "resume": "allow",
             "config": {
                 "logging": cfg["logging"],
                 "output": {"checkpoint": "outputs/checkpoint.pt"},
             },
         }
     ]
+
+
+def test_init_wandb_run_can_disable_dirty_diff_uploads(monkeypatch: Any) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr("train_logging.wandb.init", lambda **kwargs: calls.append(kwargs) or "run")
+    cfg = {
+        "logging": {
+            "wandb_enabled": True,
+            "wandb_project": "dynaworld",
+            "wandb_run_name": "paper",
+            "wandb_tags": ["paper"],
+            "wandb_mode": "offline",
+            "wandb_disable_git": True,
+            "wandb_disable_code": True,
+        }
+    }
+
+    assert init_wandb_run(cfg) == "run"
+    assert calls[0]["settings"].disable_git is True
+    assert calls[0]["settings"].disable_code is True
 
 
 def test_finish_wandb_run_skips_disabled_run(monkeypatch: Any) -> None:

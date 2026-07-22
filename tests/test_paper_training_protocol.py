@@ -6,17 +6,23 @@ import pytest
 import torch
 from PIL import Image
 
-from multicam_val_data import _load_frame
+from multicam_val_data import _load_frame, _use_sequential_video_decode
+from config_utils import load_config_file
 from paper_training_protocol import (
     PaperCostTracker,
     SpacetimeEpochSampler,
+    apply_paper_dataset_contract,
     normalize_paper_stages,
     paper_stage_for_step,
+    resolve_paper_training_protocol,
     resize_ray_grids,
     resize_video_frames,
     scale_intrinsics,
 )
 from paper_training_types import ImageSize
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_spacetime_epoch_sampler_covers_each_pair_once_and_is_reproducible() -> None:
@@ -94,6 +100,62 @@ def test_paper_stage_schedule_requires_contiguous_monotonic_progression() -> Non
         )
 
 
+def test_stage_defaults_to_declared_final_image_size() -> None:
+    stages = normalize_paper_stages(
+        [{"until_step": 2, "primitive_count": 8}],
+        total_steps=2,
+        default_image_size=ImageSize(6, 10),
+        default_primitive_count=8,
+        default_frames_per_step=2,
+    )
+
+    assert stages[0].image_size == ImageSize(6, 10)
+
+
+def test_checked_in_progressive_and_fixed_protocols_match_target_pixel_budget() -> None:
+    protocol_dir = ROOT / "src" / "train_configs" / "paper_protocols"
+    progressive = resolve_paper_training_protocol(
+        load_config_file(protocol_dir / "coffee_martini_full_300f_progressive_512_v1.jsonc")
+    )
+    fixed = resolve_paper_training_protocol(
+        load_config_file(protocol_dir / "coffee_martini_full_300f_fixed_512_pixel_matched_v1.jsonc")
+    )
+
+    assert progressive.target_pixel_budget == fixed.target_pixel_budget == 235_929_600
+    assert progressive.target_frame_budget == 2400
+    assert fixed.target_frame_budget == 1200
+    assert progressive.nominal_epoch_coverage == 4.0
+    assert fixed.nominal_epoch_coverage == 2.0
+    assert progressive.final_stage.image_size == ImageSize(384, 512)
+    assert progressive.final_stage.primitive_count == 1024
+
+
+def test_paper_dataset_contract_overrides_old_smoke_manifest() -> None:
+    protocol = resolve_paper_training_protocol(
+        load_config_file(
+            ROOT
+            / "src"
+            / "train_configs"
+            / "paper_protocols"
+            / "coffee_martini_full_300f_progressive_512_v1.jsonc"
+        )
+    )
+
+    resolved = apply_paper_dataset_contract(
+        {
+            "multicam_manifest": "old.jsonl",
+            "multicam_sample_id": "old",
+            "max_frames": 16,
+        },
+        protocol,
+    )
+
+    assert resolved["max_frames"] == 300
+    assert resolved["multicam_train_cameras"] == ["cam04", "cam09"]
+    assert resolved["multicam_heldout_camera"] == "cam06"
+    assert resolved["multicam_sample_id"].endswith("full_300f")
+
+
 def test_aspect_preserving_resize_scales_frames_rays_and_intrinsics() -> None:
     frames = torch.arange(2 * 3 * 8 * 12, dtype=torch.float32).reshape(2, 3, 8, 12)
     resized = resize_video_frames(frames, ImageSize(4, 6))
@@ -117,6 +179,11 @@ def test_multicam_frame_loader_accepts_rectangular_target(tmp_path: Path) -> Non
     frame = _load_frame(path, (4, 6))
 
     assert frame.shape == (3, 4, 6)
+
+
+def test_full_rate_video_sampling_uses_sequential_decode() -> None:
+    assert _use_sequential_video_decode(list(range(300))) is True
+    assert _use_sequential_video_decode([0, 30, 60, 90]) is False
 
 
 def test_paper_cost_tracker_separates_target_and_rasterized_pixels() -> None:

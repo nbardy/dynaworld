@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import requests
 
 from config_utils import load_config_file, path_or_none, require_config_keys
-from download_utils import fetch_json_url, validate_http_url
+from download_utils import download_url, fetch_json_url, validate_http_url
 from json_io import load_json, load_jsonl_objects
 from multicam_val import read_jsonl as read_multicam_jsonl
 from youtube_curated_spans import read_jsonl as read_curated_jsonl
@@ -83,3 +84,94 @@ def test_fetch_json_url_reports_url_on_malformed_json(monkeypatch: pytest.Monkey
 
     with pytest.raises(ValueError, match=r"Invalid JSON response from 'https://example\.com/release\.json'"):
         fetch_json_url("https://example.com/release.json")
+
+
+class _DownloadResponse:
+    def __init__(self, body: bytes, *, status_code: int, headers: dict[str, str]) -> None:
+        self.body = body
+        self.status_code = status_code
+        self.headers = headers
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def iter_content(self, *, chunk_size: int):
+        assert chunk_size == 1024 * 1024
+        yield self.body
+
+
+class _InterruptedDownloadResponse(_DownloadResponse):
+    def iter_content(self, *, chunk_size: int):
+        yield self.body
+        raise requests.ConnectionError("transient stream failure")
+
+
+def test_download_url_resumes_partial_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    output = tmp_path / "scene.zip"
+    output.with_suffix(".zip.part").write_bytes(b"first-")
+
+    def fake_get(_url: str, **kwargs):
+        assert kwargs["headers"]["Range"] == "bytes=6-"
+        return _DownloadResponse(b"second", status_code=206, headers={"Content-Range": "bytes 6-11/12"})
+
+    monkeypatch.setattr("download_utils.requests.get", fake_get)
+    assert download_url(
+        "https://example.com/scene.zip",
+        output,
+        overwrite=True,
+        user_agent="test",
+    )
+    assert output.read_bytes() == b"first-second"
+
+
+def test_download_url_restarts_when_server_ignores_range(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "scene.zip"
+    output.with_suffix(".zip.part").write_bytes(b"stale")
+    monkeypatch.setattr(
+        "download_utils.requests.get",
+        lambda *_args, **_kwargs: _DownloadResponse(b"fresh", status_code=200, headers={}),
+    )
+
+    download_url("https://example.com/scene.zip", output, overwrite=True, user_agent="test")
+
+    assert output.read_bytes() == b"fresh"
+
+
+def test_download_url_retries_and_resumes_transient_stream_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "scene.zip"
+    calls = 0
+
+    def fake_get(_url: str, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert "Range" not in kwargs["headers"]
+            return _InterruptedDownloadResponse(b"first", status_code=200, headers={})
+        assert kwargs["headers"]["Range"] == "bytes=5-"
+        return _DownloadResponse(b"second", status_code=206, headers={"Content-Range": "bytes 5-10/11"})
+
+    monkeypatch.setattr("download_utils.requests.get", fake_get)
+    monkeypatch.setattr("download_utils.time.sleep", lambda _seconds: None)
+
+    download_url(
+        "https://example.com/scene.zip",
+        output,
+        overwrite=True,
+        user_agent="test",
+        max_attempts=2,
+    )
+
+    assert output.read_bytes() == b"firstsecond"

@@ -1,0 +1,8 @@
+{
+  "dataset_name": "dnerf_paper_breadth",
+  "root_dir": "data/external/dnerf",
+  // Official D-NeRF dataset mirror used by Nerfstudio's downloader.
+  "download_url": "https://www.dropbox.com/s/raw/0bf6fl0ye2vz3vr/data.zip",
+  "archive_name": "dnerf_data.zip",
+  "controlled_scenes": ["bouncingballs", "mutant"]
+}

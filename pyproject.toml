@@ -19,15 +19,12 @@ dependencies = [
 experiments = [
     "beartype",
     "gradio>=6.12.0",
+    "lpips>=0.1.4",
     "moviepy>=2.2.1",
     "packaging",
     "roma",
     "tensordict>=0.7.0",
     "torchvision",
 ]
-vjepa-hf = [
-    "transformers @ git+https://github.com/huggingface/transformers",
-]
-
 [tool.uv]
 package = false

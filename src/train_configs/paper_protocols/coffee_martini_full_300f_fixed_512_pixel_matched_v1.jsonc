@@ -1,0 +1,31 @@
+{
+  "name": "coffee_martini_full_300f_fixed_512_pixel_matched_v1",
+  "enabled": true,
+  "dataset": {
+    "manifest": "src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl",
+    "sample_id": "neural3d_coffee_martini_train_cam04_cam09_holdout_cam06_full_300f",
+    "train_cameras": ["cam04", "cam09"],
+    "heldout_cameras": ["cam06"],
+    "frame_count": 300,
+    "fps": 30.0
+  },
+  // 300 full-resolution updates have exactly the same target-pixel budget as
+  // the 160x128w + 200x256w + 240x512w progressive schedule.
+  "steps": 300,
+  "max_train_seconds": 86400.0,
+  "frames_per_step": 4,
+  "same_time_count": 2,
+  "local_time_count": 1,
+  "local_time_radius": 8,
+  "sampler_seed_offset": 7001,
+  "stages": [
+    {
+      "label": "fixed_512w",
+      "until_step": 300,
+      "image_size": [384, 512],
+      "primitive_count": 1024,
+      "frames_per_step": 4,
+      "lr_multiplier": 0.35
+    }
+  ]
+}

@@ -121,9 +121,43 @@ Key files:
 - `outputs/benchmarks/2026-07-11_coffee_martini_matched_sweep/report/summary.md`
 - `outputs/benchmarks/2026-07-11_paper_runner_table_report/summary.json`
 - `outputs/benchmarks/2026-07-11_paper_runner_table_report/summary.md`
+- `research_experiments/paper_runner_suite/run_unified_paper_ablation.py`
+- `src/train/paper_training_types.py`
+- `src/train/paper_training_protocol.py`
+- `tests/test_paper_training_protocol.py`
+- `tests/test_unified_paper_ablation.py`
+- `src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_512_v1.jsonc`
+- `src/train_configs/paper_protocols/coffee_martini_full_300f_fixed_512_pixel_matched_v1.jsonc`
+- `src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_global_shuffle_512_v1.jsonc`
+- `outputs/benchmarks/2026-07-19_unified_paper_ablation_smoke_v2/coffee_martini_protocol_smoke_2step/seed_17/run_summary.json`
+- `outputs/benchmarks/2026-07-19_unified_paper_ablation_smoke/coffee_martini_full_300f_smoke_1step/seed_17/run_summary.json`
 - `research_notes/worldfoam_paper/experiment_designs/cell_path_optical_transfer_fixture.md`
 
 Latest evidence:
+
+- 2026-07-22 submission-spine update: evidence schema v1 now requires
+  heldout LPIPS, sampled peak current/driver memory, serialized checkpoint
+  bytes, synchronized compile/forward/backward/optimizer timing, and
+  trace/event/fallback diagnostics for every lane. The fail-closed matrix
+  runner emits JSON/CSV/Markdown/LaTeX/SVG artifacts. Live three-lane evidence
+  smoke:
+  `outputs/benchmarks/2026-07-22_unified_paper_evidence_smoke_v2/coffee_martini_protocol_smoke_2step/seed_17/run_summary.json`.
+- The exact same-representation scaling artifact is verified at
+  `outputs/benchmarks/2026-07-22_world_tubes_same_representation_scaling_f4_128_cap256/summary.json`.
+  Across `F=4,8,16,32,64,128`, fixed payload growth is `1x` versus replay
+  `32x`; final fixed/replay payload, compile, forward, and backward ratios are
+  `0.03125`, `0.047677`, `0.181323`, and `0.392235`.
+- The checked theorem-table artifact is
+  `outputs/benchmarks/2026-07-22_world_tubes_theorem_table/summary.json`
+  with generated Markdown/LaTeX. It deliberately labels scope as bounded
+  camera-chart segments; full `360/720` multi-gauge transition remains
+  unimplemented and is not claimed.
+- The first progressive-512 seed-17 600-step comparison completed World Tubes
+  and dynamic 3DGS. Heldout World Tubes is PSNR/SSIM/LPIPS
+  `5.8945/0.03360/0.98461` with `124.58s` train wall and `3.114GB` peak MPS
+  driver memory; dynamic 3DGS is `4.9110/0.28266/0.90229`, `142.58s`, and
+  `20.557GB`. The WorldFoam lane is still required before this becomes a
+  complete row; do not add it to `BASELINES.md` yet.
 
 - Focused test:
   `PYTHONPATH=src/train uv run --with pytest python -m pytest tests/test_star_uvt_projective_decisive_demo_report.py -q`
@@ -204,6 +238,22 @@ Latest evidence:
 
 Next runner TODOs:
 
+- Unified paper-ablation software status: green. The 4-frame/two-stage MPS
+  smoke completed World Tubes, dynamic 3DGS, and WorldFoam with exact shared
+  cost `4 frames / 30,720 pixels`; optimizer-update times were `0.298s`,
+  `0.299s`, and `0.608s`, respectively. WorldFoam also completed its
+  optimizer-state-preserving `128 -> 256` cell transition. The all-300-frame
+  one-step smoke also completed all three lanes, full train/heldout evaluation,
+  media, and offline W&B. These timings are mechanical smokes, not benchmark
+  rankings.
+- Run `coffee_martini_full_300f_progressive_512_v1` and the exact
+  target-pixel-matched fixed control. Then run the global-shuffle sampler
+  ablation, seeds 17/29/43, additional camera triplets, and Neural3D scene
+  breadth. Keep `fast_exploration` as the throughput row and deterministic
+  policies as separately labeled correctness audits.
+- Do not claim native 2704x2028 support from the eager 512-wide runner. Native
+  promotion requires streamed K-frame targets/rays and streamed evaluation;
+  the dependency chain is in `TODO/unified_paper_ablation_pipeline.md`.
 - The first real-dataset protocol smoke is green on Neural3D
   `coffee_martini`: train `cam04`/`cam09`, hold out `cam06`, and use
   `neural_3d_llff_relative_pinhole` calibration. The saved protocol report is
@@ -4783,6 +4833,40 @@ Current decision:
 - Next falsification gate: tiled/image-space backward plus true windowed
   D-SSIM, then a matched source-view ablation against `converge47`; novel-view
   claims still require a calibrated multicam objective.
+
+## Browser Calibrated Multicamera Demo (2026-07-19)
+
+- Surface: `web/dynaworld_browser_trainer/`, asset tag `multicam67`.
+- Scope: demo/prototype only. It does not add a Python trainer, modify the
+  unified paper runner, or claim native World Tubes/dynamic-3DGS parity.
+- Data: the existing `src/train/export_dynaworld_browser_bundle.py` now has a
+  thin dataset-export mode that calls `load_multicam_video_bundle` for the
+  canonical full-300-frame Coffee Martini manifest. It exports eight exact
+  times `[0,43,85,128,171,214,256,299]` at `96x72`, with `cam04`/`cam09`
+  train and `cam06` heldout validation-only. Three small PNG atlases replace
+  browser MP4 seeking, which had silently returned the same frame at every
+  requested time. Initialization uses 768 visible anchor-frame XYZRGB points
+  from the existing Ex4DGS SfM `input.ply`; no heldout pixels seed parameters.
+- WebGPU: shared 3D primitives are projected through canonical normalized
+  intrinsics and anchor-relative poses. Both simplified motion modes run in the
+  isolated `trainerWebGpu3d.js`. The compute shader was reduced to Apple's
+  eight-storage-buffer stage limit by packing sample indices and removing
+  redundant GPU metric/background buffers.
+- Browser evidence on the Apple adapter: the app loads with no app errors,
+  shows all three synchronized camera views, switches the main target/render to
+  `cam06 (heldout)`, and produces distinct frame-0/frame-7 target pixels.
+  Motion sampling finds `5,635` train spacetime pixels. Revised SfM radius and
+  opacity initialization starts at train/heldout loss
+  `0.182629/0.192498`, PSNR `7.4/7.2 dB`, and coverage `32.6/32.9%`.
+  A 132-step World Tubes-style trace reaches train/heldout loss
+  `0.173302/0.185356`; a separate 119-step dynamic-splats-style trace under the
+  earlier sparse init also decreased both losses. Global-luma SSIM remains a
+  validation proxy, not a windowed SSIM implementation or training loss.
+- Verification: `11` focused paper-protocol/browser-adapter tests pass. No
+  `BASELINES.md` row is warranted; quality remains low and compositing is fixed
+  order without depth sorting. The next admissible quality work is tiled
+  image-space backward, depth-aware composition, and true windowed SSIM under a
+  matched train/heldout ablation.
 
 ## Adding A New Experiment
 

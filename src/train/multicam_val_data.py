@@ -80,6 +80,15 @@ def _import_cv2():
     return cv2
 
 
+def _use_sequential_video_decode(native_frame_indices: list[int]) -> bool:
+    if not native_frame_indices:
+        return False
+    if any(right < left for left, right in zip(native_frame_indices, native_frame_indices[1:])):
+        return False
+    decoded_span = native_frame_indices[-1] - native_frame_indices[0] + 1
+    return decoded_span <= len(native_frame_indices) * 8
+
+
 def _sample_video_frames(
     *,
     video_path: Path,
@@ -98,24 +107,57 @@ def _sample_video_frames(
         capture.release()
         raise ValueError(f"Could not infer native FPS for {video_path}")
 
+    native_frame_indices = [
+        int(round((start_seconds + float(index) / sample_fps) * native_fps))
+        for index in range(frame_count)
+    ]
+    target_hw = _target_height_width(target_size)
     frames = []
+
+    def append_frame(frame_bgr) -> None:
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(frame_rgb)
+        if target_hw is not None:
+            image = image.resize((target_hw[1], target_hw[0]), resample=BILINEAR)
+        array = np.asarray(image, dtype=np.float32) / 255.0
+        frames.append(torch.from_numpy(array).permute(2, 0, 1).contiguous())
+
     try:
-        for index in range(frame_count):
-            timestamp = start_seconds + float(index) / sample_fps
-            native_frame_index = int(round(timestamp * native_fps))
-            capture.set(cv2.CAP_PROP_POS_FRAMES, native_frame_index)
-            ok, frame_bgr = capture.read()
-            if not ok:
-                raise RuntimeError(
-                    f"Failed to read frame {native_frame_index} at {timestamp:.3f}s from {video_path}"
-                )
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(frame_rgb)
-            target_hw = _target_height_width(target_size)
-            if target_hw is not None:
-                image = image.resize((target_hw[1], target_hw[0]), resample=BILINEAR)
-            array = np.asarray(image, dtype=np.float32) / 255.0
-            frames.append(torch.from_numpy(array).permute(2, 0, 1).contiguous())
+        if _use_sequential_video_decode(native_frame_indices):
+            capture.set(cv2.CAP_PROP_POS_FRAMES, native_frame_indices[0])
+            next_decoded_index = native_frame_indices[0]
+            previous_target = None
+            previous_frame = None
+            for sample_index, native_frame_index in enumerate(native_frame_indices):
+                if native_frame_index == previous_target:
+                    append_frame(previous_frame)
+                    continue
+                selected_frame = None
+                while next_decoded_index <= native_frame_index:
+                    ok, decoded_frame = capture.read()
+                    if not ok:
+                        timestamp = start_seconds + float(sample_index) / sample_fps
+                        raise RuntimeError(
+                            f"Failed to read frame {next_decoded_index} at {timestamp:.3f}s from {video_path}"
+                        )
+                    if next_decoded_index == native_frame_index:
+                        selected_frame = decoded_frame
+                    next_decoded_index += 1
+                if selected_frame is None:
+                    raise RuntimeError(f"Sequential decoder skipped requested frame {native_frame_index}")
+                append_frame(selected_frame)
+                previous_target = native_frame_index
+                previous_frame = selected_frame
+        else:
+            for sample_index, native_frame_index in enumerate(native_frame_indices):
+                capture.set(cv2.CAP_PROP_POS_FRAMES, native_frame_index)
+                ok, frame_bgr = capture.read()
+                if not ok:
+                    timestamp = start_seconds + float(sample_index) / sample_fps
+                    raise RuntimeError(
+                        f"Failed to read frame {native_frame_index} at {timestamp:.3f}s from {video_path}"
+                    )
+                append_frame(frame_bgr)
     finally:
         capture.release()
 

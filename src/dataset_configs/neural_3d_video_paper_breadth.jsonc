@@ -1,0 +1,19 @@
+{
+  "dataset_name": "neural_3d_video_paper_breadth",
+  "root_dir": "data/external/neural_3d_video",
+  "github": {
+    "owner": "facebookresearch",
+    "repo": "Neural_3D_Video",
+    "tag": "v1.0"
+  },
+  "download": {
+    "asset_names": [
+      "cook_spinach.zip",
+      "cut_roasted_beef.zip"
+    ],
+    "overwrite": false
+  },
+  "extract": {
+    "overwrite": false
+  }
+}

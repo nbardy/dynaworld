@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -45,6 +46,7 @@ def download_url(
     overwrite: bool,
     user_agent: str,
     timeout_seconds: float = 60.0,
+    max_attempts: int = 5,
 ) -> bool:
     if output_path.exists() and not overwrite:
         print(f"Already exists: {output_path}")
@@ -52,17 +54,43 @@ def download_url(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = output_path.with_suffix(output_path.suffix + ".part")
-    with requests.get(
-        validate_http_url(url),
-        headers={"User-Agent": user_agent},
-        stream=True,
-        timeout=timeout_seconds,
-    ) as response:
-        response.raise_for_status()
-        with tmp_path.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    handle.write(chunk)
+    for attempt in range(1, max_attempts + 1):
+        resume_from = tmp_path.stat().st_size if tmp_path.exists() else 0
+        headers = {"User-Agent": user_agent}
+        if resume_from:
+            headers["Range"] = f"bytes={resume_from}-"
+        try:
+            with requests.get(
+                validate_http_url(url),
+                headers=headers,
+                stream=True,
+                timeout=timeout_seconds,
+            ) as response:
+                status_code = int(response.status_code)
+                if resume_from and status_code == 416:
+                    total = str(response.headers.get("Content-Range", "")).removeprefix("bytes */")
+                    if total.isdigit() and int(total) == resume_from:
+                        tmp_path.replace(output_path)
+                        print(f"Downloaded: {output_path}")
+                        return True
+                response.raise_for_status()
+                append = resume_from > 0 and status_code == 206
+                if append:
+                    content_range = str(response.headers.get("Content-Range", ""))
+                    if not content_range.startswith(f"bytes {resume_from}-"):
+                        raise RuntimeError(
+                            f"Download server returned an invalid resume range for {url!r}: {content_range!r}"
+                        )
+                with tmp_path.open("ab" if append else "wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+            break
+        except requests.RequestException:
+            if attempt == max_attempts:
+                raise
+            print(f"Download interrupted; resuming attempt {attempt + 1}/{max_attempts}: {output_path}")
+            time.sleep(min(2 ** (attempt - 1), 8))
     tmp_path.replace(output_path)
     print(f"Downloaded: {output_path}")
     return True

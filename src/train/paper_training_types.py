@@ -9,6 +9,40 @@ import torch
 PaperRepresentation = Literal["world_tubes", "worldfoam", "dynamic_3dgs"]
 
 
+@dataclass(frozen=True)
+class PaperDatasetContract:
+    manifest: str
+    sample_id: str
+    train_cameras: tuple[str, ...]
+    heldout_cameras: tuple[str, ...]
+    frame_count: int
+    fps: float
+
+    def __post_init__(self) -> None:
+        if not self.manifest or not self.sample_id:
+            raise ValueError("paper dataset manifest and sample_id must not be empty")
+        if not self.train_cameras or not self.heldout_cameras:
+            raise ValueError("paper dataset must declare train and heldout cameras")
+        if set(self.train_cameras) & set(self.heldout_cameras):
+            raise ValueError("paper train and heldout cameras must be disjoint")
+        if self.frame_count < 1 or self.fps <= 0.0:
+            raise ValueError("paper dataset frame_count and fps must be positive")
+
+    @property
+    def samples_per_epoch(self) -> int:
+        return len(self.train_cameras) * self.frame_count
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "manifest": self.manifest,
+            "sample_id": self.sample_id,
+            "train_cameras": list(self.train_cameras),
+            "heldout_cameras": list(self.heldout_cameras),
+            "frame_count": self.frame_count,
+            "fps": self.fps,
+        }
+
+
 @dataclass(frozen=True, order=True)
 class ImageSize:
     height: int
@@ -61,6 +95,73 @@ class PaperStage:
             "primitive_count": self.primitive_count,
             "frames_per_step": self.frames_per_step,
             "lr_multiplier": self.lr_multiplier,
+        }
+
+
+@dataclass(frozen=True)
+class PaperTrainingProtocol:
+    name: str
+    dataset: PaperDatasetContract
+    steps: int
+    max_train_seconds: float
+    same_time_count: int
+    local_time_count: int
+    local_time_radius: int
+    sampler_seed_offset: int
+    stages: tuple[PaperStage, ...]
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("paper protocol name must not be empty")
+        if self.steps < 1 or self.max_train_seconds <= 0.0:
+            raise ValueError("paper protocol steps and max_train_seconds must be positive")
+        if not self.stages or self.stages[-1].end_step != self.steps:
+            raise ValueError("paper protocol stages must terminate at steps")
+        if self.same_time_count < 1 or self.local_time_count < 0 or self.local_time_radius < 0:
+            raise ValueError("paper protocol grouping counts and radius are invalid")
+        if any(
+            self.same_time_count + self.local_time_count > stage.frames_per_step
+            for stage in self.stages
+        ):
+            raise ValueError("same_time_count + local_time_count must fit every paper stage batch")
+
+    @property
+    def final_stage(self) -> PaperStage:
+        return self.stages[-1]
+
+    @property
+    def target_frame_budget(self) -> int:
+        return sum(
+            (stage.end_step - stage.start_step) * stage.frames_per_step
+            for stage in self.stages
+        )
+
+    @property
+    def target_pixel_budget(self) -> int:
+        return sum(
+            (stage.end_step - stage.start_step) * stage.frames_per_step * stage.image_size.pixels
+            for stage in self.stages
+        )
+
+    @property
+    def nominal_epoch_coverage(self) -> float:
+        return float(self.target_frame_budget) / float(self.dataset.samples_per_epoch)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "dataset": self.dataset.as_dict(),
+            "steps": self.steps,
+            "max_train_seconds": self.max_train_seconds,
+            "same_time_count": self.same_time_count,
+            "local_time_count": self.local_time_count,
+            "local_time_radius": self.local_time_radius,
+            "sampler_seed_offset": self.sampler_seed_offset,
+            "stages": [stage.as_dict() for stage in self.stages],
+            "target_frame_budget": self.target_frame_budget,
+            "target_pixel_budget": self.target_pixel_budget,
+            "samples_per_epoch": self.dataset.samples_per_epoch,
+            "nominal_epoch_coverage": self.nominal_epoch_coverage,
         }
 
 
@@ -136,6 +237,9 @@ class PaperCostSnapshot:
     trainable_parameter_count: int
     parameter_bytes: int
     optimizer_state_bytes: int
+    serialized_checkpoint_bytes: int
+    sampled_peak_current_allocated_bytes: int
+    sampled_peak_driver_allocated_bytes: int
     elapsed_s: float
 
     def as_dict(self) -> dict[str, int | float]:
@@ -149,6 +253,9 @@ class PaperCostSnapshot:
             "trainable_parameter_count": self.trainable_parameter_count,
             "parameter_bytes": self.parameter_bytes,
             "optimizer_state_bytes": self.optimizer_state_bytes,
+            "serialized_checkpoint_bytes": self.serialized_checkpoint_bytes,
+            "sampled_peak_current_allocated_bytes": self.sampled_peak_current_allocated_bytes,
+            "sampled_peak_driver_allocated_bytes": self.sampled_peak_driver_allocated_bytes,
             "elapsed_s": self.elapsed_s,
         }
 
@@ -165,8 +272,10 @@ __all__ = [
     "ImageSize",
     "MetalKernelSpec",
     "PaperCostSnapshot",
+    "PaperDatasetContract",
     "PaperRepresentation",
     "PaperStage",
+    "PaperTrainingProtocol",
     "PaperTrainerAdapter",
     "SpacetimeBatch",
     "SpacetimeSample",

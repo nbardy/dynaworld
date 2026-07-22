@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 
-from pipeline.diagnostics import reconstruction_eval_metrics
+from pipeline.diagnostics import ReconstructionEvalAccumulator, reconstruction_eval_metrics
+from perceptual_metrics import video_lpips
 from powerfoam_eval_color import (
     apply_eval_color_calibration,
     fit_eval_color_calibration,
@@ -17,6 +19,75 @@ from train_artifacts import write_json
 from train_logging import log_wandb_run_payload_lazy, mapped_metric_payload, should_log_video
 from wandb_media import build_rgb_alpha_eval_media_payload
 from video_io import save_rgb_alpha_eval_media, video_fps_from_config
+
+
+@dataclass(frozen=True)
+class StreamedEvalSplit:
+    metrics: dict[str, float]
+    renders: torch.Tensor
+    targets: torch.Tensor
+    alphas: torch.Tensor
+
+
+def _media_positions(frame_count: int, max_frames: int) -> set[int]:
+    count = min(int(frame_count), int(max_frames))
+    return set(torch.linspace(0, frame_count - 1, steps=count).round().to(torch.long).tolist())
+
+
+@torch.no_grad()
+def _stream_eval_split(
+    model: Any,
+    targets: torch.Tensor,
+    frame_indices: torch.Tensor,
+    rays: torch.Tensor | None,
+    cfg: dict[str, Any],
+    *,
+    prefix: str,
+    include_lpips: bool,
+) -> StreamedEvalSplit:
+    batch_size = powerfoam_eval_batch_size(cfg)
+    media_limit = cfg["logging"]["eval_media_max_frames"]
+    if media_limit is None:
+        media_limit = int(frame_indices.numel())
+    selected = _media_positions(int(frame_indices.numel()), int(media_limit))
+    accumulator = ReconstructionEvalAccumulator(cfg, prefix)
+    media_renders = []
+    media_targets = []
+    media_alphas = []
+    lpips_sum = 0.0
+    lpips_count = 0
+    for start in range(0, int(frame_indices.numel()), batch_size):
+        stop = min(start + batch_size, int(frame_indices.numel()))
+        chunk_rays = None if rays is None else rays[start:stop]
+        renders, alphas = render_powerfoam_samples(
+            model,
+            frame_indices[start:stop],
+            batch_size=batch_size,
+            rays=chunk_rays,
+        )
+        renders = composite_fixed_background(renders, alphas, cfg["render"])
+        target_chunk = targets[start:stop].detach().cpu()
+        accumulator.update(renders, target_chunk)
+        if include_lpips:
+            lpips_sum += video_lpips(renders, target_chunk) * float(stop - start)
+            lpips_count += stop - start
+        local_positions = [position - start for position in sorted(selected) if start <= position < stop]
+        if local_positions:
+            local = torch.tensor(local_positions, dtype=torch.long)
+            media_renders.append(renders[local])
+            media_targets.append(target_chunk[local])
+            media_alphas.append(alphas[local])
+    metrics = accumulator.metrics()
+    if include_lpips:
+        if lpips_count < 1:
+            raise ValueError("heldout LPIPS requires at least one rendered frame")
+        metrics[f"{prefix}_lpips"] = lpips_sum / float(lpips_count)
+    return StreamedEvalSplit(
+        metrics=metrics,
+        renders=torch.cat(media_renders, dim=0),
+        targets=torch.cat(media_targets, dim=0),
+        alphas=torch.cat(media_alphas, dim=0),
+    )
 
 
 def log_powerfoam_artifacts(
@@ -39,44 +110,80 @@ def log_powerfoam_artifacts(
         frame_indices = torch.arange(targets.size(0), device=device, dtype=torch.long)
     else:
         frame_indices = frame_indices.to(device=device, dtype=torch.long)
-    renders, alphas = render_powerfoam_samples(
-        model,
-        frame_indices,
-        batch_size=powerfoam_eval_batch_size(cfg),
-        rays=rays,
+    stream_paper_eval = (
+        bool(cfg["paper_protocol"]["enabled"])
+        and str(cfg["render"]["eval_color_calibration"]) == "none"
     )
-    renders = composite_fixed_background(renders, alphas, cfg["render"])
-    targets_cpu = targets.detach().cpu()
-    calibration = fit_eval_color_calibration(cfg["render"], renders, targets_cpu)
-    raw_renders = renders
-    renders = apply_eval_color_calibration(raw_renders, calibration)
-    metrics = reconstruction_eval_metrics(renders, targets_cpu, cfg, prefix="eval")
-    if calibration is not None:
-        metrics.update(reconstruction_eval_metrics(raw_renders, targets_cpu, cfg, prefix="uncalibrated_eval"))
+    if stream_paper_eval:
+        train_eval = _stream_eval_split(
+            model,
+            targets,
+            frame_indices,
+            rays,
+            cfg,
+            prefix="eval",
+            include_lpips=False,
+        )
+        renders, targets_cpu, alphas = train_eval.renders, train_eval.targets, train_eval.alphas
+        metrics = dict(train_eval.metrics)
+        calibration = None
+    else:
+        renders, alphas = render_powerfoam_samples(
+            model,
+            frame_indices,
+            batch_size=powerfoam_eval_batch_size(cfg),
+            rays=rays,
+        )
+        renders = composite_fixed_background(renders, alphas, cfg["render"])
+        targets_cpu = targets.detach().cpu()
+        calibration = fit_eval_color_calibration(cfg["render"], renders, targets_cpu)
+        raw_renders = renders
+        renders = apply_eval_color_calibration(raw_renders, calibration)
+        metrics = reconstruction_eval_metrics(renders, targets_cpu, cfg, prefix="eval")
+        if calibration is not None:
+            metrics.update(reconstruction_eval_metrics(raw_renders, targets_cpu, cfg, prefix="uncalibrated_eval"))
     metrics.update(model.aux_metrics(frame_indices, targets, rays=rays))
     heldout_renders = None
     heldout_alphas = None
+    heldout_targets_cpu = None
     if heldout_targets is not None and heldout_frame_indices is not None:
-        heldout_renders, heldout_alphas = render_powerfoam_samples(
-            model,
-            heldout_frame_indices,
-            batch_size=powerfoam_eval_batch_size(cfg),
-            rays=heldout_rays,
-        )
-        heldout_renders = composite_fixed_background(heldout_renders, heldout_alphas, cfg["render"])
-        heldout_targets_cpu = heldout_targets.detach().cpu()
-        raw_heldout_renders = heldout_renders
-        heldout_renders = apply_eval_color_calibration(raw_heldout_renders, calibration)
-        metrics.update(reconstruction_eval_metrics(heldout_renders, heldout_targets_cpu, cfg, prefix="heldout_eval"))
-        if calibration is not None:
-            metrics.update(
-                reconstruction_eval_metrics(
-                    raw_heldout_renders,
-                    heldout_targets_cpu,
-                    cfg,
-                    prefix="uncalibrated_heldout_eval",
-                )
+        if stream_paper_eval:
+            heldout_eval = _stream_eval_split(
+                model,
+                heldout_targets,
+                heldout_frame_indices,
+                heldout_rays,
+                cfg,
+                prefix="heldout_eval",
+                include_lpips=int(step) == int(cfg["train"]["steps"]),
             )
+            heldout_renders = heldout_eval.renders
+            heldout_targets_cpu = heldout_eval.targets
+            heldout_alphas = heldout_eval.alphas
+            metrics.update(heldout_eval.metrics)
+        else:
+            heldout_renders, heldout_alphas = render_powerfoam_samples(
+                model,
+                heldout_frame_indices,
+                batch_size=powerfoam_eval_batch_size(cfg),
+                rays=heldout_rays,
+            )
+            heldout_renders = composite_fixed_background(heldout_renders, heldout_alphas, cfg["render"])
+            heldout_targets_cpu = heldout_targets.detach().cpu()
+            raw_heldout_renders = heldout_renders
+            heldout_renders = apply_eval_color_calibration(raw_heldout_renders, calibration)
+            metrics.update(reconstruction_eval_metrics(heldout_renders, heldout_targets_cpu, cfg, prefix="heldout_eval"))
+            if int(step) == int(cfg["train"]["steps"]):
+                metrics["heldout_eval_lpips"] = video_lpips(heldout_renders, heldout_targets_cpu)
+            if calibration is not None:
+                metrics.update(
+                    reconstruction_eval_metrics(
+                        raw_heldout_renders,
+                        heldout_targets_cpu,
+                        cfg,
+                        prefix="uncalibrated_heldout_eval",
+                    )
+                )
     metrics.update(model.parameter_drift_metrics())
     if calibration is not None:
         write_json(
@@ -97,7 +204,7 @@ def log_powerfoam_artifacts(
         fps=video_fps_from_config(cfg),
         save_videos=should_log_video(cfg, step),
         heldout_renders=heldout_renders,
-        heldout_targets=heldout_targets,
+        heldout_targets=heldout_targets_cpu,
         heldout_alphas=heldout_alphas,
     )
 
@@ -158,6 +265,9 @@ def log_powerfoam_artifacts(
             "aux_mean_contrib_ema",
             "aux_mean_point_error_ema",
             "aux_visible_fraction",
+            "aux_visible_cell_frame_events",
+            "aux_possible_cell_frame_events",
+            "aux_mean_visible_cells_per_frame",
             "aux_mean_normal_distance",
             "aux_mean_normal_norm",
             "aux_median_depth_valid_fraction",

@@ -41,6 +41,35 @@ and the routed strategic docs it names before proposing a new direction.
 
 ## Current Project State
 
+As of 2026-07-22, the submission evidence spine is also executable and
+fail-closed. Evidence schema v1 adds LPIPS, sampled peak device memory,
+serialized storage, synchronized phase timing, and trace/event/fallback
+diagnostics. `run_unified_paper_matrix.py` expands the frozen protocol/seed
+matrix and emits JSON, CSV, Markdown, LaTeX, and SVG artifacts. The verified
+same-representation `F=4..128` scaling row and synthetic theorem table are
+complete, and the manuscript is available as both Markdown and standalone
+LaTeX. The first progressive-512 seed-17 World Tubes/dynamic-3DGS comparison
+is complete, but the WorldFoam lane and remaining matrix rows are not; do not
+promote it to `BASELINES.md` yet. Additional Neural3D data acquisition and the
+controlled D-NeRF ingest are in progress. See
+`TODO/unified_paper_ablation_pipeline.md` and the 2026-07-22 loose note.
+
+As of 2026-07-19, the unified paper-ablation software spine is executable at
+full temporal coverage. `src/train/paper_training_types.py` and
+`src/train/paper_training_protocol.py` own the typed dataset/stage/sampler/cost
+contract; `research_experiments/paper_runner_suite/run_unified_paper_ablation.py`
+adapts it to World Tubes/STAR Metal, WorldFoam/PowerFoam Metal, and dynamic
+3DGS/fast-mac Metal. The staged 4-frame smoke and an all-300-frame Coffee
+Martini smoke both completed on MPS with exact K-frame raster accounting. The
+canonical smoke summary is
+`outputs/benchmarks/2026-07-19_unified_paper_ablation_smoke_v2/coffee_martini_protocol_smoke_2step/seed_17/run_summary.json`;
+the all-temporal proof is
+`outputs/benchmarks/2026-07-19_unified_paper_ablation_smoke/coffee_martini_full_300f_smoke_1step/seed_17/run_summary.json`.
+These are software/trainability proofs, not quality baselines. Next work is the
+configured 512-wide progressive/fixed/global-shuffle matrix, then breadth.
+Native 2704x2028 remains blocked on streamed K-frame targets/rays and streamed
+evaluation; see `TODO/unified_paper_ablation_pipeline.md`.
+
 As of 2026-07-19, the camera-gauge and ray-fiber mathematics is retained, not
 closed. The stopped lane is only open-ended theory/name proliferation without
 a measured compiler failure. Its primary method and paper surface is **World

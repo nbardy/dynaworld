@@ -12,6 +12,7 @@ from torch.nn import functional as F
 from tqdm import trange
 
 from external_paths import ensure_third_party_path
+from device_memory import DeviceMemorySampler
 from powerfoam_adjacency import build_csr_adjacency, csr_adjacency_stats
 from powerfoam_checkpoints import (
     maybe_save_best_powerfoam_checkpoint,
@@ -77,6 +78,7 @@ from powerfoam_objectives import (
 )
 from paper_training_protocol import (
     PaperCostTracker,
+    PaperPhaseTimer,
     SpacetimeEpochSampler,
     normalize_image_size,
     normalize_paper_stages,
@@ -98,7 +100,6 @@ from train_logging import (
     should_log_video,
     wandb_run_lifecycle,
 )
-from train_optim import optimizer_backward_step
 
 POWERFOAM_METAL_ROOT = ensure_third_party_path("powerfoam-metal")
 
@@ -1095,6 +1096,11 @@ class MetalPowerFoamVideo(nn.Module):
             "aux_mean_contrib_ema": float(self.contrib_ema[ema_frames].mean().detach().cpu()),
             "aux_mean_point_error_ema": float(self.point_error_ema[ema_frames].mean().detach().cpu()),
             "aux_visible_fraction": float(visible_tensor.mean().detach().cpu()),
+            "aux_visible_cell_frame_events": float(visible_tensor.sum().detach().cpu()),
+            "aux_possible_cell_frame_events": float(visible_tensor.numel()),
+            "aux_mean_visible_cells_per_frame": float(
+                visible_tensor.sum(dim=1).mean().detach().cpu()
+            ),
             "aux_mean_normal_distance": float(normal_distance_tensor.mean().detach().cpu()),
             "aux_mean_normal_norm": float(normal_norm_tensor.mean().detach().cpu()),
             "aux_median_depth_valid_fraction": float(valid_depth.to(dtype=aux.normal_distance.dtype).mean().detach().cpu()),
@@ -1494,9 +1500,14 @@ def run_training(config: dict[str, Any]) -> None:
             else None
         )
         paper_costs = PaperCostTracker()
+        paper_phase_timer = PaperPhaseTimer(device)
+        paper_memory_sampler = DeviceMemorySampler(device)
+        paper_memory_sampler.start()
+        paper_optimizer_elapsed_s = 0.0
         active_paper_stage = None
         progress = trange(1, int(cfg["train"]["steps"]) + 1, desc="powerfoam_metal")
         for step in progress:
+            paper_update_started_at = time.perf_counter()
             paper_stage = paper_stage_for_step(paper_stages, step - 1)
             if paper_enabled and active_paper_stage != paper_stage.label:
                 if int(model.contrib_ema.shape[1]) != paper_stage.primitive_count:
@@ -1534,6 +1545,7 @@ def run_training(config: dict[str, Any]) -> None:
             loss_weights = scheduled_loss_weights(cfg["losses"], step - 1, int(cfg["train"]["steps"]))
             need_normal_distance = loss_weights["normal_weight"] > 0.0
             need_normal_map = loss_weights["normal_map_weight"] > 0.0
+            paper_forward_started_at = paper_phase_timer.start("forward")
             if need_normal_distance or need_normal_map:
                 render_result = model(
                     frame_indices,
@@ -1607,12 +1619,20 @@ def run_training(config: dict[str, Any]) -> None:
                 + loss_weights["contribution_weight"] * contribution_loss
                 + loss_weights["interpenetration_weight"] * interpenetration_loss
             )
-            optimizer_backward_step(optimizer, loss)
+            paper_phase_timer.stop("forward", paper_forward_started_at)
+            optimizer.zero_grad(set_to_none=True)
+            paper_backward_started_at = paper_phase_timer.start("backward")
+            loss.backward()
+            paper_phase_timer.stop("backward", paper_backward_started_at)
+            paper_optimizer_started_at = paper_phase_timer.start("optimizer")
+            optimizer.step()
+            paper_phase_timer.stop("optimizer", paper_optimizer_started_at)
             paper_costs.record(
                 stage=paper_stage,
                 target_frames=int(frame_indices.numel()),
                 rasterized_frames=int(frame_indices.numel()),
             )
+            paper_optimizer_elapsed_s += time.perf_counter() - paper_update_started_at
 
             progress.set_postfix(loss=f"{float(loss.detach().cpu()):.4f}", l1=f"{float(l1.detach().cpu()):.4f}")
             if should_log_scalar(cfg, step):
@@ -1656,6 +1676,13 @@ def run_training(config: dict[str, Any]) -> None:
                 )
             logged_artifacts = False
             if should_log_image(cfg, step):
+                if step == int(cfg["train"]["steps"]):
+                    save_powerfoam_checkpoint(
+                        output_dir / "checkpoint_pre_final_eval.pt",
+                        model,
+                        cfg,
+                        step=step,
+                    )
                 metrics = log_artifacts(
                     model,
                     targets,
@@ -1705,6 +1732,15 @@ def run_training(config: dict[str, Any]) -> None:
                 )
 
         final_step = int(cfg["train"]["steps"])
+        paper_memory_sampler.stop()
+        final_checkpoint_path = output_dir / "checkpoint_final.pt"
+        save_powerfoam_checkpoint(
+            final_checkpoint_path,
+            model,
+            cfg,
+            step=final_step,
+            metrics=last_artifact_metrics if last_artifact_step == final_step else None,
+        )
         paper_summary = {
             "enabled": paper_enabled,
             "representation": "worldfoam",
@@ -1726,17 +1762,14 @@ def run_training(config: dict[str, Any]) -> None:
             "cost": paper_costs.snapshot(
                 model=model,
                 optimizer=optimizer,
-                elapsed_s=time.perf_counter() - start_time,
+                elapsed_s=paper_optimizer_elapsed_s,
+                memory=paper_memory_sampler.stats(),
+                serialized_checkpoint_bytes=final_checkpoint_path.stat().st_size,
             ).as_dict(),
+            "timing": paper_phase_timer.snapshot(train_wall_s=time.perf_counter() - start_time),
+            "wall_loop_elapsed_s": time.perf_counter() - start_time,
         }
         write_json(output_dir / "paper_protocol_summary.json", paper_summary)
-        save_powerfoam_checkpoint(
-            output_dir / "checkpoint_final.pt",
-            model,
-            cfg,
-            step=final_step,
-            metrics=last_artifact_metrics if last_artifact_step == final_step else None,
-        )
 
 
 __all__ = [

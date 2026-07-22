@@ -141,6 +141,7 @@ LOGGING_DEFAULTS = {
     "image_log_every": 25,
     "video_log_every": 50,
     "always_log_last_step": True,
+    "eval_media_max_frames": None,
     "output_dir": "outputs/powerfoam_metal/local_mac_powerfoam_metal_video_64_smoke",
     "wandb_enabled": False,
     "wandb_project": "dynaworld",
@@ -289,6 +290,10 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("train.frames_per_step must be positive")
     if int(cfg["train"]["steps"]) < 1:
         raise ValueError("train.steps must be positive")
+    if cfg["logging"]["eval_media_max_frames"] is not None:
+        cfg["logging"]["eval_media_max_frames"] = int(cfg["logging"]["eval_media_max_frames"])
+        if cfg["logging"]["eval_media_max_frames"] < 1:
+            raise ValueError("logging.eval_media_max_frames must be positive or null")
     if int(cfg["paper_protocol"]["same_time_count"]) < 1:
         raise ValueError("paper_protocol.same_time_count must be positive")
     if int(cfg["paper_protocol"]["local_time_count"]) < 0:
@@ -305,6 +310,8 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         )
         if stages[-1].image_size != image_size:
             raise ValueError("the final paper stage image size must match render.image_size")
+        if stages[-1].primitive_count != int(cfg["model"]["cells"]):
+            raise ValueError("the final paper stage primitive_count must match model.cells")
         if str(cfg["data"]["frame_source"]) != "multicam_val" and any(
             stage.image_size != image_size for stage in stages
         ):

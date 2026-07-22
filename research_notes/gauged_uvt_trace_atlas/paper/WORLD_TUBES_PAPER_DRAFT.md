@@ -1,12 +1,12 @@
 # World Tubes in Gauged Camera Space:
 # Sublinear Frame Scaling for Dynamic Gaussian Splatting
 
-Draft date: 2026-07-04
+Draft date: 2026-07-22
 
-Status: arXiv-style working draft. This document is intentionally written as a
-paper skeleton with enough method detail and experiment placeholders to become a
-LaTeX manuscript. It should not be treated as a final submission until the
-external baselines and public dataset experiments in
+Status: arXiv-style working manuscript with generated LaTeX. The certified
+correctness and same-representation scaling tables are populated; the public
+dataset matrix is still running. It should not be treated as a final submission
+until the public dataset experiments in
 `WORLD_TUBES_EXPERIMENT_PLAN.md` are run.
 
 ## Abstract
@@ -28,15 +28,18 @@ viewport-time footprint, conditional depth model, support certificate, and
 adjoint structure. Locally, a spacetime Gaussian pulled through a camera gauge
 and integrated over ray depth yields a UVT footprint by a Schur-complement
 fiber marginalization. Globally, camera gauges and event-certified domains make
-this construction invariant to depth coordinates, revolving cameras, finite
-exposure, and rolling shutter. The renderer evaluates frames as slices of the
+this construction invariant to depth coordinates on bounded camera-path chart
+segments, including the tested orbit segments, finite exposure, and rolling
+shutter. The renderer evaluates frames as slices of the
 compiled atlas, while training accumulates gradients through a compiled
 interval VJP.
 
 On our current STAR UVT / projective interval implementation, the compiled
-atlas shows sublinear world-side growth across frame count: an orbit benchmark
-keeps fixed payload growth at `1.0x` while per-frame replay grows `8.0x`
-(`0.125` payload-growth ratio); trained high-motion traces keep final
+atlas shows sublinear world-side growth across frame count: the rerun over
+`F={4,8,16,32,64,128}` keeps fixed payload growth at `1.0x` while per-frame
+replay grows `32.0x` (final payload ratio `0.03125`), with final fixed/replay
+CPU compile, forward, and backward ratios of `0.0477`, `0.181`, and `0.392`;
+trained high-motion traces keep final
 shared/per-frame interval-entry ratio below `0.149`, final trace-count ratio at
 `0.1`, final forward ratio below `0.266`, and final backward ratio below
 `0.094`. A broad real-video audit covers 10 source-distinct cases, 20
@@ -94,6 +97,16 @@ Each atlas domain stores active primitive traces, support bounds, local depth
 models, visibility/order certificates, fallback metadata, and differentiable
 state. Frames are slices of this atlas, and finite-exposure or rolling-shutter
 images are integrals or row-coupled samples through the same object.
+
+This construction is not merely a renamed STAR UVT renderer. STAR UVT supplies
+the spacetime Gaussian representation and the sparse Metal execution lineage;
+the gauged camera-ray formulation supplies the new compiler semantics. In
+particular, it pulls primitives through a moving camera program, marginalizes
+the ray-depth fiber without discarding conditional depth, and partitions
+support-overlap regions at certified depth-order events. A single raw interval
+can therefore fail under a large-motion order crossing while the corresponding
+visibility-stratified gauge domains remain replay-equivalent. This distinction
+is part of the method and must not be removed by implementation cleanup.
 
 Our contributions are:
 
@@ -240,6 +253,13 @@ can make traces rational or low-order over longer intervals than naive frame
 time. The domain still ends at real events: denominator zeros, behind-camera
 transitions, near/far crossings, support entering/leaving tiles, order swaps,
 and disocclusions.
+
+**Scope of the current implementation.** The compiler and experiments cover
+bounded, event-certified orbit segments inside one regular projective chart.
+They do not implement chart transitions for complete `360°` or repeated
+`720°` revolutions. We therefore make no full-orbit multi-gauge claim in this
+paper; such a transition system is future work rather than an untested part of
+the method.
 
 ### 3.3 Local Gaussian fiber pushforward
 
@@ -591,8 +611,12 @@ peak memory
 Current internal evidence:
 
 ```text
-orbit fixed payload growth: 1.0x vs per-frame replay 8.0x
-orbit payload-growth ratio: 0.125
+bounded-orbit F: 4, 8, 16, 32, 64, 128
+fixed payload growth: 1.0x vs per-frame replay 32.0x
+final fixed/replay payload ratio: 0.03125
+final fixed/replay CPU compile ratio: 0.0477
+final fixed/replay forward ratio: 0.181
+final fixed/replay backward ratio: 0.392
 trained interval-entry growth ratio: 0.148
 final trained trace-count ratio: 0.1
 final trained forward ratio: <= 0.266
@@ -743,6 +767,44 @@ Table 5: public dynamic-scene comparison
 Table 6: finite exposure / rolling shutter
 Table 7: limitations and fallback-heavy cases
 ```
+
+### 6.1 Certified correctness and theorem table
+
+All rows below are generated from verifier-accepted JSON artifacts. Their scope
+is bounded event-certified projective chart segments; they do not assert an
+unimplemented full `360/720` multi-chart transition.
+
+| Claim | Metric | Value | Acceptance |
+|---|---|---:|---:|
+| Fiber value is gauge invariant | max relative error | `3.50087e-13` | `<= 1e-10` |
+| Fiber gradient is gauge invariant | max gradient relative error | `2.32523e-12` | `<= 1e-9` |
+| Compiled atlas matches dense/replay image | max absolute image error | `0` | `<= 1e-5` |
+| Visibility crossing is repaired by stratification | max accepted quality error | `0` | `<= 1e-5` |
+| Finite exposure / rolling shutter forward parity | max Metal absolute error | `5.96046e-08` | `<= 1e-5` |
+| Finite exposure / rolling shutter gradient parity | max Metal gradient relative error | `6.37738e-07` | `<= 1e-5` |
+| Mixed fallback preserves gradients | max mixed gradient relative error | `7.40632e-07` | `<= 1e-5` |
+| Bounded-orbit chart reuses payload at `F=128` | fixed/replay trace ratio | `0.03125` | `< 0.25` |
+| Bounded-orbit compiled forward is faster at `F=128` | fixed/replay forward ratio | `0.181323` | `< 0.5` |
+| Bounded-orbit compiled backward is faster at `F=128` | fixed/replay backward ratio | `0.392235` | `< 0.5` |
+
+### 6.2 Exact same-representation frame scaling
+
+The accepted `F={4,8,16,32,64,128}` experiment compares per-frame STAR replay
+with the compiled projective atlas at identical representation settings. Fixed
+payload growth is `1.0x` while replay grows `32.0x`; at `F=128`, fixed/replay
+payload, compile, forward, and backward ratios are `0.03125`, `0.047677`,
+`0.181323`, and `0.392235`. This is the central causal systems result. Public
+quality rows test whether that compiler result survives real scene breadth;
+they are not substitutes for this same-representation comparison.
+
+### 6.3 Public comparison status
+
+The shared progressive/fixed/global-shuffle Coffee Martini protocols, evidence
+schema, and matrix generator are complete. The first progressive seed-17
+World Tubes and dynamic-3DGS comparison has run, but the matching WorldFoam row,
+repeat seeds, additional camera triplets, two additional Neural3D scenes, and a
+controlled D-NeRF posed-frame row remain mandatory. No partial public table is
+presented as a submission result.
 
 ## 7. Discussion and limitations
 

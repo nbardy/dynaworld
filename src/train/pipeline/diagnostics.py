@@ -16,6 +16,7 @@ The split between this file and `pipeline.losses` is by gradient flow:
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -27,6 +28,61 @@ from runtime_types import CameraState, GaussianSequence
 # every call. Centralizing the tuple here keeps init / fill / payload in
 # lockstep — adding a field is a one-line edit.
 DECODED_TEMPORAL_FIELDS: tuple[str, ...] = ("xyz", "scales", "opacities", "rgbs")
+
+
+@dataclass
+class ReconstructionEvalAccumulator:
+    """Exact full-set reconstruction metrics accumulated in bounded chunks."""
+
+    cfg: dict[str, Any]
+    prefix: str
+    absolute_error_sum: float = 0.0
+    squared_error_sum: float = 0.0
+    element_count: int = 0
+    ssim_sum: float = 0.0
+    image_count: int = 0
+
+    def update(self, prediction: torch.Tensor, target: torch.Tensor) -> None:
+        if prediction.shape != target.shape or prediction.ndim != 4:
+            raise ValueError(
+                "streamed reconstruction metrics require matching [N,C,H,W] tensors, got "
+                f"{tuple(prediction.shape)} and {tuple(target.shape)}"
+            )
+        prediction = prediction.float()
+        target = target.float()
+        delta = prediction - target
+        self.absolute_error_sum += float(delta.abs().sum().item())
+        self.squared_error_sum += float(delta.square().sum().item())
+        self.element_count += int(delta.numel())
+        window_size = min(
+            int(self.cfg["losses"]["ssim_window_size"]),
+            int(prediction.shape[-1]),
+            int(prediction.shape[-2]),
+        )
+        if window_size % 2 == 0:
+            window_size -= 1
+        window_size = max(window_size, 1)
+        values = ssim_per_image(
+            prediction,
+            target,
+            window_size=window_size,
+            c1=float(self.cfg["losses"]["ssim_c1"]),
+            c2=float(self.cfg["losses"]["ssim_c2"]),
+        )
+        self.ssim_sum += float(values.sum().item())
+        self.image_count += int(values.numel())
+
+    def metrics(self) -> dict[str, float]:
+        if self.element_count < 1 or self.image_count < 1:
+            raise ValueError("streamed reconstruction metrics require at least one image")
+        l1 = self.absolute_error_sum / float(self.element_count)
+        mse = self.squared_error_sum / float(self.element_count)
+        return {
+            f"{self.prefix}_l1": l1,
+            f"{self.prefix}_mse": mse,
+            f"{self.prefix}_psnr": -10.0 * math.log10(max(mse, 1.0e-12)),
+            f"{self.prefix}_ssim": self.ssim_sum / float(self.image_count),
+        }
 
 
 def reconstruction_l1_mse_metrics(

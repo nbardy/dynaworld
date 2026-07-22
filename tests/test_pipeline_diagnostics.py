@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from pipeline.diagnostics import (
+    ReconstructionEvalAccumulator,
     camera_state_payload,
     camera_state_summary_metrics,
     decoded_temporal_payload,
@@ -43,6 +44,18 @@ def test_reconstruction_eval_metrics_adds_psnr_ssim_and_clamps_window() -> None:
     assert metrics["heldout_eval_mse"] == pytest.approx(0.0)
     assert metrics["heldout_eval_psnr"] == pytest.approx(120.0)
     assert metrics["heldout_eval_ssim"] == pytest.approx(1.0)
+
+
+def test_streamed_reconstruction_metrics_match_full_clip() -> None:
+    generator = torch.Generator().manual_seed(17)
+    prediction = torch.rand(5, 3, 9, 7, generator=generator)
+    target = torch.rand(5, 3, 9, 7, generator=generator)
+    cfg = {"losses": {"ssim_window_size": 11, "ssim_c1": 0.0001, "ssim_c2": 0.0009}}
+    expected = reconstruction_eval_metrics(prediction, target, cfg, prefix="eval")
+    accumulator = ReconstructionEvalAccumulator(cfg, "eval")
+    accumulator.update(prediction[:2], target[:2])
+    accumulator.update(prediction[2:], target[2:])
+    assert accumulator.metrics() == pytest.approx(expected, abs=1.0e-6)
 
 
 def test_decoded_temporal_payload_from_sequence_matches_buffer_contract() -> None:

@@ -1,0 +1,19 @@
+{
+  "name": "world_tubes_coffee_triplet_breadth_matrix_v1",
+  "runs": [
+    {
+      "role": "camera_split_breadth",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_triplet_cam13_cam18_holdout_cam00_progressive_512_v1.jsonc",
+      "seeds": [17, 29, 43],
+      "world_tubes_backward_policy": "fast_exploration",
+      "worldfoam_initializer": "video"
+    },
+    {
+      "role": "camera_split_breadth",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_triplet_cam02_cam07_holdout_cam12_progressive_512_v1.jsonc",
+      "seeds": [17, 29, 43],
+      "world_tubes_backward_policy": "fast_exploration",
+      "worldfoam_initializer": "video"
+    }
+  ]
+}

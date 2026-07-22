@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - direct script execution
 
 ensure_train_path()
 from config_utils import load_config_file
+from paper_training_protocol import apply_paper_dataset_contract, resolve_paper_training_protocol
 from multicam_video_data import load_multicam_video_bundle
 from powerfoam_metal_config import resolve_config
 
@@ -240,6 +241,10 @@ def write_ascii_ply(path: Path, points: torch.Tensor, colors: torch.Tensor) -> N
 
 def build_feature_triangulation_cloud(args: argparse.Namespace) -> dict[str, Any]:
     cfg = resolve_config(load_config_file(args.config))
+    if args.paper_protocol is not None:
+        raw_protocol = load_config_file(args.paper_protocol)
+        protocol = resolve_paper_training_protocol(raw_protocol)
+        cfg["data"] = apply_paper_dataset_contract(cfg["data"], protocol)
     if str(cfg["data"]["frame_source"]) != "multicam_val":
         raise ValueError("Feature triangulation point cloud builder expects data.frame_source='multicam_val'.")
     render_size = int(args.target_size or cfg["render"]["render_size"])
@@ -357,6 +362,11 @@ def build_feature_triangulation_cloud(args: argparse.Namespace) -> dict[str, Any
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a train-camera-only feature-triangulated PLY init.")
     parser.add_argument("config", type=Path)
+    parser.add_argument(
+        "--paper-protocol",
+        type=Path,
+        help="Override only the dataset/camera split from a checked-in paper protocol.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--target-size", type=int, default=None)
     parser.add_argument("--frame-indices", type=str, default="0")

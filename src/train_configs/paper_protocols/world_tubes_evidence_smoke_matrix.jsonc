@@ -1,0 +1,11 @@
+{
+  "name": "world_tubes_evidence_smoke_matrix",
+  "runs": [
+    {
+      "role": "mechanical_smoke",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_protocol_smoke_2step.jsonc",
+      "seeds": [17],
+      "world_tubes_backward_policy": "fast_exploration"
+    }
+  ]
+}

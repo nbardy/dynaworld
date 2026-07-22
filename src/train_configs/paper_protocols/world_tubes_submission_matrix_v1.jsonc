@@ -1,0 +1,23 @@
+{
+  "name": "world_tubes_submission_matrix_v1",
+  "runs": [
+    {
+      "role": "primary_progressive",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_512_v1.jsonc",
+      "seeds": [17, 29, 43],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "role": "pixel_matched_control",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_fixed_512_pixel_matched_v1.jsonc",
+      "seeds": [17, 29, 43],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "role": "sampler_control",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_global_shuffle_512_v1.jsonc",
+      "seeds": [17],
+      "world_tubes_backward_policy": "fast_exploration"
+    }
+  ]
+}

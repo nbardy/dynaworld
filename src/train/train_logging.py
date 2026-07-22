@@ -27,6 +27,15 @@ def init_wandb_run(cfg: dict[str, Any]) -> Any | None:
         init_kwargs["mode"] = str(cfg["logging"]["wandb_mode"])
     if cfg["logging"].get("wandb_run_id") is not None:
         init_kwargs["id"] = str(cfg["logging"]["wandb_run_id"])
+    if cfg["logging"].get("wandb_resume") is not None:
+        init_kwargs["resume"] = str(cfg["logging"]["wandb_resume"])
+    if bool(cfg["logging"].get("wandb_disable_git", False)) or bool(
+        cfg["logging"].get("wandb_disable_code", False)
+    ):
+        init_kwargs["settings"] = wandb.Settings(
+            disable_git=bool(cfg["logging"].get("wandb_disable_git", False)),
+            disable_code=bool(cfg["logging"].get("wandb_disable_code", False)),
+        )
     return wandb.init(**init_kwargs)
 
 

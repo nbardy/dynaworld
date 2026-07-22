@@ -5,6 +5,23 @@ individual TODO files.
 
 ## Current Project State
 
+2026-07-22 submission update: evidence schema v1, the fail-closed matrix
+runner, exact `F=4..128` replay-versus-compiled scaling, the verified theorem
+table, and a standalone LaTeX manuscript are now present. The first
+progressive-512 seed-17 World Tubes/dynamic-3DGS comparison is complete;
+WorldFoam and the rest of the frozen matrix remain. Additional Neural3D ingest
+is running, and D-NeRF has a controlled download/validation path but still
+needs a posed-frame evaluation adapter. No browser, V-JEPA, feature-token,
+Softmax, direct-serial, new-gauge, native-WorldFoam, or external-SOTA work
+should preempt this chain.
+
+2026-07-19 unified paper-ablation runner: the shared typed sampler/stage/cost
+protocol and all three Metal-backed adapters are implemented. Staged and
+all-300-frame MPS smokes are green. The shortest remaining chain is recorded in
+`unified_paper_ablation_pipeline.md`: run the checked-in progressive/fixed/
+global-shuffle 512-wide rows, then add streamed targets/rays before any native
+2704x2028 claim. Do not add these smokes to `BASELINES.md` as quality rows.
+
 2026-07-18 STAR UVT implementation/benchmark closeout: thin trainer wrappers
 now share `train_cli.run_config_main(...)`, with focused CLI/registry tests
 passing. Fresh RGB STAR kernel evidence is recorded in
@@ -2761,11 +2778,13 @@ Use these as the default "what next" list unless the user says otherwise:
 
 ## TODO Map
 
-- Browser trainer next gate: reorganize the all-pairs source-view backward into
-  an image/tile-oriented pass before adding real windowed D-SSIM; then run a
-  matched `converge47` versus Adam plus fixed-cap recycle/spawn ablation at the
-  same splat count, samples, steps, and validation cadence. Do not promote the
-  current optimizer foundation from startup/finite-update evidence alone.
+- Browser trainer status: `multicam67` closes the calibrated-demo bridge by
+  reusing the canonical Coffee Martini train2/holdout1 contract, exporting
+  deterministic frame atlases plus SfM seeds, and training shared 3D primitives
+  from `cam04`/`cam09` while keeping `cam06` validation-only. Keep this lane
+  parked as a demo. Any next quality pass must first replace all-pairs backward
+  with an image/tile pass, add depth-aware composition and true windowed SSIM,
+  then beat the recorded train and heldout traces in a matched ablation.
 
 - `trainer_landscape_unification.md`: trainer duplication, shared composition,
   validation media, and the mixed trainer/scheduler direction.

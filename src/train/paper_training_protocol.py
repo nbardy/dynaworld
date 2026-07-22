@@ -1,13 +1,92 @@
 from __future__ import annotations
 
 import random
+import io
+import time
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 import torch
 from torch.nn import functional as F
 
-from paper_training_types import ImageSize, PaperCostSnapshot, PaperStage, SpacetimeBatch, SpacetimeSample
+from paper_training_types import (
+    ImageSize,
+    PaperCostSnapshot,
+    PaperDatasetContract,
+    PaperStage,
+    PaperTrainingProtocol,
+    SpacetimeBatch,
+    SpacetimeSample,
+)
+
+
+def synchronize_device(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.synchronize()
+
+
+def serialized_state_dict_bytes(model: torch.nn.Module) -> int:
+    buffer = io.BytesIO()
+    torch.save(model.state_dict(), buffer)
+    return int(buffer.tell())
+
+
+class PaperPhaseTimer:
+    """Device-synchronized cold-forward, steady-forward, backward, and optimizer timing."""
+
+    def __init__(self, device: torch.device) -> None:
+        self.device = device
+        self.totals = {"forward": 0.0, "backward": 0.0, "optimizer": 0.0}
+        self.counts = {"forward": 0, "backward": 0, "optimizer": 0}
+        self.cold_compile_forward_s: float | None = None
+
+    @contextmanager
+    def measure(self, phase: str):
+        started_at = self.start(phase)
+        yield
+        self.stop(phase, started_at)
+
+    def start(self, phase: str) -> float:
+        if phase not in self.totals:
+            raise ValueError(f"unsupported paper timing phase: {phase}")
+        synchronize_device(self.device)
+        return time.perf_counter()
+
+    def stop(self, phase: str, started_at: float) -> float:
+        synchronize_device(self.device)
+        elapsed = time.perf_counter() - started_at
+        if phase == "forward" and self.cold_compile_forward_s is None:
+            self.cold_compile_forward_s = elapsed
+        else:
+            self.totals[phase] += elapsed
+            self.counts[phase] += 1
+        return elapsed
+
+    def snapshot(self, *, train_wall_s: float) -> dict[str, Any]:
+        cold = 0.0 if self.cold_compile_forward_s is None else self.cold_compile_forward_s
+        return {
+            "definition": "device-synchronized; cold_compile_forward is the first forward including lazy kernel compilation",
+            "cold_compile_forward_s": cold,
+            "steady_forward_s": self.totals["forward"],
+            "steady_forward_calls": self.counts["forward"],
+            "backward_s": self.totals["backward"],
+            "backward_calls": self.counts["backward"],
+            "optimizer_s": self.totals["optimizer"],
+            "optimizer_calls": self.counts["optimizer"],
+            "train_wall_s": float(train_wall_s),
+            "steady_forward_mean_s": (
+                self.totals["forward"] / self.counts["forward"] if self.counts["forward"] else 0.0
+            ),
+            "backward_mean_s": (
+                self.totals["backward"] / self.counts["backward"] if self.counts["backward"] else 0.0
+            ),
+            "optimizer_mean_s": (
+                self.totals["optimizer"] / self.counts["optimizer"] if self.counts["optimizer"] else 0.0
+            ),
+        }
 
 
 def normalize_image_size(value: Any, *, name: str = "image size") -> ImageSize:
@@ -54,8 +133,18 @@ def normalize_paper_stages(
         if not isinstance(raw, Mapping):
             raise ValueError("paper_protocol.stages entries must be objects")
         end_step = int(raw["until_step"])
+        raw_image_size = raw.get("image_size")
+        if raw_image_size is None:
+            if raw.get("height") is None and raw.get("width") is None:
+                raw_image_size = default_image_size
+            elif raw.get("height") is not None and raw.get("width") is not None:
+                raw_image_size = {"height": raw["height"], "width": raw["width"]}
+            else:
+                raise ValueError(
+                    f"paper_protocol.stages[{index}] must provide both height and width"
+                )
         image_size = normalize_image_size(
-            raw.get("image_size", {"height": raw.get("height"), "width": raw.get("width")}),
+            raw_image_size,
             name=f"paper_protocol.stages[{index}].image_size",
         )
         stages.append(
@@ -88,6 +177,73 @@ def paper_stage_for_step(stages: tuple[PaperStage, ...], step: int) -> PaperStag
         if stage.contains(step):
             return stage
     raise IndexError(f"step {step} is outside the paper stage schedule")
+
+
+def resolve_paper_training_protocol(raw: Mapping[str, Any]) -> PaperTrainingProtocol:
+    if not bool(raw.get("enabled", False)):
+        raise ValueError("paper protocol requires enabled=true")
+    dataset_raw = raw.get("dataset")
+    if not isinstance(dataset_raw, Mapping):
+        raise ValueError("paper protocol dataset must be an object")
+    raw_stages = raw.get("stages")
+    if not isinstance(raw_stages, list) or not raw_stages:
+        raise ValueError("paper protocol stages must be a non-empty list")
+    final_raw = raw_stages[-1]
+    if not isinstance(final_raw, Mapping):
+        raise ValueError("paper protocol stage entries must be objects")
+    final_image_size = normalize_image_size(final_raw.get("image_size"), name="final paper image size")
+    final_primitive_count = int(final_raw["primitive_count"])
+    default_frames_per_step = int(raw.get("frames_per_step", final_raw.get("frames_per_step", 1)))
+    steps = int(raw["steps"])
+    stages = normalize_paper_stages(
+        raw_stages,
+        total_steps=steps,
+        default_image_size=final_image_size,
+        default_primitive_count=final_primitive_count,
+        default_frames_per_step=default_frames_per_step,
+    )
+    return PaperTrainingProtocol(
+        name=str(raw["name"]),
+        dataset=PaperDatasetContract(
+            manifest=str(dataset_raw["manifest"]),
+            sample_id=str(dataset_raw["sample_id"]),
+            train_cameras=tuple(str(value) for value in dataset_raw["train_cameras"]),
+            heldout_cameras=tuple(str(value) for value in dataset_raw["heldout_cameras"]),
+            frame_count=int(dataset_raw["frame_count"]),
+            fps=float(dataset_raw["fps"]),
+        ),
+        steps=steps,
+        max_train_seconds=float(raw["max_train_seconds"]),
+        same_time_count=int(raw.get("same_time_count", 1)),
+        local_time_count=int(raw.get("local_time_count", 0)),
+        local_time_radius=int(raw.get("local_time_radius", 0)),
+        sampler_seed_offset=int(raw.get("sampler_seed_offset", 7001)),
+        stages=stages,
+    )
+
+
+def apply_paper_dataset_contract(
+    data_cfg: Mapping[str, Any],
+    protocol: Mapping[str, Any] | PaperTrainingProtocol | None,
+) -> dict[str, Any]:
+    resolved = dict(data_cfg)
+    if protocol is None:
+        return resolved
+    paper = protocol if isinstance(protocol, PaperTrainingProtocol) else resolve_paper_training_protocol(protocol)
+    if len(paper.dataset.heldout_cameras) != 1:
+        raise ValueError("the current multicam loader requires exactly one heldout camera")
+    resolved.update(
+        {
+            "frame_source": "multicam_val",
+            "max_frames": paper.dataset.frame_count,
+            "multicam_manifest": paper.dataset.manifest,
+            "multicam_sample_id": paper.dataset.sample_id,
+            "multicam_train_cameras": list(paper.dataset.train_cameras),
+            "multicam_heldout_camera": paper.dataset.heldout_cameras[0],
+            "multicam_anchor_camera": paper.dataset.train_cameras[0],
+        }
+    )
+    return resolved
 
 
 class SpacetimeEpochSampler:
@@ -271,8 +427,11 @@ class PaperCostTracker:
         model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         elapsed_s: float,
+        memory: Mapping[str, int] | None = None,
+        serialized_checkpoint_bytes: int | None = None,
     ) -> PaperCostSnapshot:
         parameters = tuple(model.parameters())
+        memory_values = memory or {}
         return PaperCostSnapshot(
             optimizer_steps=self.optimizer_steps,
             target_frames=self.target_frames,
@@ -283,17 +442,33 @@ class PaperCostTracker:
             trainable_parameter_count=sum(parameter.numel() for parameter in parameters if parameter.requires_grad),
             parameter_bytes=sum(tensor_bytes(parameter) for parameter in parameters),
             optimizer_state_bytes=optimizer_state_bytes(optimizer),
+            serialized_checkpoint_bytes=(
+                serialized_state_dict_bytes(model)
+                if serialized_checkpoint_bytes is None
+                else int(serialized_checkpoint_bytes)
+            ),
+            sampled_peak_current_allocated_bytes=int(
+                memory_values.get("sampled_peak_current_allocated_bytes", 0)
+            ),
+            sampled_peak_driver_allocated_bytes=int(
+                memory_values.get("sampled_peak_driver_allocated_bytes", 0)
+            ),
             elapsed_s=float(elapsed_s),
         )
 
 
 __all__ = [
+    "apply_paper_dataset_contract",
     "PaperCostTracker",
+    "PaperPhaseTimer",
     "SpacetimeEpochSampler",
     "normalize_image_size",
     "normalize_paper_stages",
     "paper_stage_for_step",
+    "resolve_paper_training_protocol",
     "resize_ray_grids",
     "resize_video_frames",
     "scale_intrinsics",
+    "serialized_state_dict_bytes",
+    "synchronize_device",
 ]

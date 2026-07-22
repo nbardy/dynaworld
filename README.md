@@ -139,6 +139,15 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
   at 128px/16f/40 steps/1024 primitives with offline W&B media and a promotable
   deterministic World Tubes policy. World Tubes leads heldout PSNR on this
   one scene/split; broader camera-triplet and scene coverage remains.
+- [x] Unified paper-ablation training now shares one typed space-time sampler,
+  progressive-stage schedule, aspect-preserving image contract, and cost
+  ledger across World Tubes/STAR Metal, WorldFoam/PowerFoam Metal, and dynamic
+  3DGS/fast-mac Metal. A staged 4-frame MPS smoke and an all-300-frame MPS
+  smoke are green; the 600-step progressive and pixel-matched 300-step quality
+  rows are configured but not yet benchmark results.
+- [ ] Run the checked-in 512-wide full-temporal quality rows across seeds and
+  camera/scene breadth. Native 2704x2028 training remains a separate streaming
+  data/ray implementation task and is not claimed by the eager 512-wide path.
 - [x] Gauged UVT theory iteration is closed into the World Tubes mainline.
   WorldFoam remains a parked retained-depth challenger with explicit reopen
   gates; future work is breadth or measured implementation bottlenecks, not
@@ -1122,7 +1131,15 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
   GPU readback, and startup/reset guards. The WebGPU pipeline compiles and boots
   cleanly on the Apple adapter, but the measured Adam/density probes do not yet
   beat `converge47`; treat this as the paper-backed optimizer/density foundation,
-  not a convergence or heldout-view promotion.
+  not a convergence or heldout-view promotion. `multicam67` replaces the old
+  source-view crop with a thin adapter over the canonical Coffee Martini paper
+  contract: `cam04`/`cam09` train, `cam06` validation-only, eight exact times
+  spanning all 300 frames at `96x72`, and 768 SfM XYZRGB seeds. Shared 3D
+  primitives now project through the calibrated cameras in WebGPU, all three
+  views loop together, and train versus heldout loss/PSNR/global-SSIM-proxy are
+  reported separately. A 132-step World Tubes-style smoke improved train loss
+  `0.182629 -> 0.173302` and heldout loss `0.192498 -> 0.185356`; this remains a
+  browser demo result, not native World Tubes parity or a baseline row.
 
 ### Pretraining Setup
 

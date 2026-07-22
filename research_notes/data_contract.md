@@ -25,6 +25,14 @@ These two paths are compatible at the training-scheduler level, but they are
 not one mixed trainer yet. The remaining bridge is a sampler/trainer that takes
 both manifests and alternates same-view and novel-view losses in one run.
 
+The browser SPA does not define a third data path. Its `multicam67` demo bundle
+is a thin serialization adapter in `src/train/export_dynaworld_browser_bundle.py`:
+it calls `load_multicam_video_bundle`, writes the loader's exact sampled frames
+as per-camera PNG atlases, serializes normalized intrinsics and anchor-relative
+poses, and marks heldout cameras `validation_only`. The browser may optimize on
+serialized train views only; changing that split requires changing the
+canonical manifest/loader contract first.
+
 ## Supported Training Tasks
 
 ### Same Angle
@@ -155,6 +163,49 @@ For `camera_json`, rows include a sequence directory with a camera JSON file.
 Multicam rows must include source and target camera/video fields. The richer
 train2-holdout1 records also include `train_cameras`, `heldout_cameras`,
 `anchor_camera`, and `condition_camera`.
+
+## Unified Paper Space-Time Contract
+
+The Coffee Martini full-temporal row lives at
+`src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl`.
+It declares 300 synchronized frames at 30 fps from time zero, trains on
+`cam04`/`cam09`, and holds out `cam06`. Runtime image sizes are
+aspect-preserving `[height, width]`; a 4:3 source is never silently square
+warped.
+
+`SpacetimeEpochSampler` defines one epoch as every train `(camera, frame)` pair
+exactly once. It can group same-time cameras and nearby times without changing
+the uniform epoch measure. Progressive stages may change image size, active
+primitive count, K frames per step, and learning-rate multiplier. Every lane
+must report target frames/pixels separately from rasterized frames/pixels.
+
+Paper evidence schema v1 additionally requires heldout LPIPS, sampled peak
+device memory, serialized checkpoint bytes, synchronized phase timing, and
+representation-specific diagnostics. Neural3D breadth rows use this same
+synchronized multicamera contract. Their WorldFoam initializer must be
+explicitly scene-specific or labelled `video`; Coffee Martini geometry may not
+be inherited implicitly.
+
+## D-NeRF Controlled Posed-Frame Contract
+
+D-NeRF is not a synchronized multicamera video bundle. Its train/val/test JSON
+files contain posed monocular frames sampled at different normalized times.
+`src/dataset_pipeline/dnerf.py` downloads the official mirrored archive and
+validates the controlled `bouncingballs` and `mutant` subsets: every image,
+time, 4x4 transform, focal field, split count, and image size is inventoried.
+
+Do not convert D-NeRF into a fake Neural3D row by treating its asynchronous
+frames as simultaneous cameras. A paper result needs a separate posed-frame
+adapter that preserves each frame's `(camera, time)` pair and labels its split
+semantics. Until that adapter exists, D-NeRF ingestion is complete but D-NeRF
+training/evaluation breadth is not.
+
+The current eager bundle path is verified for all 300 frames at low resolution
+and is the implementation behind the configured 512-wide paper rows. It is not
+a native-resolution streaming contract: eager 2704x2028 images plus per-sample
+ray grids are too large. Native-resolution promotion requires on-demand K-frame
+decode, on-demand calibrated ray grids, bounded caching, and streamed final
+evaluation.
 
 ## Static and Dynamic Data
 
