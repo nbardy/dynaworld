@@ -68,6 +68,7 @@ def build_table(paths: dict[str, Path] = DEFAULT_REPORTS) -> dict[str, Any]:
     exposure_backward = reports["exposure_backward"]["summary"]
     mixed = reports["mixed_fallback_backward"]["summary"]
     scaling = reports["scaling"]["summary"]
+    visibility_rows = {row["case_id"]: row for row in reports["visibility"]["rows"]}
     rows = [
         {
             "claim": "Fiber value is gauge invariant",
@@ -91,13 +92,16 @@ def build_table(paths: dict[str, Path] = DEFAULT_REPORTS) -> dict[str, Any]:
             "source": "decisive_demo",
         },
         {
+            "claim": "Unstratified interval exposes an order-crossing failure",
+            "metric": "raw crossing quality error",
+            "value": visibility_rows["crossing_raw_interval"]["quality_error"],
+            "acceptance": "> 1e-5 (expected failure)",
+            "source": "visibility",
+        },
+        {
             "claim": "Visibility crossing is repaired by stratification",
-            "metric": "max accepted quality error",
-            "value": max(
-                float(row["quality_error"])
-                for row in reports["visibility"]["rows"]
-                if row["case_id"] in {"clean_orbit_ordered", "crossing_stratified", "forced_fallback_ambiguous"}
-            ),
+            "metric": "stratified crossing quality error",
+            "value": visibility_rows["crossing_stratified"]["quality_error"],
             "acceptance": "<= 1e-5",
             "source": "visibility",
         },

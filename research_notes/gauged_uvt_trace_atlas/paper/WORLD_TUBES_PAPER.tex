@@ -92,14 +92,12 @@
 \IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
 \urlstyle{same}
 \hypersetup{
-  pdftitle={World Tubes in Gauged Camera Space: Sublinear Frame Scaling for Dynamic Gaussian Splatting},
-  pdfauthor={Anonymous},
+  pdftitle={World Tubes in Gauged Camera Space},
   hidelinks,
   pdfcreator={LaTeX via pandoc}}
 
-\title{World Tubes in Gauged Camera Space: Sublinear Frame Scaling for
-Dynamic Gaussian Splatting}
-\author{Anonymous}
+\title{World Tubes in Gauged Camera Space}
+\author{}
 \date{}
 
 \begin{document}
@@ -1099,8 +1097,11 @@ Fiber gradient is gauge invariant & max gradient relative error &
 \texttt{2.32523e-12} & \texttt{\textless{}=\ 1e-9} \\
 Compiled atlas matches dense/replay image & max absolute image error &
 \texttt{0} & \texttt{\textless{}=\ 1e-5} \\
-Visibility crossing is repaired by stratification & max accepted quality
-error & \texttt{0} & \texttt{\textless{}=\ 1e-5} \\
+Unstratified interval exposes an order-crossing failure & raw crossing
+quality error & \texttt{0.186742} & \texttt{\textgreater{}\ 1e-5}
+(expected failure) \\
+Visibility crossing is repaired by stratification & stratified crossing
+quality error & \texttt{0} & \texttt{\textless{}=\ 1e-5} \\
 Finite exposure / rolling shutter forward parity & max Metal absolute
 error & \texttt{5.96046e-08} & \texttt{\textless{}=\ 1e-5} \\
 Finite exposure / rolling shutter gradient parity & max Metal gradient
