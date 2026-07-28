@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en" data-parity-state="running">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>DynaWorld Tiled WebGPU Parity</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			background: #101418;
+			color: #e8edf2;
+			letter-spacing: 0;
+		}
+		* { box-sizing: border-box; }
+		body { margin: 0; min-height: 100vh; background: #101418; }
+		header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 24px;
+			padding: 24px 28px;
+			border-bottom: 1px solid #35404a;
+			background: #171d23;
+		}
+		h1 { margin: 0; font: 700 20px/1.2 system-ui, sans-serif; letter-spacing: 0; }
+		#parityStatus {
+			min-width: 96px;
+			padding: 10px 16px;
+			border: 1px solid #d7ad55;
+			border-radius: 6px;
+			color: #f4cc77;
+			text-align: center;
+			font-weight: 800;
+		}
+		[data-parity-state="pass"] #parityStatus {
+			border-color: #57c9a6;
+			color: #70dbb9;
+			background: #123129;
+		}
+		[data-parity-state="fail"] #parityStatus {
+			border-color: #ed746b;
+			color: #ff9188;
+			background: #351b1b;
+		}
+		main { width: min(1120px, 100%); margin: 0 auto; padding: 28px; }
+		#parityDetail {
+			min-height: 24px;
+			margin: 0 0 22px;
+			color: #aeb9c4;
+			font: 500 15px/1.6 system-ui, sans-serif;
+		}
+		.summary {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			border: 1px solid #35404a;
+			border-radius: 6px;
+			overflow: hidden;
+			background: #171d23;
+		}
+		.summary section { min-width: 0; padding: 18px; border-right: 1px solid #35404a; }
+		.summary section:last-child { border-right: 0; }
+		.summary h2 {
+			margin: 0 0 9px;
+			color: #91a0ad;
+			font: 600 12px/1.2 system-ui, sans-serif;
+			text-transform: uppercase;
+			letter-spacing: 0;
+		}
+		.summary p { margin: 0; overflow-wrap: anywhere; color: #f0f4f7; }
+		pre {
+			margin: 24px 0 0;
+			padding: 20px;
+			max-height: 70vh;
+			overflow: auto;
+			border: 1px solid #35404a;
+			border-radius: 6px;
+			background: #0b0f12;
+			color: #cbd6df;
+			font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			white-space: pre-wrap;
+			overflow-wrap: anywhere;
+		}
+		@media (max-width: 680px) {
+			header { padding: 18px; }
+			main { padding: 18px; }
+			.summary { grid-template-columns: 1fr; }
+			.summary section { border-right: 0; border-bottom: 1px solid #35404a; }
+			.summary section:last-child { border-bottom: 0; }
+		}
+	</style>
+</head>
+<body>
+	<header>
+		<h1>Tiled WebGPU Parity</h1>
+		<strong id="parityStatus">RUNNING</strong>
+	</header>
+	<main>
+		<p id="parityDetail">Starting active GPU diagnostic.</p>
+		<div class="summary">
+			<section>
+				<h2>Forward Raster</h2>
+				<p id="rasterSummary">Pending</p>
+			</section>
+			<section>
+				<h2>Objective</h2>
+				<p id="objectiveSummary">Pending</p>
+			</section>
+			<section>
+				<h2>Gradients</h2>
+				<p id="gradientSummary">Pending</p>
+			</section>
+		</div>
+		<pre id="parityJson">{"contract":"dynaworld_tiled_webgpu_parity/v1","status":"running"}</pre>
+	</main>
+	<script type="module" src="./tiledParityHarness.js"></script>
+</body>
+</html>

@@ -288,6 +288,21 @@ As of 2026-05-28:
   real renderer/init parity:
   shared-backward/tape accumulation, tile/depth/alpha compositing,
   camera/heldout data, and an exported-training bundle contract.
+- The 2026-07-28 browser pass closes those old renderer-contract TODOs without
+  promoting a new paper lane. The default path is now a calibrated full-frame
+  tiled raster with depth-aware source-over composition, shared backward, Adam,
+  fixed-capacity split/recycle, and Gaussian-window DSSIM training. The active
+  Apple WebGPU parity fixture and CPU image-gradient finite differences pass;
+  full-image train/heldout MSE, MAE, PSNR, and SSIM run in a separate validation
+  worker, and per-family RMS deltas make optimizer stalls visible. The
+  exporter now fails closed on seed provenance and coordinate-frame ambiguity.
+  The first train-camera-only pycolmap run yielded 815 bounded points, coherent
+  but sparse and not a drop-in 4,096-seed replacement. Immediate browser TODOs
+  are narrower: run matched 768-verified-plus-growth versus legacy-init and
+  fixed-topology/density ablations, add phase timing and LPIPS, then require
+  multi-scene/multi-seed evidence before a `BASELINES.md` row. Do not implement
+  a parallel WebGPU SfM/calibration stack or expose the incomplete
+  STAR/DynamicGs probes as production backends.
 - STAR UVT support/binner binfix lives in
   `../agent_notes/loose_notes/2026-05-26_18-52-25_star_uvt_binner_binfix_train.md`;
   current artifacts are

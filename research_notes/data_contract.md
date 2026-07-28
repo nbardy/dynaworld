@@ -25,13 +25,30 @@ These two paths are compatible at the training-scheduler level, but they are
 not one mixed trainer yet. The remaining bridge is a sampler/trainer that takes
 both manifests and alternates same-view and novel-view losses in one run.
 
-The browser SPA does not define a third data path. Its `multicam67` demo bundle
+The browser SPA does not define a third data path. Its current
+`coffee_martini_train17_holdout1` bundle
 is a thin serialization adapter in `src/train/export_dynaworld_browser_bundle.py`:
 it calls `load_multicam_video_bundle`, writes the loader's exact sampled frames
 as per-camera PNG atlases, serializes normalized intrinsics and anchor-relative
 poses, and marks heldout cameras `validation_only`. The browser may optimize on
 serialized train views only; changing that split requires changing the
 canonical manifest/loader contract first.
+
+Browser initialization is part of this split contract. A verified seed report
+must name its construction method, every input camera, whether train-only use
+was verified, and the coordinate frame of the points. The exporter rejects any
+input-camera overlap with the canonical heldout set and any camera outside the
+canonical train set. `world` points are transformed once into the manifest's
+anchor frame; `model` or the explicit `<anchor>_opencv` frame is already
+anchor-relative and must not be transformed again.
+
+The checked-in `coffee_martini_train17_holdout1` bundle uses an older external
+Ex4DGS point cloud whose original camera inputs are not recorded. Filtering
+that cloud to points visible from train cameras does not prove train-only
+construction, so its provenance is explicitly `unverified`. The preferred
+replacement is the existing offline known-pose pycolmap triangulator using
+only manifest train cameras. The browser itself must not introduce a parallel
+camera-calibration, split, or WebGPU SfM contract.
 
 ## Supported Training Tasks
 

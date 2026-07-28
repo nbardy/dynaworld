@@ -4909,6 +4909,37 @@ Current decision:
   image-space backward, depth-aware composition, and true windowed SSIM under a
   matched train/heldout ablation.
 
+## Browser Full-Frame Baseline Gates (2026-07-28)
+
+- Scope remains demo/prototype. No browser shader was added to the Python
+  trainer hierarchy, and the bounded STAR/DynamicGs probes remain non-production
+  diagnostics rather than selectable representation claims.
+- Default `tiled3d` now trains one complete calibrated camera/time image with
+  opacity-aware ellipse bins, per-tile depth sorting, source-over checkpoints,
+  pair-owned shared backward, Adam, and fixed-capacity split/recycle.
+- The objective is `0.8 L1 + 0.2 (1 - SSIM)` with reflected 11x11 Gaussian
+  sigma-1.5 weights. CPU value/image-gradient finite differences pass.
+- The live Apple WebGPU parity harness passes for rendered RGB (`8.20e-8`
+  maximum error), alpha (`2.16e-7`), objective terms (below `9e-8`), zero tile
+  overflow, and seven active gradient families (relative error below `6e-5`).
+- A separate worker now evaluates all pixels for cam04/cam09 and heldout cam06
+  over all 16 times. It reports MSE, MAE, PSNR, channelwise Gaussian SSIM, and
+  per-family RMS deltas. Measured 4,096-splat passes ranged from 1.4 to 4.5
+  seconds while optimizer submission continued, so automatic validation is
+  every 8,192 steps.
+- Seed export now fails closed on provenance, heldout overlap, coordinate-frame
+  ambiguity, and insufficient point count. The known-pose pycolmap builder
+  emits a directly consumable train-camera report. An optional nearest-camera
+  imported pair list preserves exhaustive matching by default while reducing
+  the browser recipe from 136 to 38 SIFT pairs.
+- The real train17/cam06-heldout 1024px run produced 815 bounded points from
+  71,890 keypoints and 38 verified pairs in about 2.5 minutes. This is valid
+  train-only sparse geometry but not a drop-in replacement for the current
+  4,096-point external seed. A looser all-pairs run was stopped after more than
+  ten minutes in matching. Next run a matched 768 verified-seed-plus-growth
+  ablation or use a stronger matcher; do not duplicate points or promote a
+  `BASELINES.md` row.
+
 ## Adding A New Experiment
 
 For every experiment worth resuming later:

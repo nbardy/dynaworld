@@ -474,6 +474,13 @@ export async function loadCalibratedMulticamDataset() {
 		seedPoints: new Float32Array(bundle.seed_points_xyzrgb.flat()),
 		seedPointCount: bundle.seed_points_xyzrgb.length,
 		seedSource: bundle.seed_source,
+		seedProvenance: bundle.seed_provenance ?? {
+			method: "legacy_external_unverified",
+			source_report: null,
+			source_path: bundle.seed_source,
+			input_cameras: [],
+			train_only_verified: false,
+		},
 		datasetContract: bundle.dataset_contract,
 		frameIndices: bundle.frame_indices,
 		...samples,

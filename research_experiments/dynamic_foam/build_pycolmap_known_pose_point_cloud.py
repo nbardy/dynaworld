@@ -62,6 +62,22 @@ def resolve_geometry_config(config: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
+def seed_provenance_for_bundle(bundle: Any) -> dict[str, Any]:
+    input_cameras = [str(camera) for camera in bundle.train_camera_names]
+    heldout_cameras = {str(camera) for camera in (bundle.heldout_camera_names or [])}
+    overlap = sorted(set(input_cameras) & heldout_cameras)
+    if overlap:
+        raise ValueError(f"Known-pose seed cameras overlap heldout cameras: {overlap}.")
+    if not input_cameras:
+        raise ValueError("Known-pose seed construction requires at least one train camera.")
+    return {
+        "method": "known_pose_colmap_triangulation",
+        "input_cameras": input_cameras,
+        "train_only_verified": True,
+        "coordinate_frame": "model",
+    }
+
+
 def write_rgb_image(path: Path, image: torch.Tensor) -> None:
     rgb = (image.detach().cpu().permute(1, 2, 0).clamp(0.0, 1.0).numpy() * 255.0).round().astype(np.uint8)
     Image.fromarray(rgb).save(path)
@@ -345,6 +361,48 @@ def write_exhaustive_pairs(path: Path, image_names: list[str]) -> None:
                 fh.write(f"{name0} {name1}\n")
 
 
+def known_pose_neighbor_pairs(
+    bundle: Any,
+    image_records: dict[str, tuple[int, int]],
+    neighbor_count: int,
+) -> list[tuple[str, str]]:
+    if neighbor_count < 1:
+        raise ValueError("Known-pose neighbor pairing requires neighbor_count >= 1.")
+    names_by_frame: dict[int, list[str]] = {}
+    camera_centers: dict[str, torch.Tensor] = {}
+    for image_name, (view_index, frame_index) in image_records.items():
+        names_by_frame.setdefault(int(frame_index), []).append(image_name)
+        c2w = torch.linalg.inv(bundle.train_w2c[view_index, frame_index].detach().cpu())
+        camera_centers[image_name] = c2w[:3, 3]
+
+    pairs: set[tuple[str, str]] = set()
+    for image_names in names_by_frame.values():
+        if len(image_names) < 2:
+            continue
+        for image_name in image_names:
+            center = camera_centers[image_name]
+            candidates = sorted(
+                (
+                    (float(torch.linalg.vector_norm(center - camera_centers[other])), other)
+                    for other in image_names
+                    if other != image_name
+                ),
+                key=lambda item: (item[0], item[1]),
+            )
+            for _distance, other in candidates[: min(neighbor_count, len(candidates))]:
+                pairs.add(tuple(sorted((image_name, other))))
+    if not pairs:
+        raise ValueError("Known-pose neighbor pairing did not produce any image pairs.")
+    return sorted(pairs)
+
+
+def write_image_pairs(path: Path, pairs: list[tuple[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for name0, name1 in pairs:
+            fh.write(f"{name0} {name1}\n")
+
+
 def run_hloc_import_backend(
     *,
     database_path: Path,
@@ -546,6 +604,8 @@ def run_colmap_cli_backend(
 def build_pycolmap_cloud(args: argparse.Namespace) -> dict[str, Any]:
     require_pycolmap()
     require_onnx_opt_in(args)
+    if int(args.pairing_neighbors) < 0:
+        raise ValueError("--pairing-neighbors must be zero or greater.")
     cfg = resolve_geometry_config(load_config_file(args.config))
     if args.train_cameras:
         cfg["data"]["multicam_train_cameras"] = [str(camera) for camera in args.train_cameras]
@@ -645,12 +705,34 @@ def build_pycolmap_cloud(args: argparse.Namespace) -> dict[str, Any]:
             extraction_options=extraction,
             device=pycolmap_device,
         )
-        pycolmap.match_exhaustive(
-            database_path,
-            matching_options=matching,
-            verification_options=verification,
-            device=pycolmap_device,
-        )
+        if int(args.pairing_neighbors) > 0:
+            pairs = known_pose_neighbor_pairs(bundle, image_records, int(args.pairing_neighbors))
+            pairs_path = workdir / "pairs-known-pose-nearest.txt"
+            write_image_pairs(pairs_path, pairs)
+            pycolmap.match_image_pairs(
+                database_path,
+                matching_options=matching,
+                pairing_options=pycolmap.ImportedPairingOptions(match_list_path=pairs_path),
+                verification_options=verification,
+                device=pycolmap_device,
+            )
+            backend_extra = {
+                "pairing_mode": "known_pose_nearest",
+                "pairing_neighbors": int(args.pairing_neighbors),
+                "requested_pair_count": len(pairs),
+            }
+        else:
+            pycolmap.match_exhaustive(
+                database_path,
+                matching_options=matching,
+                verification_options=verification,
+                device=pycolmap_device,
+            )
+            backend_extra = {
+                "pairing_mode": "exhaustive",
+                "pairing_neighbors": 0,
+                "requested_pair_count": len(image_names) * (len(image_names) - 1) // 2,
+            }
         database = pycolmap.Database.open(database_path)
         reconstruction = build_reconstruction_from_bundle(
             database=database,
@@ -667,6 +749,8 @@ def build_pycolmap_cloud(args: argparse.Namespace) -> dict[str, Any]:
                 two_view_geometry_options=verification,
             )
     elif str(args.feature_backend) == "hloc":
+        if int(args.pairing_neighbors) > 0:
+            raise ValueError("--pairing-neighbors currently supports feature_backend='pycolmap' only.")
         reconstruction, backend_extra = run_hloc_import_backend(
             database_path=database_path,
             images_dir=images_dir,
@@ -680,6 +764,8 @@ def build_pycolmap_cloud(args: argparse.Namespace) -> dict[str, Any]:
             args=args,
         )
     elif str(args.feature_backend) == "colmap_cli":
+        if int(args.pairing_neighbors) > 0:
+            raise ValueError("--pairing-neighbors currently supports feature_backend='pycolmap' only.")
         reconstruction, backend_extra = run_colmap_cli_backend(
             database_path=database_path,
             images_dir=images_dir,
@@ -792,6 +878,7 @@ def build_pycolmap_cloud(args: argparse.Namespace) -> dict[str, Any]:
     write_ascii_ply(Path(args.output), filtered_points, filtered_colors)
     summary_database = pycolmap.Database.open(database_path)
     summary = {
+        **seed_provenance_for_bundle(bundle),
         "config": str(args.config),
         "output": str(args.output),
         "sample_id": str(bundle.metadata.get("sample_id")) if bundle.metadata else None,
@@ -908,6 +995,15 @@ def main() -> None:
         "--matcher-type",
         choices=["sift_bruteforce", "sift_lightglue", "aliked_bruteforce", "aliked_lightglue"],
         default="sift_bruteforce",
+    )
+    parser.add_argument(
+        "--pairing-neighbors",
+        type=int,
+        default=0,
+        help=(
+            "For the pycolmap backend, match each image to this many nearest known-pose cameras "
+            "at the same frame. Zero preserves exhaustive matching."
+        ),
     )
     parser.add_argument("--allow-onnx-models", action="store_true")
     parser.add_argument("--pycolmap-use-gpu", action=argparse.BooleanOptionalAction, default=False)

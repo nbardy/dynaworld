@@ -1,7 +1,7 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260726-tiled1";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260726-tiled1";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260726-tiled1";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260726-tiled1";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260728-baseline1";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260728-baseline1";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260728-baseline1";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260728-baseline1";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
@@ -35,8 +35,12 @@ const values = {
 	meanRadius: $("meanRadiusValue"), meanAspect: $("meanAspectValue"), tileOverflow: $("tileOverflowValue"),
 	splatCount: $("splatValue"), recycled: $("recycledSplatValue"),
 	parameterDelta: $("parameterDeltaValue"), motionSamples: $("motionSampleValue"),
+	centerUpdate: $("centerUpdateValue"), motionUpdate: $("motionUpdateValue"),
+	scaleUpdate: $("scaleUpdateValue"), rotationUpdate: $("rotationUpdateValue"),
+	colorUpdate: $("colorUpdateValue"), opacityUpdate: $("opacityUpdateValue"),
 	staticSamples: $("staticSampleValue"), gpu: $("gpuValue"), fps: $("fpsValue"),
 	runtime: $("runtimeValue"), shared: $("sharedStatusValue"), validation: $("validationRuntimeValue"),
+	seedProvenance: $("seedProvenanceValue"),
 };
 const chartElements = {
 	loss: $("lossChartCanvas"), lossRange: $("lossChartRange"), lossScale: $("lossScaleToggle"),
@@ -50,7 +54,7 @@ const TEMPORAL_SUPPORT_HOLD_STEPS = 256;
 const TEMPORAL_SUPPORT_END_STEP = 2048;
 const RENDER_FPS = 20;
 const MAX_RENDER_WIDTH = 960;
-const VALIDATION_STEP_INTERVAL = 2048;
+const VALIDATION_STEP_INTERVAL = 8192;
 const UI_STATE_KEY = "dynaworld-browser-trainer-ui-v1";
 const metricHistory = { sampleLoss: [], trainLoss: [], heldoutLoss: [],
 	trainPsnr: [], heldoutPsnr: [], trainSsim: [], heldoutSsim: [] };
@@ -242,7 +246,9 @@ function resetMetrics() {
 		values.trainSsim, values.heldoutLoss, values.heldoutMae, values.heldoutPsnr,
 		values.heldoutSsim, values.heldoutCoverage, values.motionLoss, values.motionCoverage,
 		values.staticCoverage, values.peakAlpha, values.active, values.meanOpacity, values.meanRadius,
-		values.meanAspect, values.tileOverflow]) {
+		values.meanAspect, values.tileOverflow, values.parameterDelta, values.centerUpdate,
+		values.motionUpdate, values.scaleUpdate, values.rotationUpdate, values.colorUpdate,
+		values.opacityUpdate]) {
 		value.textContent = "--";
 	}
 	delete values.tileOverflow.dataset.state;
@@ -295,6 +301,24 @@ function consumeValidation({ step, metrics }) {
 	setMetricText(values.meanAspect, metrics.meanAspectRatio, (value) => `${value.toFixed(2)}:1`);
 	setMetricText(values.recycled, metrics.totalRecycled, (value) => String(value));
 	setMetricText(values.parameterDelta, metrics.parameterDelta, (value) => value.toExponential(2));
+	const updates = metrics.parameterUpdateRatios ?? {};
+	setMetricText(values.centerUpdate, updates.center?.updateRms, (value) => value.toExponential(1));
+	setMetricText(values.motionUpdate, Math.max(
+		updates.staticMix?.updateRms ?? Number.NaN,
+		updates.velocity?.updateRms ?? Number.NaN,
+		updates.timeCenter?.updateRms ?? Number.NaN,
+		updates.harmonic?.updateRms ?? Number.NaN,
+	), (value) => value.toExponential(1));
+	setMetricText(values.scaleUpdate, updates.logScale?.updateRms, (value) => value.toExponential(1));
+	setMetricText(values.rotationUpdate, updates.rotation?.updateRms, (value) => value.toExponential(1));
+	setMetricText(values.colorUpdate, updates.color?.updateRms, (value) => value.toExponential(1));
+	setMetricText(values.opacityUpdate, updates.opacity?.updateRms, (value) => value.toExponential(1));
+	if (metrics.validationContract) {
+		const trainViews = metrics.validationContract.trainViews?.length ?? 0;
+		const heldoutViews = metrics.validationContract.heldoutViews?.length ?? 0;
+		const seconds = Number(metrics.validationDurationMs) / 1000;
+		values.validation.textContent = `full ${trainViews}+${heldoutViews} · ${seconds.toFixed(1)}s`;
+	}
 	recordMetric("trainLoss", step, metrics.gridLoss);
 	recordMetric("heldoutLoss", step, metrics.heldoutLoss);
 	recordMetric("trainPsnr", step, metrics.gridPsnr);
@@ -403,7 +427,7 @@ async function initWorkerTrainer() {
 		$("renderContractNotice").textContent = "OffscreenCanvas is unavailable; optimization remains worker-owned but live rendering is disabled.";
 	}
 	resizeWorkerCanvas(); syncWorkerOptions(true);
-	workerClient.requestValidation({ gridSize: 12 });
+	workerClient.requestValidation();
 	lastValidationRequestStep = 0;
 	const cameraBatch = ready.cameraBatch;
 	const heldoutCamera = dataset.cameras?.[dataset.heldoutViewIndex];
@@ -416,7 +440,8 @@ async function initWorkerTrainer() {
 	setStatus(`Ready: ${ready.backend?.label ?? "WebGPU"} · ${ready.backend?.objective ?? "training"} · `
 		+ `${checkpointPrecision ? `${checkpointPrecision} checkpoints · ` : ""}`
 		+ `${cameraBatch?.camerasPerStep ?? 1} of ${cameraBatch?.trainViewCount ?? 17} train cameras per step; `
-		+ `${heldoutDescription}.`);
+		+ `${heldoutDescription}; init ${dataset.seedProvenance?.train_only_verified
+			? "train-only verified" : "external/unverified"}.`);
 }
 
 async function initLocalTrainer() {
@@ -518,7 +543,7 @@ function frameLoop(now) {
 		if (controls.fullMetrics.checked
 			&& validationStep - lastValidationRequestStep >= VALIDATION_STEP_INTERVAL
 			&& !(status?.flags & StatusFlag.VALIDATION_PENDING)) {
-			workerClient.requestValidation({ gridSize: 12 });
+			workerClient.requestValidation();
 			lastValidationRequestStep = validationStep;
 		}
 		syncWorkerOptions();
@@ -545,6 +570,8 @@ async function boot() {
 		values.splatCount.textContent = controls.splats.value;
 		values.motionSamples.textContent = String(dataset.motionSamples?.length ?? 0);
 		values.staticSamples.textContent = String(dataset.staticSamples?.length ?? 0);
+		values.seedProvenance.textContent = dataset.seedProvenance?.train_only_verified
+			? "train-only verified" : "unverified";
 		configureCameraUi(); updateTargetCanvas();
 		if ((dataset.viewCount ?? 1) > 1) await initWorkerTrainer(); else await initLocalTrainer();
 	} catch (error) {
@@ -558,7 +585,7 @@ async function boot() {
 
 controls.run.addEventListener("click", () => setRunning(!running));
 controls.step.addEventListener("click", () => {
-	if (workerClient) { workerClient.step(1); workerClient.requestValidation({ gridSize: 12 }); }
+	if (workerClient) { workerClient.step(1); workerClient.requestValidation(); }
 	else if (localTrainer) { localTrainer.trainStep(trainOptions()); void readLocalLoss(); }
 });
 controls.reset.addEventListener("click", () => { void resetTrainer(); });
@@ -576,7 +603,7 @@ for (const control of [controls.loop, controls.live, controls.temporalSchedule])
 controls.fullMetrics.addEventListener("change", () => {
 	if (controls.fullMetrics.checked) {
 		lastValidationRequestStep = currentStep();
-		workerClient?.requestValidation({ gridSize: 12 });
+		workerClient?.requestValidation();
 	}
 });
 controls.targetView.addEventListener("change", updateTargetCanvas);

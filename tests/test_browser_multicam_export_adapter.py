@@ -8,10 +8,13 @@ import pytest
 import torch
 from PIL import Image
 
+import export_dynaworld_browser_bundle as browser_export
 from export_dynaworld_browser_bundle import (
     _browser_camera_filename_component,
     _browser_camera_rows,
     _farthest_point_subset,
+    _resolve_seed_provenance,
+    _seed_points_in_anchor_frame,
     _write_browser_frame_atlases,
 )
 from multicam_video_data import select_multicam_record, validate_multicam_camera_split
@@ -95,6 +98,189 @@ def test_browser_seed_subset_is_deterministic_and_spatially_spread() -> None:
 
     assert torch.equal(first, second)
     assert set(first.tolist()) == {4, 0, 9}
+
+
+def test_browser_export_serializes_verified_train_only_seed_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_path = tmp_path / "colmap_seed_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "method": "colmap_sfm",
+                "input_cameras": ["cam04", "cam09"],
+                "train_only_verified": True,
+                "coordinate_frame": "model",
+            }
+        ),
+        encoding="utf-8",
+    )
+    bundle = SimpleNamespace(
+        train_camera_names=["cam04", "cam09"],
+        heldout_camera_names=["cam06"],
+        anchor_c2w=torch.eye(4),
+        train_view_count=2,
+        train_w2c=torch.eye(4).repeat(2, 1, 1, 1),
+        train_K=torch.tensor(
+            [
+                [[2.0, 0.0, 1.0], [0.0, 2.0, 1.0], [0.0, 0.0, 1.0]],
+                [[2.0, 0.0, 1.0], [0.0, 2.0, 1.0], [0.0, 0.0, 1.0]],
+            ]
+        ),
+        metadata={
+            "fps": 30.0,
+            "anchor_camera": "cam04",
+            "dataset": "Neural3D",
+            "scene": "coffee_martini",
+        },
+        pose_source="neural_3d_video",
+    )
+    seed_path = tmp_path / "train_only_sparse.ply"
+    output_path = tmp_path / "bundle.json"
+    monkeypatch.setattr(browser_export, "load_multicam_video_bundle", lambda **_kwargs: bundle)
+    monkeypatch.setattr(
+        browser_export,
+        "load_point_cloud_xyz_rgb",
+        lambda _path: (
+            torch.tensor([[0.0, 0.0, 1.0]]),
+            torch.tensor([[0.25, 0.5, 0.75]]),
+        ),
+    )
+    monkeypatch.setattr(
+        browser_export,
+        "_write_browser_frame_atlases",
+        lambda _bundle, _path: {"cam04": "./cam04.png", "cam09": "./cam09.png", "cam06": "./cam06.png"},
+    )
+    monkeypatch.setattr(browser_export, "_browser_camera_rows", lambda *_args, **_kwargs: [])
+
+    browser_export.export_browser_multicam_dataset_bundle(
+        manifest_path=tmp_path / "manifest.jsonl",
+        sample_id="sample",
+        split="train2_holdout1",
+        seed_point_cloud_path=seed_path,
+        output_path=output_path,
+        target_size=(2, 2),
+        frame_indices=[0],
+        seed_count=1,
+        seed_provenance_report_path=report_path,
+    )
+
+    assert json.loads(output_path.read_text(encoding="utf-8"))["seed_provenance"] == {
+        "method": "colmap_sfm",
+        "source_report": str(report_path),
+        "source_path": str(seed_path),
+        "input_cameras": ["cam04", "cam09"],
+        "train_only_verified": True,
+        "coordinate_frame": "model",
+    }
+
+
+def test_browser_export_rejects_raw_sparse_seed_before_decoding_video(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        browser_export,
+        "load_point_cloud_xyz_rgb",
+        lambda _path: (torch.zeros((1, 3)), torch.zeros((1, 3))),
+    )
+    monkeypatch.setattr(
+        browser_export,
+        "load_multicam_video_bundle",
+        lambda **_kwargs: pytest.fail("video bundle should not load for an impossible raw seed count"),
+    )
+
+    with pytest.raises(ValueError, match=r"only 1 points before visibility filtering.*requested 2"):
+        browser_export.export_browser_multicam_dataset_bundle(
+            manifest_path=tmp_path / "manifest.jsonl",
+            sample_id="sample",
+            split="train2_holdout1",
+            seed_point_cloud_path=tmp_path / "sparse.ply",
+            output_path=tmp_path / "bundle.json",
+            target_size=(2, 2),
+            frame_indices=[0],
+            seed_count=2,
+            allow_unverified_seed_provenance=True,
+        )
+
+
+def test_browser_seed_provenance_rejects_heldout_camera_input(tmp_path: Path) -> None:
+    report_path = tmp_path / "leaky_seed_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "method": "colmap_sfm",
+                "input_cameras": ["cam04", "cam06"],
+                "train_only_verified": True,
+                "coordinate_frame": "model",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"overlap canonical heldout cameras.*cam06"):
+        _resolve_seed_provenance(
+            report_path=report_path,
+            seed_point_cloud_path=tmp_path / "sparse.ply",
+            train_cameras=["cam04", "cam09"],
+            heldout_cameras=["cam06"],
+            allow_unverified=False,
+        )
+
+
+def test_browser_seed_provenance_allows_explicit_unverified_external_without_train_only_claim(
+    tmp_path: Path,
+) -> None:
+    seed_path = tmp_path / "external_ex4dgs" / "input.ply"
+
+    with pytest.raises(ValueError, match="requires --seed-provenance-report"):
+        _resolve_seed_provenance(
+            report_path=None,
+            seed_point_cloud_path=seed_path,
+            train_cameras=["cam04", "cam09"],
+            heldout_cameras=["cam06"],
+            allow_unverified=False,
+        )
+
+    assert _resolve_seed_provenance(
+        report_path=None,
+        seed_point_cloud_path=seed_path,
+        train_cameras=["cam04", "cam09"],
+        heldout_cameras=["cam06"],
+        allow_unverified=True,
+    ) == {
+        "method": "external_unverified",
+        "source_report": None,
+        "source_path": str(seed_path),
+        "input_cameras": [],
+        "train_only_verified": False,
+        "coordinate_frame": "world",
+    }
+
+
+def test_browser_seed_coordinates_distinguish_world_from_known_pose_model_frame() -> None:
+    anchor_c2w = torch.eye(4)
+    anchor_c2w[:3, 3] = torch.tensor([10.0, 20.0, 30.0])
+    bundle = SimpleNamespace(
+        metadata={"anchor_camera": "cam04"},
+        anchor_c2w=anchor_c2w,
+    )
+    points = torch.tensor([[11.0, 22.0, 33.0]])
+
+    world_points = _seed_points_in_anchor_frame(
+        points,
+        bundle=bundle,
+        seed_provenance={"coordinate_frame": "world"},
+    )
+    model_points = _seed_points_in_anchor_frame(
+        points,
+        bundle=bundle,
+        seed_provenance={"coordinate_frame": "model"},
+    )
+
+    torch.testing.assert_close(world_points, torch.tensor([[1.0, 2.0, 3.0]]))
+    torch.testing.assert_close(model_points, points)
 
 
 def test_coffee_martini_train17_manifest_preserves_canonical_split() -> None:

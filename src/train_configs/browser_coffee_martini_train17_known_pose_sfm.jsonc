@@ -1,0 +1,25 @@
+{
+  // Geometry-only config for a train-camera-only browser initialization.
+  // Use one synchronized frame: the rig is static, and additional times can
+  // introduce moving-foreground correspondences into a nominal SfM seed.
+  "data": {
+    "video_path": null,
+    "frame_source": "multicam_val",
+    "max_frames": 1,
+    "multicam_manifest": "src/dataset_configs/neural3d_coffee_martini_train17_holdout1_full_300f_manifest.jsonl",
+    "multicam_split": "train17_holdout1",
+    "multicam_sample_id": "neural3d_coffee_martini_train17_holdout_cam06_full_300f",
+    "multicam_heldout_camera": "cam06",
+    "multicam_anchor_camera": "cam04",
+    "multicam_condition_camera": "cam04"
+  },
+  "camera": {
+    "lens_model": "pinhole",
+    "rig_init": "neural_3d_video"
+  },
+  "model": {
+    "xy_extent": 24.0,
+    "z_min": 4.0,
+    "z_max": 120.0
+  }
+}

@@ -70,6 +70,31 @@ configured 512-wide progressive/fixed/global-shuffle matrix, then breadth.
 Native 2704x2028 remains blocked on streamed K-frame targets/rays and streamed
 evaluation; see `TODO/unified_paper_ablation_pipeline.md`.
 
+As of 2026-07-28, the browser SPA remains a calibrated multicamera demo over
+the canonical data contract, not another research lane. The current
+`coffee_martini_train17_holdout1` bundle has 17 train cameras, `cam06` held out,
+16 exact times at `96x72`, and 4,096 external Ex4DGS XYZRGB seeds. That legacy
+cloud is train-visible after loading but its original camera inputs are
+unrecorded, so the SPA now labels it `unverified`. The exporter has a
+fail-closed provenance contract and a checked-in config for rebuilding a
+train-only cloud with the existing offline known-pose pycolmap adapter; the
+browser does not run or redefine SfM. The first train17 run produced 815
+bounded points from 38 verified pairs, so it is retained as a sparse
+initialization ablation rather than replacing the 4,096-point default.
+
+The default `tiled3d` backend is a full-frame, opacity-aware tiled raster with
+depth sorting, transmittance checkpoints, pair-owned shared backward, Adam, and
+fixed-capacity split/recycle. Its production objective is `0.8 L1 + 0.2 DSSIM`
+with an 11x11 Gaussian sigma-1.5 window. An active Apple WebGPU harness now
+checks rendered RGBA, objective terms, and selected parameter-family gradients
+against CPU/finite-difference references. A separate validation worker computes
+full-image MSE/MAE/PSNR/SSIM for representative train cameras and heldout
+`cam06` over all 16 times, while per-family RMS deltas expose frozen
+parameters. The older sampled-ray backend remains only a control. Native 4DGS
+and the standalone STAR/DynamicGs probes are still not SPA backends. See
+`web/dynaworld_browser_trainer/README.md` and
+`research_notes/browser_4dgs_baseline.md`.
+
 As of 2026-07-19, the camera-gauge and ray-fiber mathematics is retained, not
 closed. The stopped lane is only open-ended theory/name proliferation without
 a measured compiler failure. Its primary method and paper surface is **World

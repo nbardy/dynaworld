@@ -31,6 +31,106 @@ EXPORT_BUNDLE_VERSION = "dynaworld_token_head_bundle/v2"
 BROWSER_MULTICAM_BUNDLE_VERSION = "dynaworld_browser_multicam_dataset/v1"
 
 
+def _resolve_seed_provenance(
+    *,
+    report_path: Path | None,
+    seed_point_cloud_path: Path,
+    train_cameras: list[str],
+    heldout_cameras: list[str],
+    allow_unverified: bool,
+) -> dict[str, Any]:
+    if report_path is None:
+        if not allow_unverified:
+            raise ValueError(
+                "Seed initialization requires --seed-provenance-report, or an explicit "
+                "--allow-unverified-seed-provenance opt-in for an external point cloud."
+            )
+        return {
+            "method": "external_unverified",
+            "source_report": None,
+            "source_path": str(seed_point_cloud_path),
+            "input_cameras": [],
+            "train_only_verified": False,
+            "coordinate_frame": "world",
+        }
+
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Could not load seed provenance report {report_path}: {error}") from error
+    if not isinstance(report, dict):
+        raise ValueError(f"Seed provenance report {report_path} must contain a JSON object.")
+
+    method = report.get("method")
+    if not isinstance(method, str) or not method.strip():
+        raise ValueError("Seed provenance report field 'method' must be a non-empty string.")
+    input_cameras = report.get("input_cameras")
+    if (
+        not isinstance(input_cameras, list)
+        or any(not isinstance(camera, str) or not camera for camera in input_cameras)
+        or len(set(input_cameras)) != len(input_cameras)
+    ):
+        raise ValueError("Seed provenance report field 'input_cameras' must be a list of unique camera names.")
+    train_only_verified = report.get("train_only_verified")
+    if not isinstance(train_only_verified, bool):
+        raise ValueError("Seed provenance report field 'train_only_verified' must be a boolean.")
+    coordinate_frame = report.get("coordinate_frame")
+    if not isinstance(coordinate_frame, str) or not coordinate_frame.strip():
+        raise ValueError("Seed provenance report field 'coordinate_frame' must be a non-empty string.")
+
+    heldout_overlap = sorted(set(input_cameras) & set(heldout_cameras))
+    if heldout_overlap:
+        raise ValueError(
+            "Seed provenance input cameras overlap canonical heldout cameras: "
+            f"{heldout_overlap}."
+        )
+    non_train_cameras = sorted(set(input_cameras) - set(train_cameras))
+    if non_train_cameras:
+        raise ValueError(
+            "Seed provenance input cameras are not a subset of canonical train cameras: "
+            f"{non_train_cameras}."
+        )
+    if train_only_verified and not input_cameras:
+        raise ValueError("Verified train-only seed provenance must declare at least one input camera.")
+    if not train_only_verified and not allow_unverified:
+        raise ValueError(
+            "Seed provenance report is unverified; pass --allow-unverified-seed-provenance "
+            "to export it without a train-only claim."
+        )
+
+    return {
+        "method": method.strip(),
+        "source_report": str(report_path),
+        "source_path": str(seed_point_cloud_path),
+        "input_cameras": input_cameras,
+        "train_only_verified": train_only_verified,
+        "coordinate_frame": coordinate_frame.strip(),
+    }
+
+
+def _seed_points_in_anchor_frame(
+    points: torch.Tensor,
+    *,
+    bundle: Any,
+    seed_provenance: dict[str, Any],
+) -> torch.Tensor:
+    metadata = bundle.metadata or {}
+    anchor_frame = f"{metadata['anchor_camera']}_opencv"
+    coordinate_frame = str(seed_provenance["coordinate_frame"])
+    if coordinate_frame in {"model", anchor_frame}:
+        return points
+    if coordinate_frame != "world":
+        raise ValueError(
+            f"Unsupported seed coordinate frame {coordinate_frame!r}; expected "
+            f"'world', 'model', or {anchor_frame!r}."
+        )
+    if bundle.anchor_c2w is None:
+        raise ValueError("The canonical multicam bundle did not provide anchor_c2w for point initialization.")
+    world_to_anchor = torch.linalg.inv(bundle.anchor_c2w.detach().cpu())
+    points_h = torch.cat([points, torch.ones((points.shape[0], 1), dtype=points.dtype)], dim=1)
+    return (points_h @ world_to_anchor.T)[:, :3]
+
+
 def _browser_camera_filename_component(camera_name: str) -> str:
     component = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(camera_name)).strip("._")
     if not component:
@@ -124,9 +224,17 @@ def export_browser_multicam_dataset_bundle(
     target_size: tuple[int, int],
     frame_indices: list[int],
     seed_count: int,
+    seed_provenance_report_path: Path | None = None,
+    allow_unverified_seed_provenance: bool = False,
 ) -> Path:
     """Serialize a thin browser adapter over the canonical multicam contract."""
     height, width = target_size
+    points, colors = load_point_cloud_xyz_rgb(seed_point_cloud_path)
+    if int(points.shape[0]) < seed_count:
+        raise ValueError(
+            f"Seed point cloud has only {int(points.shape[0])} points before visibility filtering; "
+            f"the browser bundle requested {seed_count}."
+        )
     bundle = load_multicam_video_bundle(
         data_cfg={
             "multicam_manifest": str(manifest_path),
@@ -138,12 +246,18 @@ def export_browser_multicam_dataset_bundle(
         target_size=target_size,
         device=torch.device("cpu"),
     )
-    points, colors = load_point_cloud_xyz_rgb(seed_point_cloud_path)
-    if bundle.anchor_c2w is None:
-        raise ValueError("The canonical multicam bundle did not provide anchor_c2w for point initialization.")
-    world_to_anchor = torch.linalg.inv(bundle.anchor_c2w.detach().cpu())
-    points_h = torch.cat([points, torch.ones((points.shape[0], 1), dtype=points.dtype)], dim=1)
-    anchor_points = (points_h @ world_to_anchor.T)[:, :3]
+    seed_provenance = _resolve_seed_provenance(
+        report_path=seed_provenance_report_path,
+        seed_point_cloud_path=seed_point_cloud_path,
+        train_cameras=list(bundle.train_camera_names),
+        heldout_cameras=list(bundle.heldout_camera_names or []),
+        allow_unverified=allow_unverified_seed_provenance,
+    )
+    anchor_points = _seed_points_in_anchor_frame(
+        points,
+        bundle=bundle,
+        seed_provenance=seed_provenance,
+    )
 
     visible = torch.zeros(anchor_points.shape[0], dtype=torch.bool)
     anchor_points_h = torch.cat([anchor_points, torch.ones_like(anchor_points[:, :1])], dim=1)
@@ -156,6 +270,12 @@ def export_browser_multicam_dataset_bundle(
         visible |= (z > 0.1) & (u > -0.05 * width) & (u < 1.05 * width) & (v > -0.05 * height) & (v < 1.05 * height)
     anchor_points = anchor_points[visible]
     colors = colors[visible]
+    if int(anchor_points.shape[0]) < seed_count:
+        raise ValueError(
+            f"Seed point cloud has only {int(anchor_points.shape[0])} train-visible points; "
+            f"the browser bundle requested {seed_count}. Build a denser train-only SfM cloud "
+            "or lower --dataset-seed-count explicitly."
+        )
     selected = _farthest_point_subset(anchor_points, seed_count)
     seeds = torch.cat([anchor_points[selected], colors[selected]], dim=1)
 
@@ -186,6 +306,7 @@ def export_browser_multicam_dataset_bundle(
         "frame_times_seconds": [start_seconds + float(index) / fps for index in frame_indices],
         "cameras": _browser_camera_rows(bundle, width=width, height=height, atlas_urls=atlas_urls),
         "seed_source": str(seed_point_cloud_path),
+        "seed_provenance": seed_provenance,
         "seed_coordinate_frame": f"{metadata['anchor_camera']}_opencv",
         "seed_points_xyzrgb": seeds.round(decimals=7).tolist(),
     }
@@ -584,6 +705,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-split", default="train2_holdout1", help="Manifest split for the dataset bundle.")
     parser.add_argument("--dataset-output", type=Path, help="JSON path for the dataset demo bundle.")
     parser.add_argument("--seed-point-cloud", type=Path, help="SfM/COLMAP point cloud used only for browser initialization.")
+    parser.add_argument(
+        "--seed-provenance-report",
+        type=Path,
+        help=(
+            "JSON report declaring seed method, input_cameras, and train_only_verified. "
+            "Camera claims are checked against the canonical dataset split."
+        ),
+    )
+    parser.add_argument(
+        "--allow-unverified-seed-provenance",
+        action="store_true",
+        help=(
+            "Explicitly allow an external seed source whose train-only provenance is not verified. "
+            "The bundle will serialize train_only_verified=false."
+        ),
+    )
     parser.add_argument("--dataset-height", type=int, default=72)
     parser.add_argument("--dataset-width", type=int, default=96)
     parser.add_argument("--dataset-frame-count", type=int, default=8)
@@ -619,6 +756,8 @@ def main() -> None:
             target_size=(args.dataset_height, args.dataset_width),
             frame_indices=frame_indices,
             seed_count=args.dataset_seed_count,
+            seed_provenance_report_path=args.seed_provenance_report,
+            allow_unverified_seed_provenance=args.allow_unverified_seed_provenance,
         )
         return
     if args.config is None or args.output_dir is None:
