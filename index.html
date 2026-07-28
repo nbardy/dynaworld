@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Dynaworld Browser Trainer</title>
-		<link rel="stylesheet" href="./styles.css?v=20260710-converge59" />
+		<link rel="stylesheet" href="./styles.css?v=20260726-tiled1" />
 	</head>
 	<body>
 		<div class="app-shell">
@@ -22,17 +22,25 @@
 					</div>
 
 					<label class="field">
+						<span>Training Backend</span>
+						<select id="backendSelect">
+							<option value="tiled3d">Tiled full-frame</option>
+							<option value="sampled3d">Sampled rays (control)</option>
+						</select>
+					</label>
+
+					<label class="field">
 						<span>Motion Model</span>
-						<select id="modeSelect">
-							<option value="world_tubes">World Tubes-style shared motion</option>
-							<option value="dynamic_splats">Dynamic splats-style velocity</option>
+						<select id="modeSelect" title="Current shared-kernel parameterization probe; faithful STAR and dynamic-3DGS kernels are separate work">
+							<option value="world_tubes">Harmonic trajectory splats</option>
+							<option value="dynamic_splats">Linear trajectory splats</option>
 						</select>
 					</label>
 
 					<label class="field">
 						<span>Splat Count</span>
-						<input id="splatSlider" type="range" min="96" max="768" step="32" value="768" />
-						<strong id="splatSliderValue">768</strong>
+						<input id="splatSlider" type="range" min="96" max="4096" step="32" value="4096" />
+						<strong id="splatSliderValue">4096</strong>
 					</label>
 
 					<label class="field">
@@ -44,6 +52,16 @@
 					<label class="field toggle-field">
 						<span>Loop Time</span>
 						<input id="timeLoopToggle" type="checkbox" checked />
+					</label>
+
+					<label class="field toggle-field">
+						<span>Live Preview</span>
+						<input id="livePreviewToggle" type="checkbox" checked />
+					</label>
+
+					<label class="field toggle-field">
+						<span>Full Metrics</span>
+						<input id="fullMetricsToggle" type="checkbox" checked />
 					</label>
 
 					<label class="field">
@@ -62,6 +80,11 @@
 					</label>
 
 					<label class="field">
+						<span>Render Camera</span>
+						<select id="renderCameraSelect"></select>
+					</label>
+
+					<label class="field">
 						<span>Result View</span>
 						<select id="resultViewSelect">
 							<option value="rgb">RGB result</option>
@@ -70,71 +93,83 @@
 						</select>
 					</label>
 
-					<label class="field">
-						<span>Temporal Support</span>
-						<input id="temporalSlider" type="range" min="0.14" max="0.32" step="0.01" value="0.30" />
-						<strong id="temporalValue">0.30</strong>
+					<label class="field toggle-field">
+						<span>Auto Narrow (demo)</span>
+						<input id="temporalScheduleToggle" title="Unmeasured demo heuristic: hold 0.30 through step 256, then narrow smoothly to 0.26 through step 2048" type="checkbox" />
+					</label>
+
+					<label class="field schedule-field">
+						<span id="temporalSliderLabel">Temporal Support</span>
+						<input id="temporalSlider" title="Fixed normalized time width of each splat's visibility gate" type="range" min="0.14" max="0.32" step="0.01" value="0.30" />
+						<strong id="temporalValue">0.300</strong>
+						<small id="temporalScheduleValue">manual · fixed</small>
 					</label>
 
 					<label class="field">
 						<span>Learning Rate Scale</span>
-						<input id="lrSlider" type="range" min="0.25" max="2" step="0.05" value="1" />
-						<strong id="lrValue">1.00x</strong>
+						<input id="lrSlider" type="range" min="0.25" max="2" step="0.05" value="1.25" />
+						<strong id="lrValue">1.25x</strong>
 					</label>
 
-					<label class="field">
+					<label class="field" id="sampleCountField">
 						<span>Samples / Step</span>
 						<input id="samplesSlider" type="range" min="16" max="192" step="8" value="96" />
 						<strong id="samplesValue">96</strong>
 					</label>
 
-					<label class="field">
+					<label class="field" id="motionMixField">
 						<span>Motion Mix</span>
-						<input id="motionMixSlider" type="range" min="0.50" max="0.95" step="0.05" value="0.95" />
-						<strong id="motionMixValue">95%</strong>
+						<input id="motionMixSlider" title="Share of training rays sampled from pixels that change over time" type="range" min="0.50" max="0.95" step="0.05" value="0.90" />
+						<strong id="motionMixValue">90%</strong>
 					</label>
 
-					<label class="field">
+					<label class="field" id="staticMixField">
 						<span>Static Mix</span>
-						<input id="staticMixSlider" type="range" min="0" max="0.16" step="0.01" value="0.08" />
+						<input id="staticMixSlider" title="Share of training rays sampled from stable background pixels" type="range" min="0" max="0.16" step="0.01" value="0.08" />
 						<strong id="staticMixValue">8%</strong>
 					</label>
 
-					<label class="field">
+					<label class="field" id="supportGuardField">
 						<span>Support Guard</span>
-						<input id="supportGuardSlider" type="range" min="0.40" max="0.60" step="0.01" value="0.52" />
+						<input id="supportGuardSlider" title="Minimum alpha coverage encouraged on motion-focused training rays" type="range" min="0.40" max="0.60" step="0.01" value="0.52" />
 						<strong id="supportGuardValue">52%</strong>
 					</label>
 				</section>
 
 				<section class="stats" aria-label="Training stats">
-					<div>
-						<span>Step</span>
-						<strong id="stepValue">0</strong>
+					<div class="quality-metric-grid" aria-label="Reconstruction metrics">
+						<div class="quality-metric">
+							<span>Loss</span>
+							<small>train</small><strong id="gridLossValue">--</strong>
+							<small>held</small><strong id="heldoutLossValue">--</strong>
+						</div>
+						<div class="quality-metric">
+							<span>MAE</span>
+							<small>train</small><strong id="valMaeValue">--</strong>
+							<small>held</small><strong id="heldoutMaeValue">--</strong>
+						</div>
+						<div class="quality-metric">
+							<span>PSNR</span>
+							<small>train</small><strong id="valPsnrValue">--</strong>
+							<small>held</small><strong id="heldoutPsnrValue">--</strong>
+						</div>
+						<div class="quality-metric">
+							<span>SSIM</span>
+							<small>train</small><strong id="valSsimValue">--</strong>
+							<small>held</small><strong id="heldoutSsimValue">--</strong>
+						</div>
 					</div>
+					<div class="diagnostic-grid">
+						<div><span>Step</span><strong id="stepValue">0</strong></div>
+						<div><span>Steps/s</span><strong id="stepRateValue">--</strong></div>
+						<div><span>Train Objective</span><strong id="lossValue">--</strong></div>
+						<div>
+							<span>Tile Overflow</span>
+							<strong id="tileOverflowValue">--</strong>
+						</div>
 					<div>
-						<span>Steps/s</span>
-						<strong id="stepRateValue">--</strong>
-					</div>
-					<div>
-						<span>Sample Loss</span>
-						<strong id="lossValue">--</strong>
-					</div>
-					<div>
-						<span>Grid Loss</span>
-						<strong id="gridLossValue">--</strong>
-					</div>
-					<div>
-						<span>Val MAE</span>
-						<strong id="valMaeValue">--</strong>
-					</div>
-					<div>
-						<span>Val PSNR</span>
-						<strong id="valPsnrValue">--</strong>
-					</div>
-					<div>
-						<span>Val SSIM</span>
-						<strong id="valSsimValue">--</strong>
+						<span>Heldout Cov</span>
+						<strong id="heldoutCoverageValue">--</strong>
 					</div>
 					<div>
 						<span>Motion Loss</span>
@@ -165,15 +200,19 @@
 						<strong id="meanRadiusValue">--</strong>
 					</div>
 					<div>
+						<span>Mean Aspect</span>
+						<strong id="meanAspectValue">--</strong>
+					</div>
+					<div>
 						<span>Splats</span>
-						<strong id="splatValue">768</strong>
+						<strong id="splatValue">4096</strong>
 					</div>
 					<div>
 						<span>Optimizer</span>
 						<strong>Adam</strong>
 					</div>
 					<div>
-						<span>Recycled</span>
+						<span>Topology Ops</span>
 						<strong id="recycledSplatValue">0</strong>
 					</div>
 					<div>
@@ -188,11 +227,41 @@
 						<span>Static Px</span>
 						<strong id="staticSampleValue">--</strong>
 					</div>
-					<div>
-						<span>GPU</span>
-						<strong id="gpuValue">pending</strong>
+						<div>
+							<span>GPU</span>
+							<strong id="gpuValue">pending</strong>
+						</div>
+						<div><span>Runtime</span><strong id="runtimeValue">pending</strong></div>
+						<div><span>Shared</span><strong id="sharedStatusValue">pending</strong></div>
+						<div><span>Validation</span><strong id="validationRuntimeValue">pending</strong></div>
 					</div>
 				</section>
+
+					<section class="loss-chart" aria-label="Training metric history">
+					<div class="loss-chart-title">
+						<span>Loss History</span>
+						<div class="chart-title-actions">
+							<strong id="lossChartRange">waiting</strong>
+							<button id="lossScaleToggle" class="chart-scale-toggle" type="button" aria-pressed="true" title="Toggle logarithmic loss-axis scaling">Log Y</button>
+						</div>
+					</div>
+					<canvas id="lossChartCanvas" width="300" height="132" aria-label="Loss history chart"></canvas>
+						<div class="loss-chart-legend" aria-hidden="true">
+							<span><i class="sample-line"></i>Objective EMA</span>
+							<span><i class="train-line"></i>Train grid</span>
+							<span><i class="heldout-line"></i>Heldout</span>
+						</div>
+						<div class="loss-chart-title metric-chart-title">
+							<span>PSNR</span>
+							<strong id="psnrChartRange">waiting</strong>
+						</div>
+						<canvas id="psnrChartCanvas" width="300" height="86" aria-label="PSNR history chart"></canvas>
+						<div class="loss-chart-title metric-chart-title">
+							<span>SSIM</span>
+							<strong id="ssimChartRange">waiting</strong>
+						</div>
+						<canvas id="ssimChartCanvas" width="300" height="86" aria-label="SSIM history chart"></canvas>
+					</section>
 
 				<section class="status" aria-label="Status">
 					<p id="statusText">Loading preset target.</p>
@@ -209,17 +278,24 @@
 					<div id="angleStrip" class="angle-strip" aria-label="Camera angle previews">
 						<div class="angle-tile">
 							<div>
-								<span>Source</span>
+								<span>Train A</span>
 								<strong id="sourceViewFrameValue">--</strong>
 							</div>
 							<canvas id="sourceViewCanvas" width="128" height="128"></canvas>
 						</div>
 						<div class="angle-tile">
 							<div>
-								<span>Target</span>
+								<span>Train B</span>
 								<strong id="targetViewFrameValue">--</strong>
 							</div>
 							<canvas id="targetViewCanvas" width="128" height="128"></canvas>
+						</div>
+						<div class="angle-tile">
+							<div>
+								<span>Heldout</span>
+								<strong id="heldoutViewFrameValue">--</strong>
+							</div>
+							<canvas id="heldoutViewCanvas" width="128" height="128"></canvas>
 						</div>
 					</div>
 				</section>
@@ -228,10 +304,18 @@
 						<span>WebGPU Result</span>
 						<strong id="fpsValue">-- fps</strong>
 					</div>
-					<canvas id="renderCanvas"></canvas>
+					<div class="result-strip">
+						<div id="resultAngleLabels" class="result-angle-labels" aria-hidden="true">
+							<div><span id="resultViewRole0">Train A</span><strong id="resultViewLabel0">--</strong></div>
+							<div><span id="resultViewRole1">Train B</span><strong id="resultViewLabel1">--</strong></div>
+							<div><span id="resultViewRole2">Heldout</span><strong id="resultViewLabel2">--</strong></div>
+						</div>
+						<canvas id="renderCanvas"></canvas>
+					</div>
+					<p id="renderContractNotice" class="render-contract-notice" hidden></p>
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260710-converge59"></script>
+		<script type="module" src="./app.js?v=20260726-tiled1"></script>
 	</body>
 </html>

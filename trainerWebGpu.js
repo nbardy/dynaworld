@@ -1070,7 +1070,14 @@ export class DynamicSplatWebGpuTrainer {
 			throw new Error("WebGPU adapter unavailable.");
 		}
 		this.adapterName = adapter.info?.description || adapter.info?.vendor || "WebGPU";
-		this.device = await adapter.requestDevice();
+		const requiredStorageBuffers = 10;
+		if (adapter.limits.maxStorageBuffersPerShaderStage < requiredStorageBuffers) {
+			throw new Error(`The legacy trainer needs ${requiredStorageBuffers} storage buffers per shader stage; `
+				+ `the adapter supports ${adapter.limits.maxStorageBuffersPerShaderStage}.`);
+		}
+		this.device = await adapter.requestDevice({
+			requiredLimits: { maxStorageBuffersPerShaderStage: requiredStorageBuffers },
+		});
 		this.context = this.canvas.getContext("webgpu");
 		if (!this.context) {
 			throw new Error("WebGPU canvas context unavailable.");
@@ -1086,7 +1093,7 @@ export class DynamicSplatWebGpuTrainer {
 		this.splatCount = splatCount;
 		this.stepCount = 0;
 		this.currentIndex = 0;
-		this.createPipelines();
+		await this.createPipelines();
 		this.createBuffers();
 		this.createBindGroups();
 	}
@@ -1108,11 +1115,20 @@ export class DynamicSplatWebGpuTrainer {
 		this.bindGroups = null;
 	}
 
-	createPipelines() {
+	async createPipelines() {
 		const device = this.device;
 		const trainModule = device.createShaderModule({ code: TRAIN_WGSL });
 		const renderModule = device.createShaderModule({ code: RENDER_WGSL });
 		const backgroundModule = device.createShaderModule({ code: BACKGROUND_WGSL });
+		const modules = [["training", trainModule], ["render", renderModule], ["background", backgroundModule]];
+		const diagnostics = await Promise.all(modules.map(async ([name, module]) => ({
+			name, info: await module.getCompilationInfo(),
+		})));
+		const errors = diagnostics.flatMap(({ name, info }) => info.messages
+			.filter((message) => message.type === "error")
+			.map((message) => `${name}:${message.lineNum}:${message.linePos} ${message.message}`));
+		if (errors.length) throw new Error(`WGSL compilation failed:\n${errors.join("\n")}`);
+		device.pushErrorScope("validation");
 		this.pipelines = {
 			train: device.createComputePipeline({
 				layout: "auto",
@@ -1167,6 +1183,8 @@ export class DynamicSplatWebGpuTrainer {
 				primitive: { topology: "triangle-strip" },
 			}),
 		};
+		const pipelineError = await device.popErrorScope();
+		if (pipelineError) throw new Error(`WebGPU pipeline validation failed: ${pipelineError.message}`);
 	}
 
 	createBuffers() {

@@ -1,5 +1,6 @@
 const DEFAULT_VIDEO_URL =
 	"/data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/previews/neural3d_coffee_martini_cam00_to_cam10.mp4";
+const CALIBRATED_MULTICAM_URL = "./coffee_martini_train17_holdout1.json";
 
 function hash01(seed) {
 	let value = seed >>> 0;
@@ -319,7 +320,191 @@ function makePreviewView(dataset, label) {
 	};
 }
 
-export async function loadPresetDataset() {
+async function decodeVideoFrames({ url, width, height, frameTimesSeconds }) {
+	if (!(await canFetch(url))) {
+		throw new Error(`Dataset video unavailable: ${url}`);
+	}
+	const video = document.createElement("video");
+	video.muted = true;
+	video.preload = "auto";
+	video.src = url;
+	video.load();
+	await waitForVideoEvent(video, "loadedmetadata");
+	const canvas = document.createElement("canvas");
+	canvas.width = width;
+	canvas.height = height;
+	const ctx = canvas.getContext("2d", { willReadFrequently: true });
+	if (!ctx) {
+		throw new Error("2D canvas unavailable for multicamera preload.");
+	}
+	const frameCount = frameTimesSeconds.length;
+	const frames = new Float32Array(width * height * frameCount * 4);
+	const availableDuration = Number.isFinite(video.duration) ? video.duration : frameTimesSeconds.at(-1);
+	for (let frame = 0; frame < frameCount; frame += 1) {
+		const time = Math.min(availableDuration * 0.999, frameTimesSeconds[frame]);
+		await seekVideo(video, time);
+		ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, width, height);
+		const image = ctx.getImageData(0, 0, width, height).data;
+		const offset = frame * width * height * 4;
+		for (let pixel = 0; pixel < width * height; pixel += 1) {
+			frames[offset + pixel * 4] = image[pixel * 4] / 255;
+			frames[offset + pixel * 4 + 1] = image[pixel * 4 + 1] / 255;
+			frames[offset + pixel * 4 + 2] = image[pixel * 4 + 2] / 255;
+			frames[offset + pixel * 4 + 3] = 1;
+		}
+	}
+	video.removeAttribute("src");
+	video.load();
+	return frames;
+}
+
+async function decodeFrameAtlas({ url, width, height, frameCount }) {
+	const response = await fetch(url);
+	if (!response.ok) {
+		throw new Error(`Frame atlas unavailable: ${url}`);
+	}
+	const bitmap = await createImageBitmap(await response.blob());
+	if (bitmap.width !== width * frameCount || bitmap.height !== height) {
+		throw new Error(`Frame atlas ${url} has ${bitmap.width}x${bitmap.height}; expected ${width * frameCount}x${height}.`);
+	}
+	const canvas = document.createElement("canvas");
+	canvas.width = width;
+	canvas.height = height;
+	const ctx = canvas.getContext("2d", { willReadFrequently: true });
+	if (!ctx) {
+		bitmap.close();
+		throw new Error("2D canvas unavailable for frame-atlas decode.");
+	}
+	const frames = new Float32Array(width * height * frameCount * 4);
+	for (let frame = 0; frame < frameCount; frame += 1) {
+		ctx.clearRect(0, 0, width, height);
+		ctx.drawImage(bitmap, frame * width, 0, width, height, 0, 0, width, height);
+		const image = ctx.getImageData(0, 0, width, height).data;
+		const offset = frame * width * height * 4;
+		for (let pixel = 0; pixel < width * height * 4; pixel += 1) {
+			frames[offset + pixel] = image[pixel] / 255;
+		}
+	}
+	bitmap.close();
+	return frames;
+}
+
+export function computeMultiviewSamples(frames, backgrounds, width, height, frameCount, trainViewCount) {
+	const pixels = width * height;
+	const motion = [];
+	const staticSamples = [];
+	for (let view = 0; view < trainViewCount; view += 1) {
+		for (let frame = 0; frame < frameCount; frame += 1) {
+			for (let pixel = 0; pixel < pixels; pixel += 1) {
+				const base = ((view * frameCount + frame) * pixels + pixel) * 4;
+				const bgBase = (view * pixels + pixel) * 4;
+				const dr = frames[base] - backgrounds[bgBase];
+				const dg = frames[base + 1] - backgrounds[bgBase + 1];
+				const db = frames[base + 2] - backgrounds[bgBase + 2];
+				const energy = (dr * dr + dg * dg + db * db) / 3;
+				const packed = (view * frameCount + frame) * pixels + pixel;
+				if (energy > 0.0006) {
+					motion.push({ packed, energy });
+				} else if (energy < 0.00035) {
+					staticSamples.push(packed);
+				}
+			}
+		}
+	}
+	motion.sort((a, b) => b.energy - a.energy);
+	const maxSamples = 16384;
+	const staticKept = staticSamples.length <= maxSamples
+		? staticSamples
+		: Array.from({ length: maxSamples }, (_, i) => staticSamples[Math.floor((i + 0.5) * staticSamples.length / maxSamples)]);
+	return {
+		motionSamples: new Uint32Array(motion.slice(0, maxSamples).map((item) => item.packed)),
+		staticSamples: new Uint32Array(staticKept),
+	};
+}
+
+export async function loadCalibratedMulticamDataset() {
+	const response = await fetch(CALIBRATED_MULTICAM_URL);
+	if (!response.ok) {
+		throw new Error(`Calibrated browser bundle unavailable: ${response.status}`);
+	}
+	const bundle = await response.json();
+	if (bundle.version !== "dynaworld_browser_multicam_dataset/v1") {
+		throw new Error(`Unsupported calibrated browser bundle: ${bundle.version ?? "missing version"}`);
+	}
+	const [width, height] = bundle.decode_size;
+	const frameCount = bundle.frame_count;
+	const viewFrames = await Promise.all(bundle.cameras.map((camera) => camera.frame_atlas_url
+		? decodeFrameAtlas({ url: camera.frame_atlas_url, width, height, frameCount })
+		: decodeVideoFrames({ url: camera.video_url, width, height, frameTimesSeconds: bundle.frame_times_seconds })));
+	const valuesPerView = width * height * frameCount * 4;
+	const frames = new Float32Array(valuesPerView * viewFrames.length);
+	const backgrounds = new Float32Array(width * height * 4 * viewFrames.length);
+	for (let view = 0; view < viewFrames.length; view += 1) {
+		frames.set(viewFrames[view], view * valuesPerView);
+		backgrounds.set(computeMeanBackground(viewFrames[view], width, height, frameCount), view * width * height * 4);
+	}
+	const trainViewIndices = bundle.cameras
+		.map((camera, index) => camera.role === "train" ? index : -1)
+		.filter((index) => index >= 0);
+	const heldoutViewIndex = bundle.cameras.findIndex((camera) => camera.role === "heldout");
+	const trainViewCount = trainViewIndices.length;
+	if (!trainViewIndices.every((view, index) => view === index) || heldoutViewIndex !== trainViewCount) {
+		throw new Error("Browser trainer requires train cameras first and the heldout camera last.");
+	}
+	const samples = computeMultiviewSamples(frames, backgrounds, width, height, frameCount, trainViewCount);
+	const cameras = bundle.cameras.map((camera) => ({
+		...camera,
+		intrinsics: new Float32Array(camera.intrinsics),
+		worldToCamera: new Float32Array(camera.world_to_camera.flat()),
+	}));
+	const dataset = {
+		name: bundle.name,
+		source: CALIBRATED_MULTICAM_URL,
+		width,
+		height,
+		frameCount,
+		viewCount: cameras.length,
+		trainViewCount,
+		trainViewIndices,
+		heldoutViewIndex,
+		frames,
+		backgrounds,
+		background: backgrounds.subarray(0, width * height * 4),
+		cameras,
+		seedPoints: new Float32Array(bundle.seed_points_xyzrgb.flat()),
+		seedPointCount: bundle.seed_points_xyzrgb.length,
+		seedSource: bundle.seed_source,
+		datasetContract: bundle.dataset_contract,
+		frameIndices: bundle.frame_indices,
+		...samples,
+	};
+	dataset.viewDatasets = cameras.map((camera, view) => ({
+		label: `${camera.name} ${camera.role}`,
+		width,
+		height,
+		frameCount,
+		frames: frames.subarray(view * valuesPerView, (view + 1) * valuesPerView),
+		background: backgrounds.subarray(view * width * height * 4, (view + 1) * width * height * 4),
+		viewIndex: view,
+	}));
+	const anchorName = bundle.dataset_contract?.anchor_camera;
+	const trainA = Math.max(0, cameras.findIndex((camera) => camera.name === anchorName));
+	const preferredTrainB = cameras.findIndex((camera) => camera.name === "cam09" && camera.role === "train");
+	const trainB = preferredTrainB >= 0 ? preferredTrainB : trainViewIndices.find((view) => view !== trainA) ?? trainA;
+	dataset.comparisonViewIndices = [trainA, trainB, heldoutViewIndex];
+	dataset.previewViews = dataset.comparisonViewIndices.map((view) => dataset.viewDatasets[view]);
+	return dataset;
+}
+
+export async function loadPresetDataset({ allowLegacyFallback = false } = {}) {
+	try {
+		return await loadCalibratedMulticamDataset();
+	} catch (error) {
+		if (!allowLegacyFallback) {
+			throw error;
+		}
+		console.info("Calibrated multicamera bundle unavailable; legacy fallback was explicitly enabled.", error);
+	}
 	try {
 		const source = await loadVideoFrameDataset();
 		try {

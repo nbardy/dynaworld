@@ -1,0 +1,144 @@
+{
+  "schema": "dynaworld_browser_tiled_scaling/v1",
+  "date": "2026-07-28",
+  "device": {
+    "gpu": "Apple M4",
+    "gpu_cores": 10,
+    "api": "WebGPU in the Codex in-app browser"
+  },
+  "source_state": {
+    "branch": "codex/repository-audit-cleanup",
+    "pre_commit_head": "281471d",
+    "benchmark_page": "web/dynaworld_browser_trainer/benchmarkTrainerBackends.html",
+    "backend": "tiled3d"
+  },
+  "dataset": {
+    "name": "coffee_martini calibrated train17_holdout1",
+    "source_raster": [96, 72],
+    "train_cameras": 17,
+    "heldout_cameras": 1,
+    "frames": 16,
+    "heldout_camera": "cam06",
+    "seed_points": 4096
+  },
+  "method": {
+    "objective": "0.8 L1 + 0.2 (1 - local box-window SSIM)",
+    "default_ssim_window": 11,
+    "warmup_steps": 32,
+    "repeats": 3,
+    "queue_drain": "GPUDevice.queue.onSubmittedWorkDone after every measured interval",
+    "fresh_device_per_repeat": true,
+    "matched_initial_splats_and_capacity": true,
+    "excluded": [
+      "dataset decode and benchmark-only nearest-neighbor upsampling",
+      "shader compilation",
+      "buffer initialization",
+      "warmup",
+      "preview rendering",
+      "validation",
+      "metric readback"
+    ],
+    "warning": "Raster scales above 1 repeat source pixels. They measure kernel scaling, not quality from higher-detail data."
+  },
+  "scaling_rows": [
+    {
+      "raster": [96, 72],
+      "pixels": 6912,
+      "splats": 768,
+      "measured_steps": 256,
+      "steps_per_second": [1204.00, 1267.89, 1335.35],
+      "median_steps_per_second": 1267.89,
+      "median_supervised_pixels_per_second": 8763667
+    },
+    {
+      "raster": [96, 72],
+      "pixels": 6912,
+      "splats": 1536,
+      "measured_steps": 256,
+      "steps_per_second": [935.93, 933.06, 915.53],
+      "median_steps_per_second": 933.06,
+      "median_supervised_pixels_per_second": 6449336
+    },
+    {
+      "raster": [96, 72],
+      "pixels": 6912,
+      "splats": 4096,
+      "measured_steps": 128,
+      "steps_per_second": [469.82, 504.87, 463.31],
+      "median_steps_per_second": 469.82,
+      "median_supervised_pixels_per_second": 3247393
+    },
+    {
+      "raster": [192, 144],
+      "pixels": 27648,
+      "splats": 768,
+      "measured_steps": 128,
+      "steps_per_second": [616.48, 699.07, 737.67],
+      "median_steps_per_second": 699.07,
+      "median_supervised_pixels_per_second": 19327930
+    },
+    {
+      "raster": [192, 144],
+      "pixels": 27648,
+      "splats": 1536,
+      "measured_steps": 128,
+      "steps_per_second": [526.39, 556.75, 573.50],
+      "median_steps_per_second": 556.75,
+      "median_supervised_pixels_per_second": 15393071
+    },
+    {
+      "raster": [192, 144],
+      "pixels": 27648,
+      "splats": 4096,
+      "measured_steps": 64,
+      "steps_per_second": [316.65, 385.61, 400.73],
+      "median_steps_per_second": 385.61,
+      "median_supervised_pixels_per_second": 10661397
+    }
+  ],
+  "ssim_window_rows": [
+    {
+      "raster": [96, 72],
+      "splats": 1536,
+      "window": 7,
+      "measured_steps": 256,
+      "steps_per_second": [1210.40, 1091.57, 1173.50],
+      "median_steps_per_second": 1173.50
+    },
+    {
+      "raster": [96, 72],
+      "splats": 1536,
+      "window": 11,
+      "measured_steps": 256,
+      "steps_per_second": [935.93, 933.06, 915.53],
+      "median_steps_per_second": 933.06
+    }
+  ],
+  "derived": {
+    "four_x_pixel_step_rate_retained_percent": {
+      "768_splats": 55.14,
+      "1536_splats": 59.67,
+      "4096_splats": 82.08
+    },
+    "seven_vs_eleven_window_steps_per_second_gain_percent": 25.77,
+    "interpretation": [
+      "Splat-side sort, pair-backward, and optimizer work dominate increasingly as splat count rises.",
+      "Within 96x72 to 192x144, raster pixels are cheaper than splat capacity.",
+      "A smaller SSIM window improves whole-step speed, but changes the objective and has no quality result in this artifact."
+    ]
+  },
+  "failed_boundary": {
+    "raster": [384, 288],
+    "splats": 768,
+    "result": "first tiled submission failed with an invalid bind group caused by an earlier resource error",
+    "inference": "The monolithic all-view/all-time RGBA32F target buffer is about 486 MiB at this raster and exceeds the portable storage-binding envelope.",
+    "target_buffer_bytes": 509607936,
+    "required_fix": "Stream or page camera/time targets instead of binding the complete dataset as one storage buffer."
+  },
+  "comparability": {
+    "live_spa_observation_steps_per_second_at_4096": [250, 280],
+    "isolated_median_steps_per_second_at_4096_96x72": 469.82,
+    "live_overhead_note": "The SPA also runs previews, worker scheduling, status publication, periodic metric readback, and asynchronous validation.",
+    "metal_note": "No saved Metal row matches this complete 17-camera, 16-frame, full-raster L1-plus-SSIM Adam step. Do not infer a WebGPU-vs-Metal ratio from this artifact."
+  }
+}
