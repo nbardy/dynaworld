@@ -1,8 +1,8 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260729-convergence7";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260729-convergence7";
-import { learningRateMultipliers } from "./trainingSchedule.js?v=20260729-convergence7";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260729-convergence7";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260729-convergence7";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260729-fixedtopology4";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260729-fixedtopology4";
+import { learningRateMultipliers } from "./trainingSchedule.js?v=20260729-fixedtopology4";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260729-fixedtopology4";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260729-fixedtopology4";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
@@ -18,7 +18,8 @@ const controls = {
 	fullMetrics: $("fullMetricsToggle"), speed: $("timeSpeedSlider"), targetView: $("targetViewSelect"),
 	renderCamera: $("renderCameraSelect"), resultView: $("resultViewSelect"),
 	temporalSchedule: $("temporalScheduleToggle"), temporal: $("temporalSlider"), lr: $("lrSlider"),
-	lrSchedule: $("lrScheduleToggle"),
+	lrSchedule: $("lrScheduleToggle"), staticWarmup: $("staticWarmupToggle"),
+	motionWeighting: $("motionWeightingToggle"),
 	samples: $("samplesSlider"), motionMix: $("motionMixSlider"), staticMix: $("staticMixSlider"),
 	supportGuard: $("supportGuardSlider"),
 };
@@ -28,7 +29,7 @@ const values = {
 	temporalSchedule: $("temporalScheduleValue"), lr: $("lrValue"), lrSchedule: $("lrScheduleValue"),
 	samples: $("samplesValue"),
 	motionMix: $("motionMixValue"), staticMix: $("staticMixValue"), supportGuard: $("supportGuardValue"),
-	step: $("stepValue"), stepRate: $("stepRateValue"), sampleLoss: $("lossValue"),
+	step: $("stepValue"), phase: $("phaseValue"), stepRate: $("stepRateValue"), sampleLoss: $("lossValue"),
 	gridLoss: $("gridLossValue"), trainMae: $("valMaeValue"), trainPsnr: $("valPsnrValue"),
 	trainSsim: $("valSsimValue"), heldoutLoss: $("heldoutLossValue"), heldoutMae: $("heldoutMaeValue"),
 	heldoutPsnr: $("heldoutPsnrValue"), heldoutSsim: $("heldoutSsimValue"),
@@ -62,6 +63,7 @@ const TEMPORAL_SUPPORT_END_STEP = 2048;
 const RENDER_FPS = 20;
 const MAX_RENDER_WIDTH = 960;
 const VALIDATION_STEP_INTERVAL = 8192;
+const STATIC_WARMUP_STEPS = 2048;
 const UI_STATE_KEY = "dynaworld-browser-trainer-ui-v2";
 const metricHistory = { sampleLoss: [], trainLoss: [], heldoutLoss: [],
 	trainPsnr: [], heldoutPsnr: [], trainSsim: [], heldoutSsim: [] };
@@ -83,6 +85,7 @@ let lastValidationRequestStep = 0;
 let localLossPending = false;
 let lastLocalLossStep = -1;
 let trainerCapacity = 0;
+let trainerStaticWarmupSteps = 0;
 const frameDurations = [];
 
 function currentStep() {
@@ -120,7 +123,9 @@ function trainOptions() {
 		samplesPerStep: Number(controls.samples.value),
 		modelMode: currentModelMode(), temporalSigma: currentTemporalSigma(),
 		motionSampleRate: effectiveMotionMix(), staticSampleRate: Number(controls.staticMix.value),
-		motionCoverageTarget: Number(controls.supportGuard.value), camerasPerStep: 4,
+		motionCoverageTarget: Number(controls.supportGuard.value),
+		motionWeighting: controls.motionWeighting.checked,
+		camerasPerStep: 4,
 	};
 }
 
@@ -178,6 +183,10 @@ function updateControlLabels() {
 	}
 	controls.precision.disabled = sampledBackendSelected();
 	$("checkpointPrecisionField").toggleAttribute("data-disabled", sampledBackendSelected());
+	controls.staticWarmup.disabled = sampledBackendSelected();
+	$("staticWarmupField").toggleAttribute("data-disabled", sampledBackendSelected());
+	controls.motionWeighting.disabled = sampledBackendSelected();
+	$("motionWeightingField").toggleAttribute("data-disabled", sampledBackendSelected());
 	values.temporalLabel.textContent = controls.temporalSchedule.checked ? "Temporal Support Now" : "Temporal Support";
 	if (!controls.temporalSchedule.checked) {
 		values.temporalSchedule.textContent = "manual · fixed";
@@ -439,17 +448,21 @@ async function initWorkerTrainer() {
 	const ready = await workerClient.init({
 		dataset, canvas: renderCanvas,
 		trainerOptions: { backend: controls.backend.value, splatCount: Number(controls.splats.value),
-			checkpointPrecision: controls.precision.value },
+			checkpointPrecision: controls.precision.value,
+			staticWarmupSteps: controls.staticWarmup.checked && !sampledBackendSelected()
+				? STATIC_WARMUP_STEPS : 0 },
 		trainOptions: trainOptions(), renderOptions: renderOptions(),
 		schedule: { validationEvery: 0, renderFps: RENDER_FPS },
 	});
 	trainerCapacity = ready.backend?.capacity ?? Number(controls.splats.value);
+	trainerStaticWarmupSteps = ready.backend?.memoryPlan?.staticWarmupSteps ?? 0;
 	document.documentElement.dataset.trainerBackend = ready.backend?.id ?? "unknown";
 	values.gpu.textContent = ready.adapter ?? "WebGPU";
 	values.runtime.textContent = ready.capabilities.offscreenRender
 		? `${ready.backend?.label ?? "worker"} + render` : `${ready.backend?.label ?? "worker"} optimizer`;
 	values.representation.textContent = "Trajectory 3DGS";
 	values.representation.title = ready.backend?.representation ?? "trajectory-gated dynamic 3DGS";
+	$("motionCoverageLabel").textContent = ready.backend?.sampledControls ? "Motion Cov" : "Train Cov";
 	values.shared.textContent = ready.capabilities.sharedStatus ? "atomic SAB" : "messages";
 	values.validation.textContent = ready.capabilities.validationWorker ? "separate worker" : "unavailable";
 	if (!ready.capabilities.offscreenRender) {
@@ -467,10 +480,14 @@ async function initWorkerTrainer() {
 	values.splatCount.textContent = trainerCapacity === Number(controls.splats.value)
 		? String(trainerCapacity) : `${controls.splats.value} → ${trainerCapacity}`;
 	const checkpointPrecision = ready.backend?.memoryPlan?.checkpointPrecision;
+	const objective = controls.motionWeighting.checked && !sampledBackendSelected()
+		? `motion-weighted ${ready.backend?.objective ?? "training"}`
+		: ready.backend?.objective ?? "training";
 	setStatus(`Ready: ${ready.backend?.label ?? "WebGPU"} · `
 		+ `${ready.backend?.representation ?? "trajectory-gated dynamic 3DGS"} · `
-		+ `${ready.backend?.objective ?? "training"} · `
+		+ `${objective} · `
 		+ `${checkpointPrecision ? `${checkpointPrecision} checkpoints · ` : ""}`
+		+ `${trainerStaticWarmupSteps ? `${trainerStaticWarmupSteps}-step train-only static warmup · ` : ""}`
 		+ `${cameraBatch?.camerasPerStep ?? 1} of ${cameraBatch?.trainViewCount ?? 17} train cameras per step; `
 		+ `${heldoutDescription}; init ${dataset.seedProvenance?.train_only_verified
 			? "train-only verified" : "external/unverified"}.`);
@@ -566,6 +583,7 @@ function frameLoop(now) {
 		const status = workerClient.getStatus();
 		if (status) {
 			values.step.textContent = String(status.step);
+			values.phase.textContent = status.step < trainerStaticWarmupSteps ? "static init" : "dynamic fit";
 			values.stepRate.textContent = Number.isFinite(status.stepsPerSecond) ? status.stepsPerSecond.toFixed(1) : "--";
 			if (status.lastMetricStep > lastStatusMetricStep && Number.isFinite(status.loss)) {
 				lastStatusMetricStep = status.lastMetricStep;
@@ -624,12 +642,14 @@ controls.reset.addEventListener("click", () => { void resetTrainer(); });
 controls.splats.addEventListener("change", () => { void resetTrainer(); });
 controls.backend.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
 controls.precision.addEventListener("change", () => { void resetTrainer(); });
+controls.staticWarmup.addEventListener("change", () => { void resetTrainer(); });
 controls.mode.addEventListener("change", () => { syncWorkerOptions(true); updateControlLabels(); });
 for (const control of [controls.time, controls.speed, controls.temporal, controls.lr, controls.samples,
 	controls.motionMix, controls.staticMix, controls.supportGuard]) {
 	control.addEventListener("input", () => { updateControlLabels(); syncWorkerOptions(); updateTargetCanvas(); });
 }
-for (const control of [controls.loop, controls.live, controls.temporalSchedule, controls.lrSchedule]) {
+for (const control of [controls.loop, controls.live, controls.temporalSchedule, controls.lrSchedule,
+	controls.motionWeighting]) {
 	control.addEventListener("change", () => { updateControlLabels(); syncWorkerOptions(true); });
 }
 controls.fullMetrics.addEventListener("change", () => {

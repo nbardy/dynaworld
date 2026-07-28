@@ -8,6 +8,7 @@ import {
 
 export const SPLAT_FLOATS = 24;
 export const INITIAL_SPLAT_OPACITY = 0.1;
+export const MAX_SPLAT_COLOR = 1;
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 const MAX_SAMPLES_PER_STEP = 192;
 const MAX_RENDER_VIEWS = 3;
@@ -1048,7 +1049,8 @@ const UPDATE_WGSL = `
 		p.rotation = select(vec4<f32>(0.0, 0.0, 0.0, 1.0), rotationTrial * inverseSqrt(max(rotationNorm2, 1e-16)),
 			rotationNorm2 > 1e-16);
 		p.colorOpacity = vec4<f32>(clamp(p.colorOpacity.xyz - cfg.lrColor * colorUpdate.xyz,
-			vec3<f32>(0.0), vec3<f32>(1.4)), clamp(p.colorOpacity.w - cfg.lrOpacity * colorUpdate.w, -7.0, 3.0));
+			vec3<f32>(0.0), vec3<f32>(${MAX_SPLAT_COLOR}.0)),
+			clamp(p.colorOpacity.w - cfg.lrOpacity * colorUpdate.w, -7.0, 3.0));
 		paramsOut[i] = p;
 		let observed = vec4<f32>(length(gradient.centerStatic.xyz), meanAlpha,
 			abs(gradient.colorOpacity.w), length(gradient.velocityTime.xyz));
@@ -1233,7 +1235,7 @@ const RENDER_WGSL = `
 		let invZ = 1.0 / cp.z; let horizontalFocal = cfg.targetAspect * camera.intrinsics.x;
 		let j0 = vec3<f32>(horizontalFocal*invZ, 0.0, -horizontalFocal*cp.x*invZ*invZ);
 		let j1 = vec3<f32>(0.0, camera.intrinsics.y*invZ, -camera.intrinsics.y*cp.y*invZ*invZ);
-		let filterVariance = pow(0.3 / max(1.0, cfg.targetHeight), 2.0);
+		let filterVariance = pow(0.3 / max(1.0, cfg.height), 2.0);
 		let c00 = dot(j0, sigmaCamera*j0) + filterVariance;
 		let c01 = dot(j0, sigmaCamera*j1); let c11 = dot(j1, sigmaCamera*j1) + filterVariance;
 		let l00 = sqrt(max(c00, 1e-12)); let l10 = c01 / l00;
@@ -1248,7 +1250,9 @@ const RENDER_WGSL = `
 	}
 	@fragment fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
 		let qform = dot(input.local, input.local); if (qform > 9.0) { discard; }
-		let alpha = clamp(input.opacity * exp(-0.5 * qform), 0.0, 1.0);
+		let rawAlpha = input.opacity * exp(-0.5 * qform);
+		if (rawAlpha < 0.00392156863) { discard; }
+		let alpha = min(0.99, rawAlpha);
 		if (cfg.renderMode >= 1.5) { let a = clamp(alpha * 8.0, 0.0, 1.0); return vec4<f32>(0.1 * a, a, 0.65 * a, a); }
 		if (cfg.renderMode >= 0.5) { let a = clamp(alpha * 8.0, 0.0, 1.0); return vec4<f32>(input.color * a, a); }
 		return vec4<f32>(input.color * alpha, alpha);
@@ -1728,7 +1732,7 @@ export class DynamicSplatWebGpu3dTrainer {
 			sortPass.dispatchWorkgroups(1); sortPass.end();
 		}
 		const pass = encoder.beginRenderPass({ colorAttachments: [{
-			view: this.context.getCurrentTexture().createView(), clearValue: { r: 0.01, g: 0.012, b: 0.016, a: 1 },
+			view: this.context.getCurrentTexture().createView(), clearValue: { r: 0, g: 0, b: 0, a: 1 },
 			loadOp: "clear", storeOp: "store" }] });
 		pass.setPipeline(this.pipelines.render); pass.setVertexBuffer(0, this.buffers.quad);
 		for (let panel = 0; panel < renderViews; panel += 1) {

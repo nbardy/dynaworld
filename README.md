@@ -160,7 +160,7 @@ every image pixel, and it does not materialize a pixel-by-splat gradient tensor.
 The default objective is:
 
 ```text
-0.8 * mean(abs(prediction - target)) + 0.2 * mean(1 - SSIM)
+mean_pixel weight * (0.8 * abs(prediction - target) + 0.2 * (1 - SSIM))
 ```
 
 The default SSIM uses the standard 11x11 Gaussian window with sigma 1.5,
@@ -169,6 +169,17 @@ gradient passes finite differences, and the active Apple WebGPU forward,
 objective, and selected parameter-family gradients pass the live tiled parity
 harness. Nondefault SSIM radii remain normalized uniform-window probes and
 change the objective.
+
+The optional `Motion-Weighted Loss` ablation derives train weights from RGB
+residual to each camera's temporal mean, caps them at 2x before normalization,
+and normalizes them to mean one per frame. It changes neither the raster nor
+the shared backward. Validation PSNR, SSIM, L1, and MSE are always ordinary
+unweighted full-image metrics.
+
+This ablation is off by default. At step 16,384, the unweighted run reached
+`15.3/14.6 dB` train/heldout; 2x motion weighting reached `14.9/13.9 dB`, and
+an earlier 4x run reached `15.3/14.3 dB`. It did not fix the plateau and
+reduced heldout quality.
 
 ## Primitive Model
 
@@ -186,6 +197,11 @@ center, perspective depth, scale, quaternion, color, opacity, temporal-center,
 velocity, harmonic-offset, and static-mix derivatives. Scale aspect ratio is
 bounded to 6:1.
 
+A matched 12:1 ablation at step 16,384 produced `16.3/15.4 dB`
+train/heldout and `0.518/0.254` SSIM, versus `16.2/15.5 dB` and
+`0.514/0.261` at 6:1. The longer ellipses slightly improved train fit, slightly
+hurt heldout quality, and touched more tiles, so 6:1 remains the default.
+
 The `Motion Model` selector is only a trajectory-basis ablation:
 
 - `Harmonic trajectory splats` adds one sinusoidal center component.
@@ -201,27 +217,86 @@ camera, keeps points visible from at least one training camera, and takes a
 deterministic farthest-point subset. Initial scale and rotation come from local
 point-cloud neighborhoods; opacity starts at 0.1.
 
-The trainer uses fixed GPU capacity. The SPA defaults to 2,048 initialized
-splats and reserves growth capacity through 4,096:
+The trainer uses fixed GPU capacity. The SPA defaults to all 4,096 checked-in
+SfM seeds. This replaces the short-lived 2,048-plus-growth default, which
+discarded half of the available point scaffold and asked deterministic splitting
+to recreate it. Lower slider values remain useful growth ablations:
 
 - when requested splats are below capacity, hidden slots are filled by
   split/recycle events beginning at step 600;
-- after fill, weak slots are recycled from high-gradient parents every 512
-  steps through step 120,000;
-- selecting 4,096 initial splats remains the fixed-topology/full-capacity
-  control.
+- after the reserved slots are filled, topology maintenance stops;
+- selecting 4,096 initial splats uses the complete seed bank at full capacity
+  and performs no proxy-driven replacements.
 
-This is dynamic topology within a fixed allocation. It supports relocation,
-spatial scale shrinkage, opacity-mass preservation, temporal separation, and
-moment reset. It is not a dynamic buffer resize, residual/depth-guided
-densification, canonical 3DGS densification, or native 4DGS spatial-temporal
-pruning schedule. A 25% dynamic-reserve heuristic was tested, preserved dynamic
-slots, and slightly regressed early quality, so it was not shipped.
+Lower-count growth is dynamic topology within a fixed allocation. It supports
+relocation, spatial scale shrinkage, opacity-mass preservation, temporal
+separation, and moment reset only while filling initially hidden slots. It is
+not a dynamic buffer resize, residual/depth-guided densification, canonical
+3DGS densification, or native 4DGS spatial-temporal pruning schedule. Proxy
+recycling after fill was removed because it would replace 3,744 of 4,096 slots
+by step 120,000 in the default run, erasing the SfM scaffold and producing
+repeated split chains.
 
 Adam uses `beta1=0.9`, `beta2=0.999`, and `epsilon=1e-8`. The default-on,
 toggleable schedule decays geometry learning rates by 100x and appearance
 learning rates by 10x over 120,000 steps. Density statistics use 0.999 decay so
 their memory spans the 272 camera/time-pair cycle.
+
+### Background And Static Warmup
+
+The 3D trainer composites over exact black; background color is not randomized.
+This matches the fixed-black default in the
+[original 3DGS implementation](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/train.py).
+It does not paste a camera-specific 2D background behind the splats, because
+doing so for `cam06` would leak heldout pixels and would make novel-view metrics
+meaningless. The temporal mean stored for each camera was previously used only
+to classify motion/static pixels.
+
+Decoded target RGB is clamped to `[0, 1]` and every target pixel is opaque.
+Learned splat RGB is now clamped to the same range. The earlier `[0, 1.4]`
+bound let a translucent overbright splat reproduce a bright target against
+black without learning the corresponding opacity. Train and heldout alpha
+coverage remain visible in the UI. There is no hidden coverage penalty.
+
+Random backgrounds are not the default fix for this capture. They can act as
+an opaque-coverage regularizer, but they also change the objective and can
+favor large opaque floaters. A camera-specific mean image would be worse:
+it is a 2D leak, not a novel-view background model.
+
+The optional `Static Scene Warmup` uses those means for the first 2,048
+optimizer steps, but only for the 17 training cameras. During that phase the
+temporal gate is one and motion parameters are frozen; position, covariance,
+rotation, RGB, and opacity build a static 3D scaffold. Training then restarts the
+complete camera/time schedule on the real frames. Validation always renders the
+actual train and heldout frames, never the temporal means.
+
+It is off by default. A matched Coffee Martini smoke at step 16,384 favored no
+warmup: `15.3/14.6 dB` train/heldout versus `15.1/14.2 dB` with warmup. The
+mean-image phase also bakes the moving actor's temporal ghost into the scaffold,
+which is the wrong default for this scene.
+
+The live renderer now uses display-resolution anti-aliasing, the same
+`1/255` alpha support threshold and `0.99` alpha cap as training, and an exact
+black clear. The old preview used the 72-pixel training height for filtering
+even on a much taller canvas, which made small anisotropic splats look like
+soft circles and exposed faint recycled copies that training had already
+culled.
+
+### Why Not Softmax Splatting?
+
+[Softmax Splatting](https://openaccess.thecvf.com/content_CVPR_2020/papers/Niklaus_Softmax_Splatting_for_Video_Frame_Interpolation_CVPR_2020_paper.pdf)
+is a differentiable forward-warp operator for 2D video frame interpolation.
+Its softmax resolves several source pixels landing on one target pixel. It is
+not the depth-ordered transmittance model used by 3D Gaussian Splatting.
+Replacing source-over alpha compositing with a softmax across Gaussians would
+normalize away visibility and change both the rendering model and the shared
+backward.
+
+It could be useful later in an optical-flow auxiliary loss or initialization
+experiment, but it is not a convergence patch for this 3D renderer. The
+higher-value standard additions are residual/view-space-gradient-guided
+densification and pruning, view-dependent appearance, a verified train-only
+SfM cloud, and a richer temporal parameterization.
 
 ## Runtime And Metrics
 
@@ -370,13 +445,21 @@ The highest-value remaining evidence is:
    denser verified cloud with a stronger matcher;
 2. phase timing for bin/sort, raster, SSIM, backward, update, preview, and
    validation;
-3. matched fixed-topology versus split/recycle quality runs;
-4. matched initialization and splat-capacity ablations;
+3. residual/depth-guided densification and pruning, compared against the new
+   fixed-topology default rather than the removed proxy recycler;
+4. matched initialization, normalized-scale-bound, LR-family, and splat-capacity
+   ablations;
 5. full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed;
 6. a complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
    World Tubes to a selectable browser backend;
 7. canonical byte targets plus shared host storage before presenting 384x288 as
    a normal SPA dataset mode rather than an isolated GPU benchmark.
+
+The latest corrected diagnostic reached `16.2/15.5 dB` train/heldout and
+`0.514/0.261` SSIM at step 16,384, versus `15.3/14.6 dB` and
+`0.494/0.214` before fixed topology and bounded RGB. At step 32,768 it reached
+`16.6/15.5 dB` and `0.537/0.257`. These are single-scene smokes, not rows in
+the canonical paper standings.
 
 See `research_notes/browser_4dgs_baseline.md` for the external native-4DGS
 comparison contract.

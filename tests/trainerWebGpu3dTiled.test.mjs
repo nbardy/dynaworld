@@ -5,6 +5,7 @@ import {
 	DynamicSplatWebGpu3dTiledTrainer,
 	DEFAULT_CHECKPOINT_PRECISION,
 	DEFAULT_MAX_TILE_CAPACITY,
+	DEFAULT_STATIC_WARMUP_STEPS,
 	densityDispatchesForStep,
 	ellipseIntersectsRect,
 	fullFramePairForStep,
@@ -16,12 +17,16 @@ import {
 	resolveCheckpointPrecision,
 	resolvePairDispatch,
 	resolveSsimRadius,
+	resolveStaticWarmupSteps,
 	resolveTileCapacity,
 	resolveTiledCapacity,
 	SCALE_LR_FROM_COLOR,
+	trainingPairForStep,
 	windowedL1DssimCpu,
 } from "../trainerWebGpu3dTiled.js";
+import { computeMultiviewSamples, normalizedMotionLossWeights } from "../dataset.js";
 import { canonicalGaussianSsim } from "../snapshotMetrics.js";
+import { MAX_SPLAT_COLOR } from "../trainerWebGpu3d.js";
 
 const source = readFileSync(new URL("../trainerWebGpu3dTiled.js", import.meta.url), "utf8");
 
@@ -103,6 +108,7 @@ test("target paging uploads exactly one selected Float32 frame and reuses the re
 		height: 1,
 		frameCount: 2,
 		frames: Float32Array.from({ length: 2 * 2 * 2 * 4 }, (_, index) => index + 0.25),
+		backgrounds: Float32Array.from({ length: 2 * 2 * 4 }, (_, index) => 100 + index),
 	};
 	trainer.device = { queue: { writeBuffer: (...args) => writes.push(args) } };
 	trainer.targetPageKey = null;
@@ -117,6 +123,11 @@ test("target paging uploads exactly one selected Float32 frame and reuses the re
 	assert.equal(trainer.uploadTargetPage(target, 0, 1), 2);
 	assert.equal(writes.length, 2);
 	assert.deepEqual(Array.from(writes[1][2]), Array.from(trainer.dataset.frames.subarray(8, 16)));
+	assert.equal(trainer.uploadTargetPage(target, 1, 0, { staticWarmup: true }), 2);
+	assert.equal(writes.length, 3);
+	assert.deepEqual(Array.from(writes[2][2]), Array.from(trainer.dataset.backgrounds.subarray(8, 16)));
+	assert.equal(trainer.uploadTargetPage(target, 1, 1, { staticWarmup: true }), 2);
+	assert.equal(writes.length, 3);
 });
 
 test("SSIM radius accepts the benchmark range and preserves the 11x11 default", () => {
@@ -127,16 +138,18 @@ test("SSIM radius accepts the benchmark range and preserves the 11x11 default", 
 	assert.throws(() => resolveSsimRadius(5.5), /integer/);
 });
 
-test("density schedule fills reserved slots once, then recycles slowly", () => {
+test("density schedule fills only reserved slots and preserves active topology afterward", () => {
+	assert.equal(densityDispatchesForStep(4096, 4096, 512), 0);
+	assert.equal(densityDispatchesForStep(4096, 4096, 119808), 0);
 	assert.equal(densityDispatchesForStep(1536, 3072, 599), 0);
 	assert.equal(densityDispatchesForStep(1536, 3072, 600), 4);
 	assert.equal(densityDispatchesForStep(1536, 3072, 10100), 4);
 	assert.equal(densityDispatchesForStep(1536, 3072, 10200), 0);
-	assert.equal(densityDispatchesForStep(1536, 3072, 10240), 4);
-	assert.equal(densityDispatchesForStep(1536, 3072, 119808), 4);
+	assert.equal(densityDispatchesForStep(1536, 3072, 10240), 0);
+	assert.equal(densityDispatchesForStep(1536, 3072, 119808), 0);
 	assert.equal(densityDispatchesForStep(1536, 3072, 120320), 0);
 	assert.equal(densityDispatchesForStep(1536, 4096, 16500), 4);
-	assert.equal(densityDispatchesForStep(1536, 4096, 16896), 4);
+	assert.equal(densityDispatchesForStep(1536, 4096, 16896), 0);
 });
 
 test("full-frame schedule shuffles and visits every camera/time pair before cycling", () => {
@@ -147,6 +160,34 @@ test("full-frame schedule shuffles and visits every camera/time pair before cycl
 	assert.deepEqual(fullFramePairForStep(trainViews, 2, 6), cycle[0]);
 	assert.deepEqual(fullFramePairForStep(trainViews, 2, -4), cycle[0]);
 	assert.throws(() => fullFramePairForStep([], 2, 0), /train view/);
+});
+
+test("static warmup rotates only train-camera means before restarting the dynamic pair cycle", () => {
+	const trainViews = [2, 5, 9];
+	assert.equal(DEFAULT_STATIC_WARMUP_STEPS, 2048);
+	assert.equal(resolveStaticWarmupSteps(), 0);
+	assert.equal(resolveStaticWarmupSteps(2048), 2048);
+	assert.throws(() => resolveStaticWarmupSteps(-1), /0 through 1000000/);
+	assert.throws(() => resolveStaticWarmupSteps(1.5), /integer/);
+	const warmup = Array.from({ length: 3 }, (_, step) =>
+		trainingPairForStep(trainViews, 8, step, 3));
+	assert.equal(new Set(warmup.map(({ viewIndex }) => viewIndex)).size, 3);
+	assert.ok(warmup.every(({ frameIndex, staticWarmup }) => frameIndex === 3 && staticWarmup));
+	assert.deepEqual(
+		trainingPairForStep(trainViews, 8, 3, 3),
+		{ ...fullFramePairForStep(trainViews, 8, 0), staticWarmup: false },
+	);
+});
+
+test("warmup freezes temporal gates and display filtering follows display resolution", () => {
+	assert.match(source, /cfg\.staticWarmup!=0u\)\{return 0\.5;/);
+	assert.match(source, /select\(temporal_gate\(p,t,cfg\.temporalSigma\),1\.0,cfg\.staticWarmup!=0u\)/);
+	assert.match(source, /let tc=select\(t\*2\.0-1\.0,0\.0,staticWarmup\)/);
+	assert.match(source, /let gradStaticMix=select\(/);
+	const displaySource = readFileSync(new URL("../trainerWebGpu3d.js", import.meta.url), "utf8");
+	assert.match(displaySource, /filterVariance = pow\(0\.3 \/ max\(1\.0, cfg\.height\), 2\.0\)/);
+	assert.match(displaySource, /rawAlpha < 0\.00392156863/);
+	assert.doesNotMatch(displaySource, /filterVariance = pow\(0\.3 \/ max\(1\.0, cfg\.targetHeight\)/);
 });
 
 test("opacity-aware pixel bounds shrink support and clip to the image", () => {
@@ -221,6 +262,63 @@ test("windowed L1 plus SSIM analytic gradient matches finite differences", () =>
 	}
 });
 
+test("motion weights emphasize residuals, preserve mean scale, and keep the image gradient exact", () => {
+	const weights = normalizedMotionLossWeights([0, 0.00035, 0.001, 0.004, 0.02]);
+	assertClose(weights.reduce((sum, value) => sum + value, 0) / weights.length, 1, 1e-7);
+	assert.ok(weights[0] < weights[2]);
+	assert.ok(weights[2] < weights[3]);
+	assertClose(weights[3], weights[4], 1e-7);
+
+	const width = 3;
+	const height = 2;
+	const target = Float64Array.from(
+		{ length: width * height * 3 },
+		(_, index) => 0.1 + 0.7 * ((index * 5) % 17) / 16,
+	);
+	const prediction = Float64Array.from(
+		target,
+		(value, index) => value + (index % 2 ? -0.02 : 0.03),
+	);
+	const pixelWeights = Float64Array.from([0.4, 0.7, 1.1, 1.4, 0.9, 1.5]);
+	const analytic = windowedL1DssimCpu(prediction, target, width, height, {
+		radius: 1,
+		pixelWeights,
+	});
+	const epsilon = 1e-5;
+	for (const index of [0, 5, 11, prediction.length - 1]) {
+		const plus = Float64Array.from(prediction);
+		const minus = Float64Array.from(prediction);
+		plus[index] += epsilon;
+		minus[index] -= epsilon;
+		const finiteDifference = (
+			windowedL1DssimCpu(plus, target, width, height, {
+				radius: 1,
+				pixelWeights,
+				computeGradient: false,
+			}).loss
+			- windowedL1DssimCpu(minus, target, width, height, {
+				radius: 1,
+				pixelWeights,
+				computeGradient: false,
+			}).loss
+		) / (2 * epsilon);
+		assertClose(analytic.gradient[index], finiteDifference, 1e-6);
+	}
+});
+
+test("calibrated train frames store normalized motion weights in otherwise-unused alpha", () => {
+	const frames = new Float32Array(2 * 2 * 4);
+	for (let pixel = 0; pixel < 4; pixel += 1) frames[pixel * 4 + 3] = 1;
+	frames[(2 + 0) * 4] = 1;
+	frames[(2 + 0) * 4 + 1] = 1;
+	frames[(2 + 0) * 4 + 2] = 1;
+	const backgrounds = new Float32Array(2 * 4);
+	computeMultiviewSamples(frames, backgrounds, 2, 1, 2, 1);
+	assertClose((frames[3] + frames[7]) / 2, 1, 1e-7);
+	assertClose((frames[11] + frames[15]) / 2, 1, 1e-7);
+	assert.ok(frames[11] > frames[15]);
+});
+
 test("default 11x11 training SSIM matches the Gaussian validation metric", () => {
 	const width = 12;
 	const height = 11;
@@ -269,7 +367,7 @@ test("default Gaussian SSIM image gradient matches finite differences", () => {
 
 test("tiled trainer source preserves the full-frame shared-backward contract", () => {
 	const trainStep = DynamicSplatWebGpu3dTiledTrainer.prototype.trainStep.toString();
-	assert.match(trainStep, /fullFramePairForStep/);
+	assert.match(trainStep, /trainingPairForStep/);
 	assert.match(trainStep, /this\.lastSampleCount\s*=\s*this\.pixelCount/);
 	assert.match(trainStep, /this\.tilesX,\s*this\.tilesY/);
 	assert.match(trainStep, /dispatchWorkgroupsIndirect/);
@@ -283,6 +381,7 @@ test("tiled trainer source preserves the full-frame shared-backward contract", (
 	assert.match(source, /fn\s+raster_forward/);
 	assert.match(source, /fn\s+ssim_stats/);
 	assert.match(source, /fn\s+ssim_gradient/);
+	assert.match(source, /cfg\.motionWeighting!=0u/);
 	assert.match(source, /fn\s+pair_backward/);
 	assert.match(source, /fn\s+reduce_update/);
 	assert.match(source, /atomicCompareExchangeWeak/);
@@ -297,6 +396,7 @@ test("tiled trainer source preserves the full-frame shared-backward contract", (
 	assert.equal(SCALE_LR_FROM_COLOR, 0.30);
 	assert.equal(ROTATION_LR_FROM_MOTION, 1.25);
 	assert.equal(MAX_SCALE_ASPECT_RATIO, 6);
+	assert.equal(MAX_SPLAT_COLOR, 1);
 	assert.match(source, /pairData/);
 	assert.match(source, /gradientAtoms/);
 	assert.doesNotMatch(source, /gaussianPairSlots|pairGradients:array/);

@@ -8,7 +8,7 @@ function canTransferCanvas(canvas) {
 }
 
 export class NonblockingTrainerClient extends EventTarget {
-	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260729-convergence7", import.meta.url) } = {}) {
+	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260729-fixedtopology4", import.meta.url) } = {}) {
 		super();
 		this.worker = new Worker(workerUrl, { type: "module", name: "dynaworld-webgpu-trainer" });
 		this.statusBuffer = createSharedStatusBuffer();
