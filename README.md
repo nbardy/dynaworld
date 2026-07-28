@@ -90,7 +90,7 @@ The GPU command buffer then performs:
 2. project every splat through the calibrated pinhole camera;
 3. bin exact opacity-aware ellipse support into 16x16 tiles;
 4. depth-sort each tile;
-5. front-to-back alpha compositing with periodic transmittance checkpoints;
+5. front-to-back alpha compositing with storage-bounded transmittance checkpoints;
 6. local SSIM statistics and image-space RGB gradient;
 7. pair-owned shared raster backward;
 8. per-splat reduction and Adam update;
@@ -179,18 +179,21 @@ paper-protocol full-image metric.
 
 ## July 28 Scaling Result
 
-The synchronized Apple M4 benchmark creates a fresh WebGPU device per repeat,
-uses matched requested splats and capacity, warms for 32 steps, measures three
-GPU-drained intervals, and excludes compilation, initialization, preview,
-validation, and readback.
+The synchronized Apple M4 benchmark creates a fresh WebGPU device per run, uses
+matched requested splats and capacity, warms for 32 steps, measures 128
+GPU-drained steps, and excludes compilation, initialization, preview,
+validation, and readback. The table uses FP32 checkpoints; the 384x288/4,096
+endpoint is the median of three repeats and the other cells are single
+intervals.
 
 | Raster | 768 splats | 1,536 splats | 4,096 splats |
 | --- | ---: | ---: | ---: |
-| 96x72 | 1,268 steps/s | 933 steps/s | 470 steps/s |
-| 192x144 | 699 steps/s | 557 steps/s | 386 steps/s |
+| 96x72 | 1,233 steps/s | 863 steps/s | 359 steps/s |
+| 192x144 | 675 steps/s | 462 steps/s | 240 steps/s |
+| 384x288 | 266 steps/s | 182 steps/s | 118 steps/s |
 
-Four times as many pixels retain 55%, 60%, and 82% of native-raster step rate
-as splat count rises. In this range, splat-side work is the stronger cost.
+At 4,096 splats, packed-FP16 checkpoints improve these three raster points to
+403, 294, and 132 steps/s respectively.
 
 A matched 96x72/1,536-splat window ablation measured:
 
@@ -203,13 +206,52 @@ The smaller window is about 26% faster, but changes the objective and has no
 quality result. The standards-preserving optimization is an 11-tap separable
 Gaussian forward and transpose backward, not a whole-image SSIM statistic.
 
-The 384x288/768-splat probe fails the current resource contract. The complete
-18-camera x 16-time RGBA32F target tensor becomes about 486 MiB in one storage
-binding. Higher-resolution work therefore needs streamed or paged camera/time
-targets before more shader tuning.
+### Memory-layout follow-up
+
+The primary tiled backend now pages exactly one camera/time RGBA32F target into
+a reusable GPU buffer before each submitted step. At 384x288 this is 1.69 MiB,
+down from a 486 MiB all-camera/all-time binding, without changing target
+precision or the objective. Queue writes and compute submissions remain ordered
+on one `GPUQueue`; training does not drain or synchronize between pages.
+
+Each tile now reserves enough IDs to cover every splat, so a valid frame cannot
+overflow its bin. Active tile/splat pairs are compacted, backward dispatch uses
+two workgroup dimensions, and pair-owned gradients accumulate into one FP32
+record per splat with compare/exchange atomics. Checkpoint stride expands only
+enough to keep each storage binding within the device limit. On the Apple M4's
+128 MiB binding limit, the 384x288/4,096-splat plan is:
+
+| Buffer | Old reservation | Current reservation |
+| --- | ---: | ---: |
+| Target | 486 MiB | 1.69 MiB |
+| Forward checkpoints | 432 MiB | 108 MiB |
+| Pair gradients | 162 MiB | removed |
+| Compact pair IDs and references | 13.5 MiB | 13.5 MiB |
+| FP32 gradient accumulator | n/a | 0.375 MiB |
+
+A real 384x288/4,096-splat browser smoke compiled, trained, reported finite
+loss, and had zero tile overflow. FP32 repeats measured 117.6, 118.0, and 118.7
+steps/s. Packed-FP16 repeats measured 131.1, 131.6, and 139.2 steps/s, an 11.6%
+median improvement. After 1,024 submissions, FP16 and FP32 losses were
+0.284516 and 0.284515; the corresponding measured intervals were 100.0 and
+88.1 steps/s.
+
+Packed-FP16 checkpoints are therefore the SPA default, with FP32 selectable.
+Packing uses core `pack2x16float`/`unpack2x16float`; it does not require native
+FP16 arithmetic. Projection, covariance, depth, compositing arithmetic, SSIM,
+image gradients, atomic reductions, trainable parameters, and Adam moments
+remain FP32. FP16 either halves checkpoint memory or spends that saving on
+denser checkpoints and less backward replay, depending on raster size.
+
+The sampled-ray control still binds the complete target tensor and therefore
+still rejects 384x288. More importantly, GPU paging does not remove the host
+Float32 tensor: a future high-resolution SPA path should retain canonical RGBA8
+frames and share them across the main, training, and validation workers instead
+of cloning roughly 486 MiB per worker.
 
 Full measurements and repeats are in
-`benchmark_results/2026-07-28_tiled_scaling_apple_m4.json`.
+`benchmark_results/2026-07-28_tiled_scaling_apple_m4.json` and
+`benchmark_results/2026-07-28_tiled_memory_precision_apple_m4.json`.
 
 ## What The Numbers Do Not Prove
 
@@ -238,6 +280,8 @@ solid research baseline. The highest-value missing evidence is:
 6. Full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed.
 7. A complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
    World Tubes to a selectable browser backend.
+8. Canonical byte targets plus shared host storage before presenting 384x288 as
+   a normal SPA dataset mode rather than an isolated GPU benchmark.
 
 See `research_notes/browser_4dgs_baseline.md` for the external native-4DGS
 comparison contract.

@@ -12,7 +12,7 @@ const resultViewLabels = [0, 1, 2].map((index) => $(`resultViewLabel${index}`));
 const resultViewRoles = [0, 1, 2].map((index) => $(`resultViewRole${index}`));
 const controls = {
 	run: $("runButton"), step: $("stepButton"), reset: $("resetButton"), backend: $("backendSelect"),
-	mode: $("modeSelect"),
+	precision: $("checkpointPrecisionSelect"), mode: $("modeSelect"),
 	splats: $("splatSlider"), time: $("timeSlider"), loop: $("timeLoopToggle"), live: $("livePreviewToggle"),
 	fullMetrics: $("fullMetricsToggle"), speed: $("timeSpeedSlider"), targetView: $("targetViewSelect"),
 	renderCamera: $("renderCameraSelect"), resultView: $("resultViewSelect"),
@@ -135,6 +135,9 @@ function setRunning(next) {
 }
 
 function updateControlLabels() {
+	const splatLimit = sampledBackendSelected() ? 2048 : 4096;
+	controls.splats.max = String(splatLimit);
+	if (Number(controls.splats.value) > splatLimit) controls.splats.value = String(splatLimit);
 	const step = currentStep();
 	const sigma = currentTemporalSigma(step);
 	values.splats.textContent = controls.splats.value;
@@ -154,6 +157,8 @@ function updateControlLabels() {
 	for (const field of [$("sampleCountField"), $("motionMixField"), $("staticMixField"), $("supportGuardField")]) {
 		field.toggleAttribute("data-disabled", !sampledBackendSelected());
 	}
+	controls.precision.disabled = sampledBackendSelected();
+	$("checkpointPrecisionField").toggleAttribute("data-disabled", sampledBackendSelected());
 	values.temporalLabel.textContent = controls.temporalSchedule.checked ? "Temporal Support Now" : "Temporal Support";
 	if (!controls.temporalSchedule.checked) {
 		values.temporalSchedule.textContent = "manual · fixed";
@@ -381,7 +386,8 @@ async function initWorkerTrainer() {
 	bindWorkerEvents(workerClient);
 	const ready = await workerClient.init({
 		dataset, canvas: renderCanvas,
-		trainerOptions: { backend: controls.backend.value, splatCount: Number(controls.splats.value) },
+		trainerOptions: { backend: controls.backend.value, splatCount: Number(controls.splats.value),
+			checkpointPrecision: controls.precision.value },
 		trainOptions: trainOptions(), renderOptions: renderOptions(),
 		schedule: { validationEvery: 0, renderFps: RENDER_FPS },
 	});
@@ -406,7 +412,9 @@ async function initWorkerTrainer() {
 		: "no heldout camera is configured";
 	values.splatCount.textContent = trainerCapacity === Number(controls.splats.value)
 		? String(trainerCapacity) : `${controls.splats.value} → ${trainerCapacity}`;
+	const checkpointPrecision = ready.backend?.memoryPlan?.checkpointPrecision;
 	setStatus(`Ready: ${ready.backend?.label ?? "WebGPU"} · ${ready.backend?.objective ?? "training"} · `
+		+ `${checkpointPrecision ? `${checkpointPrecision} checkpoints · ` : ""}`
 		+ `${cameraBatch?.camerasPerStep ?? 1} of ${cameraBatch?.trainViewCount ?? 17} train cameras per step; `
 		+ `${heldoutDescription}.`);
 }
@@ -556,6 +564,7 @@ controls.step.addEventListener("click", () => {
 controls.reset.addEventListener("click", () => { void resetTrainer(); });
 controls.splats.addEventListener("change", () => { void resetTrainer(); });
 controls.backend.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
+controls.precision.addEventListener("change", () => { void resetTrainer(); });
 controls.mode.addEventListener("change", () => { syncWorkerOptions(true); updateControlLabels(); });
 for (const control of [controls.time, controls.speed, controls.temporal, controls.lr, controls.samples,
 	controls.motionMix, controls.staticMix, controls.supportGuard]) {

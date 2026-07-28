@@ -1,12 +1,14 @@
 import {
+	assertStorageBufferFits,
 	DynamicSplatWebGpu3dTrainer,
 	SPLAT_FLOATS,
 	makeInitialSplats,
+	rgbaFloatFrameBytes,
 } from "./trainerWebGpu3d.js";
 
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 const TILE_SIZE = 16;
-const CHECKPOINT_STRIDE = 16;
+const MIN_CHECKPOINT_STRIDE = 16;
 const PROJECTION_BYTES = 12 * 16;
 const SSIM_STATS_BYTES = 5 * 16;
 const DENSITY_START_STEP = 600;
@@ -15,6 +17,9 @@ const DENSITY_DISPATCHES = 4;
 const RECYCLE_INTERVAL = 500;
 const RECYCLE_STOP_STEP = 60000;
 const TILED_CONFIG_BYTES = 160;
+export const DEFAULT_MAX_TILE_CAPACITY = 4096;
+export const DEFAULT_CHECKPOINT_PRECISION = "packed-f16";
+export const MAX_WORKGROUPS_PER_DIMENSION = 65535;
 export const SCALE_LR_FROM_COLOR = 0.30;
 export const ROTATION_LR_FROM_MOTION = 1.25;
 export const MAX_SCALE_ASPECT_RATIO = 3;
@@ -40,6 +45,55 @@ export function resolveTiledCapacity(initialSplats, requestedCapacity = null) {
 	}
 	const capacity = requestedCapacity == null ? initialSplats * 3 : Number(requestedCapacity);
 	return Math.min(4096, Math.max(initialSplats, Math.floor(capacity)));
+}
+
+export function resolveTileCapacity(splatCount, requestedCapacity = null) {
+	if (!Number.isSafeInteger(splatCount) || splatCount < 8 || splatCount > 4096) {
+		throw new RangeError("splatCount must be an integer from 8 through 4096.");
+	}
+	const required = nextPowerOfTwo(splatCount);
+	const requested = requestedCapacity == null ? required : Math.floor(Number(requestedCapacity));
+	if (!Number.isSafeInteger(requested) || requested < splatCount
+		|| requested > DEFAULT_MAX_TILE_CAPACITY) {
+		throw new RangeError(`tileCapacity must cover all ${splatCount} splats and be at most `
+			+ `${DEFAULT_MAX_TILE_CAPACITY}.`);
+	}
+	return nextPowerOfTwo(requested);
+}
+
+export function resolveCheckpointPrecision(value = DEFAULT_CHECKPOINT_PRECISION) {
+	if (value !== "f32" && value !== "packed-f16") {
+		throw new RangeError('checkpointPrecision must be "f32" or "packed-f16".');
+	}
+	return value;
+}
+
+export function resolvePairDispatch(pairCount) {
+	if (!Number.isSafeInteger(pairCount) || pairCount < 0) {
+		throw new RangeError("pairCount must be a non-negative safe integer.");
+	}
+	return {
+		x: Math.min(pairCount, MAX_WORKGROUPS_PER_DIMENSION),
+		y: Math.max(1, ceilDiv(pairCount, MAX_WORKGROUPS_PER_DIMENSION)),
+		z: 1,
+	};
+}
+
+export function resolveCheckpointLayout(pixelCount, tileCapacity, storageLimit, bytesPerCheckpoint = 16) {
+	if (!Number.isSafeInteger(pixelCount) || pixelCount < 1
+		|| !Number.isSafeInteger(tileCapacity) || tileCapacity < MIN_CHECKPOINT_STRIDE
+		|| !Number.isSafeInteger(storageLimit) || storageLimit < 16
+		|| (bytesPerCheckpoint !== 8 && bytesPerCheckpoint !== 16)) {
+		throw new RangeError("Checkpoint layout inputs must be positive safe integers.");
+	}
+	for (let stride = MIN_CHECKPOINT_STRIDE; stride <= tileCapacity; stride *= 2) {
+		const blocksPerTile = ceilDiv(tileCapacity, stride);
+		const byteLength = pixelCount * blocksPerTile * bytesPerCheckpoint;
+		if (Number.isSafeInteger(byteLength) && byteLength <= storageLimit) {
+			return { stride, blocksPerTile, byteLength };
+		}
+	}
+	throw new RangeError(`Even one checkpoint record per pixel exceeds the ${storageLimit}-byte storage limit.`);
 }
 
 export function densityDispatchesForStep(initialSplats, capacity, step) {
@@ -223,7 +277,7 @@ function writeTiledConfig(buffer, values) {
 	u32(28, values.blocksPerTile);
 	u32(32, values.viewIndex); u32(36, values.frameIndex); u32(40, values.step);
 	u32(44, values.modelMode); u32(48, values.targetOffset); u32(52, values.pixelCount);
-	u32(56, values.pairCapacity); u32(60, CHECKPOINT_STRIDE);
+	u32(56, values.pairCapacity); u32(60, values.checkpointStride);
 	f32(64, values.targetAspect); f32(68, values.temporalSigma); f32(72, values.alphaThreshold);
 	f32(76, values.transmittanceThreshold); f32(80, values.lrPosition); f32(84, values.lrColor);
 	f32(88, values.lrOpacity); f32(92, values.lrMotion); f32(96, values.geometryScale);
@@ -298,7 +352,7 @@ function projectWgsl() {
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
 	@group(0) @binding(2) var<storage,read> cameras:array<Camera>;
 	@group(0) @binding(3) var<storage,read_write> tileCounts:array<atomic<u32>>;
-	@group(0) @binding(4) var<storage,read_write> tileIds:array<u32>;
+	@group(0) @binding(4) var<storage,read_write> pairData:array<u32>;
 	@group(0) @binding(5) var<storage,read_write> projections:array<Projection>;
 	@group(0) @binding(6) var<storage,read_write> counters:array<atomic<u32>>;
 	fn quadratic(d:vec2<f32>,q:vec3<f32>)->f32 {
@@ -375,7 +429,7 @@ function projectWgsl() {
 				if(ellipse_intersects_rect(center,conic,qLimit,pixelMin,pixelMax)){
 					let tile=ty*cfg.tilesX+tx; let slot=atomicAdd(&tileCounts[tile],1u);
 					if(slot<cfg.tileCapacity){
-						tileIds[tile*cfg.tileCapacity+slot]=i;
+						pairData[tile*cfg.tileCapacity+slot]=i;
 					}else{atomicAdd(&counters[1],1u);}
 				}
 			}
@@ -390,12 +444,12 @@ function clearWgsl() {
 	@group(0) @binding(2) var<storage,read_write> counters:array<atomic<u32>>;
 	@group(0) @binding(3) var<storage,read_write> indirectArgs:array<u32>;
 	@group(0) @binding(4) var<storage,read_write> metrics:array<vec4<f32>>;
-	@group(0) @binding(5) var<storage,read_write> gaussianPairSlots:array<u32>;
+	@group(0) @binding(5) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
 	@compute @workgroup_size(64)
 	fn clear_step(@builtin(global_invocation_id) gid:vec3<u32>){
 		let tileCount=cfg.tilesX*cfg.tilesY;
 		if(gid.x<tileCount){atomicStore(&tileCounts[gid.x],0u);}
-		if(gid.x<cfg.splatCount*tileCount){gaussianPairSlots[gid.x]=0xffffffffu;}
+		if(gid.x<cfg.splatCount*24u){atomicStore(&gradientAtoms[gid.x],0u);}
 		if(gid.x==0u){
 			atomicStore(&counters[0],0u);atomicStore(&counters[1],0u);
 			indirectArgs[0]=0u;indirectArgs[1]=1u;indirectArgs[2]=1u;metrics[0]=vec4<f32>(0.0);
@@ -408,10 +462,8 @@ function sortWgsl(tileCapacity) {
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> projections:array<Projection>;
 	@group(0) @binding(2) var<storage,read_write> tileCounts:array<atomic<u32>>;
-	@group(0) @binding(3) var<storage,read_write> tileIds:array<u32>;
+	@group(0) @binding(3) var<storage,read_write> pairData:array<u32>;
 	@group(0) @binding(4) var<storage,read_write> counters:array<atomic<u32>>;
-	@group(0) @binding(5) var<storage,read_write> pairRefs:array<u32>;
-	@group(0) @binding(6) var<storage,read_write> gaussianPairSlots:array<u32>;
 	var<workgroup> depthKeys:array<u32,${tileCapacity}>;
 	var<workgroup> tileSortCount:u32;
 	var<workgroup> pairBase:u32;
@@ -430,7 +482,7 @@ function sortWgsl(tileCapacity) {
 		let sortCount=workgroupUniformLoad(&tileSortCount);
 		for(var index=lid.x;index<sortCount;index+=256u){
 			if(index<count){
-				let id=tileIds[tile*cfg.tileCapacity+index];
+				let id=pairData[tile*cfg.tileCapacity+index];
 				let depthBits=bitcast<u32>(max(0.0,projections[id].conicDepthAlpha.y));
 				depthKeys[index]=(depthBits&0xfffff000u)|(id&0x00000fffu);
 			}else{depthKeys[index]=0xffffffffu;}
@@ -454,12 +506,13 @@ function sortWgsl(tileCapacity) {
 			}
 		}
 		for(var index=lid.x;index<count;index+=256u){
-			let slot=tile*cfg.tileCapacity+index;let id=depthKeys[index]&0x00000fffu;tileIds[slot]=id;
-			gaussianPairSlots[id*tileCount+tile]=slot;
+			let slot=tile*cfg.tileCapacity+index;let id=depthKeys[index]&0x00000fffu;pairData[slot]=id;
 		}
 		if(lid.x==0u){pairBase=atomicAdd(&counters[0],count);}
 		workgroupBarrier();
-		for(var index=lid.x;index<count;index+=256u){pairRefs[pairBase+index]=tile*cfg.tileCapacity+index;}
+		for(var index=lid.x;index<count;index+=256u){
+			pairData[cfg.pairCapacity+pairBase+index]=tile*cfg.tileCapacity+index;
+		}
 	}`;
 }
 
@@ -467,19 +520,48 @@ function finalizeWgsl() {
 	return `
 	@group(0) @binding(0) var<storage,read_write> counters:array<atomic<u32>>;
 	@group(0) @binding(1) var<storage,read_write> indirectArgs:array<u32>;
-	@compute @workgroup_size(1) fn finalize_pairs(){indirectArgs[0]=atomicLoad(&counters[0]);indirectArgs[1]=1u;indirectArgs[2]=1u;}
+	@compute @workgroup_size(1) fn finalize_pairs(){
+		let pairCount=atomicLoad(&counters[0]);
+		indirectArgs[0]=min(pairCount,${MAX_WORKGROUPS_PER_DIMENSION}u);
+		indirectArgs[1]=max(1u,(pairCount+${MAX_WORKGROUPS_PER_DIMENSION - 1}u)
+			/${MAX_WORKGROUPS_PER_DIMENSION}u);
+		indirectArgs[2]=1u;
+	}
 	`;
 }
 
-function forwardWgsl() {
+function checkpointForwardWgsl(precision) {
+	return precision === "packed-f16" ? `
+	@group(0) @binding(6) var<storage,read_write> checkpoints:array<vec2<u32>>;
+	fn write_checkpoint(index:u32,state:vec4<f32>){
+		checkpoints[index]=vec2<u32>(pack2x16float(state.xy),pack2x16float(state.zw));
+	}` : `
+	@group(0) @binding(6) var<storage,read_write> checkpoints:array<vec4<f32>>;
+	fn write_checkpoint(index:u32,state:vec4<f32>){checkpoints[index]=state;}
+	`;
+}
+
+function checkpointBackwardWgsl(precision) {
+	return precision === "packed-f16" ? `
+	@group(0) @binding(5) var<storage,read> checkpoints:array<vec2<u32>>;
+	fn read_checkpoint(index:u32)->vec4<f32>{
+		let packed=checkpoints[index];
+		return vec4<f32>(unpack2x16float(packed.x),unpack2x16float(packed.y));
+	}` : `
+	@group(0) @binding(5) var<storage,read> checkpoints:array<vec4<f32>>;
+	fn read_checkpoint(index:u32)->vec4<f32>{return checkpoints[index];}
+	`;
+}
+
+function forwardWgsl(checkpointPrecision) {
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
 	@group(0) @binding(2) var<storage,read> projections:array<Projection>;
 	@group(0) @binding(3) var<storage,read_write> tileCounts:array<atomic<u32>>;
-	@group(0) @binding(4) var<storage,read> tileIds:array<u32>;
+	@group(0) @binding(4) var<storage,read> pairData:array<u32>;
 	@group(0) @binding(5) var<storage,read_write> rendered:array<vec4<f32>>;
-	@group(0) @binding(6) var<storage,read_write> checkpoints:array<vec4<f32>>;
+	${checkpointForwardWgsl(checkpointPrecision)}
 	@group(0) @binding(7) var<storage,read_write> stopRanks:array<u32>;
 	fn alpha_at(proj:Projection,point:vec2<f32>)->f32{
 		if(proj.cameraPointValid.w<0.5){return 0.0;}
@@ -499,9 +581,9 @@ function forwardWgsl() {
 		var color=vec3<f32>(0.0);var transmittance=1.0;var stop=count;
 		for(var rank=0u;rank<count;rank++){
 			if(rank%cfg.checkpointStride==0u){
-				checkpoints[pixel*cfg.blocksPerTile+rank/cfg.checkpointStride]=vec4<f32>(color,transmittance);
+				write_checkpoint(pixel*cfg.blocksPerTile+rank/cfg.checkpointStride,vec4<f32>(color,transmittance));
 			}
-			let id=tileIds[tile*cfg.tileCapacity+rank];let alpha=alpha_at(projections[id],point);
+			let id=pairData[tile*cfg.tileCapacity+rank];let alpha=alpha_at(projections[id],point);
 			color+=transmittance*alpha*params[id].colorOpacity.xyz;transmittance*=1.0-alpha;
 			if(transmittance<cfg.transmittanceThreshold){stop=rank+1u;break;}
 		}
@@ -561,7 +643,8 @@ function ssimGradientWgsl() {
 	@group(0) @binding(1) var<storage,read> rendered:array<vec4<f32>>;
 	@group(0) @binding(2) var<storage,read> targets:array<vec4<f32>>;
 	@group(0) @binding(3) var<storage,read> stats:array<SsimStats>;
-	@group(0) @binding(4) var<storage,read_write> pixelGrad:array<vec4<f32>>;
+	@group(0) @binding(4) var<storage,read> stopRanks:array<u32>;
+	@group(0) @binding(5) var<storage,read_write> pixelGrad:array<vec4<f32>>;
 	fn reflected_multiplicity(center:i32,pixel:i32,size:i32,radius:i32)->u32 {
 		var count=select(0u,1u,abs(center-pixel)<=radius);
 		if(pixel>0&&abs(center+pixel)<=radius){count+=1u;}
@@ -595,7 +678,8 @@ function ssimGradientWgsl() {
 			}
 		}
 		let l1=sign(prediction-targetColor)/(f32(cfg.pixelCount)*3.0);
-		pixelGrad[pixel]=vec4<f32>(cfg.l1Weight*l1+cfg.dssimWeight*dssim,0.0);
+		pixelGrad[pixel]=vec4<f32>(cfg.l1Weight*l1+cfg.dssimWeight*dssim,
+			f32(stopRanks[pixel]));
 	}`;
 }
 
@@ -623,22 +707,42 @@ function metricsWgsl() {
 	}`;
 }
 
-function backwardWgsl() {
+function backwardWgsl(checkpointPrecision) {
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
 	@group(0) @binding(2) var<storage,read> projections:array<Projection>;
-	@group(0) @binding(3) var<storage,read> tileIds:array<u32>;
-	@group(0) @binding(4) var<storage,read> pairRefs:array<u32>;
-	@group(0) @binding(5) var<storage,read> rendered:array<vec4<f32>>;
-	@group(0) @binding(6) var<storage,read> checkpoints:array<vec4<f32>>;
-	@group(0) @binding(7) var<storage,read> stopRanks:array<u32>;
-	@group(0) @binding(8) var<storage,read> pixelGrad:array<vec4<f32>>;
-	@group(0) @binding(9) var<storage,read_write> pairGradients:array<Splat>;
+	@group(0) @binding(3) var<storage,read> pairData:array<u32>;
+	@group(0) @binding(4) var<storage,read> rendered:array<vec4<f32>>;
+	${checkpointBackwardWgsl(checkpointPrecision)}
+	@group(0) @binding(6) var<storage,read> pixelGrad:array<vec4<f32>>;
+	@group(0) @binding(7) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
+	@group(0) @binding(8) var<storage,read_write> counters:array<atomic<u32>>;
 	var<workgroup> gradientScratch:array<Splat,256>;
 	fn zero_splat()->Splat{return Splat(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0));}
 	fn add_splat(a:Splat,b:Splat)->Splat{return Splat(a.centerStatic+b.centerStatic,a.velocityTime+b.velocityTime,
 		a.harmonicPad+b.harmonicPad,a.logScalePad+b.logScalePad,a.rotation+b.rotation,a.colorOpacity+b.colorOpacity);}
+	fn atomic_add_f32(index:u32,value:f32){
+		if(value==0.0){return;}
+		var oldBits=atomicLoad(&gradientAtoms[index]);
+		loop{
+			let newBits=bitcast<u32>(bitcast<f32>(oldBits)+value);
+			let result=atomicCompareExchangeWeak(&gradientAtoms[index],oldBits,newBits);
+			if(result.exchanged){break;}
+			oldBits=result.old_value;
+		}
+	}
+	fn accumulate_splat(id:u32,gradient:Splat){
+		let base=id*24u;
+		for(var component=0u;component<4u;component++){
+			atomic_add_f32(base+component,gradient.centerStatic[component]);
+			atomic_add_f32(base+4u+component,gradient.velocityTime[component]);
+			atomic_add_f32(base+8u+component,gradient.harmonicPad[component]);
+			atomic_add_f32(base+12u+component,gradient.logScalePad[component]);
+			atomic_add_f32(base+16u+component,gradient.rotation[component]);
+			atomic_add_f32(base+20u+component,gradient.colorOpacity[component]);
+		}
+	}
 	fn alpha_at(proj:Projection,point:vec2<f32>)->f32{
 		if(proj.cameraPointValid.w<0.5){return 0.0;}let d=point-proj.screenConic0.xy;
 		let q=proj.screenConic0.z*d.x*d.x+2.0*proj.screenConic0.w*d.x*d.y+proj.conicDepthAlpha.x*d.y*d.y;
@@ -648,89 +752,94 @@ function backwardWgsl() {
 	}
 	@compute @workgroup_size(16,16)
 	fn pair_backward(@builtin(local_invocation_id) lid:vec3<u32>,@builtin(workgroup_id) wid:vec3<u32>){
-		let lane=lid.y*16u+lid.x;let pair=wid.x;let slot=pairRefs[pair];let tile=slot/cfg.tileCapacity;
-		let rank=slot%cfg.tileCapacity;let id=tileIds[slot];let tileX=tile%cfg.tilesX;let tileY=tile/cfg.tilesX;
-		let x=tileX*cfg.tileSize+lid.x;let y=tileY*cfg.tileSize+lid.y;var gradient=zero_splat();
-		if(x<cfg.width&&y<cfg.height){
-			let pixel=y*cfg.width+x;
-			if(rank<stopRanks[pixel]){
-				let point=vec2<f32>((f32(x)+0.5)/f32(cfg.height),(f32(y)+0.5)/f32(cfg.height));
-				let block=rank/cfg.checkpointStride;let checkpoint=checkpoints[pixel*cfg.blocksPerTile+block];
-				var before=checkpoint.xyz;var transmittance=checkpoint.w;
-				for(var replay=block*cfg.checkpointStride;replay<rank;replay++){
-					let prior=tileIds[tile*cfg.tileCapacity+replay];let alpha=alpha_at(projections[prior],point);
-					before+=transmittance*alpha*params[prior].colorOpacity.xyz;transmittance*=1.0-alpha;
-				}
-				let p=params[id];let proj=projections[id];let d=point-proj.screenConic0.xy;
-				let qform=proj.screenConic0.z*d.x*d.x+2.0*proj.screenConic0.w*d.x*d.y+proj.conicDepthAlpha.x*d.y*d.y;
-				if(qform>=0.0&&qform<=9.0&&transmittance>cfg.transmittanceThreshold){
-					let gaussian=exp(-0.5*qform);
-					let rawAlpha=proj.conicDepthAlpha.z*proj.conicDepthAlpha.w*gaussian;
-					let alpha=select(0.0,min(0.99,rawAlpha),rawAlpha>=cfg.alphaThreshold);
-					let denominator=transmittance*(1.0-alpha);
-					let behind=select(vec3<f32>(0.0),(rendered[pixel].xyz-before-transmittance*alpha*p.colorOpacity.xyz)
-						/max(denominator,1e-8),denominator>1e-8);
-					let imageGrad=pixelGrad[pixel].xyz;
-					let alphaGrad=dot(imageGrad,transmittance*(p.colorOpacity.xyz-behind));
-					let clampGate=select(0.0,1.0,rawAlpha<0.99&&rawAlpha>=cfg.alphaThreshold);
-					let barQform=-0.5*alphaGrad*rawAlpha*clampGate;
-					let conicDelta=vec2<f32>(proj.screenConic0.z*d.x+proj.screenConic0.w*d.y,
-						proj.screenConic0.w*d.x+proj.conicDepthAlpha.x*d.y);
-					let barMu=-2.0*barQform*conicDelta;
-					let barC00=-barQform*conicDelta.x*conicDelta.x;
-					let barC01=-barQform*conicDelta.x*conicDelta.y;
-					let barC11=-barQform*conicDelta.y*conicDelta.y;
-					let j0=proj.jacobian0.xyz;let j1=proj.jacobian1.xyz;
-					let barSigma=barC00*outer3(j0,j0)+barC01*(outer3(j0,j1)+outer3(j1,j0))+barC11*outer3(j1,j1);
-					let basis=mat3x3<f32>(proj.basis0.xyz,proj.basis1.xyz,proj.basis2.xyz);
-					let variances=proj.variancesPad.xyz;
-					let sigmaCamera=variances.x*outer3(basis[0],basis[0])+variances.y*outer3(basis[1],basis[1])
-						+variances.z*outer3(basis[2],basis[2]);
-					let sigmaJ0=sigmaCamera*j0;let sigmaJ1=sigmaCamera*j1;
-					let barJ0=2.0*(barC00*sigmaJ0+barC01*sigmaJ1);
-					let barJ1=2.0*(barC01*sigmaJ0+barC11*sigmaJ1);
-					let cp=proj.cameraPointValid.xyz;let invZ=1.0/cp.z;
-					let horizontalFocal=proj.jacobian0.x*cp.z;let verticalFocal=proj.jacobian1.y*cp.z;
-					let cameraGrad=vec3<f32>(
-						barMu.x*horizontalFocal*invZ-barJ0.z*horizontalFocal*invZ*invZ,
-						barMu.y*verticalFocal*invZ-barJ1.z*verticalFocal*invZ*invZ,
-						-barMu.x*horizontalFocal*cp.x*invZ*invZ-barMu.y*verticalFocal*cp.y*invZ*invZ
-						-barJ0.x*horizontalFocal*invZ*invZ+barJ0.z*2.0*horizontalFocal*cp.x*invZ*invZ*invZ
-						-barJ1.y*verticalFocal*invZ*invZ+barJ1.z*2.0*verticalFocal*cp.y*invZ*invZ*invZ);
-					let cameraRotation=mat3x3<f32>(proj.camera0.xyz,proj.camera1.xyz,proj.camera2.xyz);
-					let worldGrad=transpose(cameraRotation)*cameraGrad;
-					var gradLogScale=vec3<f32>(0.0);
-					for(var axis=0u;axis<3u;axis++){let column=basis[axis];
-						gradLogScale[axis]=2.0*variances[axis]*dot(column,barSigma*column);}
-					let barBasis=mat3x3<f32>(2.0*variances.x*(barSigma*basis[0]),
-						2.0*variances.y*(barSigma*basis[1]),2.0*variances.z*(barSigma*basis[2]));
-					let barRotation=transpose(cameraRotation)*barBasis;let q=safe_quaternion(p.rotation);
-					let h00=barRotation[0].x;let h01=barRotation[1].x;let h02=barRotation[2].x;
-					let h10=barRotation[0].y;let h11=barRotation[1].y;let h12=barRotation[2].y;
-					let h20=barRotation[0].z;let h21=barRotation[1].z;let h22=barRotation[2].z;
-					let normalizedQuatGrad=vec4<f32>(
-						-4.0*q.x*(h11+h22)+2.0*q.y*(h01+h10)+2.0*q.z*(h02+h20)+2.0*q.w*(h21-h12),
-						-4.0*q.y*(h00+h22)+2.0*q.x*(h01+h10)+2.0*q.z*(h12+h21)+2.0*q.w*(h02-h20),
-						-4.0*q.z*(h00+h11)+2.0*q.x*(h02+h20)+2.0*q.y*(h12+h21)+2.0*q.w*(h10-h01),
-						2.0*q.z*(h10-h01)+2.0*q.y*(h02-h20)+2.0*q.x*(h21-h12));
-					let rawNorm2=dot(p.rotation,p.rotation);var gradRotation=vec4<f32>(0.0);
-					if(rawNorm2>1e-16){gradRotation=(normalizedQuatGrad-q*dot(q,normalizedQuatGrad))*inverseSqrt(rawNorm2);}
-					let t=frame_time(cfg);let tc=t*2.0-1.0;let wave=sin(t*6.28318530718);
-					let sigma=clamp(cfg.temporalSigma,0.12,0.36);let staticMix=clamp(p.centerStatic.w,0.0,1.0);
-					let temporalFloor=clamp(sigma*0.30,0.035,0.12);let timeDelta=t-clamp(p.velocityTime.w,0.0,1.0);
-					let dynamicGate=temporalFloor+(1.0-temporalFloor)*exp(-0.5*timeDelta*timeDelta/(sigma*sigma));
-					let dynamicCore=max(0.0,(proj.conicDepthAlpha.w-staticMix-temporalFloor*(1.0-staticMix))
-						/max(1e-6,1.0-staticMix));
-					let gradTime=clampGate*alphaGrad*proj.conicDepthAlpha.z*gaussian
-						*(1.0-staticMix)*dynamicCore*(t-p.velocityTime.w)/(sigma*sigma);
-					let gradStaticMix=clampGate*alphaGrad*proj.conicDepthAlpha.z*gaussian*(1.0-dynamicGate);
-					let gradOpacity=clampGate*alphaGrad*gaussian*proj.conicDepthAlpha.w
-						*proj.conicDepthAlpha.z*(1.0-proj.conicDepthAlpha.z);
-					let gradColor=imageGrad*transmittance*alpha;
-					gradient=Splat(vec4<f32>(worldGrad,gradStaticMix),vec4<f32>(worldGrad*tc,gradTime),
-						vec4<f32>(select(vec3<f32>(0.0),worldGrad*wave,cfg.modelMode==0u),
-							alpha/f32(cfg.pixelCount)),vec4<f32>(gradLogScale,length(barMu)),gradRotation,
-						vec4<f32>(gradColor,gradOpacity));
+		let lane=lid.y*16u+lid.x;let pair=wid.y*${MAX_WORKGROUPS_PER_DIMENSION}u+wid.x;
+		let pairValid=pair<atomicLoad(&counters[0]);var id=0u;var gradient=zero_splat();
+		if(pairValid){
+			let slot=pairData[cfg.pairCapacity+pair];let tile=slot/cfg.tileCapacity;
+			let rank=slot%cfg.tileCapacity;id=pairData[slot];let tileX=tile%cfg.tilesX;let tileY=tile/cfg.tilesX;
+			let x=tileX*cfg.tileSize+lid.x;let y=tileY*cfg.tileSize+lid.y;
+			if(x<cfg.width&&y<cfg.height){
+				let pixel=y*cfg.width+x;
+				if(rank<u32(pixelGrad[pixel].w)){
+					let point=vec2<f32>((f32(x)+0.5)/f32(cfg.height),(f32(y)+0.5)/f32(cfg.height));
+					let block=rank/cfg.checkpointStride;
+					let checkpoint=read_checkpoint(pixel*cfg.blocksPerTile+block);
+					var before=checkpoint.xyz;var transmittance=checkpoint.w;
+					for(var replay=block*cfg.checkpointStride;replay<rank;replay++){
+						let prior=pairData[tile*cfg.tileCapacity+replay];let alpha=alpha_at(projections[prior],point);
+						before+=transmittance*alpha*params[prior].colorOpacity.xyz;transmittance*=1.0-alpha;
+					}
+					let p=params[id];let proj=projections[id];let d=point-proj.screenConic0.xy;
+					let qform=proj.screenConic0.z*d.x*d.x+2.0*proj.screenConic0.w*d.x*d.y+proj.conicDepthAlpha.x*d.y*d.y;
+					if(qform>=0.0&&qform<=9.0&&transmittance>cfg.transmittanceThreshold){
+						let gaussian=exp(-0.5*qform);
+						let rawAlpha=proj.conicDepthAlpha.z*proj.conicDepthAlpha.w*gaussian;
+						let alpha=select(0.0,min(0.99,rawAlpha),rawAlpha>=cfg.alphaThreshold);
+						let denominator=transmittance*(1.0-alpha);
+						let behind=select(vec3<f32>(0.0),(rendered[pixel].xyz-before-transmittance*alpha*p.colorOpacity.xyz)
+							/max(denominator,1e-8),denominator>1e-8);
+						let imageGrad=pixelGrad[pixel].xyz;
+						let alphaGrad=dot(imageGrad,transmittance*(p.colorOpacity.xyz-behind));
+						let clampGate=select(0.0,1.0,rawAlpha<0.99&&rawAlpha>=cfg.alphaThreshold);
+						let barQform=-0.5*alphaGrad*rawAlpha*clampGate;
+						let conicDelta=vec2<f32>(proj.screenConic0.z*d.x+proj.screenConic0.w*d.y,
+							proj.screenConic0.w*d.x+proj.conicDepthAlpha.x*d.y);
+						let barMu=-2.0*barQform*conicDelta;
+						let barC00=-barQform*conicDelta.x*conicDelta.x;
+						let barC01=-barQform*conicDelta.x*conicDelta.y;
+						let barC11=-barQform*conicDelta.y*conicDelta.y;
+						let j0=proj.jacobian0.xyz;let j1=proj.jacobian1.xyz;
+						let barSigma=barC00*outer3(j0,j0)+barC01*(outer3(j0,j1)+outer3(j1,j0))+barC11*outer3(j1,j1);
+						let basis=mat3x3<f32>(proj.basis0.xyz,proj.basis1.xyz,proj.basis2.xyz);
+						let variances=proj.variancesPad.xyz;
+						let sigmaCamera=variances.x*outer3(basis[0],basis[0])+variances.y*outer3(basis[1],basis[1])
+							+variances.z*outer3(basis[2],basis[2]);
+						let sigmaJ0=sigmaCamera*j0;let sigmaJ1=sigmaCamera*j1;
+						let barJ0=2.0*(barC00*sigmaJ0+barC01*sigmaJ1);
+						let barJ1=2.0*(barC01*sigmaJ0+barC11*sigmaJ1);
+						let cp=proj.cameraPointValid.xyz;let invZ=1.0/cp.z;
+						let horizontalFocal=proj.jacobian0.x*cp.z;let verticalFocal=proj.jacobian1.y*cp.z;
+						let cameraGrad=vec3<f32>(
+							barMu.x*horizontalFocal*invZ-barJ0.z*horizontalFocal*invZ*invZ,
+							barMu.y*verticalFocal*invZ-barJ1.z*verticalFocal*invZ*invZ,
+							-barMu.x*horizontalFocal*cp.x*invZ*invZ-barMu.y*verticalFocal*cp.y*invZ*invZ
+							-barJ0.x*horizontalFocal*invZ*invZ+barJ0.z*2.0*horizontalFocal*cp.x*invZ*invZ*invZ
+							-barJ1.y*verticalFocal*invZ*invZ+barJ1.z*2.0*verticalFocal*cp.y*invZ*invZ*invZ);
+						let cameraRotation=mat3x3<f32>(proj.camera0.xyz,proj.camera1.xyz,proj.camera2.xyz);
+						let worldGrad=transpose(cameraRotation)*cameraGrad;
+						var gradLogScale=vec3<f32>(0.0);
+						for(var axis=0u;axis<3u;axis++){let column=basis[axis];
+							gradLogScale[axis]=2.0*variances[axis]*dot(column,barSigma*column);}
+						let barBasis=mat3x3<f32>(2.0*variances.x*(barSigma*basis[0]),
+							2.0*variances.y*(barSigma*basis[1]),2.0*variances.z*(barSigma*basis[2]));
+						let barRotation=transpose(cameraRotation)*barBasis;let q=safe_quaternion(p.rotation);
+						let h00=barRotation[0].x;let h01=barRotation[1].x;let h02=barRotation[2].x;
+						let h10=barRotation[0].y;let h11=barRotation[1].y;let h12=barRotation[2].y;
+						let h20=barRotation[0].z;let h21=barRotation[1].z;let h22=barRotation[2].z;
+						let normalizedQuatGrad=vec4<f32>(
+							-4.0*q.x*(h11+h22)+2.0*q.y*(h01+h10)+2.0*q.z*(h02+h20)+2.0*q.w*(h21-h12),
+							-4.0*q.y*(h00+h22)+2.0*q.x*(h01+h10)+2.0*q.z*(h12+h21)+2.0*q.w*(h02-h20),
+							-4.0*q.z*(h00+h11)+2.0*q.x*(h02+h20)+2.0*q.y*(h12+h21)+2.0*q.w*(h10-h01),
+							2.0*q.z*(h10-h01)+2.0*q.y*(h02-h20)+2.0*q.x*(h21-h12));
+						let rawNorm2=dot(p.rotation,p.rotation);var gradRotation=vec4<f32>(0.0);
+						if(rawNorm2>1e-16){gradRotation=(normalizedQuatGrad-q*dot(q,normalizedQuatGrad))*inverseSqrt(rawNorm2);}
+						let t=frame_time(cfg);let tc=t*2.0-1.0;let wave=sin(t*6.28318530718);
+						let sigma=clamp(cfg.temporalSigma,0.12,0.36);let staticMix=clamp(p.centerStatic.w,0.0,1.0);
+						let temporalFloor=clamp(sigma*0.30,0.035,0.12);let timeDelta=t-clamp(p.velocityTime.w,0.0,1.0);
+						let dynamicGate=temporalFloor+(1.0-temporalFloor)*exp(-0.5*timeDelta*timeDelta/(sigma*sigma));
+						let dynamicCore=max(0.0,(proj.conicDepthAlpha.w-staticMix-temporalFloor*(1.0-staticMix))
+							/max(1e-6,1.0-staticMix));
+						let gradTime=clampGate*alphaGrad*proj.conicDepthAlpha.z*gaussian
+							*(1.0-staticMix)*dynamicCore*(t-p.velocityTime.w)/(sigma*sigma);
+						let gradStaticMix=clampGate*alphaGrad*proj.conicDepthAlpha.z*gaussian*(1.0-dynamicGate);
+						let gradOpacity=clampGate*alphaGrad*gaussian*proj.conicDepthAlpha.w
+							*proj.conicDepthAlpha.z*(1.0-proj.conicDepthAlpha.z);
+						let gradColor=imageGrad*transmittance*alpha;
+						gradient=Splat(vec4<f32>(worldGrad,gradStaticMix),vec4<f32>(worldGrad*tc,gradTime),
+							vec4<f32>(select(vec3<f32>(0.0),worldGrad*wave,cfg.modelMode==0u),
+								alpha/f32(cfg.pixelCount)),vec4<f32>(gradLogScale,length(barMu)),gradRotation,
+							vec4<f32>(gradColor,gradOpacity));
+					}
 				}
 			}
 		}
@@ -739,7 +848,7 @@ function backwardWgsl() {
 			if(lane<stride){gradientScratch[lane]=add_splat(gradientScratch[lane],gradientScratch[lane+stride]);}
 			workgroupBarrier();if(stride==1u){break;}stride/=2u;
 		}
-		if(lane==0u){pairGradients[slot]=gradientScratch[0];}
+		if(lane==0u&&pairValid){accumulate_splat(id,gradientScratch[0]);}
 	}`;
 }
 
@@ -751,22 +860,40 @@ function updateWgsl() {
 	@group(0) @binding(3) var<storage,read_write> firstMoment:array<Splat>;
 	@group(0) @binding(4) var<storage,read_write> secondMoment:array<Splat>;
 	@group(0) @binding(5) var<storage,read_write> splatStats:array<vec4<f32>>;
-	@group(0) @binding(6) var<storage,read> gaussianPairSlots:array<u32>;
-	@group(0) @binding(7) var<storage,read> pairGradients:array<Splat>;
-	@group(0) @binding(8) var<storage,read_write> counters:array<atomic<u32>>;
-	fn zero_splat()->Splat{return Splat(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0));}
+	@group(0) @binding(6) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
+	fn load_gradient(id:u32)->Splat{
+		let base=id*24u;
+		return Splat(
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+1u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+2u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+3u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+4u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+5u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+6u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+7u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+8u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+9u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+10u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+11u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+12u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+13u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+14u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+15u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+16u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+17u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+18u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+19u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+20u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+21u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+22u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+23u])))
+		);
+	}
 	@compute @workgroup_size(64)
 	fn reduce_update(@builtin(global_invocation_id) gid:vec3<u32>){
 		let i=gid.x;if(i>=cfg.splatCount){return;}
-		if(atomicLoad(&counters[1])>0u){paramsOut[i]=paramsIn[i];return;}
-		var gradient=zero_splat();let tileCount=cfg.tilesX*cfg.tilesY;
-		for(var tile=0u;tile<tileCount;tile++){
-			let slot=gaussianPairSlots[i*tileCount+tile];
-			if(slot!=0xffffffffu){let g=pairGradients[slot];gradient.centerStatic+=g.centerStatic;
-				gradient.velocityTime+=g.velocityTime;gradient.harmonicPad+=g.harmonicPad;
-				gradient.logScalePad+=g.logScalePad;gradient.rotation+=g.rotation;
-				gradient.colorOpacity+=g.colorOpacity;}
-		}
+		var gradient=load_gradient(i);
 		let meanAlpha=gradient.harmonicPad.w;gradient.harmonicPad.w=0.0;
 		let screenGradient=gradient.logScalePad.w;gradient.logScalePad.w=0.0;
 		var p=paramsIn[i];var m=firstMoment[i];var v=secondMoment[i];
@@ -831,8 +958,39 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.tiledConfigBytes = new ArrayBuffer(TILED_CONFIG_BYTES);
 	}
 
-	async init(dataset, { splatCount = 1536, growthCapacity = null } = {}) {
+	targetBufferByteLength(dataset) {
+		return rgbaFloatFrameBytes(dataset);
+	}
+
+	uploadTargetPage(target, viewIndex, frameIndex) {
+		const pixelCount = this.dataset.width * this.dataset.height;
+		const sourcePixelOffset = (viewIndex * this.dataset.frameCount + frameIndex) * pixelCount;
+		const pageKey = viewIndex * this.dataset.frameCount + frameIndex;
+		if (this.targetPageKey !== pageKey) {
+			const sourceElementOffset = sourcePixelOffset * 4;
+			this.device.queue.writeBuffer(target, 0, this.dataset.frames.subarray(
+				sourceElementOffset,
+				sourceElementOffset + pixelCount * 4,
+			));
+			this.targetPageKey = pageKey;
+		}
+		return sourcePixelOffset;
+	}
+
+	initializeTargetBuffer(target) {
+		this.targetPageKey = null;
+		this.uploadTargetPage(target, this.trainViewIndices[0], 0);
+	}
+
+	async init(dataset, {
+		splatCount = 1536,
+		growthCapacity = null,
+		tileCapacity = null,
+		checkpointPrecision = DEFAULT_CHECKPOINT_PRECISION,
+	} = {}) {
 		this.initialSplatCount = splatCount;
+		this.requestedTileCapacity = tileCapacity;
+		this.checkpointPrecision = resolveCheckpointPrecision(checkpointPrecision);
 		const capacity = resolveTiledCapacity(splatCount, growthCapacity);
 		await super.init(dataset, { splatCount: capacity, requiredWorkgroupStorageSize: 24576 });
 		this.adapterName = `${this.adapterName} · tiled full-frame`;
@@ -840,17 +998,17 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 
 	async createPipelines() {
 		await super.createPipelines();
-		this.tileCapacity = nextPowerOfTwo(this.splatCount);
+		this.tileCapacity = resolveTileCapacity(this.splatCount, this.requestedTileCapacity);
 		const modules = await Promise.all([
 			checkedModule(this.device, "tiled-clear", clearWgsl()),
 			checkedModule(this.device, "tiled-project", projectWgsl()),
 			checkedModule(this.device, "tiled-sort", sortWgsl(this.tileCapacity)),
 			checkedModule(this.device, "tiled-finalize", finalizeWgsl()),
-			checkedModule(this.device, "tiled-forward", forwardWgsl()),
+			checkedModule(this.device, "tiled-forward", forwardWgsl(this.checkpointPrecision)),
 			checkedModule(this.device, "tiled-ssim-stats", ssimStatsWgsl()),
 			checkedModule(this.device, "tiled-ssim-gradient", ssimGradientWgsl()),
 			checkedModule(this.device, "tiled-metrics", metricsWgsl()),
-			checkedModule(this.device, "tiled-backward", backwardWgsl()),
+			checkedModule(this.device, "tiled-backward", backwardWgsl(this.checkpointPrecision)),
 			checkedModule(this.device, "tiled-update", updateWgsl()),
 		]);
 		const pipeline = (module, entryPoint) => this.device.createComputePipeline({
@@ -896,25 +1054,51 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.tilesY = ceilDiv(this.dataset.height, TILE_SIZE);
 		this.tileCount = this.tilesX * this.tilesY;
 		this.pixelCount = this.dataset.width * this.dataset.height;
-		this.blocksPerTile = this.tileCapacity / CHECKPOINT_STRIDE;
 		this.pairCapacity = this.tileCount * this.tileCapacity;
+		const checkpointLayout = resolveCheckpointLayout(
+			this.pixelCount,
+			this.tileCapacity,
+			this.storageBufferLimit,
+			this.checkpointPrecision === "packed-f16" ? 8 : 16,
+		);
+		this.checkpointStride = checkpointLayout.stride;
+		this.blocksPerTile = checkpointLayout.blocksPerTile;
+		const tiledBufferBytes = {
+			pairData: this.pairCapacity * 8,
+			checkpoints: checkpointLayout.byteLength,
+			gradientAccumulator: this.splatCount * SPLAT_BYTES,
+		};
+		for (const [label, byteLength] of Object.entries(tiledBufferBytes)) {
+			assertStorageBufferFits(`The tiled ${label} buffer`, byteLength, this.storageBufferLimit);
+		}
+		this.memoryPlan = Object.freeze({
+			targetPageBytes: this.targetBufferByteLength(this.dataset),
+			tileCapacity: this.tileCapacity,
+			pairCapacity: this.pairCapacity,
+			checkpointStride: this.checkpointStride,
+			checkpointPrecision: this.checkpointPrecision,
+			checkpointBytes: tiledBufferBytes.checkpoints,
+			pairDataBytes: tiledBufferBytes.pairData,
+			gradientAccumulatorBytes: tiledBufferBytes.gradientAccumulator,
+			pairGradientBytes: 0,
+			storageBufferLimit: this.storageBufferLimit,
+			nativeShaderF16: this.supportsShaderF16,
+		});
 		Object.assign(this.buffers, {
 			tiledConfig: makeBuffer(TILED_CONFIG_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST),
 			projections: makeBuffer(this.splatCount * PROJECTION_BYTES),
 			tileCounts: makeBuffer(this.tileCount * 4),
-			tileIds: makeBuffer(this.pairCapacity * 4),
-			gaussianPairSlots: makeBuffer(this.splatCount * this.tileCount * 4),
+			pairData: makeBuffer(tiledBufferBytes.pairData),
 			counters: makeBuffer(16),
-			pairRefs: makeBuffer(this.pairCapacity * 4),
 			indirectArgs: makeBuffer(12, GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT
 				| GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC),
 			renderedTrain: makeBuffer(this.pixelCount * 16),
-			checkpoints: makeBuffer(this.pixelCount * this.blocksPerTile * 16),
+			checkpoints: makeBuffer(tiledBufferBytes.checkpoints),
 			stopRanks: makeBuffer(this.pixelCount * 4),
 			ssimStats: makeBuffer(this.pixelCount * SSIM_STATS_BYTES),
 			pixelLoss: makeBuffer(this.pixelCount * 16),
 			pixelGrad: makeBuffer(this.pixelCount * 16),
-			pairGradients: makeBuffer(this.pairCapacity * SPLAT_BYTES),
+			gradientAtoms: makeBuffer(tiledBufferBytes.gradientAccumulator),
 			tiledMetrics: makeBuffer(16),
 		});
 	}
@@ -929,25 +1113,24 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			clear: group(this.tiledPipelines.clear, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.tileCounts),
 				buffer(2, this.buffers.counters), buffer(3, this.buffers.indirectArgs),
-				buffer(4, this.buffers.tiledMetrics), buffer(5, this.buffers.gaussianPairSlots),
+				buffer(4, this.buffers.tiledMetrics), buffer(5, this.buffers.gradientAtoms),
 			]),
 			project: this.buffers.params.map((params) => group(this.tiledPipelines.project, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, params), buffer(2, this.buffers.cameras),
-				buffer(3, this.buffers.tileCounts), buffer(4, this.buffers.tileIds),
+				buffer(3, this.buffers.tileCounts), buffer(4, this.buffers.pairData),
 				buffer(5, this.buffers.projections), buffer(6, this.buffers.counters),
 			])),
 			sort: group(this.tiledPipelines.sort, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.projections),
-				buffer(2, this.buffers.tileCounts), buffer(3, this.buffers.tileIds),
-				buffer(4, this.buffers.counters), buffer(5, this.buffers.pairRefs),
-				buffer(6, this.buffers.gaussianPairSlots),
+				buffer(2, this.buffers.tileCounts), buffer(3, this.buffers.pairData),
+				buffer(4, this.buffers.counters),
 			]),
 			finalize: group(this.tiledPipelines.finalize, [
 				buffer(0, this.buffers.counters), buffer(1, this.buffers.indirectArgs),
 			]),
 			forward: this.buffers.params.map((params) => group(this.tiledPipelines.forward, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, params), buffer(2, this.buffers.projections),
-				buffer(3, this.buffers.tileCounts), buffer(4, this.buffers.tileIds),
+				buffer(3, this.buffers.tileCounts), buffer(4, this.buffers.pairData),
 				buffer(5, this.buffers.renderedTrain), buffer(6, this.buffers.checkpoints),
 				buffer(7, this.buffers.stopRanks),
 			])),
@@ -959,7 +1142,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			ssimGradient: group(this.tiledPipelines.ssimGradient, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
 				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimStats),
-				buffer(4, this.buffers.pixelGrad),
+				buffer(4, this.buffers.stopRanks), buffer(5, this.buffers.pixelGrad),
 			]),
 			metrics: group(this.tiledPipelines.metrics, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.pixelLoss),
@@ -967,25 +1150,22 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			]),
 			backward: this.buffers.params.map((params) => group(this.tiledPipelines.backward, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, params), buffer(2, this.buffers.projections),
-				buffer(3, this.buffers.tileIds), buffer(4, this.buffers.pairRefs),
-				buffer(5, this.buffers.renderedTrain), buffer(6, this.buffers.checkpoints),
-				buffer(7, this.buffers.stopRanks), buffer(8, this.buffers.pixelGrad),
-				buffer(9, this.buffers.pairGradients),
+				buffer(3, this.buffers.pairData), buffer(4, this.buffers.renderedTrain),
+				buffer(5, this.buffers.checkpoints), buffer(6, this.buffers.pixelGrad),
+				buffer(7, this.buffers.gradientAtoms), buffer(8, this.buffers.counters),
 			])),
 			update: [
 				group(this.tiledPipelines.update, [
 					buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.params[0]),
 					buffer(2, this.buffers.params[1]), buffer(3, this.buffers.firstMoment),
 					buffer(4, this.buffers.secondMoment), buffer(5, this.buffers.stats),
-					buffer(6, this.buffers.gaussianPairSlots), buffer(7, this.buffers.pairGradients),
-					buffer(8, this.buffers.counters),
+					buffer(6, this.buffers.gradientAtoms),
 				]),
 				group(this.tiledPipelines.update, [
 					buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.params[1]),
 					buffer(2, this.buffers.params[0]), buffer(3, this.buffers.firstMoment),
 					buffer(4, this.buffers.secondMoment), buffer(5, this.buffers.stats),
-					buffer(6, this.buffers.gaussianPairSlots), buffer(7, this.buffers.pairGradients),
-					buffer(8, this.buffers.counters),
+					buffer(6, this.buffers.gradientAtoms),
 				]),
 			],
 		};
@@ -1003,7 +1183,12 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		const selected = fullFramePairForStep(this.trainViewIndices, this.dataset.frameCount, this.stepCount);
 		this.lastCameraBatch = [selected.viewIndex]; this.lastCameraBatchStart = selected.viewSlot;
 		this.lastFrameIndex = selected.frameIndex;
-		const targetOffset = (selected.viewIndex * this.dataset.frameCount + selected.frameIndex) * this.pixelCount;
+		this.lastTargetSourceOffset = this.uploadTargetPage(
+			this.buffers.target,
+			selected.viewIndex,
+			selected.frameIndex,
+		);
+		const targetOffset = 0;
 		this.lastTargetOffset = targetOffset;
 		writeTiledConfig(this.tiledConfigBytes, {
 			width: this.dataset.width, height: this.dataset.height, splatCount: this.splatCount,
@@ -1016,11 +1201,12 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			lrOpacity: learningRate * 0.0008, lrMotion: learningRate * 0.0002,
 			geometryScale: this.dataset.geometryScale, l1Weight: 0.8, dssimWeight: 0.2,
 			statDecay: 0.995, ssimRadius: resolvedSsimRadius, frameCount: this.dataset.frameCount,
+			checkpointStride: this.checkpointStride,
 		});
 		this.device.queue.writeBuffer(this.buffers.tiledConfig, 0, this.tiledConfigBytes);
 		const encoder = this.device.createCommandEncoder();
 		this.encodePass(encoder, this.tiledPipelines.clear, this.tiledBindGroups.clear,
-			ceilDiv(Math.max(this.tileCount, this.splatCount * this.tileCount), 64));
+			ceilDiv(Math.max(this.tileCount, this.splatCount * SPLAT_FLOATS), 64));
 		this.encodePass(encoder, this.tiledPipelines.project, this.tiledBindGroups.project[this.currentIndex],
 			ceilDiv(this.splatCount, 64));
 		this.encodePass(encoder, this.tiledPipelines.sort, this.tiledBindGroups.sort, this.tileCount);

@@ -16,6 +16,7 @@ const TRAIN_OPTIONS = Object.freeze({
 const form = document.querySelector("#benchmarkForm");
 const runButton = document.querySelector("#runBenchmark");
 const statusOutput = document.querySelector("#benchmarkStatus");
+const jsonOutput = document.querySelector("#benchmarkJson");
 const resultsBody = document.querySelector("#resultsBody");
 const inputs = {
 	splatCount: document.querySelector("#splatCount"),
@@ -25,6 +26,7 @@ const inputs = {
 	sampledPixels: document.querySelector("#sampledPixels"),
 	rasterScale: document.querySelector("#rasterScale"),
 	ssimWindow: document.querySelector("#ssimWindow"),
+	checkpointPrecision: document.querySelector("#checkpointPrecision"),
 };
 const datasetFields = {
 	name: document.querySelector("#datasetName"),
@@ -52,12 +54,16 @@ function readOptions() {
 		sampledPixels: positiveInteger(inputs.sampledPixels, "Sampled rays per step"),
 		rasterScale: positiveInteger(inputs.rasterScale, "Raster scale"),
 		ssimWindow: positiveInteger(inputs.ssimWindow, "SSIM window"),
+		checkpointPrecision: inputs.checkpointPrecision.value,
 	};
 	if (options.tiledCapacity < options.splatCount) {
 		throw new RangeError("Tiled capacity must be at least the requested splat count.");
 	}
 	if (options.ssimWindow % 2 !== 1) {
 		throw new RangeError("SSIM window must be odd.");
+	}
+	if (!["f32", "packed-f16"].includes(options.checkpointPrecision)) {
+		throw new RangeError("Checkpoint precision must be FP32 or packed FP16.");
 	}
 	return options;
 }
@@ -148,7 +154,11 @@ function setRowResult(result) {
 	cells[6].textContent = `${formatNumber(result.elapsedMs, 2)} ms`;
 	cells[7].textContent = formatNumber(result.stepsPerSecond, 2);
 	cells[8].textContent = formatNumber(result.supervisedPixelsPerSecond, 0);
-	cells[8].className = "complete";
+	cells[9].textContent = formatNumber(result.loss, 6);
+	cells[10].textContent = result.lossBreakdown?.tileOverflow == null
+		? "-"
+		: formatNumber(result.lossBreakdown.tileOverflow, 0);
+	cells[10].className = result.lossBreakdown?.tileOverflow > 0 ? "failed" : "complete";
 }
 
 function setRowError(backendId, error) {
@@ -168,7 +178,10 @@ async function benchmarkBackend(backendId, dataset, options) {
 	try {
 		setRowRunning(backendId, "Initializing");
 		const trainerOptions = { splatCount: options.splatCount };
-		if (backendId === "tiled3d") trainerOptions.growthCapacity = options.tiledCapacity;
+		if (backendId === "tiled3d") {
+			trainerOptions.growthCapacity = options.tiledCapacity;
+			trainerOptions.checkpointPrecision = options.checkpointPrecision;
+		}
 		await trainer.init(dataset, trainerOptions);
 		await trainer.device.queue.onSubmittedWorkDone();
 
@@ -178,6 +191,7 @@ async function benchmarkBackend(backendId, dataset, options) {
 
 		setRowRunning(backendId, "Measuring");
 		const elapsedMs = await submitAndDrain(trainer, options.measuredSteps, trainOptions);
+		const loss = await trainer.readLoss(trainOptions);
 		const supervisedPixelsPerStep = loaded.descriptor.sampledControls
 			? options.sampledPixels
 			: dataset.width * dataset.height;
@@ -198,7 +212,10 @@ async function benchmarkBackend(backendId, dataset, options) {
 			stepsPerSecond,
 			supervisedPixelsPerStep,
 			supervisedPixelsPerSecond: stepsPerSecond * supervisedPixelsPerStep,
+			loss,
+			lossBreakdown: trainer.lastLossBreakdown ?? null,
 			adapter: trainer.adapterName,
+			memoryPlan: trainer.memoryPlan ?? null,
 		};
 	} finally {
 		trainer.device?.destroy();
@@ -230,7 +247,8 @@ async function runBenchmark(options) {
 				objective: descriptor.objective,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			console.error(`${descriptor.label} benchmark failed.`, error);
+			const logFailure = error instanceof RangeError ? console.warn : console.error;
+			logFailure(`${descriptor.label} benchmark failed.`, error);
 		}
 	}
 
@@ -250,6 +268,7 @@ async function runBenchmark(options) {
 		results,
 		objectivesMatched: false,
 	};
+	jsonOutput.textContent = JSON.stringify(globalThis.__trainerBackendBenchmarkResults, null, 2);
 	const completed = results.filter((result) => !result.error).length;
 	if (completed === BACKEND_IDS.length) {
 		setStatus("Benchmark complete. Both timed intervals drained their GPU queues.", "complete");

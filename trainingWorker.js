@@ -213,6 +213,7 @@ async function initialize(message) {
 		adapter: trainer.adapterName,
 		backend: { ...backendDescriptor, initialSplats: trainer.initialSplatCount ?? trainer.splatCount,
 			capacity: trainer.splatCount,
+			memoryPlan: trainer.memoryPlan ?? null,
 			trainingPixelsPerStep: backendDescriptor.sampledControls
 				? trainOptions.samplesPerStep : trainer.dataset.width * trainer.dataset.height,
 		},
