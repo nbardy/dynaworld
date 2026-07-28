@@ -1,14 +1,14 @@
 import { SPLAT_FLOATS, resolveTrainViewIndices } from "./trainerWebGpu3d.js";
-import { computeSnapshotMetrics, snapshotUpdateRatios } from "./snapshotMetrics.js";
+import {
+	computeSnapshotMetrics,
+	snapshotUpdateRatios,
+	summarizeSplatParameters,
+} from "./snapshotMetrics.js";
 import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js";
 
 let dataset = null;
 let initialParams = null;
 let previousParams = null;
-
-function sigmoid(value) {
-	return 1 / (1 + Math.exp(-value));
-}
 
 function representativeTrainViews() {
 	const trainViews = resolveTrainViewIndices(dataset);
@@ -28,35 +28,6 @@ function heldoutViews() {
 		&& dataset.heldoutViewIndex >= 0) heldout.push(dataset.heldoutViewIndex);
 	if (!heldout.length) throw new Error("Full-image validation requires a heldout camera.");
 	return heldout;
-}
-
-function parameterStats(params, splatCount) {
-	let active = 0;
-	let opacity = 0;
-	let maxOpacity = 0;
-	let radius = 0;
-	let aspectRatio = 0;
-	for (let index = 0; index < splatCount; index += 1) {
-		const base = index * SPLAT_FLOATS;
-		const alpha = sigmoid(params[base + 23]);
-		const scales = [
-			Math.exp(params[base + 12]),
-			Math.exp(params[base + 13]),
-			Math.exp(params[base + 14]),
-		];
-		opacity += alpha;
-		maxOpacity = Math.max(maxOpacity, alpha);
-		radius += Math.cbrt(scales[0] * scales[1] * scales[2]);
-		aspectRatio += Math.max(...scales) / Math.max(1e-8, Math.min(...scales));
-		if (alpha > 0.05) active += 1;
-	}
-	return {
-		activeSplats: active,
-		meanOpacity: opacity / splatCount,
-		meanRadius: radius / splatCount,
-		meanAspectRatio: aspectRatio / splatCount,
-		motionMaxAlpha: maxOpacity,
-	};
 }
 
 function meanAbsoluteDelta(before, after) {
@@ -110,9 +81,15 @@ self.onmessage = ({ data }) => {
 			motionLoss: Number.NaN,
 			motionCoverage: train.coverage,
 			staticCoverage: Number.NaN,
-			...parameterStats(params, splatCount),
+			...summarizeSplatParameters(params, {
+				splatCount,
+				temporalSigma: options.temporalSigma,
+				frameCount: dataset.frameCount,
+				maxAspectRatio: data.options?.maxAspectRatio ?? 3,
+			}),
 			parameterDelta: meanAbsoluteDelta(initialParams, params),
 			parameterUpdateRatios: snapshotUpdateRatios(previousParams, params),
+			learningRateMultipliers: data.options?.learningRateMultipliers ?? null,
 			totalRecycled: data.options?.totalRecycled ?? 0,
 			validationDurationMs: performance.now() - startedAt,
 			validationContract: {

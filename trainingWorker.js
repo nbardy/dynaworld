@@ -7,6 +7,7 @@ import {
 
 const DEFAULT_TRAIN_OPTIONS = Object.freeze({
 	learningRate: 1.25,
+	learningRateDecay: true,
 	samplesPerStep: 96,
 	modelMode: 0,
 	temporalSigma: 0.30,
@@ -118,7 +119,9 @@ function requestValidation(options = {}) {
 		validationWorker.postMessage({ version: WORKER_PROTOCOL_VERSION, type: "validate", step,
 			options: { splatCount: trainer.splatCount, modelMode: trainOptions.modelMode,
 				temporalSigma: trainOptions.temporalSigma,
-				totalRecycled: trainer.totalRecycled },
+				totalRecycled: trainer.totalRecycled,
+				maxAspectRatio: backendDescriptor?.maxAspectRatio ?? 3,
+				learningRateMultipliers: trainer.lastLearningRateMultipliers ?? null },
 			params: params.buffer }, [params.buffer]);
 	}).catch((error) => {
 		validationPending = false;
@@ -188,7 +191,8 @@ async function initialize(message) {
 		trainOptions.camerasPerStep = 1;
 	}
 	renderOptions.viewIndices = resolveRenderViewIndices(trainer.dataset, renderOptions.viewIndices);
-	validationWorker = new Worker(new URL("./validationWorker.js", import.meta.url), { type: "module" });
+	validationWorker = new Worker(new URL("./validationWorker.js?v=20260729-convergence7", import.meta.url),
+		{ type: "module" });
 	validationWorker.onmessage = ({ data }) => {
 		if (data?.type === "validation") {
 			validationPending = false;
