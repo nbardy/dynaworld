@@ -3,6 +3,7 @@ import { renderSnapshotFrame } from "./snapshotMetrics.js";
 import { SPLAT_FLOATS } from "./trainerWebGpu3d.js";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
+	fullFramePairForStep,
 	windowedL1DssimCpu,
 } from "./trainerWebGpu3dTiled.js";
 
@@ -30,9 +31,109 @@ const THRESHOLDS = Object.freeze({
 	finiteDifferenceAbs: 5e-5,
 	finiteDifferenceRelative: 0.08,
 	gradientActivity: 1e-7,
-	minimumActiveGradientFamilies: 6,
+	minimumActiveGradientFamilies: TILED_PARITY_GRADIENT_FAMILIES.length,
 });
 const PARITY_SSIM_RADIUS = 5;
+const PARITY_MINIMUM_TEMPORAL_BASIS = 0.5;
+
+function normalizedAxis(values) {
+	const length = Math.hypot(...values);
+	return values.map((value) => value / length);
+}
+
+function axisAngleQuaternion(axis, angle) {
+	const normalized = normalizedAxis(axis);
+	const sine = Math.sin(angle / 2);
+	return [
+		normalized[0] * sine,
+		normalized[1] * sine,
+		normalized[2] * sine,
+		Math.cos(angle / 2),
+	];
+}
+
+export function makeTiledParityFixtureParameters(initialParams) {
+	if (initialParams.length === 0 || initialParams.length % SPLAT_FLOATS !== 0) {
+		throw new RangeError("Parity fixture parameters must contain complete 24-float splats.");
+	}
+	const result = initialParams.slice();
+	const scalePatterns = [
+		[2.0, 0.65, 1.1],
+		[0.7, 1.9, 1.05],
+		[1.15, 0.6, 2.0],
+	];
+	const rotationAxes = [
+		[1, 2, 3],
+		[-2, 1, 1],
+		[1, -3, 2],
+	];
+	const harmonicAxes = [
+		[1, -0.5, 0.25],
+		[-0.25, 1, 0.5],
+		[0.5, 0.25, -1],
+	];
+	for (let splatIndex = 0; splatIndex < result.length / SPLAT_FLOATS; splatIndex += 1) {
+		const base = splatIndex * SPLAT_FLOATS;
+		const referenceScale = Math.exp(
+			(result[base + 12] + result[base + 13] + result[base + 14]) / 3,
+		);
+		const scalePattern = scalePatterns[splatIndex % scalePatterns.length];
+		for (let axis = 0; axis < 3; axis += 1) {
+			result[base + 12 + axis] = Math.log(referenceScale * scalePattern[axis]);
+		}
+		result.set(axisAngleQuaternion(
+			rotationAxes[splatIndex % rotationAxes.length],
+			0.35 + 0.07 * (splatIndex % 4),
+		), base + 16);
+		const harmonicAxis = normalizedAxis(harmonicAxes[splatIndex % harmonicAxes.length]);
+		for (let axis = 0; axis < 3; axis += 1) {
+			result[base + 8 + axis] = harmonicAxis[axis] * referenceScale * 0.35;
+		}
+		result[base + 3] = 0.35 + 0.1 * (splatIndex % 3);
+		result[base + 7] = 0.25 + 0.1 * (splatIndex % 4);
+	}
+	return result;
+}
+
+function parityWeightRange(dataset, viewIndex, frameIndex) {
+	if (!dataset) return Number.POSITIVE_INFINITY;
+	const pixels = dataset.width * dataset.height;
+	const source = (viewIndex * dataset.frameCount + frameIndex) * pixels * 4;
+	let minimum = Number.POSITIVE_INFINITY;
+	let maximum = Number.NEGATIVE_INFINITY;
+	for (let pixel = 0; pixel < pixels; pixel += 1) {
+		const weight = dataset.frames[source + pixel * 4 + 3];
+		minimum = Math.min(minimum, weight);
+		maximum = Math.max(maximum, weight);
+	}
+	return maximum - minimum;
+}
+
+export function selectTiledParityTrainingStep(trainViewIndices, frameCount, dataset = null) {
+	if (!Number.isSafeInteger(frameCount) || frameCount < 2) {
+		throw new RangeError("Tiled parity requires at least two temporal frames.");
+	}
+	const pairCount = trainViewIndices.length * frameCount;
+	for (let step = 1; step <= pairCount; step += 1) {
+		const pair = fullFramePairForStep(trainViewIndices, frameCount, step);
+		const time = pair.frameIndex / (frameCount - 1);
+		const harmonicBasis = Math.sin(time * Math.PI * 2);
+		const linearBasis = time * 2 - 1;
+		if (Math.abs(harmonicBasis) >= PARITY_MINIMUM_TEMPORAL_BASIS
+			&& Math.abs(linearBasis) >= PARITY_MINIMUM_TEMPORAL_BASIS
+			&& parityWeightRange(dataset, pair.viewIndex, pair.frameIndex) >= 1e-3) {
+			return {
+				...pair,
+				step,
+				time,
+				harmonicBasis,
+				linearBasis,
+				pixelWeightRange: parityWeightRange(dataset, pair.viewIndex, pair.frameIndex),
+			};
+		}
+	}
+	throw new Error("No training pair excites both temporal bases with non-uniform motion weights.");
+}
 
 function differenceSummary(left, right, stride, components) {
 	if (left.length !== right.length) throw new RangeError("Parity arrays must have equal lengths.");
@@ -110,16 +211,18 @@ export function selectGradientChannels(gradients, splatCount) {
 	});
 }
 
-function targetRgb(dataset, viewIndex, frameIndex) {
+export function extractTiledParityTarget(dataset, viewIndex, frameIndex) {
 	const pixels = dataset.width * dataset.height;
 	const source = (viewIndex * dataset.frameCount + frameIndex) * pixels * 4;
-	const result = new Float32Array(pixels * 3);
+	const rgb = new Float32Array(pixels * 3);
+	const pixelWeights = new Float32Array(pixels);
 	for (let pixel = 0; pixel < pixels; pixel += 1) {
-		result[pixel * 3] = dataset.frames[source + pixel * 4];
-		result[pixel * 3 + 1] = dataset.frames[source + pixel * 4 + 1];
-		result[pixel * 3 + 2] = dataset.frames[source + pixel * 4 + 2];
+		rgb[pixel * 3] = dataset.frames[source + pixel * 4];
+		rgb[pixel * 3 + 1] = dataset.frames[source + pixel * 4 + 1];
+		rgb[pixel * 3 + 2] = dataset.frames[source + pixel * 4 + 2];
+		pixelWeights[pixel] = dataset.frames[source + pixel * 4 + 3];
 	}
-	return result;
+	return { rgb, pixelWeights };
 }
 
 function finiteDifferenceStep(component, geometryScale) {
@@ -127,11 +230,12 @@ function finiteDifferenceStep(component, geometryScale) {
 		|| (component >= 8 && component <= 10)) {
 		return Math.max(2e-6, geometryScale * 0.0002);
 	}
+	if (component >= 16 && component <= 19) return 5e-4;
 	if (component >= 20 && component <= 22) return 5e-4;
 	return 1e-3;
 }
 
-function objective(dataset, params, target, viewIndex, frameIndex) {
+function objective(dataset, params, target, pixelWeights, viewIndex, frameIndex) {
 	const rendered = renderSnapshotFrame(dataset, params, {
 		viewIndex,
 		frameIndex,
@@ -142,17 +246,27 @@ function objective(dataset, params, target, viewIndex, frameIndex) {
 	return windowedL1DssimCpu(rendered.rgb, target, dataset.width, dataset.height, {
 		radius: PARITY_SSIM_RADIUS,
 		computeGradient: false,
+		pixelWeights,
 	}).loss;
 }
 
-function centralDifference(dataset, params, target, viewIndex, frameIndex, parameterIndex, step) {
+function centralDifference(
+	dataset,
+	params,
+	target,
+	pixelWeights,
+	viewIndex,
+	frameIndex,
+	parameterIndex,
+	step,
+) {
 	const plus = params.slice();
 	const minus = params.slice();
 	plus[parameterIndex] = params[parameterIndex] + step;
 	minus[parameterIndex] = params[parameterIndex] - step;
 	const denominator = plus[parameterIndex] - minus[parameterIndex];
-	return (objective(dataset, plus, target, viewIndex, frameIndex)
-		- objective(dataset, minus, target, viewIndex, frameIndex)) / denominator;
+	return (objective(dataset, plus, target, pixelWeights, viewIndex, frameIndex)
+		- objective(dataset, minus, target, pixelWeights, viewIndex, frameIndex)) / denominator;
 }
 
 function closeEnough(left, right, absoluteTolerance, relativeTolerance = 0) {
@@ -160,13 +274,35 @@ function closeEnough(left, right, absoluteTolerance, relativeTolerance = 0) {
 		+ relativeTolerance * Math.max(Math.abs(left), Math.abs(right));
 }
 
-function checkGradient(dataset, initialParams, target, selection, viewIndex, frameIndex) {
+function checkGradient(
+	dataset,
+	initialParams,
+	target,
+	pixelWeights,
+	selection,
+	viewIndex,
+	frameIndex,
+) {
 	const epsilon = finiteDifferenceStep(selection.component, dataset.geometryScale);
 	const finiteDifference = centralDifference(
-		dataset, initialParams, target, viewIndex, frameIndex, selection.parameterIndex, epsilon,
+		dataset,
+		initialParams,
+		target,
+		pixelWeights,
+		viewIndex,
+		frameIndex,
+		selection.parameterIndex,
+		epsilon,
 	);
 	const halfStepFiniteDifference = centralDifference(
-		dataset, initialParams, target, viewIndex, frameIndex, selection.parameterIndex, epsilon / 2,
+		dataset,
+		initialParams,
+		target,
+		pixelWeights,
+		viewIndex,
+		frameIndex,
+		selection.parameterIndex,
+		epsilon / 2,
 	);
 	const finiteDifferenceStable = closeEnough(
 		finiteDifference,
@@ -215,6 +351,23 @@ function objectiveParity(gpuMetrics, cpuMetrics) {
 	};
 }
 
+export function summarizeGradientParity(gradientChecks) {
+	if (gradientChecks.length !== TILED_PARITY_GRADIENT_FAMILIES.length) {
+		throw new RangeError(
+			`Expected ${TILED_PARITY_GRADIENT_FAMILIES.length} gradient-family checks.`,
+		);
+	}
+	const activeCount = gradientChecks.filter((check) => check.active).length;
+	return {
+		skippedDiagnosticComponents: [...TILED_PARITY_DIAGNOSTIC_COMPONENTS],
+		selectedCount: gradientChecks.length,
+		activeCount,
+		checks: gradientChecks,
+		pass: activeCount === THRESHOLDS.minimumActiveGradientFamilies
+			&& gradientChecks.every((check) => check.active && check.pass),
+	};
+}
+
 function failuresFor(report) {
 	const failures = [];
 	if (!report.forward.pass) failures.push("forward raster parity");
@@ -249,9 +402,8 @@ export async function runTiledParityHarness({
 			checkpointPrecision: "f32",
 		});
 		await trainer.device.queue.onSubmittedWorkDone();
-		const initialParams = trainer.initialParams.slice();
 
-		onProgress("Running one zero-learning-rate full-frame step");
+		onProgress("Validating one zero-learning-rate tiled submission");
 		trainer.trainStep({
 			learningRate: 0,
 			modelMode: 0,
@@ -261,9 +413,39 @@ export async function runTiledParityHarness({
 		const submissionError = await trainer.firstStepValidation;
 		trainer.firstStepValidation = null;
 		if (submissionError) throw new Error(`Tiled submission failed: ${submissionError.message}`);
+		const initialParams = makeTiledParityFixtureParameters(trainer.initialParams);
+		for (const params of trainer.buffers.params) {
+			trainer.device.queue.writeBuffer(params, 0, initialParams);
+		}
+		const parityPair = selectTiledParityTrainingStep(
+			trainer.trainViewIndices,
+			trainer.dataset.frameCount,
+			trainer.dataset,
+		);
+		trainer.stepCount = parityPair.step;
+		onProgress(
+			`Running parity step at frame ${parityPair.frameIndex} `
+			+ `(sin=${parityPair.harmonicBasis.toFixed(3)})`,
+		);
+		trainer.trainStep({
+			learningRate: 0,
+			modelMode: 0,
+			temporalSigma: 0.30,
+			ssimRadius: PARITY_SSIM_RADIUS,
+			motionWeighting: true,
+		});
 		const debug = await trainer.readTiledStepDebugState();
 		const dataset = trainer.dataset;
-		const target = targetRgb(dataset, debug.viewIndex, debug.frameIndex);
+		const target = extractTiledParityTarget(dataset, debug.viewIndex, debug.frameIndex);
+		let minimumWeight = Number.POSITIVE_INFINITY;
+		let maximumWeight = Number.NEGATIVE_INFINITY;
+		for (const weight of target.pixelWeights) {
+			minimumWeight = Math.min(minimumWeight, weight);
+			maximumWeight = Math.max(maximumWeight, weight);
+		}
+		if (maximumWeight - minimumWeight < 1e-3) {
+			throw new Error("Weighted parity target must contain non-uniform pixel weights.");
+		}
 
 		onProgress("Comparing GPU raster against CPU tile renderer");
 		const cpuFrame = renderSnapshotFrame(dataset, initialParams, {
@@ -286,10 +468,14 @@ export async function runTiledParityHarness({
 		};
 		const cpuObjective = windowedL1DssimCpu(
 			cpuFrame.rgb,
-			target,
+			target.rgb,
 			dataset.width,
 			dataset.height,
-			{ radius: PARITY_SSIM_RADIUS, computeGradient: false },
+			{
+				radius: PARITY_SSIM_RADIUS,
+				computeGradient: false,
+				pixelWeights: target.pixelWeights,
+			},
 		);
 
 		onProgress("Checking selected analytic gradients with central differences");
@@ -297,20 +483,13 @@ export async function runTiledParityHarness({
 			checkGradient(
 				dataset,
 				initialParams,
-				target,
+				target.rgb,
+				target.pixelWeights,
 				selection,
 				debug.viewIndex,
 				debug.frameIndex,
 			));
-		const activeCount = gradientChecks.filter((check) => check.active).length;
-		const gradients = {
-			skippedDiagnosticComponents: [...TILED_PARITY_DIAGNOSTIC_COMPONENTS],
-			selectedCount: gradientChecks.length,
-			activeCount,
-			checks: gradientChecks,
-			pass: activeCount >= THRESHOLDS.minimumActiveGradientFamilies
-				&& gradientChecks.every((check) => check.pass),
-		};
+		const gradients = summarizeGradientParity(gradientChecks);
 		report = {
 			contract: "dynaworld_tiled_webgpu_parity/v1",
 			pass: false,
@@ -329,8 +508,14 @@ export async function runTiledParityHarness({
 				tileCapacity: 16,
 				checkpointPrecision: "f32",
 				step: debug.step,
+				fixtureStep: parityPair.step,
+				fixtureTime: parityPair.time,
+				fixtureHarmonicBasis: parityPair.harmonicBasis,
+				fixtureLinearBasis: parityPair.linearBasis,
+				fixturePixelWeightRange: parityPair.pixelWeightRange,
 				ssimRadius: PARITY_SSIM_RADIUS,
 				learningRate: 0,
+				motionWeighting: true,
 			},
 			thresholds: THRESHOLDS,
 			forward,

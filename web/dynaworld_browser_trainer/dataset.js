@@ -389,12 +389,33 @@ async function decodeFrameAtlas({ url, width, height, frameCount }) {
 	return frames;
 }
 
+export const MOTION_LOSS_WEIGHT_MAX = 2;
+
+export function normalizedMotionLossWeights(energies, maximumWeight = MOTION_LOSS_WEIGHT_MAX) {
+	if (!energies || !Number.isFinite(maximumWeight) || maximumWeight < 1) {
+		throw new RangeError("Motion-loss weights require finite energies and a maximum weight of at least one.");
+	}
+	const weights = new Float32Array(energies.length);
+	let sum = 0;
+	for (let index = 0; index < energies.length; index += 1) {
+		const linear = Math.min(1, Math.max(0, (Number(energies[index]) - 0.00035) / (0.004 - 0.00035)));
+		const score = linear * linear * (3 - 2 * linear);
+		const weight = 1 + (maximumWeight - 1) * score;
+		weights[index] = weight;
+		sum += weight;
+	}
+	const mean = sum / Math.max(1, weights.length);
+	for (let index = 0; index < weights.length; index += 1) weights[index] /= mean;
+	return weights;
+}
+
 export function computeMultiviewSamples(frames, backgrounds, width, height, frameCount, trainViewCount) {
 	const pixels = width * height;
 	const motion = [];
 	const staticSamples = [];
 	for (let view = 0; view < trainViewCount; view += 1) {
 		for (let frame = 0; frame < frameCount; frame += 1) {
+			const energies = new Float32Array(pixels);
 			for (let pixel = 0; pixel < pixels; pixel += 1) {
 				const base = ((view * frameCount + frame) * pixels + pixel) * 4;
 				const bgBase = (view * pixels + pixel) * 4;
@@ -402,12 +423,18 @@ export function computeMultiviewSamples(frames, backgrounds, width, height, fram
 				const dg = frames[base + 1] - backgrounds[bgBase + 1];
 				const db = frames[base + 2] - backgrounds[bgBase + 2];
 				const energy = (dr * dr + dg * dg + db * db) / 3;
+				energies[pixel] = energy;
 				const packed = (view * frameCount + frame) * pixels + pixel;
 				if (energy > 0.0006) {
 					motion.push({ packed, energy });
 				} else if (energy < 0.00035) {
 					staticSamples.push(packed);
 				}
+			}
+			const weights = normalizedMotionLossWeights(energies);
+			for (let pixel = 0; pixel < pixels; pixel += 1) {
+				const base = ((view * frameCount + frame) * pixels + pixel) * 4;
+				frames[base + 3] = weights[pixel];
 			}
 		}
 	}

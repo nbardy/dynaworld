@@ -14,6 +14,7 @@ const DEFAULT_TRAIN_OPTIONS = Object.freeze({
 	motionSampleRate: 0.90,
 	staticSampleRate: 0.08,
 	motionCoverageTarget: 0.52,
+	motionWeighting: false,
 	camerasPerStep: null,
 });
 let trainer = null;
@@ -191,7 +192,7 @@ async function initialize(message) {
 		trainOptions.camerasPerStep = 1;
 	}
 	renderOptions.viewIndices = resolveRenderViewIndices(trainer.dataset, renderOptions.viewIndices);
-	validationWorker = new Worker(new URL("./validationWorker.js?v=20260729-convergence7", import.meta.url),
+	validationWorker = new Worker(new URL("./validationWorker.js?v=20260729-fixedtopology4", import.meta.url),
 		{ type: "module" });
 	validationWorker.onmessage = ({ data }) => {
 		if (data?.type === "validation") {

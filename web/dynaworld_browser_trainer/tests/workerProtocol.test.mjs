@@ -75,3 +75,19 @@ test("SPA exposes packed-FP16 checkpoints and sends the selected precision to th
 	assert.match(appSource, /controls\.precision\.disabled\s*=\s*sampledBackendSelected\(\)/);
 	assert.match(appSource, /sampledBackendSelected\(\)\s*\?\s*2048\s*:\s*4096/);
 });
+
+test("SPA defaults to the complete seed bank and unweighted training with opt-in ablations", async () => {
+	const [htmlSource, appSource] = await Promise.all([
+		readFile(new URL("../index.html", import.meta.url), "utf8"),
+		readFile(new URL("../app.js", import.meta.url), "utf8"),
+	]);
+	assert.match(htmlSource, /id="splatSlider"[^>]+value="4096"/);
+	assert.doesNotMatch(htmlSource.match(/<input id="staticWarmupToggle"[^>]+>/)?.[0] ?? "", /checked/);
+	assert.doesNotMatch(htmlSource.match(/<input id="motionWeightingToggle"[^>]+>/)?.[0] ?? "", /checked/);
+	assert.match(htmlSource, /id="phaseValue"/);
+	assert.match(appSource, /const STATIC_WARMUP_STEPS = 2048/);
+	assert.match(appSource, /staticWarmupSteps:\s*controls\.staticWarmup\.checked/);
+	assert.match(appSource, /motionWeighting:\s*controls\.motionWeighting\.checked/);
+	assert.match(appSource, /sampledControls \? "Motion Cov" : "Train Cov"/);
+	assert.match(appSource, /status\.step < trainerStaticWarmupSteps \? "static init" : "dynamic fit"/);
+});

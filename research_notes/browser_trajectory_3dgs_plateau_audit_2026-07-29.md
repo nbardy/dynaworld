@@ -52,10 +52,11 @@ failure modes; they do not establish a quality win.
 
 ## Main Bottlenecks
 
-1. **Effective topology is much smaller than allocated topology.** The 4,096
-   slot count includes hidden and raster-dead slots. Split/recycle uses
-   opacity/gradient proxies, not the spatial loss map, so it cannot reliably
-   put births on missing structure or motion.
+1. **There is no useful adaptive topology yet.** The default now initializes
+   all 4,096 slots and preserves them. Lower-count growth can fill hidden
+   capacity, but it uses opacity/gradient proxies rather than a spatial
+   residual/depth map. It cannot reliably place births on missing structure or
+   motion.
 2. **The representation collapses static.** Full images are dominated by the
    stable kitchen. A shared broad temporal gate plus trainable static mix makes
    "be persistent" the easiest solution.
@@ -68,6 +69,12 @@ failure modes; they do not establish a quality win.
 5. **Initialization is not yet a clean baseline.** The default 4,096-point
    bundle is external/unverified. The train-only known-pose pycolmap cloud is
    verified but sparse.
+
+The 6:1 anisotropy ceiling was also tested directly. At step 16,384, a 12:1
+ceiling reached `16.3/15.4 dB` train/heldout and `0.518/0.254` SSIM, compared
+with `16.2/15.5 dB` and `0.514/0.261` at 6:1. Longer ellipses did not improve
+heldout convergence and increased raster work, so the ceiling is not the
+leading plateau cause.
 
 ## Paper-Space Comparison
 
@@ -97,9 +104,11 @@ motion, or allocation capacity above.
 - added default-on, toggleable geometry/appearance LR decay over 120k steps;
 - changed Adam from `beta2=0.99, epsilon=1e-6` to `0.999, 1e-8`;
 - extended density statistics from `0.995` to `0.999` decay;
-- changed the default from 4,096 initialized slots to 2,048 initialized plus
-  fixed-capacity growth to 4,096;
-- extended cheap recycling every 512 steps through step 120k;
+- tested 2,048 initialized slots plus fixed-capacity growth, then restored all
+  4,096 checked-in SfM seeds after the reduced scaffold regressed quality;
+- tested cheap proxy recycling through step 120k, then removed post-fill
+  recycling after auditing that it replaced 3,744 of 4,096 initialized slots
+  without a residual/depth placement signal;
 - raised the still-bounded tiled anisotropy cap from 3:1 to 6:1;
 - added asynchronous diagnostics for dynamic/persistent counts, static-mix
   quantiles, endpoint temporal support, anisotropy saturation, raster-dead
@@ -107,9 +116,16 @@ motion, or allocation capacity above.
 - tested and removed a dynamic-reserve heuristic after it failed the early
   quality A/B.
 
-The Apple WebGPU parity harness still passes with `8.2e-8` maximum RGB error,
-`1.1e-8` objective error, and seven active gradient families. The focused
-browser suite passes 67 tests.
+The final Apple WebGPU parity harness passes with `1.15e-7` maximum RGB error,
+`3.34e-8` weighted-objective error, and all nine intended gradient families active. The
+browser suite passes 75 tests.
+
+The combined fixed-topology plus bounded-RGB run reached `16.2/15.5 dB`
+train/heldout and `0.514/0.261` SSIM at step 16,384, compared with
+`15.3/14.6 dB` and `0.494/0.214` for the earlier unweighted run. At the
+step-32,768 validation it reached `16.6/15.5 dB` and `0.537/0.257`. Because
+topology and color bounds changed together, these smokes establish the corrected
+default, not an isolated causal attribution.
 
 ## Highest-Value Next Experiments
 
@@ -126,9 +142,63 @@ browser suite passes 67 tests.
    4,096-point seed under matched settings.
 6. Record long matched runs in `BASELINES.md`; do not promote the short smokes
    above.
+7. Separate the median-depth normalization factor from normalized-space scale
+   bounds. Coffee Martini currently reports `0.07098`; 589 initial splats hit
+   the local maximum scale. Treat this as a measured A/B, not an unreviewed
+   global-unit rewrite.
+8. Compare the current family schedule against a scale/geometry-coherent
+   schedule. After 120k steps, scale retains 10x decay while position, motion,
+   and rotation have decayed 100x; this can keep changing blur after geometry
+   is effectively frozen.
 
 Do not build browser SfM next. The bundle already carries calibrated cameras,
 and duplicating calibration/split semantics would violate the browser adapter
 boundary. Improve train-only point support through
 `src/train/export_dynaworld_browser_bundle.py` and the existing known-pose
 pycolmap route first.
+
+## Follow-Up: Background And Preview Audit
+
+A second pass found two concrete regressions behind the sparse, circular live
+result:
+
+1. the new 2,048-plus-growth default used only half of the checked-in 4,096 seed
+   points, then populated capacity with deterministic copies and splits;
+2. the preview added a 0.3-pixel low-pass filter in 72-pixel training units even
+   when the display panel was roughly six times taller, visually circularizing
+   small ellipses.
+
+The SPA now defaults to the complete 4,096-seed scaffold, uses
+display-resolution filtering plus the training alpha threshold, and clears to
+the same exact-black background as the training compositor.
+
+Background treatment is now explicit. Camera-specific mean images are not
+composited into evaluation. They are used only by an optional 2,048-step warmup
+across train cameras, with motion frozen, before supervision switches to the
+real synchronized frames. A matched step-16,384 smoke favored leaving it off:
+`15.3/14.6 dB` train/heldout without warmup versus `15.1/14.2 dB` with it.
+
+The compositor uses fixed black, not random color. Targets are opaque RGB in
+`[0,1]`, and learned splat RGB is now clamped to the same range rather than the
+former `[0,1.4]`. That removes an opacity/color escape in which translucent
+overbright splats could match bright pixels against black. No camera-specific
+2D background or hidden opacity prior was added.
+
+Softmax Splatting is not a substitute for this renderer's visibility model. It
+is a differentiable 2D forward warp for resolving source-pixel collisions in
+video interpolation, whereas 3DGS needs depth-ordered transmittance. A softmax
+over Gaussians would change occlusion semantics and invalidate the existing
+source-over shared adjoint.
+
+The full-frame objective had also dropped the old sampled trainer's strong
+moving-pixel emphasis. An optional ablation now carries a residual-derived
+train weight in frame alpha, caps it at 2x before normalization, and normalizes
+it to mean one per frame. Tiled L1 and DSSIM values and gradients use those
+weights only when `Motion-Weighted Loss` is enabled; validation remains
+unweighted.
+
+The ablation is off by default because matched step-16,384 runs favored the
+standard objective: `15.3/14.6 dB` train/heldout unweighted versus
+`14.9/13.9 dB` at 2x motion weighting. An earlier 4x run reached
+`15.3/14.3 dB`. Motion emphasis did not explain the plateau and weakened
+heldout quality.
