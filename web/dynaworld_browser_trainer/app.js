@@ -1,570 +1,590 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260710-converge59";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260710-converge59";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260726-tiled1";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260726-tiled1";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260726-tiled1";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260726-tiled1";
 
-const renderCanvas = document.getElementById("renderCanvas");
-const targetCanvas = document.getElementById("targetCanvas");
-const sourceViewCanvas = document.getElementById("sourceViewCanvas");
-const targetViewCanvas = document.getElementById("targetViewCanvas");
-const angleStrip = document.getElementById("angleStrip");
-const runButton = document.getElementById("runButton");
-const stepButton = document.getElementById("stepButton");
-const resetButton = document.getElementById("resetButton");
-const modeSelect = document.getElementById("modeSelect");
-const splatSlider = document.getElementById("splatSlider");
-const timeSlider = document.getElementById("timeSlider");
-const timeLoopToggle = document.getElementById("timeLoopToggle");
-const timeSpeedSlider = document.getElementById("timeSpeedSlider");
-const targetViewSelect = document.getElementById("targetViewSelect");
-const resultViewSelect = document.getElementById("resultViewSelect");
-const temporalSlider = document.getElementById("temporalSlider");
-const lrSlider = document.getElementById("lrSlider");
-const samplesSlider = document.getElementById("samplesSlider");
-const motionMixSlider = document.getElementById("motionMixSlider");
-const staticMixSlider = document.getElementById("staticMixSlider");
-const supportGuardSlider = document.getElementById("supportGuardSlider");
-const splatSliderValue = document.getElementById("splatSliderValue");
-const timeValue = document.getElementById("timeValue");
-const timeSpeedValue = document.getElementById("timeSpeedValue");
-const temporalValue = document.getElementById("temporalValue");
-const lrValue = document.getElementById("lrValue");
-const samplesValue = document.getElementById("samplesValue");
-const motionMixValue = document.getElementById("motionMixValue");
-const staticMixValue = document.getElementById("staticMixValue");
-const supportGuardValue = document.getElementById("supportGuardValue");
-const stepValue = document.getElementById("stepValue");
-const stepRateValue = document.getElementById("stepRateValue");
-const lossValue = document.getElementById("lossValue");
-const gridLossValue = document.getElementById("gridLossValue");
-const valMaeValue = document.getElementById("valMaeValue");
-const valPsnrValue = document.getElementById("valPsnrValue");
-const valSsimValue = document.getElementById("valSsimValue");
-const motionLossValue = document.getElementById("motionLossValue");
-const motionCoverageValue = document.getElementById("motionCoverageValue");
-const staticCoverageValue = document.getElementById("staticCoverageValue");
-const motionMaxAlphaValue = document.getElementById("motionMaxAlphaValue");
-const activeSplatValue = document.getElementById("activeSplatValue");
-const meanOpacityValue = document.getElementById("meanOpacityValue");
-const meanRadiusValue = document.getElementById("meanRadiusValue");
-const splatValue = document.getElementById("splatValue");
-const recycledSplatValue = document.getElementById("recycledSplatValue");
-const parameterDeltaValue = document.getElementById("parameterDeltaValue");
-const motionSampleValue = document.getElementById("motionSampleValue");
-const staticSampleValue = document.getElementById("staticSampleValue");
-const gpuValue = document.getElementById("gpuValue");
-const fpsValue = document.getElementById("fpsValue");
-const statusText = document.getElementById("statusText");
-const datasetName = document.getElementById("datasetName");
-const targetFrameValue = document.getElementById("targetFrameValue");
-const sourceViewFrameValue = document.getElementById("sourceViewFrameValue");
-const targetViewFrameValue = document.getElementById("targetViewFrameValue");
+const $ = (id) => document.getElementById(id);
+const renderCanvas = $("renderCanvas");
+const targetCanvas = $("targetCanvas");
+const comparisonCanvases = [$("sourceViewCanvas"), $("targetViewCanvas"), $("heldoutViewCanvas")];
+const comparisonFrameLabels = [$("sourceViewFrameValue"), $("targetViewFrameValue"), $("heldoutViewFrameValue")];
+const resultViewLabels = [0, 1, 2].map((index) => $(`resultViewLabel${index}`));
+const resultViewRoles = [0, 1, 2].map((index) => $(`resultViewRole${index}`));
+const controls = {
+	run: $("runButton"), step: $("stepButton"), reset: $("resetButton"), backend: $("backendSelect"),
+	mode: $("modeSelect"),
+	splats: $("splatSlider"), time: $("timeSlider"), loop: $("timeLoopToggle"), live: $("livePreviewToggle"),
+	fullMetrics: $("fullMetricsToggle"), speed: $("timeSpeedSlider"), targetView: $("targetViewSelect"),
+	renderCamera: $("renderCameraSelect"), resultView: $("resultViewSelect"),
+	temporalSchedule: $("temporalScheduleToggle"), temporal: $("temporalSlider"), lr: $("lrSlider"),
+	samples: $("samplesSlider"), motionMix: $("motionMixSlider"), staticMix: $("staticMixSlider"),
+	supportGuard: $("supportGuardSlider"),
+};
+const values = {
+	splats: $("splatSliderValue"), time: $("timeValue"), speed: $("timeSpeedValue"),
+	temporalLabel: $("temporalSliderLabel"), temporal: $("temporalValue"),
+	temporalSchedule: $("temporalScheduleValue"), lr: $("lrValue"), samples: $("samplesValue"),
+	motionMix: $("motionMixValue"), staticMix: $("staticMixValue"), supportGuard: $("supportGuardValue"),
+	step: $("stepValue"), stepRate: $("stepRateValue"), sampleLoss: $("lossValue"),
+	gridLoss: $("gridLossValue"), trainMae: $("valMaeValue"), trainPsnr: $("valPsnrValue"),
+	trainSsim: $("valSsimValue"), heldoutLoss: $("heldoutLossValue"), heldoutMae: $("heldoutMaeValue"),
+	heldoutPsnr: $("heldoutPsnrValue"), heldoutSsim: $("heldoutSsimValue"),
+	heldoutCoverage: $("heldoutCoverageValue"), motionLoss: $("motionLossValue"),
+	motionCoverage: $("motionCoverageValue"), staticCoverage: $("staticCoverageValue"),
+	peakAlpha: $("motionMaxAlphaValue"), active: $("activeSplatValue"), meanOpacity: $("meanOpacityValue"),
+	meanRadius: $("meanRadiusValue"), meanAspect: $("meanAspectValue"), tileOverflow: $("tileOverflowValue"),
+	splatCount: $("splatValue"), recycled: $("recycledSplatValue"),
+	parameterDelta: $("parameterDeltaValue"), motionSamples: $("motionSampleValue"),
+	staticSamples: $("staticSampleValue"), gpu: $("gpuValue"), fps: $("fpsValue"),
+	runtime: $("runtimeValue"), shared: $("sharedStatusValue"), validation: $("validationRuntimeValue"),
+};
+const chartElements = {
+	loss: $("lossChartCanvas"), lossRange: $("lossChartRange"), lossScale: $("lossScaleToggle"),
+	psnr: $("psnrChartCanvas"), psnrRange: $("psnrChartRange"),
+	ssim: $("ssimChartCanvas"), ssimRange: $("ssimChartRange"),
+};
+
+const TEMPORAL_SUPPORT_START = 0.30;
+const TEMPORAL_SUPPORT_TARGET = 0.26;
+const TEMPORAL_SUPPORT_HOLD_STEPS = 256;
+const TEMPORAL_SUPPORT_END_STEP = 2048;
+const RENDER_FPS = 20;
+const MAX_RENDER_WIDTH = 960;
+const VALIDATION_STEP_INTERVAL = 2048;
+const UI_STATE_KEY = "dynaworld-browser-trainer-ui-v1";
+const metricHistory = { sampleLoss: [], trainLoss: [], heldoutLoss: [],
+	trainPsnr: [], heldoutPsnr: [], trainSsim: [], heldoutSsim: [] };
 
 let dataset = null;
-let trainer = null;
+let workerClient = null;
+let localTrainer = null;
 let running = false;
-let lastFrameMs = performance.now();
-let lastLossStep = -1;
-let lastGridLossStep = -1;
-let lastRateStep = 0;
-let lastRateMs = performance.now();
+let booting = true;
 let lossEma = null;
+let lossLogScale = true;
 let animationHandle = 0;
-let booting = false;
-let gridLossBusy = false;
-let validationEpoch = 0;
-let errorMapBusy = false;
-let lastErrorMapMs = 0;
-let lastErrorMapKey = "";
+let lastFrameAt = performance.now();
+let lastTargetDrawAt = 0;
+let lastRenderOptionsKey = "";
+let lastTrainOptionsKey = "";
+let lastStatusMetricStep = -1;
+let lastValidationRequestStep = 0;
+let localLossPending = false;
+let lastLocalLossStep = -1;
+let trainerCapacity = 0;
+const frameDurations = [];
 
-function setStatus(message) {
-	statusText.textContent = message;
-}
-
-function previewTime() {
-	return Number(timeSlider.value);
-}
-
-function currentLoopSpeed() {
-	return Number(timeSpeedSlider.value);
+function currentStep() {
+	return workerClient?.getStatus()?.step ?? localTrainer?.stepCount ?? 0;
 }
 
 function currentModelMode() {
-	return modeSelect.value === "dynamic_splats" ? 1 : 0;
-}
-
-function currentSplatCount() {
-	return Number(splatSlider.value);
-}
-
-function currentTemporalSigma() {
-	return Number(temporalSlider.value);
-}
-
-function currentMotionMix() {
-	return Number(motionMixSlider.value);
-}
-
-function currentStaticMix() {
-	return Number(staticMixSlider.value);
-}
-
-function currentSupportGuard() {
-	return Number(supportGuardSlider.value);
-}
-
-function effectiveMotionMix() {
-	return Math.min(currentMotionMix(), 1 - currentStaticMix());
+	return controls.mode.value === "dynamic_splats" ? 1 : 0;
 }
 
 function currentRenderMode() {
-	if (resultViewSelect?.value === "alpha_support") {
-		return 2;
-	}
-	return resultViewSelect?.value === "dynamic_residual" ? 1 : 0;
+	if (controls.resultView.value === "alpha_support") return 2;
+	return controls.resultView.value === "dynamic_residual" ? 1 : 0;
 }
 
-function updateSliderLabels() {
-	splatSliderValue.textContent = splatSlider.value;
-	timeValue.textContent = previewTime().toFixed(3);
-	timeSpeedValue.textContent = `${currentLoopSpeed().toFixed(2)}x`;
-	temporalValue.textContent = currentTemporalSigma().toFixed(2);
-	lrValue.textContent = `${Number(lrSlider.value).toFixed(2)}x`;
-	samplesValue.textContent = samplesSlider.value;
-	motionMixValue.textContent = `${Math.round(effectiveMotionMix() * 100)}%`;
-	staticMixValue.textContent = `${Math.round(currentStaticMix() * 100)}%`;
-	supportGuardValue.textContent = `${Math.round(currentSupportGuard() * 100)}%`;
+function currentTemporalSigma(step = currentStep()) {
+	if (!controls.temporalSchedule.checked) return Number(controls.temporal.value);
+	const progress = Math.max(0, Math.min(1, (step - TEMPORAL_SUPPORT_HOLD_STEPS)
+		/ (TEMPORAL_SUPPORT_END_STEP - TEMPORAL_SUPPORT_HOLD_STEPS)));
+	const smooth = progress * progress * (3 - 2 * progress);
+	return TEMPORAL_SUPPORT_START + (TEMPORAL_SUPPORT_TARGET - TEMPORAL_SUPPORT_START) * smooth;
 }
 
-function setRunning(value) {
-	running = value;
-	runButton.textContent = running ? "Pause" : "Start";
-	runButton.dataset.running = running ? "true" : "false";
+function effectiveMotionMix() {
+	return Math.min(Number(controls.motionMix.value), 1 - Number(controls.staticMix.value));
 }
 
-function drawValidationErrorCanvas(result) {
-	const ctx = targetCanvas.getContext("2d");
-	if (!ctx) {
-		return;
-	}
-	targetCanvas.width = result.width;
-	targetCanvas.height = result.height;
-	const image = new ImageData(result.data, result.width, result.height);
-	ctx.putImageData(image, 0, 0);
-	targetFrameValue.textContent = `frame ${result.frame} error ${result.meanAbs.toFixed(4)}`;
+function sampledBackendSelected() {
+	return controls.backend.value === "sampled3d";
 }
 
-async function refreshValidationErrorCanvas(time) {
-	if (!trainer || errorMapBusy) {
-		return;
+function trainOptions() {
+	return {
+		learningRate: Number(controls.lr.value), samplesPerStep: Number(controls.samples.value),
+		modelMode: currentModelMode(), temporalSigma: currentTemporalSigma(),
+		motionSampleRate: effectiveMotionMix(), staticSampleRate: Number(controls.staticMix.value),
+		motionCoverageTarget: Number(controls.supportGuard.value), camerasPerStep: 4,
+	};
+}
+
+function renderOptions() {
+	return { time: Number(controls.time.value), modelMode: currentModelMode(),
+		temporalSigma: currentTemporalSigma(), renderMode: currentRenderMode(),
+		enabled: controls.live.checked,
+		viewIndex: Number(controls.renderCamera.value || 0),
+		viewIndices: dataset?.comparisonViewIndices ?? null };
+}
+
+function setStatus(message) {
+	$("statusText").textContent = message;
+}
+
+function setRunning(next) {
+	running = Boolean(next);
+	controls.run.textContent = running ? "Pause" : "Start";
+	controls.run.dataset.running = String(running);
+	controls.step.disabled = running || booting;
+	if (workerClient) {
+		if (running) workerClient.start(); else workerClient.pause();
 	}
-	const frame = dataset.frameCount <= 1 ? 0 : Math.round(time * (dataset.frameCount - 1));
-	const key = `${trainer.stepCount}:${frame}:${currentModelMode()}:${currentTemporalSigma().toFixed(3)}`;
-	const now = performance.now();
-	if (key === lastErrorMapKey || now - lastErrorMapMs < 650) {
-		return;
+}
+
+function updateControlLabels() {
+	const step = currentStep();
+	const sigma = currentTemporalSigma(step);
+	values.splats.textContent = controls.splats.value;
+	values.time.textContent = Number(controls.time.value).toFixed(3);
+	values.speed.textContent = `${Number(controls.speed.value).toFixed(2)}x`;
+	values.temporal.textContent = sigma.toFixed(3);
+	values.lr.textContent = `${Number(controls.lr.value).toFixed(2)}x`;
+	values.samples.textContent = sampledBackendSelected()
+		? controls.samples.value : dataset ? `${dataset.width * dataset.height} px` : "full image";
+	values.motionMix.textContent = `${Math.round(effectiveMotionMix() * 100)}%`;
+	values.staticMix.textContent = `${Math.round(Number(controls.staticMix.value) * 100)}%`;
+	values.supportGuard.textContent = `${Math.round(Number(controls.supportGuard.value) * 100)}%`;
+	controls.temporal.disabled = controls.temporalSchedule.checked;
+	for (const control of [controls.samples, controls.motionMix, controls.staticMix, controls.supportGuard]) {
+		control.disabled = !sampledBackendSelected();
 	}
-	errorMapBusy = true;
-	const activeTrainer = trainer;
-	const activeEpoch = validationEpoch;
-	try {
-		const result = await activeTrainer.readPreviewErrorImage({
-			time,
-			modelMode: currentModelMode(),
-			temporalSigma: currentTemporalSigma(),
+	for (const field of [$("sampleCountField"), $("motionMixField"), $("staticMixField"), $("supportGuardField")]) {
+		field.toggleAttribute("data-disabled", !sampledBackendSelected());
+	}
+	values.temporalLabel.textContent = controls.temporalSchedule.checked ? "Temporal Support Now" : "Temporal Support";
+	if (!controls.temporalSchedule.checked) {
+		values.temporalSchedule.textContent = "manual · fixed";
+	} else if (step < TEMPORAL_SUPPORT_HOLD_STEPS) {
+		values.temporalSchedule.textContent = `hold ${step}/${TEMPORAL_SUPPORT_HOLD_STEPS} · target 0.26`;
+	} else if (step < TEMPORAL_SUPPORT_END_STEP) {
+		const progress = Math.round(100 * (step - TEMPORAL_SUPPORT_HOLD_STEPS)
+			/ (TEMPORAL_SUPPORT_END_STEP - TEMPORAL_SUPPORT_HOLD_STEPS));
+		values.temporalSchedule.textContent = `narrowing ${progress}% · target 0.26`;
+	} else {
+		values.temporalSchedule.textContent = "settled · target 0.26";
+	}
+}
+
+function drawMetricChart(canvas, range, definitions, { log = false, format = (value) => value.toFixed(3) } = {}) {
+	const ctx = canvas.getContext("2d");
+	if (!ctx) return;
+	const dpr = window.devicePixelRatio || 1;
+	const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+	const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+	if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+	ctx.clearRect(0, 0, width, height);
+	ctx.strokeStyle = "#2d353e"; ctx.lineWidth = dpr;
+	for (let row = 1; row < 4; row += 1) {
+		const y = Math.round((height * row) / 4) + 0.5;
+		ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
+	}
+	const valid = (point) => Number.isFinite(point.value) && (!log || point.value > 0);
+	const points = definitions.flatMap(({ key }) => metricHistory[key]).filter(valid);
+	if (!points.length) { range.textContent = "waiting"; return; }
+	const minStep = Math.min(...points.map((point) => point.step));
+	const historyMaxStep = Math.max(...points.map((point) => point.step));
+	const maxStep = Math.max(minStep + 1, historyMaxStep);
+	const transformed = points.map((point) => log ? Math.log10(point.value) : point.value);
+	let minValue = Math.min(...transformed); let maxValue = Math.max(...transformed);
+	const minimumSpan = log ? 0.08 : Math.max(0.02, Math.abs(maxValue) * 0.025);
+	if (maxValue - minValue < minimumSpan) {
+		const center = (minValue + maxValue) / 2; minValue = center - minimumSpan / 2; maxValue = center + minimumSpan / 2;
+	}
+	const inset = 8 * dpr;
+	for (const { key, color } of definitions) {
+		const visible = metricHistory[key].filter(valid); if (!visible.length) continue;
+		ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.7 * dpr;
+		ctx.lineJoin = "round"; ctx.lineCap = "round";
+		visible.forEach((point, index) => {
+			const x = inset + ((point.step - minStep) / (maxStep - minStep)) * (width - inset * 2);
+			const value = log ? Math.log10(point.value) : point.value;
+			const y = inset + ((maxValue - value) / (maxValue - minValue)) * (height - inset * 2);
+			if (index) ctx.lineTo(x, y); else ctx.moveTo(x, y);
 		});
-		if (trainer !== activeTrainer || validationEpoch !== activeEpoch) {
-			return;
-		}
-		drawValidationErrorCanvas(result);
-		lastErrorMapKey = key;
-		lastErrorMapMs = performance.now();
-	} catch (error) {
-		if (trainer === activeTrainer && validationEpoch === activeEpoch) {
-			console.warn("Validation error image failed.", error);
-		}
-	} finally {
-		if (validationEpoch === activeEpoch) {
-			errorMapBusy = false;
-		}
+		ctx.stroke();
 	}
+	const latest = points.reduce((current, point) => point.step >= current.step ? point : current, points[0]);
+	range.textContent = `${format(latest.value)} @ ${latest.step} · full ${minStep}–${historyMaxStep}`;
+}
+
+function drawMetricCharts() {
+	drawMetricChart(chartElements.loss, chartElements.lossRange, [
+		{ key: "sampleLoss", color: "#56c7a5" }, { key: "trainLoss", color: "#e1b85f" },
+		{ key: "heldoutLoss", color: "#e67c73" },
+	], { log: lossLogScale, format: (value) => value.toExponential(2) });
+	drawMetricChart(chartElements.psnr, chartElements.psnrRange, [
+		{ key: "trainPsnr", color: "#e1b85f" }, { key: "heldoutPsnr", color: "#e67c73" },
+	], { format: (value) => `${value.toFixed(1)} dB` });
+	drawMetricChart(chartElements.ssim, chartElements.ssimRange, [
+		{ key: "trainSsim", color: "#e1b85f" }, { key: "heldoutSsim", color: "#e67c73" },
+	], { format: (value) => value.toFixed(3) });
+}
+
+function recordMetric(kind, step, value) {
+	if (!Number.isFinite(value) || (kind.endsWith("Loss") && value <= 0)) return;
+	const series = metricHistory[kind];
+	if (series.at(-1)?.step === step) series[series.length - 1] = { step, value };
+	else series.push({ step, value });
+	drawMetricCharts();
+}
+
+function resetMetrics() {
+	for (const series of Object.values(metricHistory)) series.length = 0;
+	for (const value of [values.sampleLoss, values.gridLoss, values.trainMae, values.trainPsnr,
+		values.trainSsim, values.heldoutLoss, values.heldoutMae, values.heldoutPsnr,
+		values.heldoutSsim, values.heldoutCoverage, values.motionLoss, values.motionCoverage,
+		values.staticCoverage, values.peakAlpha, values.active, values.meanOpacity, values.meanRadius,
+		values.meanAspect, values.tileOverflow]) {
+		value.textContent = "--";
+	}
+	delete values.tileOverflow.dataset.state;
+	drawMetricCharts();
+}
+
+function consumeSampleMetric({ step, loss, breakdown = null }) {
+	if (!Number.isFinite(loss)) {
+		values.sampleLoss.textContent = "invalid";
+		const detail = breakdown ? ` (${JSON.stringify(breakdown)})` : "";
+		setStatus(`Training objective became non-finite at step ${step}${detail}.`);
+		return;
+	}
+	if (loss < 0) return;
+	if (loss === 0 && breakdown) {
+		setStatus(`Zero-objective diagnostic at step ${step}: ${JSON.stringify(breakdown)}.`);
+	}
+	lossEma = lossEma == null ? loss : lossEma * 0.82 + loss * 0.18;
+	values.sampleLoss.textContent = lossEma.toFixed(5);
+	if (breakdown) {
+		const overflow = Number(breakdown.tileOverflow);
+		values.tileOverflow.textContent = Number.isFinite(overflow) ? String(Math.round(overflow)) : "--";
+		values.tileOverflow.dataset.state = overflow > 0 ? "warning" : "ok";
+	}
+	recordMetric("sampleLoss", step, lossEma);
+}
+
+function setMetricText(element, value, format) {
+	if (Number.isFinite(value)) element.textContent = format(value);
+}
+
+function consumeValidation({ step, metrics }) {
+	setMetricText(values.gridLoss, metrics.gridLoss, (value) => value.toFixed(6));
+	setMetricText(values.trainMae, metrics.gridMae, (value) => value.toFixed(4));
+	setMetricText(values.trainPsnr, metrics.gridPsnr, (value) => `${value.toFixed(1)} dB`);
+	setMetricText(values.trainSsim, metrics.gridSsim, (value) => value.toFixed(3));
+	setMetricText(values.heldoutLoss, metrics.heldoutLoss, (value) => value.toFixed(6));
+	setMetricText(values.heldoutMae, metrics.heldoutMae, (value) => value.toFixed(4));
+	setMetricText(values.heldoutPsnr, metrics.heldoutPsnr, (value) => `${value.toFixed(1)} dB`);
+	setMetricText(values.heldoutSsim, metrics.heldoutSsim, (value) => value.toFixed(3));
+	setMetricText(values.heldoutCoverage, metrics.heldoutCoverage, (value) => `${(value * 100).toFixed(1)}%`);
+	setMetricText(values.motionLoss, metrics.motionLoss, (value) => value.toFixed(6));
+	setMetricText(values.motionCoverage, metrics.motionCoverage, (value) => `${(value * 100).toFixed(1)}%`);
+	setMetricText(values.staticCoverage, metrics.staticCoverage, (value) => `${(value * 100).toFixed(1)}%`);
+	setMetricText(values.peakAlpha, metrics.motionMaxAlpha, (value) => `${(value * 100).toFixed(1)}%`);
+	setMetricText(values.active, metrics.activeSplats,
+		(value) => `${value}/${trainerCapacity || controls.splats.value}`);
+	setMetricText(values.meanOpacity, metrics.meanOpacity, (value) => `${(value * 100).toFixed(1)}%`);
+	setMetricText(values.meanRadius, metrics.meanRadius, (value) => value.toFixed(4));
+	setMetricText(values.meanAspect, metrics.meanAspectRatio, (value) => `${value.toFixed(2)}:1`);
+	setMetricText(values.recycled, metrics.totalRecycled, (value) => String(value));
+	setMetricText(values.parameterDelta, metrics.parameterDelta, (value) => value.toExponential(2));
+	recordMetric("trainLoss", step, metrics.gridLoss);
+	recordMetric("heldoutLoss", step, metrics.heldoutLoss);
+	recordMetric("trainPsnr", step, metrics.gridPsnr);
+	recordMetric("heldoutPsnr", step, metrics.heldoutPsnr);
+	recordMetric("trainSsim", step, metrics.gridSsim);
+	recordMetric("heldoutSsim", step, metrics.heldoutSsim);
+}
+
+function selectedViewDataset() {
+	const index = Number(controls.renderCamera.value || 0);
+	return dataset?.viewDatasets?.[index] ?? dataset?.previewViews?.[index] ?? dataset;
 }
 
 function updateTargetCanvas() {
-	if (!dataset) {
-		return;
+	if (!dataset) return;
+	let targetView = controls.targetView.value;
+	if (workerClient && targetView === "validation_error") {
+		targetView = "rgb";
+		controls.targetView.value = "rgb";
+		setStatus("Validation error images are not in the nonblocking worker snapshot protocol; scalar validation remains live.");
 	}
-	const targetView = targetViewSelect?.value ?? "rgb";
-	const time = previewTime();
-	if (targetView === "validation_error") {
-		if (errorMapBusy) {
-			targetFrameValue.textContent = "updating error";
-		} else if (!lastErrorMapKey) {
-			targetFrameValue.textContent = "validation error";
-		}
-		void refreshValidationErrorCanvas(time);
-	} else {
-		const frame = drawTargetFrame(targetCanvas, dataset, time, { view: targetView });
-		targetFrameValue.textContent = targetView === "motion_residual" ? `frame ${frame} residual` : `frame ${frame}`;
-	}
-	const views = dataset.previewViews ?? [];
-	angleStrip.hidden = views.length === 0;
-	const previewPairs = [
-		[sourceViewCanvas, sourceViewFrameValue, views[0]],
-		[targetViewCanvas, targetViewFrameValue, views[1]],
-	];
-	for (const [canvas, label, view] of previewPairs) {
-		if (!canvas || !label) {
-			continue;
-		}
-		if (!view) {
-			canvas.hidden = true;
-			label.textContent = "--";
-			continue;
-		}
-		canvas.hidden = false;
-		const viewFrame = drawTargetFrame(canvas, view, time, { view: "rgb" });
-		label.textContent = `${view.label ?? "View"} f${viewFrame}`;
+	const time = Number(controls.time.value);
+	const selected = selectedViewDataset();
+	const frame = drawTargetFrame(targetCanvas, selected, time, { view: targetView });
+	const camera = dataset.cameras?.[Number(controls.renderCamera.value || 0)];
+	$("targetFrameValue").textContent = `${camera ? `${camera.name} ${camera.role}` : "target"} f${frame}`;
+	const previews = dataset.previewViews ?? [];
+	$("angleStrip").hidden = !previews.length;
+	for (let index = 0; index < comparisonCanvases.length; index += 1) {
+		const preview = previews[index];
+		comparisonCanvases[index].hidden = !preview;
+		comparisonFrameLabels[index].textContent = preview
+			? `${preview.label} f${drawTargetFrame(comparisonCanvases[index], preview, time)}` : "--";
 	}
 }
 
-function advancePreviewTime(deltaMs) {
-	if (!timeLoopToggle.checked || !dataset) {
-		return false;
+function configureCameraUi() {
+	const cameras = dataset.cameras ?? [{ name: "Source", role: "train" }];
+	controls.renderCamera.replaceChildren(...cameras.map((camera, index) => {
+		const option = document.createElement("option"); option.value = String(index);
+		option.textContent = `${camera.name} (${camera.role})`; return option;
+	}));
+	controls.renderCamera.value = String(dataset.comparisonViewIndices?.[0] ?? 0);
+	$("resultAngleLabels").hidden = (dataset.viewCount ?? 1) < 2;
+	const renderedIndices = cameras.length > 1 ? dataset.comparisonViewIndices : [0];
+	for (let panel = 0; panel < 3; panel += 1) {
+		const camera = cameras[renderedIndices[panel]];
+		resultViewLabels[panel].textContent = camera?.name ?? "--";
+		resultViewRoles[panel].textContent = camera?.role === "heldout" ? "Heldout" : `Train ${String.fromCharCode(65 + panel)}`;
 	}
-	const next = (previewTime() + (deltaMs / 1000) * currentLoopSpeed()) % 1;
-	timeSlider.value = next.toFixed(3);
-	updateSliderLabels();
-	updateTargetCanvas();
-	return true;
+	const notice = $("renderContractNotice");
+	notice.hidden = true;
 }
 
-async function readLossIfReady(force = false) {
-	if (!trainer) {
-		return;
+function syncWorkerOptions(force = false) {
+	if (!workerClient) return;
+	const nextTrain = trainOptions(); const trainKey = JSON.stringify(nextTrain);
+	if (force || trainKey !== lastTrainOptionsKey) {
+		workerClient.setTrainOptions(nextTrain); lastTrainOptionsKey = trainKey;
 	}
-	if (!force && trainer.stepCount === lastLossStep) {
-		return;
+	const nextRender = renderOptions(); const renderKey = JSON.stringify(nextRender);
+	if (force || renderKey !== lastRenderOptionsKey) {
+		workerClient.setRenderOptions(nextRender); lastRenderOptionsKey = renderKey;
 	}
-	if (!force && trainer.stepCount - lastLossStep < 16) {
-		return;
+}
+
+function resizeWorkerCanvas() {
+	if (!workerClient) return;
+	const rect = renderCanvas.getBoundingClientRect();
+	const scale = Math.min(window.devicePixelRatio || 1, 1.25, MAX_RENDER_WIDTH / Math.max(1, rect.width));
+	workerClient.resize(Math.max(1, Math.floor(rect.width * scale)), Math.max(1, Math.floor(rect.height * scale)));
+}
+
+function bindWorkerEvents(client) {
+	client.addEventListener(WorkerEvent.METRICS, ({ detail }) => consumeSampleMetric(detail));
+	client.addEventListener(WorkerEvent.VALIDATION, ({ detail }) => consumeValidation(detail));
+	client.addEventListener(WorkerEvent.ERROR, ({ detail }) => {
+		setRunning(false);
+		setStatus([detail.message || "Training worker failed.", detail.stack].filter(Boolean).join("\n"));
+		console.error(detail.error ?? detail);
+	});
+	client.addEventListener(WorkerEvent.CAPABILITY, ({ detail }) => {
+		setStatus(`${detail.capability}: ${detail.available ? "available" : detail.reason}`);
+	});
+}
+
+async function initWorkerTrainer() {
+	workerClient = createNonblockingTrainer();
+	bindWorkerEvents(workerClient);
+	const ready = await workerClient.init({
+		dataset, canvas: renderCanvas,
+		trainerOptions: { backend: controls.backend.value, splatCount: Number(controls.splats.value) },
+		trainOptions: trainOptions(), renderOptions: renderOptions(),
+		schedule: { validationEvery: 0, renderFps: RENDER_FPS },
+	});
+	trainerCapacity = ready.backend?.capacity ?? Number(controls.splats.value);
+	document.documentElement.dataset.trainerBackend = ready.backend?.id ?? "unknown";
+	values.gpu.textContent = ready.adapter ?? "WebGPU";
+	values.runtime.textContent = ready.capabilities.offscreenRender
+		? `${ready.backend?.label ?? "worker"} + render` : `${ready.backend?.label ?? "worker"} optimizer`;
+	values.shared.textContent = ready.capabilities.sharedStatus ? "atomic SAB" : "messages";
+	values.validation.textContent = ready.capabilities.validationWorker ? "separate worker" : "unavailable";
+	if (!ready.capabilities.offscreenRender) {
+		$("renderContractNotice").hidden = false;
+		$("renderContractNotice").textContent = "OffscreenCanvas is unavailable; optimization remains worker-owned but live rendering is disabled.";
 	}
-	lastLossStep = trainer.stepCount;
+	resizeWorkerCanvas(); syncWorkerOptions(true);
+	workerClient.requestValidation({ gridSize: 12 });
+	lastValidationRequestStep = 0;
+	const cameraBatch = ready.cameraBatch;
+	const heldoutCamera = dataset.cameras?.[dataset.heldoutViewIndex];
+	const heldoutDescription = heldoutCamera
+		? `${heldoutCamera.name} is held out`
+		: "no heldout camera is configured";
+	values.splatCount.textContent = trainerCapacity === Number(controls.splats.value)
+		? String(trainerCapacity) : `${controls.splats.value} → ${trainerCapacity}`;
+	setStatus(`Ready: ${ready.backend?.label ?? "WebGPU"} · ${ready.backend?.objective ?? "training"} · `
+		+ `${cameraBatch?.camerasPerStep ?? 1} of ${cameraBatch?.trainViewCount ?? 17} train cameras per step; `
+		+ `${heldoutDescription}.`);
+}
+
+async function initLocalTrainer() {
+	localTrainer = new DynamicSplatWebGpuTrainer(renderCanvas);
+	await localTrainer.init(dataset, { splatCount: Number(controls.splats.value) });
+	values.gpu.textContent = localTrainer.adapterName;
+	values.runtime.textContent = "main-thread fallback";
+	values.shared.textContent = "n/a";
+	values.validation.textContent = "local";
+	localTrainer.render(Number(controls.time.value), currentModelMode(), currentTemporalSigma(), currentRenderMode());
+	setStatus("Single-view compatibility mode. Multicamera datasets use the nonblocking worker runtime.");
+}
+
+function saveUiState() {
+	const state = {};
+	for (const [name, control] of Object.entries(controls)) {
+		if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement)) continue;
+		state[name] = control.type === "checkbox" ? control.checked : control.value;
+	}
+	sessionStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
+}
+
+function restoreUiState() {
 	try {
-		const loss = await trainer.readLoss();
-		if (Number.isFinite(loss)) {
-			lossEma = lossEma == null ? loss : lossEma * 0.82 + loss * 0.18;
-			lossValue.textContent = lossEma.toFixed(5);
+		const state = JSON.parse(sessionStorage.getItem(UI_STATE_KEY) || "null");
+		sessionStorage.removeItem(UI_STATE_KEY);
+		if (!state) return;
+		for (const [name, saved] of Object.entries(state)) {
+			const control = controls[name]; if (!control) continue;
+			if (control.type === "checkbox") control.checked = Boolean(saved); else control.value = saved;
 		}
 	} catch (error) {
-		console.warn("Loss readback failed.", error);
+		console.warn("Could not restore trainer controls.", error);
 	}
-}
-
-async function readGridLossIfReady(force = false) {
-	if (!trainer) {
-		return;
-	}
-	if (gridLossBusy) {
-		if (!force) {
-			return;
-		}
-		while (gridLossBusy && trainer) {
-			await new Promise((resolve) => setTimeout(resolve, 16));
-		}
-		if (!trainer) {
-			return;
-		}
-	}
-	if (!force && trainer.stepCount - lastGridLossStep < 128) {
-		return;
-	}
-	const activeTrainer = trainer;
-	const activeEpoch = validationEpoch;
-	const step = activeTrainer.stepCount;
-	lastGridLossStep = step;
-	gridLossBusy = true;
-	try {
-		const metrics = await activeTrainer.readValidationMetrics({
-			modelMode: currentModelMode(),
-			temporalSigma: currentTemporalSigma(),
-			gridSize: 32,
-		});
-		if (trainer !== activeTrainer || validationEpoch !== activeEpoch) {
-			return;
-		}
-		if (Number.isFinite(metrics.gridLoss)) {
-			gridLossValue.textContent = metrics.gridLoss.toFixed(6);
-		}
-		if (Number.isFinite(metrics.gridMae)) {
-			valMaeValue.textContent = metrics.gridMae.toFixed(4);
-		}
-		if (Number.isFinite(metrics.gridPsnr)) {
-			valPsnrValue.textContent = `${metrics.gridPsnr.toFixed(1)} dB`;
-		}
-		if (Number.isFinite(metrics.gridSsim)) {
-			valSsimValue.textContent = metrics.gridSsim.toFixed(3);
-		}
-		if (Number.isFinite(metrics.motionLoss)) {
-			motionLossValue.textContent = metrics.motionLoss.toFixed(6);
-		}
-		if (Number.isFinite(metrics.motionCoverage)) {
-			motionCoverageValue.textContent = `${(metrics.motionCoverage * 100).toFixed(1)}%`;
-		}
-		if (Number.isFinite(metrics.staticCoverage)) {
-			staticCoverageValue.textContent = `${(metrics.staticCoverage * 100).toFixed(1)}%`;
-		}
-		if (Number.isFinite(metrics.motionMaxAlpha)) {
-			motionMaxAlphaValue.textContent = `${(metrics.motionMaxAlpha * 100).toFixed(1)}%`;
-		}
-		if (Number.isFinite(metrics.activeSplats)) {
-			activeSplatValue.textContent = `${metrics.activeSplats}/${trainer.splatCount}`;
-		}
-		if (Number.isFinite(metrics.meanOpacity)) {
-			meanOpacityValue.textContent = `${(metrics.meanOpacity * 100).toFixed(1)}%`;
-		}
-		if (Number.isFinite(metrics.meanRadius)) {
-			meanRadiusValue.textContent = metrics.meanRadius.toFixed(4);
-		}
-		if (Number.isFinite(metrics.parameterDelta)) {
-			parameterDeltaValue.textContent = metrics.parameterDelta.toExponential(2);
-		}
-	} catch (error) {
-		if (trainer === activeTrainer && validationEpoch === activeEpoch) {
-			console.warn("Grid loss readback failed.", error);
-		}
-	} finally {
-		if (validationEpoch === activeEpoch) {
-			gridLossBusy = false;
-		}
-	}
-}
-
-function renderOnce() {
-	if (!trainer?.dataset || !trainer.device) {
-		return;
-	}
-	trainer.render(previewTime(), currentModelMode(), currentTemporalSigma(), currentRenderMode());
-	stepValue.textContent = String(trainer.stepCount);
 }
 
 async function resetTrainer() {
-	if (booting) {
+	if (workerClient) {
+		saveUiState(); location.reload();
 		return;
 	}
-	booting = true;
-	setRunning(false);
-	runButton.disabled = true;
-	stepButton.disabled = true;
-	resetButton.disabled = true;
-	setStatus("Preparing WebGPU trainer.");
-	let nextTrainer = null;
+	if (!dataset || booting) return;
+	booting = true; setRunning(false);
+	for (const control of [controls.run, controls.step, controls.reset]) control.disabled = true;
 	try {
-		validationEpoch += 1;
-		gridLossBusy = false;
-		errorMapBusy = false;
-		lastErrorMapKey = "";
-		const oldTrainer = trainer;
-		trainer = null;
-		oldTrainer?.dispose();
-		nextTrainer = new DynamicSplatWebGpuTrainer(renderCanvas);
-		await nextTrainer.init(dataset, { splatCount: currentSplatCount() });
-		trainer = nextTrainer;
-		nextTrainer = null;
-		splatValue.textContent = String(trainer.splatCount);
-		motionSampleValue.textContent = String(dataset.motionSamples?.length ?? 0);
-		staticSampleValue.textContent = String(dataset.staticSamples?.length ?? 0);
-		gpuValue.textContent = trainer.adapterName;
-		lastLossStep = -1;
-		lastGridLossStep = -1;
-		lastRateStep = 0;
-		lastRateMs = performance.now();
-		lossEma = null;
-		lossValue.textContent = "--";
-		stepRateValue.textContent = "--";
-		gridLossValue.textContent = "--";
-		valMaeValue.textContent = "--";
-		valPsnrValue.textContent = "--";
-		valSsimValue.textContent = "--";
-		motionLossValue.textContent = "--";
-		motionCoverageValue.textContent = "--";
-		staticCoverageValue.textContent = "--";
-		motionMaxAlphaValue.textContent = "--";
-		activeSplatValue.textContent = "--";
-		meanOpacityValue.textContent = "--";
-		meanRadiusValue.textContent = "--";
-		recycledSplatValue.textContent = "0";
-		parameterDeltaValue.textContent = "0";
-		stepValue.textContent = "0";
-		renderOnce();
-		void readGridLossIfReady(true);
-		setStatus("Ready.");
+		localTrainer?.dispose(); localTrainer = null; lossEma = null; resetMetrics();
+		await initLocalTrainer();
 	} catch (error) {
-		nextTrainer?.dispose();
-		trainer?.dispose();
-		trainer = null;
-		setStatus(error instanceof Error ? error.message : String(error));
-		console.error(error);
+		setStatus(error instanceof Error ? error.message : String(error)); console.error(error);
 	} finally {
-		runButton.disabled = false;
-		stepButton.disabled = false;
-		resetButton.disabled = false;
 		booting = false;
+		for (const control of [controls.run, controls.step, controls.reset]) control.disabled = false;
 	}
+}
+
+async function readLocalLoss() {
+	if (!localTrainer || localLossPending || localTrainer.stepCount - lastLocalLossStep < 16) return;
+	localLossPending = true; lastLocalLossStep = localTrainer.stepCount;
+	try { consumeSampleMetric({ step: localTrainer.stepCount, loss: await localTrainer.readLoss(trainOptions()) }); }
+	finally { localLossPending = false; }
+}
+
+function tickLocalTrainer() {
+	if (!localTrainer) return;
+	if (running) for (let iteration = 0; iteration < 2; iteration += 1) localTrainer.trainStep(trainOptions());
+	if (controls.live.checked) localTrainer.render(Number(controls.time.value), currentModelMode(),
+		currentTemporalSigma(), currentRenderMode());
+	void readLocalLoss();
+}
+
+function updateFrameDiagnostics(now, delta) {
+	frameDurations.push(delta); if (frameDurations.length > 180) frameDurations.shift();
+	const sorted = [...frameDurations].sort((a, b) => a - b);
+	const p95 = sorted[Math.floor(sorted.length * 0.95)] ?? delta;
+	const uiFps = 1000 / Math.max(1, frameDurations.reduce((sum, value) => sum + value, 0) / frameDurations.length);
+	values.fps.textContent = workerClient && controls.live.checked
+		? `${RENDER_FPS} GPU · ${Math.round(uiFps)} UI` : controls.live.checked ? `${Math.round(uiFps)} fps` : "off";
+	globalThis.__dynaworldDiagnostics = { at: now, uiFps, uiP95Ms: p95,
+		completedStepsPerSecond: workerClient?.getStatus()?.stepsPerSecond ?? 0, step: currentStep(),
+		metricCounts: Object.fromEntries(Object.entries(metricHistory)
+			.map(([name, points]) => [name, points.length])) };
+}
+
+function frameLoop(now) {
+	const delta = Math.max(1, now - lastFrameAt); lastFrameAt = now;
+	if (controls.loop.checked && dataset) {
+		controls.time.value = ((Number(controls.time.value) + delta / 1000 * Number(controls.speed.value)) % 1).toFixed(3);
+	}
+	if (workerClient) {
+		const status = workerClient.getStatus();
+		if (status) {
+			values.step.textContent = String(status.step);
+			values.stepRate.textContent = Number.isFinite(status.stepsPerSecond) ? status.stepsPerSecond.toFixed(1) : "--";
+			if (status.lastMetricStep > lastStatusMetricStep && Number.isFinite(status.loss)) {
+				lastStatusMetricStep = status.lastMetricStep;
+			}
+		}
+		const validationStep = status?.step ?? 0;
+		if (controls.fullMetrics.checked
+			&& validationStep - lastValidationRequestStep >= VALIDATION_STEP_INTERVAL
+			&& !(status?.flags & StatusFlag.VALIDATION_PENDING)) {
+			workerClient.requestValidation({ gridSize: 12 });
+			lastValidationRequestStep = validationStep;
+		}
+		syncWorkerOptions();
+	} else {
+		tickLocalTrainer(); values.step.textContent = String(currentStep());
+	}
+	updateControlLabels();
+	if (controls.live.checked && now - lastTargetDrawAt >= 1000 / 30) {
+		lastTargetDrawAt = now; updateTargetCanvas();
+	}
+	updateFrameDiagnostics(now, delta);
+	animationHandle = requestAnimationFrame(frameLoop);
 }
 
 async function boot() {
-	updateSliderLabels();
-	runButton.disabled = true;
-	stepButton.disabled = true;
-	resetButton.disabled = true;
+	restoreUiState(); updateControlLabels(); resetMetrics();
+	for (const control of [controls.run, controls.step, controls.reset]) control.disabled = true;
 	try {
 		dataset = await loadPresetDataset();
-		datasetName.textContent = dataset.name;
-		setStatus(`Loaded ${dataset.width}x${dataset.height}x${dataset.frameCount} target.`);
-		updateTargetCanvas();
-		await resetTrainer();
+		const trainCount = dataset.trainViewCount ?? 1;
+		$("datasetName").textContent = dataset.datasetContract
+			? `${dataset.name} · ${trainCount} train / ${dataset.viewCount - trainCount} heldout`
+			: dataset.name;
+		values.splatCount.textContent = controls.splats.value;
+		values.motionSamples.textContent = String(dataset.motionSamples?.length ?? 0);
+		values.staticSamples.textContent = String(dataset.staticSamples?.length ?? 0);
+		configureCameraUi(); updateTargetCanvas();
+		if ((dataset.viewCount ?? 1) > 1) await initWorkerTrainer(); else await initLocalTrainer();
 	} catch (error) {
-		setStatus(error instanceof Error ? error.message : String(error));
-		console.error(error);
+		setStatus(error instanceof Error ? error.message : String(error)); console.error(error);
 	} finally {
-		runButton.disabled = false;
-		stepButton.disabled = false;
-		resetButton.disabled = false;
+		booting = false;
+		for (const control of [controls.run, controls.step, controls.reset]) control.disabled = false;
 	}
+	animationHandle = requestAnimationFrame((now) => { lastFrameAt = now; frameLoop(now); });
 }
 
-async function stepTrainer(iterations = 1) {
-	if (!trainer?.dataset || !trainer.device) {
-		return;
-	}
-	const learningRate = Number(lrSlider.value);
-	const samplesPerStep = Number(samplesSlider.value);
-	const modelMode = currentModelMode();
-	const temporalSigma = currentTemporalSigma();
-	const motionSampleRate = currentMotionMix();
-	const staticSampleRate = currentStaticMix();
-	const motionCoverageTarget = currentSupportGuard();
-	for (let i = 0; i < iterations; i += 1) {
-		trainer.trainStep({
-			learningRate,
-			samplesPerStep,
-			modelMode,
-			temporalSigma,
-			motionSampleRate,
-			staticSampleRate,
-			motionCoverageTarget,
-		});
-	}
-	const recycled = await trainer.maintainDensity({ modelMode, temporalSigma });
-	if (recycled > 0) {
-		recycledSplatValue.textContent = String(trainer.totalRecycled);
-		setStatus(`Recycled ${recycled} weak splats into high-error motion support.`);
-	}
-	renderOnce();
-	await readLossIfReady(iterations === 1);
-	if (iterations === 1) {
-		await readGridLossIfReady(true);
-	} else {
-		void readGridLossIfReady(false);
-	}
+controls.run.addEventListener("click", () => setRunning(!running));
+controls.step.addEventListener("click", () => {
+	if (workerClient) { workerClient.step(1); workerClient.requestValidation({ gridSize: 12 }); }
+	else if (localTrainer) { localTrainer.trainStep(trainOptions()); void readLocalLoss(); }
+});
+controls.reset.addEventListener("click", () => { void resetTrainer(); });
+controls.splats.addEventListener("change", () => { void resetTrainer(); });
+controls.backend.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
+controls.mode.addEventListener("change", () => { syncWorkerOptions(true); updateControlLabels(); });
+for (const control of [controls.time, controls.speed, controls.temporal, controls.lr, controls.samples,
+	controls.motionMix, controls.staticMix, controls.supportGuard]) {
+	control.addEventListener("input", () => { updateControlLabels(); syncWorkerOptions(); updateTargetCanvas(); });
 }
-
-async function frameLoop(nowMs) {
-	try {
-		const deltaMs = Math.max(1, nowMs - lastFrameMs);
-		lastFrameMs = nowMs;
-		fpsValue.textContent = `${Math.round(1000 / deltaMs)} fps`;
-		advancePreviewTime(deltaMs);
-
-		if (!booting && running && trainer && !gridLossBusy) {
-			await stepTrainer(trainer.splatCount >= 320 ? 1 : 2);
-		} else if (!booting) {
-			renderOnce();
-		}
-		if (!booting && trainer && nowMs - lastRateMs >= 1000) {
-			const stepDelta = trainer.stepCount - lastRateStep;
-			const seconds = (nowMs - lastRateMs) / 1000;
-			stepRateValue.textContent = `${(stepDelta / seconds).toFixed(1)}`;
-			lastRateStep = trainer.stepCount;
-			lastRateMs = nowMs;
-		}
-	} catch (error) {
-		console.warn("Frame loop recovered after render/train failure.", error);
-		setRunning(false);
-		setStatus(error instanceof Error ? error.message : String(error));
-	} finally {
-		animationHandle = requestAnimationFrame((nextMs) => {
-			void frameLoop(nextMs);
-		});
-	}
+for (const control of [controls.loop, controls.live, controls.temporalSchedule]) {
+	control.addEventListener("change", () => { updateControlLabels(); syncWorkerOptions(true); });
 }
-
-runButton.addEventListener("click", () => {
-	setRunning(!running);
-});
-
-stepButton.addEventListener("click", () => {
-	void stepTrainer(1);
-});
-
-resetButton.addEventListener("click", () => {
-	void resetTrainer();
-});
-
-modeSelect.addEventListener("change", () => {
-	if (dataset && !booting) {
-		void resetTrainer();
+controls.fullMetrics.addEventListener("change", () => {
+	if (controls.fullMetrics.checked) {
+		lastValidationRequestStep = currentStep();
+		workerClient?.requestValidation({ gridSize: 12 });
 	}
 });
-
-splatSlider.addEventListener("input", updateSliderLabels);
-splatSlider.addEventListener("change", () => {
-	if (dataset && !booting) {
-		void resetTrainer();
-	}
+controls.targetView.addEventListener("change", updateTargetCanvas);
+controls.renderCamera.addEventListener("change", () => { updateTargetCanvas(); syncWorkerOptions(true); });
+controls.resultView.addEventListener("change", () => syncWorkerOptions(true));
+chartElements.lossScale.addEventListener("click", () => {
+	lossLogScale = !lossLogScale;
+	chartElements.lossScale.setAttribute("aria-pressed", String(lossLogScale));
+	drawMetricCharts();
 });
 
-timeSlider.addEventListener("input", () => {
-	updateSliderLabels();
-	updateTargetCanvas();
-	renderOnce();
-});
-timeLoopToggle.addEventListener("change", updateSliderLabels);
-timeSpeedSlider.addEventListener("input", updateSliderLabels);
-
-targetViewSelect?.addEventListener("change", () => {
-	lastErrorMapKey = "";
-	updateTargetCanvas();
-});
-resultViewSelect?.addEventListener("change", renderOnce);
-
-temporalSlider.addEventListener("input", () => {
-	updateSliderLabels();
-	renderOnce();
-});
-
-lrSlider.addEventListener("input", updateSliderLabels);
-samplesSlider.addEventListener("input", updateSliderLabels);
-motionMixSlider.addEventListener("input", updateSliderLabels);
-motionMixSlider.addEventListener("change", updateSliderLabels);
-staticMixSlider.addEventListener("input", updateSliderLabels);
-staticMixSlider.addEventListener("change", updateSliderLabels);
-supportGuardSlider.addEventListener("input", updateSliderLabels);
-supportGuardSlider.addEventListener("change", updateSliderLabels);
-
-new ResizeObserver(() => {
-	renderOnce();
-}).observe(renderCanvas);
-
+new ResizeObserver(() => resizeWorkerCanvas()).observe(renderCanvas);
+const chartObserver = new ResizeObserver(drawMetricCharts);
+for (const canvas of [chartElements.loss, chartElements.psnr, chartElements.ssim]) chartObserver.observe(canvas);
 window.addEventListener("beforeunload", () => {
-	if (animationHandle) {
-		cancelAnimationFrame(animationHandle);
-	}
-	trainer?.dispose();
+	if (animationHandle) cancelAnimationFrame(animationHandle);
+	workerClient?.dispose(); localTrainer?.dispose();
 });
 
-void boot().then(() => {
-	animationHandle = requestAnimationFrame((nowMs) => {
-		lastFrameMs = nowMs;
-		void frameLoop(nowMs);
-	});
-});
+void boot();

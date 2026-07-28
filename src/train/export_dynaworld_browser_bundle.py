@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import torch
+from PIL import Image
 
 from checkpoint_utils import load_torch_checkpoint
 from config_utils import load_config_file
 from fast_attn import fast_attn_context, pick_device
 from model_factories import build_model_from_config
+from multicam_video_data import load_multicam_video_bundle
+from powerfoam_point_cloud import load_point_cloud_xyz_rgb
 from sequence_data import (
     load_camera_sequence,
     load_manifest_sequences,
@@ -24,6 +28,170 @@ from trainer_registry import resolve_config_for_arch
 
 
 EXPORT_BUNDLE_VERSION = "dynaworld_token_head_bundle/v2"
+BROWSER_MULTICAM_BUNDLE_VERSION = "dynaworld_browser_multicam_dataset/v1"
+
+
+def _browser_camera_filename_component(camera_name: str) -> str:
+    component = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(camera_name)).strip("._")
+    if not component:
+        raise ValueError(f"Camera name {camera_name!r} cannot be represented as a browser atlas filename.")
+    return component
+
+
+def _farthest_point_subset(points: torch.Tensor, count: int) -> torch.Tensor:
+    if int(points.shape[0]) <= count:
+        return torch.arange(int(points.shape[0]))
+    scale = (points.max(dim=0).values - points.min(dim=0).values).clamp_min(1.0e-5)
+    normalized = (points - points.median(dim=0).values) / scale
+    selected = torch.empty(count, dtype=torch.long)
+    selected[0] = torch.argmin((normalized * normalized).sum(dim=1))
+    min_distance2 = ((normalized - normalized[selected[0]]) ** 2).sum(dim=1)
+    for index in range(1, count):
+        selected[index] = torch.argmax(min_distance2)
+        candidate_distance2 = ((normalized - normalized[selected[index]]) ** 2).sum(dim=1)
+        min_distance2 = torch.minimum(min_distance2, candidate_distance2)
+    return selected
+
+
+def _write_browser_frame_atlases(bundle: Any, output_path: Path) -> dict[str, str]:
+    frames_by_name = list(zip(bundle.train_camera_names, bundle.train_frames))
+    if bundle.heldout_camera_names and bundle.heldout_frames is not None:
+        frames_by_name.extend(zip(bundle.heldout_camera_names, bundle.heldout_frames))
+    atlas_urls = {}
+    used_filenames: set[str] = set()
+    for camera_name, frames in frames_by_name:
+        atlas = torch.cat([frame.permute(1, 2, 0) for frame in frames], dim=1)
+        pixels = (atlas.clamp(0.0, 1.0) * 255.0).round().to(dtype=torch.uint8).cpu().numpy()
+        camera_component = _browser_camera_filename_component(str(camera_name))
+        atlas_filename = f"{output_path.stem}_{camera_component}.png"
+        if atlas_filename in used_filenames:
+            raise ValueError(f"Camera names collide on browser atlas filename {atlas_filename!r}.")
+        used_filenames.add(atlas_filename)
+        atlas_path = output_path.with_name(atlas_filename)
+        Image.fromarray(pixels).save(atlas_path, optimize=True)
+        atlas_urls[str(camera_name)] = f"./{atlas_path.name}"
+    return atlas_urls
+
+
+def _browser_camera_rows(
+    bundle: Any,
+    *,
+    width: int,
+    height: int,
+    atlas_urls: dict[str, str],
+) -> list[dict[str, Any]]:
+    rows = []
+    camera_groups = (
+        ("train", bundle.train_camera_names, bundle.train_K, bundle.train_w2c),
+        ("heldout", bundle.heldout_camera_names, bundle.heldout_K, bundle.heldout_w2c),
+    )
+    for role, names, intrinsics, world_to_camera in camera_groups:
+        if not names or intrinsics is None or world_to_camera is None:
+            continue
+        for index, name in enumerate(names):
+            K = intrinsics[index].detach().cpu()
+            camera_poses = world_to_camera[index].detach().cpu()
+            reference_pose = camera_poses[0].expand_as(camera_poses)
+            if not torch.allclose(camera_poses, reference_pose, rtol=1.0e-5, atol=1.0e-6):
+                raise ValueError(
+                    "dynaworld_browser_multicam_dataset/v1 supports static camera rigs only; "
+                    f"camera {name!r} changes pose across sampled frames."
+                )
+            rows.append(
+                {
+                    "name": str(name),
+                    "role": role,
+                    "frame_atlas_url": atlas_urls[str(name)],
+                    "intrinsics": [
+                        float(K[0, 0]) / float(width),
+                        float(K[1, 1]) / float(height),
+                        float(K[0, 2]) / float(width),
+                        float(K[1, 2]) / float(height),
+                    ],
+                    "world_to_camera": world_to_camera[index, 0].detach().cpu().tolist(),
+                }
+            )
+    return rows
+
+
+def export_browser_multicam_dataset_bundle(
+    *,
+    manifest_path: Path,
+    sample_id: str,
+    split: str,
+    seed_point_cloud_path: Path,
+    output_path: Path,
+    target_size: tuple[int, int],
+    frame_indices: list[int],
+    seed_count: int,
+) -> Path:
+    """Serialize a thin browser adapter over the canonical multicam contract."""
+    height, width = target_size
+    bundle = load_multicam_video_bundle(
+        data_cfg={
+            "multicam_manifest": str(manifest_path),
+            "multicam_split": split,
+            "multicam_sample_id": sample_id,
+            "frame_indices": frame_indices,
+        },
+        camera_cfg={"rig_init": "neural_3d_video"},
+        target_size=target_size,
+        device=torch.device("cpu"),
+    )
+    points, colors = load_point_cloud_xyz_rgb(seed_point_cloud_path)
+    if bundle.anchor_c2w is None:
+        raise ValueError("The canonical multicam bundle did not provide anchor_c2w for point initialization.")
+    world_to_anchor = torch.linalg.inv(bundle.anchor_c2w.detach().cpu())
+    points_h = torch.cat([points, torch.ones((points.shape[0], 1), dtype=points.dtype)], dim=1)
+    anchor_points = (points_h @ world_to_anchor.T)[:, :3]
+
+    visible = torch.zeros(anchor_points.shape[0], dtype=torch.bool)
+    anchor_points_h = torch.cat([anchor_points, torch.ones_like(anchor_points[:, :1])], dim=1)
+    for view in range(bundle.train_view_count):
+        camera_points = (anchor_points_h @ bundle.train_w2c[view, 0].detach().cpu().T)[:, :3]
+        z = camera_points[:, 2]
+        K = bundle.train_K[view].detach().cpu()
+        u = K[0, 0] * camera_points[:, 0] / z.clamp_min(1.0e-5) + K[0, 2]
+        v = K[1, 1] * camera_points[:, 1] / z.clamp_min(1.0e-5) + K[1, 2]
+        visible |= (z > 0.1) & (u > -0.05 * width) & (u < 1.05 * width) & (v > -0.05 * height) & (v < 1.05 * height)
+    anchor_points = anchor_points[visible]
+    colors = colors[visible]
+    selected = _farthest_point_subset(anchor_points, seed_count)
+    seeds = torch.cat([anchor_points[selected], colors[selected]], dim=1)
+
+    metadata = bundle.metadata or {}
+    fps = float(metadata["fps"])
+    start_seconds = float(metadata.get("source_start_seconds", 0.0))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    atlas_urls = _write_browser_frame_atlases(bundle, output_path)
+    payload = {
+        "version": BROWSER_MULTICAM_BUNDLE_VERSION,
+        "dataset_contract": {
+            "manifest": str(manifest_path),
+            "sample_id": sample_id,
+            "split": split,
+            "train_cameras": list(bundle.train_camera_names),
+            "heldout_cameras": list(bundle.heldout_camera_names or []),
+            "anchor_camera": str(metadata["anchor_camera"]),
+            "heldout_usage": "validation_only",
+            "pose_source": bundle.pose_source,
+            "camera_motion": "static_rig",
+        },
+        "dataset": str(metadata["dataset"]),
+        "scene": str(metadata["scene"]),
+        "name": f"{metadata['scene']} calibrated {split}",
+        "decode_size": [width, height],
+        "frame_count": len(frame_indices),
+        "frame_indices": frame_indices,
+        "frame_times_seconds": [start_seconds + float(index) / fps for index in frame_indices],
+        "cameras": _browser_camera_rows(bundle, width=width, height=height, atlas_urls=atlas_urls),
+        "seed_source": str(seed_point_cloud_path),
+        "seed_coordinate_frame": f"{metadata['anchor_camera']}_opencv",
+        "seed_points_xyzrgb": seeds.round(decimals=7).tolist(),
+    }
+    output_path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+    print(f"Wrote browser multicam dataset bundle to {output_path}")
+    return output_path
 
 
 def _load_state_dict(checkpoint_path: Path) -> dict[str, torch.Tensor]:
@@ -391,8 +559,8 @@ def parse_args() -> argparse.Namespace:
             "weights needed to decode splats in the browser."
         )
     )
-    parser.add_argument("config", type=Path, help="Path to the Dynaworld JSONC train config.")
-    parser.add_argument("--output-dir", type=Path, required=True, help="Directory to write the browser bundle.")
+    parser.add_argument("config", type=Path, nargs="?", help="Path to the Dynaworld JSONC train config.")
+    parser.add_argument("--output-dir", type=Path, help="Directory to write the trained-model browser bundle.")
     parser.add_argument(
         "--state-dict",
         type=Path,
@@ -411,11 +579,50 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Deterministic start index for the exported clip window. Default: 0.",
     )
+    parser.add_argument("--dataset-manifest", type=Path, help="Canonical multicam manifest for a dataset demo bundle.")
+    parser.add_argument("--dataset-sample-id", help="Sample id in --dataset-manifest.")
+    parser.add_argument("--dataset-split", default="train2_holdout1", help="Manifest split for the dataset bundle.")
+    parser.add_argument("--dataset-output", type=Path, help="JSON path for the dataset demo bundle.")
+    parser.add_argument("--seed-point-cloud", type=Path, help="SfM/COLMAP point cloud used only for browser initialization.")
+    parser.add_argument("--dataset-height", type=int, default=72)
+    parser.add_argument("--dataset-width", type=int, default=96)
+    parser.add_argument("--dataset-frame-count", type=int, default=8)
+    parser.add_argument("--dataset-native-frame-count", type=int, default=300)
+    parser.add_argument("--dataset-seed-count", type=int, default=768)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.dataset_manifest is not None:
+        required = {
+            "--dataset-sample-id": args.dataset_sample_id,
+            "--dataset-output": args.dataset_output,
+            "--seed-point-cloud": args.seed_point_cloud,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise SystemExit(f"Dataset export requires: {', '.join(missing)}")
+        if args.dataset_frame_count < 2 or args.dataset_native_frame_count < args.dataset_frame_count:
+            raise SystemExit("Dataset frame counts must satisfy native >= sampled >= 2.")
+        frame_indices = torch.linspace(
+            0,
+            args.dataset_native_frame_count - 1,
+            args.dataset_frame_count,
+        ).round().to(dtype=torch.long).tolist()
+        export_browser_multicam_dataset_bundle(
+            manifest_path=args.dataset_manifest,
+            sample_id=args.dataset_sample_id,
+            split=args.dataset_split,
+            seed_point_cloud_path=args.seed_point_cloud,
+            output_path=args.dataset_output,
+            target_size=(args.dataset_height, args.dataset_width),
+            frame_indices=frame_indices,
+            seed_count=args.dataset_seed_count,
+        )
+        return
+    if args.config is None or args.output_dir is None:
+        raise SystemExit("Model export requires config and --output-dir.")
     export_browser_bundle(
         config_path=args.config,
         output_dir=args.output_dir,

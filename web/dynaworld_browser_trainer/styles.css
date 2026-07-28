@@ -64,6 +64,7 @@ select {
 
 .controls,
 .stats,
+.loss-chart,
 .status {
 	border: 1px solid var(--line);
 	border-radius: 8px;
@@ -111,6 +112,10 @@ button:disabled {
 	margin-top: 16px;
 }
 
+.field[data-disabled] {
+	opacity: 0.45;
+}
+
 .field span,
 .stats span {
 	color: var(--muted);
@@ -140,6 +145,13 @@ button:disabled {
 	justify-self: end;
 }
 
+.schedule-field small {
+	grid-column: 1 / -1;
+	color: var(--muted);
+	font-size: 0.72rem;
+	font-variant-numeric: tabular-nums;
+}
+
 .field select {
 	-webkit-appearance: none;
 	appearance: none;
@@ -159,13 +171,55 @@ button:disabled {
 }
 
 .stats {
-	display: grid;
-	grid-template-columns: repeat(2, 1fr);
-	gap: 1px;
 	overflow: hidden;
 }
 
-.stats div {
+.quality-metric-grid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 1px;
+	background: var(--line);
+}
+
+.quality-metric {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 3px;
+	min-width: 0;
+	padding: 10px 6px;
+	background: var(--surface);
+	text-align: center;
+}
+
+.quality-metric span {
+	margin-bottom: 3px;
+	color: var(--text);
+	font-size: 0.76rem;
+	font-weight: 650;
+}
+
+.quality-metric small {
+	color: var(--muted);
+	font-size: 0.61rem;
+	text-transform: uppercase;
+}
+
+.quality-metric strong {
+	min-width: 0;
+	overflow: hidden;
+	font-size: 0.72rem;
+	text-overflow: ellipsis;
+}
+
+.diagnostic-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1px;
+	background: var(--line);
+	border-top: 1px solid var(--line);
+}
+
+.diagnostic-grid > div {
 	display: flex;
 	flex-direction: column;
 	gap: 5px;
@@ -174,8 +228,105 @@ button:disabled {
 	background: var(--surface);
 }
 
-.stats strong {
+.diagnostic-grid strong {
 	font-size: 1.1rem;
+}
+
+#tileOverflowValue[data-state="ok"] {
+	color: var(--accent);
+}
+
+#tileOverflowValue[data-state="warning"] {
+	color: var(--danger);
+}
+
+.loss-chart {
+	padding: 12px;
+}
+
+.loss-chart-title,
+.loss-chart-legend {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.loss-chart-title {
+	margin-bottom: 8px;
+	color: var(--muted);
+	font-size: 0.82rem;
+}
+
+.loss-chart-title strong {
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+}
+
+.chart-title-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	min-width: 0;
+}
+
+.chart-scale-toggle {
+	min-height: 28px;
+	padding: 0 9px;
+	border-radius: 5px;
+	color: var(--muted);
+	font-size: 0.72rem;
+}
+
+.chart-scale-toggle[aria-pressed="true"] {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+#lossChartCanvas,
+#psnrChartCanvas,
+#ssimChartCanvas {
+	display: block;
+	width: 100%;
+	border: 1px solid var(--line);
+	background: #101419;
+}
+
+#lossChartCanvas { height: 132px; }
+#psnrChartCanvas,
+#ssimChartCanvas { height: 86px; }
+
+.metric-chart-title {
+	margin-top: 14px;
+}
+
+.loss-chart-legend {
+	justify-content: flex-start;
+	margin-top: 8px;
+	color: var(--muted);
+	font-size: 0.75rem;
+}
+
+.loss-chart-legend span {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.loss-chart-legend i {
+	display: block;
+	width: 14px;
+	height: 2px;
+	background: var(--accent);
+}
+
+.loss-chart-legend .train-line {
+	background: var(--accent-2);
+}
+
+.loss-chart-legend .heldout-line {
+	background: #e67c73;
 }
 
 .status {
@@ -202,6 +353,10 @@ button:disabled {
 	grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
+.render-pane {
+	grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
 .viewport-title {
 	display: flex;
 	justify-content: space-between;
@@ -222,7 +377,8 @@ button:disabled {
 #targetCanvas,
 #renderCanvas,
 #sourceViewCanvas,
-#targetViewCanvas {
+#targetViewCanvas,
+#heldoutViewCanvas {
 	display: block;
 	width: 100%;
 	height: 100%;
@@ -236,12 +392,63 @@ button:disabled {
 }
 
 #renderCanvas {
+	height: auto;
+	aspect-ratio: 1 / 1;
 	background: #080a0d;
+}
+
+.result-strip {
+	align-self: center;
+	width: 100%;
+	min-width: 0;
+	background: #080a0d;
+}
+
+.result-strip:has(.result-angle-labels:not([hidden])) #renderCanvas {
+	aspect-ratio: 4 / 1;
+}
+
+.result-angle-labels {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 1px;
+	height: 30px;
+	background: var(--line);
+}
+
+.result-angle-labels div {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-width: 0;
+	padding: 0 10px;
+	background: #171c22;
+	color: var(--muted);
+	font-size: 0.76rem;
+}
+
+.result-angle-labels strong {
+	overflow: hidden;
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.render-contract-notice {
+	margin: 0;
+	padding: 8px 12px;
+	border-top: 1px solid var(--line);
+	background: #171c22;
+	color: #e1b85f;
+	font-size: 0.72rem;
+	line-height: 1.35;
 }
 
 .angle-strip {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 1px;
 	min-height: 150px;
 	border-top: 1px solid var(--line);
@@ -272,7 +479,8 @@ button:disabled {
 }
 
 #sourceViewCanvas,
-#targetViewCanvas {
+#targetViewCanvas,
+#heldoutViewCanvas {
 	object-fit: contain;
 	image-rendering: pixelated;
 	background: #080a0d;
