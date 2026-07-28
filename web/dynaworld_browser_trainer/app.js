@@ -1,7 +1,8 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260728-baseline1";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260728-baseline1";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260728-baseline1";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260728-baseline1";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260729-convergence7";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260729-convergence7";
+import { learningRateMultipliers } from "./trainingSchedule.js?v=20260729-convergence7";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260729-convergence7";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260729-convergence7";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
@@ -17,13 +18,15 @@ const controls = {
 	fullMetrics: $("fullMetricsToggle"), speed: $("timeSpeedSlider"), targetView: $("targetViewSelect"),
 	renderCamera: $("renderCameraSelect"), resultView: $("resultViewSelect"),
 	temporalSchedule: $("temporalScheduleToggle"), temporal: $("temporalSlider"), lr: $("lrSlider"),
+	lrSchedule: $("lrScheduleToggle"),
 	samples: $("samplesSlider"), motionMix: $("motionMixSlider"), staticMix: $("staticMixSlider"),
 	supportGuard: $("supportGuardSlider"),
 };
 const values = {
 	splats: $("splatSliderValue"), time: $("timeValue"), speed: $("timeSpeedValue"),
 	temporalLabel: $("temporalSliderLabel"), temporal: $("temporalValue"),
-	temporalSchedule: $("temporalScheduleValue"), lr: $("lrValue"), samples: $("samplesValue"),
+	temporalSchedule: $("temporalScheduleValue"), lr: $("lrValue"), lrSchedule: $("lrScheduleValue"),
+	samples: $("samplesValue"),
 	motionMix: $("motionMixValue"), staticMix: $("staticMixValue"), supportGuard: $("supportGuardValue"),
 	step: $("stepValue"), stepRate: $("stepRateValue"), sampleLoss: $("lossValue"),
 	gridLoss: $("gridLossValue"), trainMae: $("valMaeValue"), trainPsnr: $("valPsnrValue"),
@@ -33,6 +36,10 @@ const values = {
 	motionCoverage: $("motionCoverageValue"), staticCoverage: $("staticCoverageValue"),
 	peakAlpha: $("motionMaxAlphaValue"), active: $("activeSplatValue"), meanOpacity: $("meanOpacityValue"),
 	meanRadius: $("meanRadiusValue"), meanAspect: $("meanAspectValue"), tileOverflow: $("tileOverflowValue"),
+	representation: $("representationValue"), dynamicSplats: $("dynamicSplatValue"),
+	persistentSplats: $("persistentSplatValue"), staticMixP50: $("staticMixP50Value"),
+	edgeSupport: $("edgeSupportValue"), aspectP90: $("aspectP90Value"),
+	rasterDead: $("rasterDeadValue"),
 	splatCount: $("splatValue"), recycled: $("recycledSplatValue"),
 	parameterDelta: $("parameterDeltaValue"), motionSamples: $("motionSampleValue"),
 	centerUpdate: $("centerUpdateValue"), motionUpdate: $("motionUpdateValue"),
@@ -55,7 +62,7 @@ const TEMPORAL_SUPPORT_END_STEP = 2048;
 const RENDER_FPS = 20;
 const MAX_RENDER_WIDTH = 960;
 const VALIDATION_STEP_INTERVAL = 8192;
-const UI_STATE_KEY = "dynaworld-browser-trainer-ui-v1";
+const UI_STATE_KEY = "dynaworld-browser-trainer-ui-v2";
 const metricHistory = { sampleLoss: [], trainLoss: [], heldoutLoss: [],
 	trainPsnr: [], heldoutPsnr: [], trainSsim: [], heldoutSsim: [] };
 
@@ -109,7 +116,8 @@ function sampledBackendSelected() {
 
 function trainOptions() {
 	return {
-		learningRate: Number(controls.lr.value), samplesPerStep: Number(controls.samples.value),
+		learningRate: Number(controls.lr.value), learningRateDecay: controls.lrSchedule.checked,
+		samplesPerStep: Number(controls.samples.value),
 		modelMode: currentModelMode(), temporalSigma: currentTemporalSigma(),
 		motionSampleRate: effectiveMotionMix(), staticSampleRate: Number(controls.staticMix.value),
 		motionCoverageTarget: Number(controls.supportGuard.value), camerasPerStep: 4,
@@ -144,11 +152,18 @@ function updateControlLabels() {
 	if (Number(controls.splats.value) > splatLimit) controls.splats.value = String(splatLimit);
 	const step = currentStep();
 	const sigma = currentTemporalSigma(step);
+	const lrMultipliers = learningRateMultipliers(step, controls.lrSchedule.checked);
+	const baseLearningRate = Number(controls.lr.value);
+	const formatLearningRate = (value) => value >= 0.1 ? value.toFixed(2) : value.toPrecision(2);
 	values.splats.textContent = controls.splats.value;
 	values.time.textContent = Number(controls.time.value).toFixed(3);
 	values.speed.textContent = `${Number(controls.speed.value).toFixed(2)}x`;
 	values.temporal.textContent = sigma.toFixed(3);
-	values.lr.textContent = `${Number(controls.lr.value).toFixed(2)}x`;
+	values.lr.textContent = `${baseLearningRate.toFixed(2)}x`;
+	values.lrSchedule.textContent = controls.lrSchedule.checked
+		? `geometry ${formatLearningRate(baseLearningRate * lrMultipliers.geometry)}x · `
+			+ `appearance ${formatLearningRate(baseLearningRate * lrMultipliers.appearance)}x`
+		: "fixed legacy control";
 	values.samples.textContent = sampledBackendSelected()
 		? controls.samples.value : dataset ? `${dataset.width * dataset.height} px` : "full image";
 	values.motionMix.textContent = `${Math.round(effectiveMotionMix() * 100)}%`;
@@ -246,7 +261,9 @@ function resetMetrics() {
 		values.trainSsim, values.heldoutLoss, values.heldoutMae, values.heldoutPsnr,
 		values.heldoutSsim, values.heldoutCoverage, values.motionLoss, values.motionCoverage,
 		values.staticCoverage, values.peakAlpha, values.active, values.meanOpacity, values.meanRadius,
-		values.meanAspect, values.tileOverflow, values.parameterDelta, values.centerUpdate,
+		values.meanAspect, values.dynamicSplats, values.persistentSplats, values.staticMixP50,
+		values.edgeSupport, values.aspectP90, values.rasterDead, values.tileOverflow,
+		values.parameterDelta, values.centerUpdate,
 		values.motionUpdate, values.scaleUpdate, values.rotationUpdate, values.colorUpdate,
 		values.opacityUpdate]) {
 		value.textContent = "--";
@@ -295,6 +312,17 @@ function consumeValidation({ step, metrics }) {
 	setMetricText(values.staticCoverage, metrics.staticCoverage, (value) => `${(value * 100).toFixed(1)}%`);
 	setMetricText(values.peakAlpha, metrics.motionMaxAlpha, (value) => `${(value * 100).toFixed(1)}%`);
 	setMetricText(values.active, metrics.activeSplats,
+		(value) => `${value}/${trainerCapacity || controls.splats.value}`);
+	setMetricText(values.dynamicSplats, metrics.dynamicSplats,
+		(value) => `${value}/${metrics.temporalAnalyzedSplats ?? metrics.activeSplats}`);
+	setMetricText(values.persistentSplats, metrics.persistentSplats,
+		(value) => `${value}/${metrics.temporalAnalyzedSplats ?? metrics.activeSplats}`);
+	setMetricText(values.staticMixP50, metrics.staticMixP50, (value) => value.toFixed(3));
+	setMetricText(values.edgeSupport, metrics.meanEdgeTemporalSupport,
+		(value) => `${(value * 100).toFixed(1)}%`);
+	setMetricText(values.aspectP90, metrics.aspectP90,
+		(value) => `${value.toFixed(2)}:1 · ${((metrics.aspectCapFraction ?? 0) * 100).toFixed(0)}%`);
+	setMetricText(values.rasterDead, metrics.rasterDeadSplats,
 		(value) => `${value}/${trainerCapacity || controls.splats.value}`);
 	setMetricText(values.meanOpacity, metrics.meanOpacity, (value) => `${(value * 100).toFixed(1)}%`);
 	setMetricText(values.meanRadius, metrics.meanRadius, (value) => value.toFixed(4));
@@ -420,6 +448,8 @@ async function initWorkerTrainer() {
 	values.gpu.textContent = ready.adapter ?? "WebGPU";
 	values.runtime.textContent = ready.capabilities.offscreenRender
 		? `${ready.backend?.label ?? "worker"} + render` : `${ready.backend?.label ?? "worker"} optimizer`;
+	values.representation.textContent = "Trajectory 3DGS";
+	values.representation.title = ready.backend?.representation ?? "trajectory-gated dynamic 3DGS";
 	values.shared.textContent = ready.capabilities.sharedStatus ? "atomic SAB" : "messages";
 	values.validation.textContent = ready.capabilities.validationWorker ? "separate worker" : "unavailable";
 	if (!ready.capabilities.offscreenRender) {
@@ -437,7 +467,9 @@ async function initWorkerTrainer() {
 	values.splatCount.textContent = trainerCapacity === Number(controls.splats.value)
 		? String(trainerCapacity) : `${controls.splats.value} → ${trainerCapacity}`;
 	const checkpointPrecision = ready.backend?.memoryPlan?.checkpointPrecision;
-	setStatus(`Ready: ${ready.backend?.label ?? "WebGPU"} · ${ready.backend?.objective ?? "training"} · `
+	setStatus(`Ready: ${ready.backend?.label ?? "WebGPU"} · `
+		+ `${ready.backend?.representation ?? "trajectory-gated dynamic 3DGS"} · `
+		+ `${ready.backend?.objective ?? "training"} · `
 		+ `${checkpointPrecision ? `${checkpointPrecision} checkpoints · ` : ""}`
 		+ `${cameraBatch?.camerasPerStep ?? 1} of ${cameraBatch?.trainViewCount ?? 17} train cameras per step; `
 		+ `${heldoutDescription}; init ${dataset.seedProvenance?.train_only_verified
@@ -597,7 +629,7 @@ for (const control of [controls.time, controls.speed, controls.temporal, control
 	controls.motionMix, controls.staticMix, controls.supportGuard]) {
 	control.addEventListener("input", () => { updateControlLabels(); syncWorkerOptions(); updateTargetCanvas(); });
 }
-for (const control of [controls.loop, controls.live, controls.temporalSchedule]) {
+for (const control of [controls.loop, controls.live, controls.temporalSchedule, controls.lrSchedule]) {
 	control.addEventListener("change", () => { updateControlLabels(); syncWorkerOptions(true); });
 }
 controls.fullMetrics.addEventListener("change", () => {

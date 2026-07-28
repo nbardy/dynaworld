@@ -1,3 +1,11 @@
+import {
+	BROWSER_ADAM_BETA1,
+	BROWSER_ADAM_BETA2,
+	BROWSER_ADAM_EPSILON,
+	DENSITY_STAT_DECAY,
+	browserLearningRates,
+} from "./trainingSchedule.js";
+
 export const SPLAT_FLOATS = 24;
 export const INITIAL_SPLAT_OPACITY = 0.1;
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
@@ -521,10 +529,10 @@ function writeTrainConfig(buffer, values) {
 	view.setFloat32(84, 0.00045, true);
 	view.setUint32(88, values.staticSampleCount, true);
 	view.setUint32(92, Math.round(values.staticSampleRate * 1000), true);
-	view.setFloat32(96, 0.9, true);
-	view.setFloat32(100, 0.99, true);
-	view.setFloat32(104, 1e-6, true);
-	view.setFloat32(108, 0.95, true);
+	view.setFloat32(96, BROWSER_ADAM_BETA1, true);
+	view.setFloat32(100, BROWSER_ADAM_BETA2, true);
+	view.setFloat32(104, BROWSER_ADAM_EPSILON, true);
+	view.setFloat32(108, DENSITY_STAT_DECAY, true);
 	view.setFloat32(112, 0, true);
 	view.setUint32(116, values.trainViewCount, true);
 	view.setUint32(120, values.cameraCount, true);
@@ -1581,18 +1589,25 @@ export class DynamicSplatWebGpu3dTrainer {
 		}
 	}
 
-	trainStep({ learningRate = 1, samplesPerStep = 96, modelMode = 0, temporalSigma = 0.30,
+	trainStep({ learningRate = 1, learningRateDecay = false, samplesPerStep = 96,
+		modelMode = 0, temporalSigma = 0.30,
 		motionSampleRate = 0.90, staticSampleRate = 0.08, motionCoverageTarget = 0.52,
 		camerasPerStep = undefined } = {}) {
 		samplesPerStep = Math.min(MAX_SAMPLES_PER_STEP, Math.max(1, samplesPerStep));
+		const rates = browserLearningRates(learningRate, this.stepCount, learningRateDecay);
+		this.lastLearningRateMultipliers = {
+			geometry: rates.geometry,
+			appearance: rates.appearance,
+			progress: rates.progress,
+		};
 		const cameraBatch = rotatingTrainViewBatch(this.trainViewIndices, this.stepCount, camerasPerStep);
 		this.lastCameraBatch = cameraBatch.indices;
 		this.lastCameraBatchStart = cameraBatch.start;
 		writeTrainConfig(this.configBytes, { width: this.dataset.width, height: this.dataset.height,
 			frameCount: this.dataset.frameCount, splatCount: this.splatCount, sampleCount: samplesPerStep,
 			step: this.stepCount, modelMode, motionSampleCount: this.dataset.motionSamples.length,
-			staticSampleCount: this.dataset.staticSamples.length, lrPosition: learningRate * 0.00035,
-			lrColor: learningRate * 0.0015, lrOpacity: learningRate * 0.0008, lrMotion: learningRate * 0.0002,
+			staticSampleCount: this.dataset.staticSamples.length, lrPosition: rates.position,
+			lrColor: rates.color, lrOpacity: rates.opacity, lrMotion: rates.motion,
 			minRadius: 0.0015, maxRadius: 0.12, temporalSigma, targetAspect: this.dataset.width / this.dataset.height,
 			motionSampleRate, motionCoverageTarget, motionCoverageWeight: 0.05, staticAlphaWeight: 0.08,
 			staticSampleRate, trainViewCount: this.trainViewIndices.length, cameraCount: this.dataset.viewCount,

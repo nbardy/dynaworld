@@ -184,14 +184,15 @@ Each splat stores:
 The covariance is projected through the camera Jacobian. The backward includes
 center, perspective depth, scale, quaternion, color, opacity, temporal-center,
 velocity, harmonic-offset, and static-mix derivatives. Scale aspect ratio is
-bounded to 3:1.
+bounded to 6:1.
 
 The `Motion Model` selector is only a trajectory-basis ablation:
 
 - `Harmonic trajectory splats` adds one sinusoidal center component.
 - `Linear trajectory splats` omits it.
 
-Neither mode uses a native four-dimensional covariance.
+Neither mode uses a native four-dimensional covariance. The precise name of
+both modes is **trajectory-gated dynamic 3DGS**.
 
 ## Initialization And Topology
 
@@ -200,19 +201,27 @@ camera, keeps points visible from at least one training camera, and takes a
 deterministic farthest-point subset. Initial scale and rotation come from local
 point-cloud neighborhoods; opacity starts at 0.1.
 
-The trainer uses fixed GPU capacity:
+The trainer uses fixed GPU capacity. The SPA defaults to 2,048 initialized
+splats and reserves growth capacity through 4,096:
 
 - when requested splats are below capacity, hidden slots are filled by
   split/recycle events beginning at step 600;
-- after fill, weak slots are recycled from high-gradient parents every 500
-  steps through step 60,000;
-- at the default 4,096 splats, capacity is already full, so maintenance
-  recycles rather than increasing primitive count.
+- after fill, weak slots are recycled from high-gradient parents every 512
+  steps through step 120,000;
+- selecting 4,096 initial splats remains the fixed-topology/full-capacity
+  control.
 
 This is dynamic topology within a fixed allocation. It supports relocation,
 spatial scale shrinkage, opacity-mass preservation, temporal separation, and
-moment reset. It is not a dynamic buffer resize, canonical 3DGS densification,
-or native 4DGS spatial-temporal pruning schedule.
+moment reset. It is not a dynamic buffer resize, residual/depth-guided
+densification, canonical 3DGS densification, or native 4DGS spatial-temporal
+pruning schedule. A 25% dynamic-reserve heuristic was tested, preserved dynamic
+slots, and slightly regressed early quality, so it was not shipped.
+
+Adam uses `beta1=0.9`, `beta2=0.999`, and `epsilon=1e-8`. The default-on,
+toggleable schedule decays geometry learning rates by 100x and appearance
+learning rates by 10x over 120,000 steps. Density statistics use 0.999 decay so
+their memory spans the 272 camera/time-pair cycle.
 
 ## Runtime And Metrics
 
@@ -228,6 +237,11 @@ Loss readback runs every 256 steps. Every 8,192 steps, full metrics request an
 asynchronous parameter snapshot and send it to a separate validation worker.
 The optimizer pump continues submitting work while the GPU copy/map completes;
 the full-image raster and metric pass never runs in the training worker.
+
+The validation worker also reports active versus raster-dead slots,
+dynamic/persistent counts, static-mix quantiles, endpoint temporal support,
+anisotropy saturation, and per-family update RMS. These diagnostics never block
+the optimizer pump.
 
 The validation selection is all pixels from `cam04` and `cam09` over all 16
 times, plus all pixels from heldout `cam06` over all 16 times. The charts retain
@@ -366,3 +380,6 @@ The highest-value remaining evidence is:
 
 See `research_notes/browser_4dgs_baseline.md` for the external native-4DGS
 comparison contract.
+
+See `research_notes/browser_trajectory_3dgs_plateau_audit_2026-07-29.md` for
+the measured plateau diagnosis and prioritized paper-space comparison.

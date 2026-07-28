@@ -39,16 +39,16 @@
 
 					<label class="field">
 						<span>Motion Model</span>
-						<select id="modeSelect" title="Current shared-kernel parameterization probe; faithful STAR and dynamic-3DGS kernels are separate work">
-							<option value="world_tubes">Harmonic trajectory splats</option>
-							<option value="dynamic_splats">Linear trajectory splats</option>
+						<select id="modeSelect" title="Both choices use trajectory-gated dynamic 3DGS; neither is World Tubes, STAR, native 4DGS, or SpacetimeGS">
+							<option value="world_tubes">Harmonic trajectory 3DGS</option>
+							<option value="dynamic_splats">Linear trajectory 3DGS</option>
 						</select>
 					</label>
 
 					<label class="field">
-						<span>Splat Count</span>
-						<input id="splatSlider" type="range" min="96" max="4096" step="32" value="4096" />
-						<strong id="splatSliderValue">4096</strong>
+						<span>Initial Splats</span>
+						<input id="splatSlider" title="The tiled backend reserves up to 3x this count, capped at 4096, then fills slots by splitting" type="range" min="96" max="4096" step="32" value="2048" />
+						<strong id="splatSliderValue">2048</strong>
 					</label>
 
 					<label class="field">
@@ -113,10 +113,16 @@
 						<small id="temporalScheduleValue">manual · fixed</small>
 					</label>
 
-					<label class="field">
+					<label class="field toggle-field">
+						<span>Auto LR Decay</span>
+						<input id="lrScheduleToggle" title="Decay geometry 100x and appearance 10x over the first 120,000 steps; disable for the former constant-LR control" type="checkbox" checked />
+					</label>
+
+					<label class="field schedule-field">
 						<span>Learning Rate Scale</span>
 						<input id="lrSlider" type="range" min="0.25" max="2" step="0.05" value="1.25" />
 						<strong id="lrValue">1.25x</strong>
+						<small id="lrScheduleValue">geometry 1.25x · appearance 1.25x</small>
 					</label>
 
 					<label class="field" id="sampleCountField">
@@ -198,6 +204,34 @@
 					<div>
 						<span>Active</span>
 						<strong id="activeSplatValue">--</strong>
+					</div>
+					<div>
+						<span>Representation</span>
+						<strong id="representationValue">Trajectory 3DGS</strong>
+					</div>
+					<div>
+						<span>Dynamic Splats</span>
+						<strong id="dynamicSplatValue">--</strong>
+					</div>
+					<div>
+						<span>Persistent Splats</span>
+						<strong id="persistentSplatValue">--</strong>
+					</div>
+					<div>
+						<span>Static Mix p50</span>
+						<strong id="staticMixP50Value">--</strong>
+					</div>
+					<div>
+						<span>Edge Support</span>
+						<strong id="edgeSupportValue">--</strong>
+					</div>
+					<div>
+						<span>Aspect p90 / Cap</span>
+						<strong id="aspectP90Value">--</strong>
+					</div>
+					<div>
+						<span>Raster Dead</span>
+						<strong id="rasterDeadValue">--</strong>
 					</div>
 					<div>
 						<span>Mean Opac</span>
@@ -331,6 +365,6 @@
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260728-baseline1"></script>
+		<script type="module" src="./app.js?v=20260729-convergence7"></script>
 	</body>
 </html>

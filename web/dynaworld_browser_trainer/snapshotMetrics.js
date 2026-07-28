@@ -33,6 +33,15 @@ function sigmoid(value) {
 	return 1 / (1 + Math.exp(-value));
 }
 
+function quantile(values, probability) {
+	if (values.length === 0) return Number.NaN;
+	const sorted = [...values].sort((left, right) => left - right);
+	const position = clamp(probability, 0, 1) * (sorted.length - 1);
+	const lower = Math.floor(position);
+	const fraction = position - lower;
+	return sorted[lower] + (sorted[Math.min(sorted.length - 1, lower + 1)] - sorted[lower]) * fraction;
+}
+
 function ceilDiv(value, divisor) {
 	return Math.floor((value + divisor - 1) / divisor);
 }
@@ -74,6 +83,101 @@ function temporalGate(params, base, time, temporalSigma) {
 	const delta = time - clamp(params[base + 7], 0, 1);
 	const dynamic = floor + (1 - floor) * Math.exp(-0.5 * delta * delta / (sigma * sigma));
 	return dynamic * (1 - clamp(params[base + 3], 0, 1)) + clamp(params[base + 3], 0, 1);
+}
+
+export function summarizeSplatParameters(params, {
+	splatCount: requestedSplatCount,
+	temporalSigma = DEFAULT_TEMPORAL_SIGMA,
+	frameCount = 1,
+	maxAspectRatio = 3,
+	alphaThreshold = DEFAULT_ALPHA_THRESHOLD,
+} = {}) {
+	const splatCount = resolveSplatCount(params, requestedSplatCount);
+	assertPositiveInteger(frameCount, "frameCount");
+	if (!(maxAspectRatio > 1) || !Number.isFinite(maxAspectRatio)) {
+		throw new RangeError("maxAspectRatio must be finite and greater than one.");
+	}
+	if (!(alphaThreshold > 0 && alphaThreshold < 1)) {
+		throw new RangeError("alphaThreshold must be between zero and one.");
+	}
+	let activeSplats = 0;
+	let rasterDeadSplats = 0;
+	let dynamicSplats = 0;
+	let persistentSplats = 0;
+	let opacitySum = 0;
+	let radiusSum = 0;
+	let maxPeakAlpha = 0;
+	let edgeSupportSum = 0;
+	const activeStaticMix = [];
+	const activeAspectRatios = [];
+	const activeVelocities = [];
+	const activeHarmonics = [];
+	const opacities = [];
+	for (let index = 0; index < splatCount; index += 1) {
+		const base = index * SPLAT_FLOATS;
+		const opacity = sigmoid(params[base + 23]);
+		const scales = [
+			Math.exp(params[base + 12]),
+			Math.exp(params[base + 13]),
+			Math.exp(params[base + 14]),
+		];
+		const staticMix = clamp(params[base + 3], 0, 1);
+		const aspectRatio = Math.max(...scales) / Math.max(1e-8, Math.min(...scales));
+		const radius = Math.cbrt(scales[0] * scales[1] * scales[2]);
+		let peakAlpha = 0;
+		for (let frame = 0; frame < frameCount; frame += 1) {
+			peakAlpha = Math.max(peakAlpha,
+				opacity * temporalGate(params, base, frameTime(frame, frameCount), temporalSigma));
+		}
+		opacitySum += opacity;
+		radiusSum += radius;
+		opacities.push(opacity);
+		maxPeakAlpha = Math.max(maxPeakAlpha, peakAlpha);
+		if (peakAlpha <= alphaThreshold) rasterDeadSplats += 1;
+		if (opacity <= 0.05) continue;
+		activeSplats += 1;
+		activeStaticMix.push(staticMix);
+		activeAspectRatios.push(aspectRatio);
+		activeVelocities.push(Math.hypot(params[base + 4], params[base + 5], params[base + 6]));
+		activeHarmonics.push(Math.hypot(params[base + 8], params[base + 9], params[base + 10]));
+		edgeSupportSum += 0.5 * (
+			temporalGate(params, base, 0, temporalSigma)
+			+ temporalGate(params, base, 1, temporalSigma)
+		);
+		if (staticMix < 0.5) dynamicSplats += 1;
+		if (staticMix >= 0.9) persistentSplats += 1;
+	}
+	const aspectCapFraction = activeAspectRatios.length === 0 ? Number.NaN
+		: activeAspectRatios.filter((value) => value >= maxAspectRatio * 0.98).length
+			/ activeAspectRatios.length;
+	return {
+		activeSplats,
+		rasterDeadSplats,
+		dynamicSplats,
+		persistentSplats,
+		temporalAnalyzedSplats: activeSplats,
+		meanOpacity: opacitySum / splatCount,
+		opacityP10: quantile(opacities, 0.1),
+		opacityP50: quantile(opacities, 0.5),
+		opacityP90: quantile(opacities, 0.9),
+		meanRadius: radiusSum / splatCount,
+		meanAspectRatio: activeAspectRatios.length
+			? activeAspectRatios.reduce((sum, value) => sum + value, 0) / activeAspectRatios.length
+			: Number.NaN,
+		aspectP90: quantile(activeAspectRatios, 0.9),
+		aspectP99: quantile(activeAspectRatios, 0.99),
+		aspectCapFraction,
+		meanStaticMix: activeStaticMix.length
+			? activeStaticMix.reduce((sum, value) => sum + value, 0) / activeStaticMix.length
+			: Number.NaN,
+		staticMixP10: quantile(activeStaticMix, 0.1),
+		staticMixP50: quantile(activeStaticMix, 0.5),
+		staticMixP90: quantile(activeStaticMix, 0.9),
+		meanEdgeTemporalSupport: activeSplats ? edgeSupportSum / activeSplats : Number.NaN,
+		velocityP90: quantile(activeVelocities, 0.9),
+		harmonicP90: quantile(activeHarmonics, 0.9),
+		motionMaxAlpha: maxPeakAlpha,
+	};
 }
 
 function worldCenter(params, base, time, modelMode) {

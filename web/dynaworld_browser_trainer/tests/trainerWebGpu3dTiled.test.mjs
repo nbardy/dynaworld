@@ -132,11 +132,11 @@ test("density schedule fills reserved slots once, then recycles slowly", () => {
 	assert.equal(densityDispatchesForStep(1536, 3072, 600), 4);
 	assert.equal(densityDispatchesForStep(1536, 3072, 10100), 4);
 	assert.equal(densityDispatchesForStep(1536, 3072, 10200), 0);
-	assert.equal(densityDispatchesForStep(1536, 3072, 10500), 4);
-	assert.equal(densityDispatchesForStep(1536, 3072, 60000), 4);
-	assert.equal(densityDispatchesForStep(1536, 3072, 60500), 0);
+	assert.equal(densityDispatchesForStep(1536, 3072, 10240), 4);
+	assert.equal(densityDispatchesForStep(1536, 3072, 119808), 4);
+	assert.equal(densityDispatchesForStep(1536, 3072, 120320), 0);
 	assert.equal(densityDispatchesForStep(1536, 4096, 16500), 4);
-	assert.equal(densityDispatchesForStep(1536, 4096, 17000), 4);
+	assert.equal(densityDispatchesForStep(1536, 4096, 16896), 4);
 });
 
 test("full-frame schedule shuffles and visits every camera/time pair before cycling", () => {
@@ -296,7 +296,7 @@ test("tiled trainer source preserves the full-frame shared-backward contract", (
 	assert.ok(trainStep.indexOf("writeBuffer(this.buffers.tiledConfig") < trainStep.indexOf("queue.submit"));
 	assert.equal(SCALE_LR_FROM_COLOR, 0.30);
 	assert.equal(ROTATION_LR_FROM_MOTION, 1.25);
-	assert.equal(MAX_SCALE_ASPECT_RATIO, 3);
+	assert.equal(MAX_SCALE_ASPECT_RATIO, 6);
 	assert.match(source, /pairData/);
 	assert.match(source, /gradientAtoms/);
 	assert.doesNotMatch(source, /gaussianPairSlots|pairGradients:array/);

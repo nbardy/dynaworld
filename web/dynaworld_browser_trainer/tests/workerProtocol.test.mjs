@@ -47,7 +47,7 @@ test("protocol rejects mismatched versions", () => {
 test("optimizer pump never awaits train steps, metrics, or validation", async () => {
 	const source = await readFile(new URL("../trainingWorker.js", import.meta.url), "utf8");
 	assert.doesNotMatch(source, /await\s+trainer\.(?:trainStep|readLoss|readParams)/);
-	assert.match(source, /new Worker\(new URL\("\.\/validationWorker\.js"/);
+	assert.match(source, /new Worker\(new URL\("\.\/validationWorker\.js(?:\?[^"]+)?"/);
 	assert.match(source, /setTimeout\(\(\) => pump\(token\), delay\)/);
 	assert.match(source,
 		/message\.schedule\?\.maxQueuedSteps\s*\?\?\s*backendDescriptor\.defaultSchedule\.maxQueuedSteps/);

@@ -5,6 +5,13 @@ import {
 	makeInitialSplats,
 	rgbaFloatFrameBytes,
 } from "./trainerWebGpu3d.js";
+import {
+	BROWSER_ADAM_BETA1,
+	BROWSER_ADAM_BETA2,
+	BROWSER_ADAM_EPSILON,
+	DENSITY_STAT_DECAY,
+	browserLearningRates,
+} from "./trainingSchedule.js";
 
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 const TILE_SIZE = 16;
@@ -14,15 +21,15 @@ const SSIM_STATS_BYTES = 5 * 16;
 const DENSITY_START_STEP = 600;
 const DENSITY_INTERVAL = 100;
 const DENSITY_DISPATCHES = 4;
-const RECYCLE_INTERVAL = 500;
-const RECYCLE_STOP_STEP = 60000;
+const RECYCLE_INTERVAL = 512;
+const RECYCLE_STOP_STEP = 120000;
 const TILED_CONFIG_BYTES = 160;
 export const DEFAULT_MAX_TILE_CAPACITY = 4096;
 export const DEFAULT_CHECKPOINT_PRECISION = "packed-f16";
 export const MAX_WORKGROUPS_PER_DIMENSION = 65535;
 export const SCALE_LR_FROM_COLOR = 0.30;
 export const ROTATION_LR_FROM_MOTION = 1.25;
-export const MAX_SCALE_ASPECT_RATIO = 3;
+export const MAX_SCALE_ASPECT_RATIO = 6;
 
 export function resolveSsimRadius(value = 5) {
 	if (!Number.isSafeInteger(value) || value < 0 || value > 15) {
@@ -313,7 +320,8 @@ function writeTiledConfig(buffer, values) {
 	f32(76, values.transmittanceThreshold); f32(80, values.lrPosition); f32(84, values.lrColor);
 	f32(88, values.lrOpacity); f32(92, values.lrMotion); f32(96, values.geometryScale);
 	f32(100, values.l1Weight); f32(104, values.dssimWeight); f32(108, values.statDecay);
-	f32(112, 0.9); f32(116, 0.99); f32(120, 1e-6); f32(124, 0);
+	f32(112, BROWSER_ADAM_BETA1); f32(116, BROWSER_ADAM_BETA2);
+	f32(120, BROWSER_ADAM_EPSILON); f32(124, 0);
 	u32(128, values.ssimRadius); u32(132, values.frameCount); u32(136, 0); u32(140, 0);
 	f32(144, 0.0001); f32(148, 0.0009);
 	f32(152, 0.03 * values.geometryScale); f32(156, values.geometryScale);
@@ -1233,9 +1241,16 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(x, y, z); pass.end();
 	}
 
-	trainStep({ learningRate = 1, modelMode = 0, temporalSigma = 0.30, ssimRadius = 5 } = {}) {
+	trainStep({ learningRate = 1, learningRateDecay = false, modelMode = 0,
+		temporalSigma = 0.30, ssimRadius = 5 } = {}) {
 		const validateSubmission = this.stepCount === 0;
 		const resolvedSsimRadius = resolveSsimRadius(ssimRadius);
+		const rates = browserLearningRates(learningRate, this.stepCount, learningRateDecay);
+		this.lastLearningRateMultipliers = {
+			geometry: rates.geometry,
+			appearance: rates.appearance,
+			progress: rates.progress,
+		};
 		if (validateSubmission) this.device.pushErrorScope("validation");
 		const selected = fullFramePairForStep(this.trainViewIndices, this.dataset.frameCount, this.stepCount);
 		this.lastCameraBatch = [selected.viewIndex]; this.lastCameraBatchStart = selected.viewSlot;
@@ -1254,10 +1269,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			step: this.stepCount, modelMode, targetOffset, pixelCount: this.pixelCount,
 			pairCapacity: this.pairCapacity, targetAspect: this.dataset.width / this.dataset.height,
 			temporalSigma, alphaThreshold: 1 / 255, transmittanceThreshold: 1e-4,
-			lrPosition: learningRate * 0.00035, lrColor: learningRate * 0.0015,
-			lrOpacity: learningRate * 0.0008, lrMotion: learningRate * 0.0002,
+			lrPosition: rates.position, lrColor: rates.color,
+			lrOpacity: rates.opacity, lrMotion: rates.motion,
 			geometryScale: this.dataset.geometryScale, l1Weight: 0.8, dssimWeight: 0.2,
-			statDecay: 0.995, ssimRadius: resolvedSsimRadius, frameCount: this.dataset.frameCount,
+			statDecay: DENSITY_STAT_DECAY, ssimRadius: resolvedSsimRadius,
+			frameCount: this.dataset.frameCount,
 			checkpointStride: this.checkpointStride,
 		});
 		this.device.queue.writeBuffer(this.buffers.tiledConfig, 0, this.tiledConfigBytes);

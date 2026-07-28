@@ -7,6 +7,7 @@ import {
 	renderSnapshotFrame,
 	resolveSnapshotSelections,
 	snapshotUpdateRatios,
+	summarizeSplatParameters,
 } from "../snapshotMetrics.js";
 import { SPLAT_FLOATS, projectAnisotropicGaussianCpu } from "../trainerWebGpu3d.js";
 
@@ -237,4 +238,34 @@ test("snapshot update ratios report independent 24-float parameter families", ()
 	assert.equal(ratios.opacity.ratio, 0);
 	assert.equal(ratios.rotation.ratio, 0);
 	assert.deepEqual(ratios.logScale.components, [12, 13, 14]);
+});
+
+test("parameter summary exposes temporal persistence, dead slots, and aspect saturation", () => {
+	const params = makeParams([
+		{ center: [0, 0, 2], staticMix: 0.95, scales: [0.3, 0.1, 0.1],
+			color: [0.8, 0.2, 0.1], opacity: 0.8 },
+		{ center: [0, 0, 2], staticMix: 0.2, timeCenter: 0.5, scales: [0.1, 0.1, 0.1],
+			velocity: [0.3, 0, 0], harmonic: [0, 0.2, 0], color: [0.2, 0.8, 0.1], opacity: 0.6 },
+		{ center: [0, 0, 2], staticMix: 0.92, scales: [0.2, 0.1, 0.1],
+			color: [0.1, 0.2, 0.8], opacity: 1e-5 },
+	]);
+	const summary = summarizeSplatParameters(params, {
+		frameCount: 3,
+		temporalSigma: 0.3,
+		maxAspectRatio: 3,
+	});
+	assert.equal(summary.activeSplats, 2);
+	assert.equal(summary.rasterDeadSplats, 1);
+	assert.equal(summary.dynamicSplats, 1);
+	assert.equal(summary.persistentSplats, 1);
+	assert.equal(summary.temporalAnalyzedSplats, 2);
+	assert.ok(Math.abs(summary.staticMixP50 - 0.575) < 1e-7);
+	assert.ok(Math.abs(summary.opacityP50 - 0.6) < 1e-6);
+	assert.ok(Math.abs(summary.aspectP90 - 2.8) < 1e-6);
+	assert.equal(summary.aspectCapFraction, 0.5);
+	assert.ok(summary.meanEdgeTemporalSupport > 0.5);
+	assert.ok(summary.meanEdgeTemporalSupport < 1);
+	assert.ok(Math.abs(summary.velocityP90 - 0.27) < 1e-6);
+	assert.ok(Math.abs(summary.harmonicP90 - 0.18) < 1e-6);
+	assert.throws(() => summarizeSplatParameters(params, { frameCount: 0 }), /positive/);
 });
