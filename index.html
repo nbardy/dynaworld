@@ -68,7 +68,7 @@
 					</label>
 
 					<label class="field toggle-field">
-						<span>Full Metrics</span>
+						<span>Full-Image Metrics</span>
 						<input id="fullMetricsToggle" type="checkbox" checked />
 					</label>
 
@@ -148,23 +148,23 @@
 					<div class="quality-metric-grid" aria-label="Reconstruction metrics">
 						<div class="quality-metric">
 							<span>Loss</span>
-							<small>train</small><strong id="gridLossValue">--</strong>
-							<small>held</small><strong id="heldoutLossValue">--</strong>
+							<small>train full</small><strong id="gridLossValue">--</strong>
+							<small>held full</small><strong id="heldoutLossValue">--</strong>
 						</div>
 						<div class="quality-metric">
 							<span>MAE</span>
-							<small>train</small><strong id="valMaeValue">--</strong>
-							<small>held</small><strong id="heldoutMaeValue">--</strong>
+							<small>train full</small><strong id="valMaeValue">--</strong>
+							<small>held full</small><strong id="heldoutMaeValue">--</strong>
 						</div>
 						<div class="quality-metric">
 							<span>PSNR</span>
-							<small>train</small><strong id="valPsnrValue">--</strong>
-							<small>held</small><strong id="heldoutPsnrValue">--</strong>
+							<small>train full</small><strong id="valPsnrValue">--</strong>
+							<small>held full</small><strong id="heldoutPsnrValue">--</strong>
 						</div>
 						<div class="quality-metric">
 							<span>SSIM</span>
-							<small>train</small><strong id="valSsimValue">--</strong>
-							<small>held</small><strong id="heldoutSsimValue">--</strong>
+							<small>train full</small><strong id="valSsimValue">--</strong>
+							<small>held full</small><strong id="heldoutSsimValue">--</strong>
 						</div>
 					</div>
 					<div class="diagnostic-grid">
@@ -224,9 +224,15 @@
 						<strong id="recycledSplatValue">0</strong>
 					</div>
 					<div>
-						<span>Param Delta</span>
+						<span>Delta from Init</span>
 						<strong id="parameterDeltaValue">0</strong>
 					</div>
+					<div><span>Center RMS Delta</span><strong id="centerUpdateValue">--</strong></div>
+					<div><span>Motion RMS Delta</span><strong id="motionUpdateValue">--</strong></div>
+					<div><span>Scale RMS Delta</span><strong id="scaleUpdateValue">--</strong></div>
+					<div><span>Rotation RMS Delta</span><strong id="rotationUpdateValue">--</strong></div>
+					<div><span>Color RMS Delta</span><strong id="colorUpdateValue">--</strong></div>
+					<div><span>Opacity RMS Delta</span><strong id="opacityUpdateValue">--</strong></div>
 					<div>
 						<span>Motion Px</span>
 						<strong id="motionSampleValue">--</strong>
@@ -242,6 +248,7 @@
 						<div><span>Runtime</span><strong id="runtimeValue">pending</strong></div>
 						<div><span>Shared</span><strong id="sharedStatusValue">pending</strong></div>
 						<div><span>Validation</span><strong id="validationRuntimeValue">pending</strong></div>
+						<div><span>Initialization</span><strong id="seedProvenanceValue">pending</strong></div>
 					</div>
 				</section>
 
@@ -256,8 +263,8 @@
 					<canvas id="lossChartCanvas" width="300" height="132" aria-label="Loss history chart"></canvas>
 						<div class="loss-chart-legend" aria-hidden="true">
 							<span><i class="sample-line"></i>Objective EMA</span>
-							<span><i class="train-line"></i>Train grid</span>
-							<span><i class="heldout-line"></i>Heldout</span>
+							<span><i class="train-line"></i>Train full</span>
+							<span><i class="heldout-line"></i>Heldout full</span>
 						</div>
 						<div class="loss-chart-title metric-chart-title">
 							<span>PSNR</span>
@@ -324,6 +331,6 @@
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260726-tiled1"></script>
+		<script type="module" src="./app.js?v=20260728-baseline1"></script>
 	</body>
 </html>

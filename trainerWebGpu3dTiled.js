@@ -182,18 +182,48 @@ function reflectIndex(index, size) {
 	return value;
 }
 
+const SSIM_GAUSSIAN_11 = Object.freeze([
+	0.0010283800844791101,
+	0.0075987581352391850,
+	0.036000772128430829,
+	0.10936068950970002,
+	0.21300553771125369,
+	0.26601172486179436,
+	0.21300553771125369,
+	0.10936068950970002,
+	0.036000772128430829,
+	0.0075987581352391850,
+	0.0010283800844791101,
+]);
+
+function ssimKernel1d(radius) {
+	if (radius === 5) return SSIM_GAUSSIAN_11;
+	const side = radius * 2 + 1;
+	return Array.from({ length: side }, () => 1 / side);
+}
+
+function reflectedKernelWeight(center, pixel, size, radius, kernel) {
+	const weightAt = (offset) => Math.abs(offset) <= radius ? kernel[offset + radius] : 0;
+	let weight = weightAt(pixel - center);
+	if (pixel > 0) weight += weightAt(-pixel - center);
+	const maximum = size - 1;
+	if (pixel < maximum) weight += weightAt(2 * maximum - pixel - center);
+	return weight;
+}
+
 export function windowedL1DssimCpu(prediction, target, width, height, {
 	l1Weight = 0.8,
 	dssimWeight = 0.2,
 	radius = 5,
 	c1 = 0.0001,
 	c2 = 0.0009,
+	computeGradient = true,
 } = {}) {
 	if (prediction.length !== target.length || prediction.length !== width * height * 3) {
 		throw new RangeError("prediction and target must be packed RGB images.");
 	}
 	const pixels = width * height;
-	const windowArea = (radius * 2 + 1) ** 2;
+	const kernel = ssimKernel1d(radius);
 	const stats = Array.from({ length: pixels }, () => null);
 	let l1 = 0;
 	let ssimSum = 0;
@@ -204,22 +234,23 @@ export function windowedL1DssimCpu(prediction, target, width, height, {
 			for (let ox = -radius; ox <= radius; ox += 1) {
 				const sx = reflectIndex(x + ox, width);
 				const base = (sy * width + sx) * 3;
+				const weight = kernel[oy + radius] * kernel[ox + radius];
 				for (let channel = 0; channel < 3; channel += 1) {
 					const px = prediction[base + channel];
 					const py = target[base + channel];
-					sums[0][channel] += px;
-					sums[1][channel] += py;
-					sums[2][channel] += px * px;
-					sums[3][channel] += py * py;
-					sums[4][channel] += px * py;
+					sums[0][channel] += weight * px;
+					sums[1][channel] += weight * py;
+					sums[2][channel] += weight * px * px;
+					sums[3][channel] += weight * py * py;
+					sums[4][channel] += weight * px * py;
 				}
 			}
 		}
-		const muX = sums[0].map((value) => value / windowArea);
-		const muY = sums[1].map((value) => value / windowArea);
-		const varX = sums[2].map((value, channel) => value / windowArea - muX[channel] ** 2);
-		const varY = sums[3].map((value, channel) => value / windowArea - muY[channel] ** 2);
-		const cov = sums[4].map((value, channel) => value / windowArea - muX[channel] * muY[channel]);
+		const muX = sums[0];
+		const muY = sums[1];
+		const varX = sums[2].map((value, channel) => value - muX[channel] ** 2);
+		const varY = sums[3].map((value, channel) => value - muY[channel] ** 2);
+		const cov = sums[4].map((value, channel) => value - muX[channel] * muY[channel]);
 		stats[y * width + x] = { muX, muY, varX, varY, cov };
 		for (let channel = 0; channel < 3; channel += 1) {
 			const numerator = (2 * muX[channel] * muY[channel] + c1) * (2 * cov[channel] + c2);
@@ -232,6 +263,8 @@ export function windowedL1DssimCpu(prediction, target, width, height, {
 	}
 	l1 /= pixels * 3;
 	const dssim = 1 - ssimSum / (pixels * 3);
+	const loss = l1Weight * l1 + dssimWeight * dssim;
+	if (!computeGradient) return { loss, l1, dssim, gradient: null };
 	const gradient = new Float32Array(prediction.length);
 	for (let py = 0; py < height; py += 1) for (let px = 0; px < width; px += 1) {
 		const pixel = py * width + px;
@@ -239,13 +272,12 @@ export function windowedL1DssimCpu(prediction, target, width, height, {
 			const packed = pixel * 3 + channel;
 			const error = prediction[packed] - target[packed];
 			let dssimGradient = 0;
-			for (let cy = 0; cy < height; cy += 1) for (let cx = 0; cx < width; cx += 1) {
-				const center = stats[cy * width + cx];
-				for (let oy = -radius; oy <= radius; oy += 1) {
-					if (reflectIndex(cy + oy, height) !== py) continue;
-					for (let ox = -radius; ox <= radius; ox += 1) {
-						if (reflectIndex(cx + ox, width) !== px) continue;
-						const weight = 1 / windowArea;
+			for (let cy = Math.max(0, py - radius); cy <= Math.min(height - 1, py + radius); cy += 1) {
+				const yWeight = reflectedKernelWeight(cy, py, height, radius, kernel);
+				for (let cx = Math.max(0, px - radius); cx <= Math.min(width - 1, px + radius); cx += 1) {
+					const weight = yWeight * reflectedKernelWeight(cx, px, width, radius, kernel);
+					if (weight === 0) continue;
+					const center = stats[cy * width + cx];
 					const mx = center.muX[channel]; const my = center.muY[channel];
 					const vx = center.varX[channel]; const vy = center.varY[channel];
 					const covariance = center.cov[channel];
@@ -258,14 +290,13 @@ export function windowedL1DssimCpu(prediction, target, width, height, {
 						const denominator = Math.max(c * d, 1e-12);
 						dssimGradient -= (((da * b + a * db) * denominator)
 							- (a * b) * (dc * d + c * dd)) / (denominator ** 2 * pixels * 3);
-					}
 				}
 			}
 			gradient[packed] = l1Weight * Math.sign(error) / (pixels * 3)
 				+ dssimWeight * dssimGradient;
 		}
 	}
-	return { loss: l1Weight * l1 + dssimWeight * dssim, l1, dssim, gradient };
+	return { loss, l1, dssim, gradient };
 }
 
 function writeTiledConfig(buffer, values) {
@@ -608,6 +639,19 @@ function ssimStatsWgsl() {
 		}
 		return u32(resolved);
 	}
+	fn ssim_weight(offset:i32,radius:i32)->f32 {
+		if(radius==0){return 1.0;}
+		if(radius!=5){return 1.0/f32(radius*2+1);}
+		switch abs(offset) {
+			case 0: { return 0.2660117149; }
+			case 1: { return 0.2130055428; }
+			case 2: { return 0.1093606874; }
+			case 3: { return 0.0360007733; }
+			case 4: { return 0.0075987582; }
+			case 5: { return 0.0010283801; }
+			default: { return 0.0; }
+		}
+	}
 	@compute @workgroup_size(64)
 	fn ssim_stats(@builtin(global_invocation_id) gid:vec3<u32>){
 		let pixel=gid.x;if(pixel>=cfg.pixelCount){return;}let x=i32(pixel%cfg.width);let y=i32(pixel/cfg.width);
@@ -619,12 +663,13 @@ function ssimStatsWgsl() {
 			for(var ox=-radius;ox<=radius;ox++){
 				let sx=reflect_index(x+ox,cfg.width);let sample=sy*cfg.width+sx;
 				let px=rendered[sample].xyz;let py=targets[cfg.targetOffset+sample].xyz;
-				mux+=px;muy+=py;ex2+=px*px;ey2+=py*py;exy+=px*py;
+				let weight=ssim_weight(oy,radius)*ssim_weight(ox,radius);
+				mux+=weight*px;muy+=weight*py;ex2+=weight*px*px;
+				ey2+=weight*py*py;exy+=weight*px*py;
 			}
 		}
-		let side=f32(cfg.ssimRadius*2u+1u);let norm=side*side;
-		mux/=norm;muy/=norm;let vx=ex2/norm-mux*mux;
-		let vy=ey2/norm-muy*muy;let covariance=exy/norm-mux*muy;
+		let vx=ex2-mux*mux;
+		let vy=ey2-muy*muy;let covariance=exy-mux*muy;
 		stats[pixel]=SsimStats(vec4<f32>(mux,0.0),vec4<f32>(muy,0.0),vec4<f32>(vx,0.0),
 			vec4<f32>(vy,0.0),vec4<f32>(covariance,0.0));
 		let a=2.0*mux*muy+vec3<f32>(cfg.c1);let b=2.0*covariance+vec3<f32>(cfg.c2);
@@ -645,12 +690,26 @@ function ssimGradientWgsl() {
 	@group(0) @binding(3) var<storage,read> stats:array<SsimStats>;
 	@group(0) @binding(4) var<storage,read> stopRanks:array<u32>;
 	@group(0) @binding(5) var<storage,read_write> pixelGrad:array<vec4<f32>>;
-	fn reflected_multiplicity(center:i32,pixel:i32,size:i32,radius:i32)->u32 {
-		var count=select(0u,1u,abs(center-pixel)<=radius);
-		if(pixel>0&&abs(center+pixel)<=radius){count+=1u;}
+	fn ssim_weight(offset:i32,radius:i32)->f32 {
+		if(radius==0){return 1.0;}
+		if(radius!=5){return 1.0/f32(radius*2+1);}
+		switch abs(offset) {
+			case 0: { return 0.2660117149; }
+			case 1: { return 0.2130055428; }
+			case 2: { return 0.1093606874; }
+			case 3: { return 0.0360007733; }
+			case 4: { return 0.0075987582; }
+			case 5: { return 0.0010283801; }
+			default: { return 0.0; }
+		}
+	}
+	fn reflected_weight(center:i32,pixel:i32,size:i32,radius:i32)->f32 {
+		var weight=select(0.0,ssim_weight(pixel-center,radius),abs(center-pixel)<=radius);
+		if(pixel>0&&abs(center+pixel)<=radius){weight+=ssim_weight(-pixel-center,radius);}
 		let maximum=size-1;
-		if(pixel<maximum&&abs(center-(2*maximum-pixel))<=radius){count+=1u;}
-		return count;
+		let rightOffset=2*maximum-pixel-center;
+		if(pixel<maximum&&abs(rightOffset)<=radius){weight+=ssim_weight(rightOffset,radius);}
+		return weight;
 	}
 	@compute @workgroup_size(64)
 	fn ssim_gradient(@builtin(global_invocation_id) gid:vec3<u32>){
@@ -658,14 +717,12 @@ function ssimGradientWgsl() {
 		let px=i32(pixel%cfg.width);let py=i32(pixel/cfg.width);
 		let prediction=rendered[pixel].xyz;let targetColor=targets[cfg.targetOffset+pixel].xyz;
 		var dssim=vec3<f32>(0.0);let radius=i32(cfg.ssimRadius);
-		let side=f32(cfg.ssimRadius*2u+1u);let windowArea=side*side;
 		for(var cy=max(0,py-radius);cy<=min(i32(cfg.height)-1,py+radius);cy++){
-			let yMultiplicity=reflected_multiplicity(cy,py,i32(cfg.height),radius);
+			let yWeight=reflected_weight(cy,py,i32(cfg.height),radius);
 			for(var cx=max(0,px-radius);cx<=min(i32(cfg.width)-1,px+radius);cx++){
-				let multiplicity=yMultiplicity*reflected_multiplicity(cx,px,i32(cfg.width),radius);
-				if(multiplicity==0u){continue;}
+				let weight=yWeight*reflected_weight(cx,px,i32(cfg.width),radius);
+				if(weight==0.0){continue;}
 				let center=u32(cy)*cfg.width+u32(cx);let s=stats[center];
-				let weight=f32(multiplicity)/windowArea;
 				let mx=s.muX.xyz;let my=s.muY.xyz;let vx=s.varX.xyz;let vy=s.varY.xyz;let covariance=s.cov.xyz;
 				let a=2.0*mx*my+vec3<f32>(cfg.c1);let b=2.0*covariance+vec3<f32>(cfg.c2);
 				let c=mx*mx+my*my+vec3<f32>(cfg.c1);let d=vx+vy+vec3<f32>(cfg.c2);
@@ -1259,5 +1316,42 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			loss: values[0], l1: values[1], dssim: values[2], tileOverflow: values[3],
 		};
 		return values[0];
+	}
+
+	async readTiledStepDebugStateUnlocked() {
+		const renderedBytes = this.pixelCount * 16;
+		const gradientBytes = this.splatCount * SPLAT_BYTES;
+		const metricsOffset = renderedBytes + gradientBytes;
+		const readback = this.device.createBuffer({
+			label: "tiled-step-debug-readback",
+			size: metricsOffset + 16,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
+		try {
+			const encoder = this.device.createCommandEncoder();
+			encoder.copyBufferToBuffer(this.buffers.renderedTrain, 0, readback, 0, renderedBytes);
+			encoder.copyBufferToBuffer(this.buffers.gradientAtoms, 0, readback, renderedBytes, gradientBytes);
+			encoder.copyBufferToBuffer(this.buffers.tiledMetrics, 0, readback, metricsOffset, 16);
+			this.device.queue.submit([encoder.finish()]);
+			await readback.mapAsync(GPUMapMode.READ);
+			const bytes = readback.getMappedRange().slice(0);
+			return {
+				step: this.stepCount,
+				viewIndex: this.lastCameraBatch?.[0] ?? null,
+				frameIndex: this.lastFrameIndex ?? null,
+				renderedRgba: new Float32Array(bytes, 0, this.pixelCount * 4).slice(),
+				gradients: new Float32Array(bytes, renderedBytes, this.splatCount * SPLAT_FLOATS).slice(),
+				metrics: new Float32Array(bytes, metricsOffset, 4).slice(),
+			};
+		} finally {
+			if (readback.mapState === "mapped") readback.unmap();
+			readback.destroy();
+		}
+	}
+
+	readTiledStepDebugState() {
+		const read = this.readbackChain.then(() => this.readTiledStepDebugStateUnlocked());
+		this.readbackChain = read.then(() => undefined, () => undefined);
+		return read;
 	}
 }

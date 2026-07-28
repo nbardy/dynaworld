@@ -24,6 +24,7 @@ Useful diagnostics:
 ```text
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/benchmarkTrainerBackends.html
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/benchmarkLegacy2d.html
+http://127.0.0.1:8080/web/dynaworld_browser_trainer/tiledParityHarness.html
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/workerSmoke.html
 ```
 
@@ -46,7 +47,7 @@ The default checked-in bundle is
 | Times | 16 synchronized frames sampled across the 300-frame source |
 | Training cameras | 17 |
 | Heldout cameras | `cam06` only |
-| Initialization | 4,096 train-visible Ex4DGS SfM XYZRGB points |
+| Checked-in initialization | 4,096 train-visible external Ex4DGS XYZRGB points |
 | Anchor coordinates | `cam04` OpenCV camera frame |
 
 The browser does not run COLMAP. The bundle exporter is a thin adapter over
@@ -54,9 +55,66 @@ The browser does not run COLMAP. The bundle exporter is a thin adapter over
 camera calibration, train/heldout split, synchronized frame indices, and
 initialization provenance. Heldout pixels are never used by the optimizer.
 
-Regenerate a bundle with `src/train/export_dynaworld_browser_bundle.py` and the
-checked-in manifest. The adapter test is
-`tests/test_browser_multicam_export_adapter.py`.
+The checked-in bundle predates the provenance report contract. Its external
+Ex4DGS cloud is filtered after loading to points visible from at least one
+training camera, but the repository cannot prove which source images originally
+created that cloud. In particular, it cannot prove that `cam06` was excluded.
+The SPA therefore labels this initialization `unverified`; "train-visible" is
+not the same claim as "constructed from train cameras only."
+
+### Verified offline initialization
+
+Coffee Martini already provides calibrated intrinsics and camera poses. The
+missing operation is known-pose feature triangulation, not a new browser
+structure-from-motion system. Run the existing pycolmap adapter offline on one
+synchronized frame from the 17 train cameras:
+
+```bash
+PYTHONPATH=src/train uv run --with pycolmap==4.0.4 python \
+  research_experiments/dynamic_foam/build_pycolmap_known_pose_point_cloud.py \
+  src/train_configs/browser_coffee_martini_train17_known_pose_sfm.jsonc \
+  --output research_experiments/dynamic_foam/artifacts/browser_coffee_martini_train17_known_pose_frame0_1024px.ply \
+  --target-size 1024 \
+  --frame-index 0 \
+  --camera-model pinhole \
+  --camera-mode per_image \
+  --feature-backend pycolmap \
+  --feature-type sift \
+  --matcher-type sift_bruteforce \
+  --pairing-neighbors 4 \
+  --known-pose-guided-verification \
+  --min-track-length 2 \
+  --min-unique-cameras 2 \
+  --max-points 16384
+```
+
+The builder writes both the PLY and a same-stem JSON report. The report declares
+the input cameras, train-only verification, and `model` coordinate frame. The
+2026-07-28 run produced 815 bounded points from 71,890 keypoints and 38 verified
+camera pairs. That is a valid sparse scaffold, but it does not satisfy the
+current 4,096-seed bundle. A valid 768-seed ablation export is:
+
+```bash
+PYTHONPATH=src/train uv run python src/train/export_dynaworld_browser_bundle.py \
+  --dataset-manifest src/dataset_configs/neural3d_coffee_martini_train17_holdout1_full_300f_manifest.jsonl \
+  --dataset-sample-id neural3d_coffee_martini_train17_holdout_cam06_full_300f \
+  --dataset-split train17_holdout1 \
+  --dataset-output web/dynaworld_browser_trainer/coffee_martini_train17_holdout1_verified_sparse.json \
+  --seed-point-cloud research_experiments/dynamic_foam/artifacts/browser_coffee_martini_train17_known_pose_frame0_1024px.ply \
+  --seed-provenance-report research_experiments/dynamic_foam/artifacts/browser_coffee_martini_train17_known_pose_frame0_1024px.json \
+  --dataset-height 72 \
+  --dataset-width 96 \
+  --dataset-frame-count 16 \
+  --dataset-native-frame-count 300 \
+  --dataset-seed-count 768
+```
+
+The exporter rejects heldout camera overlap, unknown coordinate frames,
+unverified reports without an explicit override, and point clouds with fewer
+than the requested number of train-visible points. This also prevents the old
+browser fallback from silently duplicating a sparse seed cloud. Do not replace
+the checked-in default with the 768-point variant until it has a matched
+initialization/densification quality run.
 
 ## Active Training Backends
 
@@ -105,11 +163,12 @@ The default objective is:
 0.8 * mean(abs(prediction - target)) + 0.2 * mean(1 - SSIM)
 ```
 
-The current SSIM uses an 11x11 reflected **uniform box** window. Radius 5 and
-the constants `C1=0.01^2`, `C2=0.03^2` match common SSIM settings, and the
-analytic CPU analogue passes finite differences. However, canonical SSIM and
-the official 3DGS implementation use an 11x11 Gaussian window with sigma 1.5.
-This distinction must be preserved in baseline claims.
+The default SSIM uses the standard 11x11 Gaussian window with sigma 1.5,
+reflected image boundaries, and `C1=0.01^2`, `C2=0.03^2`. Its analytic image
+gradient passes finite differences, and the active Apple WebGPU forward,
+objective, and selected parameter-family gradients pass the live tiled parity
+harness. Nondefault SSIM radii remain normalized uniform-window probes and
+change the objective.
 
 ## Primitive Model
 
@@ -165,17 +224,26 @@ Live rendering is capped at 20 GPU frames per second and shows two training
 cameras plus the heldout camera at a looping time. It can be disabled without
 stopping optimization.
 
-Loss readback runs every 256 steps. Full metrics request an asynchronous
-parameter snapshot, then a separate validation worker computes a deterministic
-12x12 grid across all train cameras and the heldout camera every 2,048 steps.
-The charts retain full decimated history and show:
+Loss readback runs every 256 steps. Every 8,192 steps, full metrics request an
+asynchronous parameter snapshot and send it to a separate validation worker.
+The optimizer pump continues submitting work while the GPU copy/map completes;
+the full-image raster and metric pass never runs in the training worker.
+
+The validation selection is all pixels from `cam04` and `cam09` over all 16
+times, plus all pixels from heldout `cam06` over all 16 times. The charts retain
+full decimated history and show:
 
 - optimizer objective;
-- sparse train and heldout MSE/MAE/PSNR;
-- sparse global-luma SSIM proxy.
+- full-image train and heldout MSE/MAE/PSNR;
+- full-image channelwise 11x11 Gaussian SSIM;
+- center, motion, scale, rotation, color, and opacity RMS deltas between
+  validation snapshots.
 
-The validation SSIM is not the training windowed SSIM and is not a
-paper-protocol full-image metric.
+This is a deterministic browser diagnostic, not the Python paper evaluator:
+it currently omits LPIPS and evaluates two representative train cameras rather
+than all 17. A measured 4,096-splat validation pass took about 4.5 seconds on
+the local Apple browser in the earlier contended run and 1.4-1.9 seconds in the
+final clean smoke, without pausing the optimizer.
 
 ## July 28 Scaling Result
 
@@ -205,6 +273,10 @@ A matched 96x72/1,536-splat window ablation measured:
 The smaller window is about 26% faster, but changes the objective and has no
 quality result. The standards-preserving optimization is an 11-tap separable
 Gaussian forward and transpose backward, not a whole-image SSIM statistic.
+
+These saved scaling artifacts predate the switch from the 11x11 box window to
+the 11x11 Gaussian weights. They have the same 121-sample support but are not
+an exact throughput claim for the current build until rerun.
 
 ### Memory-layout follow-up
 
@@ -266,21 +338,30 @@ Full measurements and repeats are in
   WebGPU-versus-Metal percentage.
 - Throughput does not establish convergence or novel-view quality.
 
-## Remaining Baseline Work
+## Baseline Status
 
-The browser trainer is now a useful full-frame systems prototype, but not a
-solid research baseline. The highest-value missing evidence is:
+The browser trainer is a useful full-frame systems prototype, but not yet a
+solid research baseline. Completed correctness gates now include:
 
-1. CPU-versus-WGSL rendered-image and gradient parity on a tiny tiled fixture.
-2. Canonical Gaussian-window SSIM with value/gradient parity.
-3. Phase timing for bin/sort, raster, SSIM, backward, update, preview, and
-   validation.
-4. Matched fixed-topology versus split/recycle quality runs.
-5. Matched initialization and splat-capacity ablations.
-6. Full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed.
-7. A complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
-   World Tubes to a selectable browser backend.
-8. Canonical byte targets plus shared host storage before presenting 384x288 as
+1. active Apple WebGPU image/objective/selected-gradient parity on an eight-splat
+   tiled fixture;
+2. canonical 11x11 Gaussian SSIM value and image-gradient finite differences;
+3. deterministic full-image train/heldout MSE, MAE, PSNR, and SSIM;
+4. fail-closed initialization provenance and coordinate-frame handling.
+
+The highest-value remaining evidence is:
+
+1. compare the verified 768-point train-only cloud plus growth against the
+   legacy unverified 4,096-point seed under matched settings, or produce a
+   denser verified cloud with a stronger matcher;
+2. phase timing for bin/sort, raster, SSIM, backward, update, preview, and
+   validation;
+3. matched fixed-topology versus split/recycle quality runs;
+4. matched initialization and splat-capacity ablations;
+5. full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed;
+6. a complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
+   World Tubes to a selectable browser backend;
+7. canonical byte targets plus shared host storage before presenting 384x288 as
    a normal SPA dataset mode rather than an isolated GPU benchmark.
 
 See `research_notes/browser_4dgs_baseline.md` for the external native-4DGS

@@ -21,6 +21,7 @@ import {
 	SCALE_LR_FROM_COLOR,
 	windowedL1DssimCpu,
 } from "../trainerWebGpu3dTiled.js";
+import { canonicalGaussianSsim } from "../snapshotMetrics.js";
 
 const source = readFileSync(new URL("../trainerWebGpu3dTiled.js", import.meta.url), "utf8");
 
@@ -217,6 +218,52 @@ test("windowed L1 plus SSIM analytic gradient matches finite differences", () =>
 			- windowedL1DssimCpu(minus, target, width, height, { radius: 1 }).loss
 		) / (2 * epsilon);
 		assertClose(analytic.gradient[index], finiteDifference, 1e-6);
+	}
+});
+
+test("default 11x11 training SSIM matches the Gaussian validation metric", () => {
+	const width = 12;
+	const height = 11;
+	const target = Float64Array.from(
+		{ length: width * height * 3 },
+		(_, index) => ((index * 17) % 101) / 100,
+	);
+	const prediction = Float64Array.from(
+		target,
+		(value, index) => Math.min(1, Math.max(0, value + (index % 5 === 0 ? 0.03 : -0.01))),
+	);
+	const training = windowedL1DssimCpu(prediction, target, width, height);
+	const validationSsim = canonicalGaussianSsim(prediction, target, width, height);
+
+	assertClose(1 - training.dssim, validationSsim, 1e-10);
+	assert.match(source, /case 0: \{ return 0\.2660117149; \}/);
+	assert.match(source, /fn reflected_weight/);
+});
+
+test("default Gaussian SSIM image gradient matches finite differences", () => {
+	const width = 12;
+	const height = 11;
+	const length = width * height * 3;
+	const target = Float64Array.from(
+		{ length },
+		(_, index) => 0.05 + 0.9 * ((index * 13) % 97) / 96,
+	);
+	const prediction = Float64Array.from(
+		target,
+		(value, index) => value + (index % 3 === 0 ? 0.02 : -0.015),
+	);
+	const analytic = windowedL1DssimCpu(prediction, target, width, height);
+	const epsilon = 1e-5;
+	for (const index of [0, 1, 35, 117, 229, length - 1]) {
+		const plus = Float64Array.from(prediction);
+		const minus = Float64Array.from(prediction);
+		plus[index] += epsilon;
+		minus[index] -= epsilon;
+		const finiteDifference = (
+			windowedL1DssimCpu(plus, target, width, height, { computeGradient: false }).loss
+			- windowedL1DssimCpu(minus, target, width, height, { computeGradient: false }).loss
+		) / (2 * epsilon);
+		assertClose(analytic.gradient[index], finiteDifference, 2e-6);
 	}
 });
 

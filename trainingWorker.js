@@ -117,7 +117,7 @@ function requestValidation(options = {}) {
 	trainer.readParams().then((params) => {
 		validationWorker.postMessage({ version: WORKER_PROTOCOL_VERSION, type: "validate", step,
 			options: { splatCount: trainer.splatCount, modelMode: trainOptions.modelMode,
-				temporalSigma: trainOptions.temporalSigma, gridSize: options.gridSize ?? 12,
+				temporalSigma: trainOptions.temporalSigma,
 				totalRecycled: trainer.totalRecycled },
 			params: params.buffer }, [params.buffer]);
 	}).catch((error) => {
