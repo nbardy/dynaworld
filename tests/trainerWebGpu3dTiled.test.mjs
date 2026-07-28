@@ -26,7 +26,7 @@ import {
 } from "../trainerWebGpu3dTiled.js";
 import { computeMultiviewSamples, normalizedMotionLossWeights } from "../dataset.js";
 import { canonicalGaussianSsim } from "../snapshotMetrics.js";
-import { MAX_SPLAT_COLOR } from "../trainerWebGpu3d.js";
+import { FILTER_SIGMA_PIXELS, MAX_SPLAT_COLOR } from "../trainerWebGpu3d.js";
 
 const source = readFileSync(new URL("../trainerWebGpu3dTiled.js", import.meta.url), "utf8");
 
@@ -185,9 +185,11 @@ test("warmup freezes temporal gates and display filtering follows display resolu
 	assert.match(source, /let tc=select\(t\*2\.0-1\.0,0\.0,staticWarmup\)/);
 	assert.match(source, /let gradStaticMix=select\(/);
 	const displaySource = readFileSync(new URL("../trainerWebGpu3d.js", import.meta.url), "utf8");
-	assert.match(displaySource, /filterVariance = pow\(0\.3 \/ max\(1\.0, cfg\.height\), 2\.0\)/);
+	assert.match(displaySource,
+		/filterVariance = pow\(\$\{FILTER_SIGMA_PIXELS\} \/ max\(1\.0, cfg\.height\), 2\.0\)/);
 	assert.match(displaySource, /rawAlpha < 0\.00392156863/);
-	assert.doesNotMatch(displaySource, /filterVariance = pow\(0\.3 \/ max\(1\.0, cfg\.targetHeight\)/);
+	assert.doesNotMatch(displaySource,
+		/filterVariance = pow\(\$\{FILTER_SIGMA_PIXELS\} \/ max\(1\.0, cfg\.targetHeight\)/);
 });
 
 test("opacity-aware pixel bounds shrink support and clip to the image", () => {
@@ -396,6 +398,7 @@ test("tiled trainer source preserves the full-frame shared-backward contract", (
 	assert.equal(SCALE_LR_FROM_COLOR, 0.30);
 	assert.equal(ROTATION_LR_FROM_MOTION, 1.25);
 	assert.equal(MAX_SCALE_ASPECT_RATIO, 6);
+	assert.equal(FILTER_SIGMA_PIXELS, 0.3);
 	assert.equal(MAX_SPLAT_COLOR, 1);
 	assert.match(source, /pairData/);
 	assert.match(source, /gradientAtoms/);

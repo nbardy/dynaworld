@@ -195,7 +195,15 @@ Each splat stores:
 The covariance is projected through the camera Jacobian. The backward includes
 center, perspective depth, scale, quaternion, color, opacity, temporal-center,
 velocity, harmonic-offset, and static-mix derivatives. Scale aspect ratio is
-bounded to 6:1.
+bounded to 6:1 in the tiled trainer. Initialization starts inside 3:1, and the
+all-splat sampled fallback uses 4:1.
+
+These are optimizer trust regions, not a penalty toward spheres. With scale as
+standard deviation, 6:1 still permits a 36:1 covariance eigenvalue ratio and
+fully trainable rotation. The cap prevents a noisy scale update from creating a
+needle that spans many tiles, explodes pair work, becomes poorly conditioned,
+and lets one primitive cover an edge instead of asking topology to represent
+it. The cost is less freedom for legitimately thin structure.
 
 A matched 12:1 ablation at step 16,384 produced `16.3/15.4 dB`
 train/heldout and `0.518/0.254` SSIM, versus `16.2/15.5 dB` and
@@ -275,12 +283,46 @@ warmup: `15.3/14.6 dB` train/heldout versus `15.1/14.2 dB` with warmup. The
 mean-image phase also bakes the moving actor's temporal ghost into the scaffold,
 which is the wrong default for this scene.
 
-The live renderer now uses display-resolution anti-aliasing, the same
+The live renderer now uses display-resolution footprint filtering, the same
 `1/255` alpha support threshold and `0.99` alpha cap as training, and an exact
 black clear. The old preview used the 72-pixel training height for filtering
 even on a much taller canvas, which made small anisotropic splats look like
 soft circles and exposed faint recycled copies that training had already
 culled.
+
+### Raster Filtering And Antialiasing
+
+The current rasterizer projects the world covariance with the pinhole Jacobian
+and adds an isotropic screen-space floor:
+
+```text
+C_screen = J R C_world R^T J^T + (0.3 / image_height)^2 I
+```
+
+Screen coordinates are normalized by image height, so this is a `0.3 px`
+standard deviation, or `0.09 px^2` diagonal variance. The same constant is
+shared by CPU parity, sampled training, tiled training, and live rendering.
+The raster then evaluates that Gaussian at each pixel center, truncates at
+three standard deviations (`q <= 9`), drops contributions below `1/255`, and
+composites front to back.
+
+This is a conservative EWA-style footprint floor, not complete alias-free
+rendering. [EWA Splatting](https://www.cs.umd.edu/~zwicker/publications/EWASplatting-TVCG02.pdf)
+provides the projection/filtering foundation. The
+[original 3DGS rasterizer](https://github.com/graphdeco-inria/diff-gaussian-rasterization/blob/main/cuda_rasterizer/forward.cu)
+uses the stronger `+0.3 px^2` dilation. [Mip-Splatting](https://openaccess.thecvf.com/content/CVPR2024/papers/Yu_Mip-Splatting_Alias-free_3D_Gaussian_Splatting_CVPR_2024_paper.pdf)
+shows why bare 2D dilation changes apparent opacity and size: it adds a
+determinant-compensated 2D Mip filter and a view-derived 3D smoothing
+constraint. [Analytic-Splatting](https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/02597.pdf)
+instead approximates the Gaussian integral over the pixel area.
+
+The next honest antialiasing ablation is current filtering versus a complete
+Mip-style 2D filter, including opacity compensation and its covariance
+derivative in the shared backward, tested across train/display resolutions.
+A forward-only compensation patch would make training and gradients disagree.
+The 3D Nyquist constraint is a separate experiment because it needs each
+primitive's maximum observed sampling frequency. Neither change should be
+presented as a same-resolution convergence fix without a matched run.
 
 ### Why Not Softmax Splatting?
 
@@ -290,7 +332,8 @@ Its softmax resolves several source pixels landing on one target pixel. It is
 not the depth-ordered transmittance model used by 3D Gaussian Splatting.
 Replacing source-over alpha compositing with a softmax across Gaussians would
 normalize away visibility and change both the rendering model and the shared
-backward.
+backward. It also does not integrate a footprint over a pixel, so it is not an
+antialiasing method for this rasterizer.
 
 It could be useful later in an optical-flow auxiliary loss or initialization
 experiment, but it is not a convergence patch for this 3D renderer. The

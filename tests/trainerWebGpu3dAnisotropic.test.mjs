@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+	FILTER_SIGMA_PIXELS,
+	MAX_SAMPLED_SCALE_ASPECT_RATIO,
 	SPLAT_FLOATS,
 	INITIAL_SPLAT_OPACITY,
 	anisotropicGaussianVjpCpu,
@@ -11,6 +13,7 @@ import {
 	normalizeDatasetGeometry,
 	projectAnisotropicGaussianCpu,
 	resolveAnchorCameraIndex,
+	screenSpaceFilterVariance,
 	sortProjectedSplatsBackToFront,
 } from "../trainerWebGpu3d.js";
 
@@ -58,10 +61,25 @@ test("24-float source contract reaches WGSL train, update, render, and hybrid ta
 	assert.match(source, /let conic = vec3<f32>\(covariance\.z, -covariance\.y, covariance\.x\) \/ determinant/);
 	assert.match(source, /barJ0 = 2\.0 \* \(barC00 \* sigmaJ0 \+ barC01 \* sigmaJ1\)/);
 	assert.match(source, /gradRotation = \(normalizedQuatGrad - q \* dot\(q, normalizedQuatGrad\)\)/);
-	assert.match(source, /halfLogAspectLimit = log\(2\.0\)/);
+	assert.match(source, /halfLogAspectLimit = 0\.5 \* log\(\$\{MAX_SAMPLED_SCALE_ASPECT_RATIO\}\.0\)/);
 	assert.match(source, /if \(qform > 9\.0\) \{ discard; \}/);
 	assert.match(source, /cfg\.splatCount <= 768u/);
 	assert.match(source, /sampleGradients\[s \* cfg\.splatCount \+ i\] = Splat/);
+});
+
+test("screen-space filter is a 0.3-pixel sigma floor, not a 0.3 covariance", () => {
+	assert.equal(FILTER_SIGMA_PIXELS, 0.3);
+	assert.equal(MAX_SAMPLED_SCALE_ASPECT_RATIO, 4);
+	assertClose(screenSpaceFilterVariance(72), 0.09 / (72 * 72), 1e-12);
+	const projection = projectAnisotropicGaussianCpu({
+		center: [0, 0, 2],
+		logScales: [-16, -16, -16],
+		quaternion: [0, 0, 0, 1],
+		...projectionOptions,
+	});
+	assert.equal(projection.valid, true);
+	assert.ok(projection.covariance[0] >= screenSpaceFilterVariance(72));
+	assert.ok(projection.covariance[2] >= screenSpaceFilterVariance(72));
 });
 
 test("analytic anisotropic VJP matches finite differences", () => {
