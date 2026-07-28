@@ -8,14 +8,22 @@ import {
 
 export const SPLAT_FLOATS = 24;
 export const INITIAL_SPLAT_OPACITY = 0.1;
+// Targets are bounded RGB. Matching that support prevents opacity from trading
+// against an unphysical overbright color during optimization.
 export const MAX_SPLAT_COLOR = 1;
+// This is a conservative screen-space standard deviation, not a covariance.
+// It adds 0.09 px^2 to each projected covariance axis: enough to keep subpixel
+// conics finite without claiming the stronger filtering of Mip-Splatting.
+export const FILTER_SIGMA_PIXELS = 0.3;
+// The sampled fallback has a tighter trust region because every ray examines
+// every splat. A 4:1 scale ratio already permits a 16:1 covariance condition.
+export const MAX_SAMPLED_SCALE_ASPECT_RATIO = 4;
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 const MAX_SAMPLES_PER_STEP = 192;
 const MAX_RENDER_VIEWS = 3;
 const DENSITY_INTERVAL = 512;
 const DENSITY_STOP_STEP = 16384;
 const DENSITY_SPLITS_PER_PASS = 4;
-const FILTER_SIGMA_PIXELS = 0.3;
 const QUATERNION_EPSILON = 1e-8;
 const CONIC_DETERMINANT_EPSILON = 1e-16;
 
@@ -134,6 +142,10 @@ function dot3(left, right) {
 	return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
 
+export function screenSpaceFilterVariance(height) {
+	return (FILTER_SIGMA_PIXELS / Math.max(1, height)) ** 2;
+}
+
 export function projectAnisotropicGaussianCpu({ center, logScales, quaternion, camera, aspect, height }) {
 	const matrix = camera.worldToCamera;
 	const cameraPoint = [
@@ -160,7 +172,7 @@ export function projectAnisotropicGaussianCpu({ center, logScales, quaternion, c
 		0, fy * invZ, -fy * cameraY * invZ * invZ];
 	const row0 = jacobian.slice(0, 3); const row1 = jacobian.slice(3, 6);
 	const sigmaRow0 = mat3Vector(sigmaCamera, row0); const sigmaRow1 = mat3Vector(sigmaCamera, row1);
-	const filterVariance = (FILTER_SIGMA_PIXELS / Math.max(1, height)) ** 2;
+	const filterVariance = screenSpaceFilterVariance(height);
 	const covariance = [dot3(row0, sigmaRow0) + filterVariance, dot3(row0, sigmaRow1),
 		dot3(row1, sigmaRow1) + filterVariance];
 	const determinant = covariance[0] * covariance[2] - covariance[1] * covariance[1];
@@ -414,6 +426,9 @@ function localGaussianFrames(seeds, selectedSeeds, geometryScale, neighborCount 
 			* (axis === 2 ? 0.75 : 1.35));
 		const scales = rawScales.map((value) => Math.min(maximumScale, Math.max(minimumScale, value)));
 		const largest = Math.max(...scales);
+		// Local PCA supplies orientation, but a sparse/noisy neighborhood can
+		// produce a needle at initialization. Start within 3:1 and let verified
+		// image gradients learn stronger anisotropy.
 		for (let axis = 0; axis < 3; axis += 1) scales[axis] = Math.max(scales[axis], largest / 3);
 		return {
 			scales,
@@ -732,7 +747,9 @@ const TRAIN_WGSL = `
 		let j0 = vec3<f32>(horizontalFocal * invZ, 0.0, -horizontalFocal * cp.x * invZ * invZ);
 		let j1 = vec3<f32>(0.0, camera.intrinsics.y * invZ,
 			-camera.intrinsics.y * cp.y * invZ * invZ);
-		let filterVariance = pow(0.3 / max(1.0, f32(cfg.height)), 2.0);
+		// Minimal EWA-style pixel footprint. This samples at pixel centers; it
+		// is not pixel-area integration or the determinant-corrected Mip filter.
+		let filterVariance = pow(${FILTER_SIGMA_PIXELS} / max(1.0, f32(cfg.height)), 2.0);
 		let covariance = vec3<f32>(dot(j0, sigmaCamera * j0) + filterVariance,
 			dot(j0, sigmaCamera * j1), dot(j1, sigmaCamera * j1) + filterVariance);
 		let determinant = covariance.x * covariance.z - covariance.y * covariance.y;
@@ -1040,7 +1057,9 @@ const UPDATE_WGSL = `
 		var nextLogScale = clamp(p.logScalePad.xyz - 0.10 * cfg.lrPosition * scaleUpdate.xyz,
 			vec3<f32>(minLogScale), vec3<f32>(maxLogScale));
 		let meanLogScale = (nextLogScale.x + nextLogScale.y + nextLogScale.z) / 3.0;
-		let halfLogAspectLimit = log(2.0);
+		// Bound scale conditioning without forcing spheres. Long unconstrained
+		// needles make the all-splat sampled fallback especially unstable.
+		let halfLogAspectLimit = 0.5 * log(${MAX_SAMPLED_SCALE_ASPECT_RATIO}.0);
 		nextLogScale = clamp(nextLogScale, vec3<f32>(meanLogScale - halfLogAspectLimit),
 			vec3<f32>(meanLogScale + halfLogAspectLimit));
 		p.logScalePad = vec4<f32>(nextLogScale, p.logScalePad.w);
@@ -1235,7 +1254,9 @@ const RENDER_WGSL = `
 		let invZ = 1.0 / cp.z; let horizontalFocal = cfg.targetAspect * camera.intrinsics.x;
 		let j0 = vec3<f32>(horizontalFocal*invZ, 0.0, -horizontalFocal*cp.x*invZ*invZ);
 		let j1 = vec3<f32>(0.0, camera.intrinsics.y*invZ, -camera.intrinsics.y*cp.y*invZ*invZ);
-		let filterVariance = pow(0.3 / max(1.0, cfg.height), 2.0);
+		// Use display height here so preview filtering matches its own pixel
+		// footprint rather than the lower-resolution training raster.
+		let filterVariance = pow(${FILTER_SIGMA_PIXELS} / max(1.0, cfg.height), 2.0);
 		let c00 = dot(j0, sigmaCamera*j0) + filterVariance;
 		let c01 = dot(j0, sigmaCamera*j1); let c11 = dot(j1, sigmaCamera*j1) + filterVariance;
 		let l00 = sqrt(max(c00, 1e-12)); let l10 = c01 / l00;

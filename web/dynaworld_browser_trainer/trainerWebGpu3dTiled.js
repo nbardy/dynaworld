@@ -1,6 +1,7 @@
 import {
 	assertStorageBufferFits,
 	DynamicSplatWebGpu3dTrainer,
+	FILTER_SIGMA_PIXELS,
 	MAX_SPLAT_COLOR,
 	SPLAT_FLOATS,
 	makeInitialSplats,
@@ -29,6 +30,9 @@ export const DEFAULT_STATIC_WARMUP_STEPS = 2048;
 export const MAX_WORKGROUPS_PER_DIMENSION = 65535;
 export const SCALE_LR_FROM_COLOR = 0.30;
 export const ROTATION_LR_FROM_MOTION = 1.25;
+// This is an optimizer/performance trust region, not a roundness prior. A 6:1
+// standard-deviation ratio still allows 36:1 covariance conditioning; larger
+// needles increase tile pairs and were worse on heldout in the matched 12:1 run.
 export const MAX_SCALE_ASPECT_RATIO = 6;
 
 export function resolveSsimRadius(value = 5) {
@@ -121,6 +125,9 @@ export function densityDispatchesForStep(initialSplats, capacity, step) {
 		const remaining = hiddenSlots - fillEvent * DENSITY_DISPATCHES * 4;
 		return Math.min(DENSITY_DISPATCHES, Math.ceil(remaining / 4));
 	}
+	// Once reserved capacity is full, keep the SfM scaffold stable. The former
+	// perpetual recycling repeatedly erased useful seeds without a residual-
+	// guided replacement test.
 	return 0;
 }
 
@@ -469,7 +476,9 @@ function projectWgsl() {
 		let invZ=1.0/cp.z; let horizontalFocal=cfg.targetAspect*camera.intrinsics.x;
 		let j0=vec3<f32>(horizontalFocal*invZ,0.0,-horizontalFocal*cp.x*invZ*invZ);
 		let j1=vec3<f32>(0.0,camera.intrinsics.y*invZ,-camera.intrinsics.y*cp.y*invZ*invZ);
-		let filterVariance=pow(0.3/max(1.0,f32(cfg.height)),2.0);
+		// Conservative screen-space footprint floor. This is point-sampled
+		// EWA-style filtering, not Mip-Splatting's compensated pixel filter.
+		let filterVariance=pow(${FILTER_SIGMA_PIXELS}/max(1.0,f32(cfg.height)),2.0);
 		let covariance=vec3<f32>(dot(j0,sigmaCamera*j0)+filterVariance,
 			dot(j0,sigmaCamera*j1),dot(j1,sigmaCamera*j1)+filterVariance);
 		let determinant=covariance.x*covariance.z-covariance.y*covariance.y;
@@ -653,6 +662,8 @@ function forwardWgsl(checkpointPrecision) {
 		let count=min(atomicLoad(&tileCounts[tile]),cfg.tileCapacity);
 		let point=vec2<f32>((f32(gid.x)+0.5)/f32(cfg.height),(f32(gid.y)+0.5)/f32(cfg.height));
 		var color=vec3<f32>(0.0);var transmittance=1.0;var stop=count;
+		// Depth-sorted source-over is the model's occlusion/transmittance law.
+		// A softmax over contributors would normalize away this visibility state.
 		for(var rank=0u;rank<count;rank++){
 			if(rank%cfg.checkpointStride==0u){
 				write_checkpoint(pixel*cfg.blocksPerTile+rank/cfg.checkpointStride,vec4<f32>(color,transmittance));
@@ -1042,6 +1053,8 @@ function updateWgsl() {
 		var nextLogScale=clamp(p.logScalePad.xyz-${SCALE_LR_FROM_COLOR}*cfg.lrColor*scaleUpdate.xyz,
 			vec3<f32>(log(cfg.minScale)),vec3<f32>(log(cfg.maxScale)));
 		let meanLog=(nextLogScale.x+nextLogScale.y+nextLogScale.z)/3.0;
+		// Center the trust region in log scale so the ratio bound is symmetric
+		// across axes and does not select a preferred world direction.
 		let halfLogAspect=0.5*log(${MAX_SCALE_ASPECT_RATIO}.0);
 		nextLogScale=clamp(nextLogScale,vec3<f32>(meanLog-halfLogAspect),vec3<f32>(meanLog+halfLogAspect));
 		p.logScalePad=vec4<f32>(nextLogScale,p.logScalePad.w);
