@@ -63,3 +63,15 @@ test("live preview can be disabled without pausing optimization", async () => {
 	assert.match(workerSource, /if\s*\(!renderOptions\.enabled/);
 	assert.match(appSource, /enabled:\s*controls\.live\.checked/);
 });
+
+test("SPA exposes packed-FP16 checkpoints and sends the selected precision to the worker", async () => {
+	const [htmlSource, appSource] = await Promise.all([
+		readFile(new URL("../index.html", import.meta.url), "utf8"),
+		readFile(new URL("../app.js", import.meta.url), "utf8"),
+	]);
+	assert.match(htmlSource, /id="checkpointPrecisionSelect"/);
+	assert.ok(htmlSource.indexOf('value="packed-f16"') < htmlSource.indexOf('value="f32"'));
+	assert.match(appSource, /checkpointPrecision:\s*controls\.precision\.value/);
+	assert.match(appSource, /controls\.precision\.disabled\s*=\s*sampledBackendSelected\(\)/);
+	assert.match(appSource, /sampledBackendSelected\(\)\s*\?\s*2048\s*:\s*4096/);
+});

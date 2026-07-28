@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { assertStorageBufferFits, sampleGradientBufferBytes } from "../trainerWebGpu3d.js";
+import {
+	assertStorageBufferFits,
+	rgbaFloatFrameBytes,
+	sampleGradientBufferBytes,
+} from "../trainerWebGpu3d.js";
 
 const source = readFileSync(new URL("../trainerWebGpu3d.js", import.meta.url), "utf8");
 
@@ -19,6 +23,16 @@ test("oversized dataset bindings fail before WebGPU bind-group construction", ()
 	);
 });
 
+test("one RGBA32F target page scales with one frame instead of the dataset", () => {
+	const dataset = {
+		width: 384,
+		height: 288,
+		frames: { byteLength: 384 * 288 * 4 * 18 * 16 * Float32Array.BYTES_PER_ELEMENT },
+	};
+	assert.equal(rgbaFloatFrameBytes(dataset), 1_769_472);
+	assert.equal(dataset.frames.byteLength, 509_607_936);
+});
+
 test("training WGSL keeps the 768 fast tape and uses storage above it", () => {
 	assert.doesNotMatch(source, /lane\s*<\s*3u/);
 	assert.match(source, /fastTapeUnderAlpha: array<vec4<f32>, 768>/);
@@ -26,4 +40,9 @@ test("training WGSL keeps the 768 fast tape and uses storage above it", () => {
 	assert.match(source, /for \(var i = lid\.x; i < cfg\.splatCount; i = i \+ 256u\)/);
 	assert.match(source, /sampleGradients\[s \* cfg\.splatCount \+ i\] = Splat/);
 	assert.ok((source.match(/storageBarrier\(\); workgroupBarrier\(\);/g) ?? []).length >= 2);
+});
+
+test("sampled trainer rejects counts beyond its fixed 2048-entry order cache", () => {
+	assert.match(source, /splatCount > 2048 && !this\.skipSampleGradientAllocation/);
+	assert.match(source, /sampled-ray depth-order cache supports at most 2048 splats/);
 });

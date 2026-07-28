@@ -1,0 +1,146 @@
+{
+  "schema": "dynaworld_browser_tiled_memory_precision/v2",
+  "date": "2026-07-28",
+  "hardware": {
+    "adapter": "apple",
+    "machine": "Apple M4 10-core GPU",
+    "max_storage_buffer_binding_size": 134217728,
+    "native_shader_f16": true
+  },
+  "workload": {
+    "dataset": "coffee_martini calibrated train17_holdout1",
+    "views": 18,
+    "train_views": 17,
+    "heldout_view": 17,
+    "frames": 16,
+    "raster": [
+      384,
+      288
+    ],
+    "raster_note": "Nearest-neighbor 4x scaling of the 96x72 browser targets for systems measurement only.",
+    "splats": 4096,
+    "tile_capacity": 4096,
+    "objective": "0.8 L1 + 0.2 (1 - 11x11 box SSIM)"
+  },
+  "memory_plan_bytes": {
+    "target_page": 1769472,
+    "forward_checkpoints": 113246208,
+    "pair_ids_and_references": 14155776,
+    "fp32_gradient_accumulator": 393216,
+    "pair_gradient_slab": 0,
+    "pair_capacity": 1769472,
+    "checkpoint_stride_fp32": 64,
+    "checkpoint_stride_packed_f16": 32
+  },
+  "superseded_layout_bytes": {
+    "all_view_all_time_target": 509607936,
+    "forward_checkpoints_at_stride_16_fp32": 452984832,
+    "pair_gradient_slab": 169869312,
+    "gaussian_pair_inverse_map": 7077888
+  },
+  "fp32_sustained": {
+    "warmup_steps": 32,
+    "measured_steps": 128,
+    "elapsed_ms": [
+      1078.6449999809265,
+      1088.2600000202656,
+      1085.1450000107288
+    ],
+    "steps_per_second": [
+      118.66740215943466,
+      117.61895135134654,
+      117.95658644580628
+    ],
+    "median_steps_per_second": 117.95658644580628,
+    "loss_after_160_steps": [
+      0.4719429612159729,
+      0.4719429612159729,
+      0.4719434082508087
+    ],
+    "tile_overflow": 0
+  },
+  "packed_f16_checkpoint_sustained": {
+    "description": "Only stored forward checkpoints use binary16 packing. Arithmetic and optimizer state remain FP32.",
+    "warmup_steps": 32,
+    "measured_steps": 128,
+    "elapsed_ms": [
+      919.244999974966,
+      976.5949999988079,
+      972.2849999964237
+    ],
+    "steps_per_second": [
+      139.2447062572936,
+      131.06763806916504,
+      131.64864211673614
+    ],
+    "median_steps_per_second": 131.64864211673614,
+    "median_speedup_over_fp32_percent": 11.607707618107877,
+    "loss_after_160_steps": [
+      0.4719492197036743,
+      0.47194910049438477,
+      0.4719502627849579
+    ],
+    "tile_overflow": 0,
+    "promoted_default": true
+  },
+  "precision_convergence_check": {
+    "warmup_steps": 512,
+    "measured_steps": 512,
+    "total_steps": 1024,
+    "fp32": {
+      "elapsed_ms": 5811.844999998808,
+      "steps_per_second": 88.09594887683774,
+      "loss": 0.2845153212547302
+    },
+    "packed_f16": {
+      "elapsed_ms": 5121.744999974966,
+      "steps_per_second": 99.96592958112959,
+      "loss": 0.28451645374298096
+    },
+    "absolute_loss_delta": 0.0000011324882507324219
+  },
+  "fp32_scaling_steps_per_second": [
+    {
+      "raster": [96, 72],
+      "splats_768": 1233.1406549643527,
+      "splats_1536": 862.5336926877284,
+      "splats_4096": 358.9003070471911
+    },
+    {
+      "raster": [192, 144],
+      "splats_768": 675.2835662988657,
+      "splats_1536": 461.5856187111609,
+      "splats_4096": 240.36881590835657
+    },
+    {
+      "raster": [384, 288],
+      "splats_768": 265.78349027775795,
+      "splats_1536": 182.19343818636122,
+      "splats_4096": 117.95658644580628
+    }
+  ],
+  "packed_f16_4096_scaling_steps_per_second": [
+    {
+      "raster": [96, 72],
+      "steps_per_second": 402.59168396854704,
+      "checkpoint_bytes": 14155776
+    },
+    {
+      "raster": [192, 144],
+      "steps_per_second": 294.14468241808055,
+      "checkpoint_bytes": 56623104
+    },
+    {
+      "raster": [384, 288],
+      "steps_per_second": 131.64864211673614,
+      "checkpoint_bytes": 113246208
+    }
+  ],
+  "caveats": [
+    "The 384x288 targets are upscaled copies, so this proves systems execution rather than higher-detail reconstruction quality.",
+    "The sampled-ray control still needs the complete target tensor and rejects this raster.",
+    "The sampled-ray control has a 2048-entry depth-order cache and now rejects larger splat counts explicitly.",
+    "The host-side Float32 dataset remains about 486 MiB and can be cloned across workers.",
+    "Later training has more visible splat support, so its active-pair count and step time can differ from the 32-step warmup interval."
+  ]
+}

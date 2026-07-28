@@ -30,6 +30,14 @@ export function assertStorageBufferFits(label, requiredBytes, storageLimit) {
 	}
 }
 
+export function rgbaFloatFrameBytes(dataset) {
+	const bytes = dataset.width * dataset.height * 4 * Float32Array.BYTES_PER_ELEMENT;
+	if (!Number.isSafeInteger(bytes) || bytes < 16) {
+		throw new RangeError("Dataset raster dimensions require an invalid RGBA32F frame size.");
+	}
+	return bytes;
+}
+
 function nextPowerOfTwo(value) {
 	return 2 ** Math.ceil(Math.log2(Math.max(1, value)));
 }
@@ -1369,12 +1377,25 @@ export class DynamicSplatWebGpu3dTrainer {
 		this.renderConfigBytes = Array.from({ length: MAX_RENDER_VIEWS }, () => new ArrayBuffer(48));
 	}
 
+	targetBufferByteLength(dataset) {
+		return dataset.frames.byteLength;
+	}
+
+	initializeTargetBuffer(target) {
+		this.device.queue.writeBuffer(target, 0, this.dataset.frames);
+	}
+
 	async init(dataset, { splatCount = 768, requiredWorkgroupStorageSize = 0 } = {}) {
-		if (splatCount > 4096) throw new RangeError("The camera/time depth-order cache supports at most 4096 splats.");
+		if (splatCount > 4096) throw new RangeError("The browser render path supports at most 4096 splats.");
+		if (splatCount > 2048 && !this.skipSampleGradientAllocation) {
+			throw new RangeError("The sampled-ray depth-order cache supports at most 2048 splats; "
+				+ "use the tiled full-frame backend above that count.");
+		}
 		const sampleGradientBytes = sampleGradientBufferBytes(splatCount);
 		if (!navigator.gpu) throw new Error("WebGPU unavailable in this browser.");
 		const adapter = await navigator.gpu.requestAdapter(); if (!adapter) throw new Error("WebGPU adapter unavailable.");
 		this.adapterName = adapter.info?.description || adapter.info?.vendor || "WebGPU";
+		this.supportsShaderF16 = adapter.features.has("shader-f16");
 		const requiredStorageBuffers = 9;
 		if (adapter.limits.maxStorageBuffersPerShaderStage < requiredStorageBuffers) {
 			throw new Error(`This trainer needs ${requiredStorageBuffers} storage buffers per shader stage; `
@@ -1391,12 +1412,13 @@ export class DynamicSplatWebGpu3dTrainer {
 		this.device = await adapter.requestDevice({
 			requiredLimits,
 		});
-		const storageLimit = Math.min(this.device.limits.maxStorageBufferBindingSize,
+		this.storageBufferLimit = Math.min(this.device.limits.maxStorageBufferBindingSize,
 			this.device.limits.maxBufferSize);
-		assertStorageBufferFits("The all-view training target", dataset.frames.byteLength, storageLimit);
-		if (sampleGradientBytes > storageLimit) {
+		assertStorageBufferFits("The training target", this.targetBufferByteLength(dataset),
+			this.storageBufferLimit);
+		if (sampleGradientBytes > this.storageBufferLimit) {
 			throw new RangeError(`splatCount ${splatCount} needs a ${sampleGradientBytes}-byte gradient buffer; `
-				+ `this device supports ${storageLimit} bytes.`);
+				+ `this device supports ${this.storageBufferLimit} bytes.`);
 		}
 		this.context = this.canvas?.getContext("webgpu") ?? null;
 		this.format = navigator.gpu.getPreferredCanvasFormat();
@@ -1457,9 +1479,9 @@ export class DynamicSplatWebGpu3dTrainer {
 		const sampleGradients = makeBuffer(this.skipSampleGradientAllocation
 			? SPLAT_BYTES : sampleGradientBufferBytes(this.splatCount));
 		const sampleLosses = makeBuffer(MAX_SAMPLES_PER_STEP * 4);
-		const target = makeBuffer(this.dataset.frames.byteLength,
+		const target = makeBuffer(this.targetBufferByteLength(this.dataset),
 			GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
-		this.device.queue.writeBuffer(target, 0, this.dataset.frames);
+		this.initializeTargetBuffer(target);
 		const cameraData = packCameras(this.dataset.cameras); const cameras = makeBuffer(cameraData.byteLength,
 			GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST); this.device.queue.writeBuffer(cameras, 0, cameraData);
 		const trainViewData = new Uint32Array(this.trainViewIndices);

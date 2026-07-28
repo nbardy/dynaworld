@@ -3,13 +3,20 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
+	DEFAULT_CHECKPOINT_PRECISION,
+	DEFAULT_MAX_TILE_CAPACITY,
 	densityDispatchesForStep,
 	ellipseIntersectsRect,
 	fullFramePairForStep,
 	MAX_SCALE_ASPECT_RATIO,
+	MAX_WORKGROUPS_PER_DIMENSION,
 	opacityAwarePixelBounds,
 	ROTATION_LR_FROM_MOTION,
+	resolveCheckpointLayout,
+	resolveCheckpointPrecision,
+	resolvePairDispatch,
 	resolveSsimRadius,
+	resolveTileCapacity,
 	resolveTiledCapacity,
 	SCALE_LR_FROM_COLOR,
 	windowedL1DssimCpu,
@@ -32,6 +39,83 @@ test("tiled capacity reserves growth while respecting explicit bounds", () => {
 	assert.equal(resolveTiledCapacity(2048, 8192), 4096);
 	assert.throws(() => resolveTiledCapacity(7), /at least 8/);
 	assert.throws(() => resolveTiledCapacity(8.5), /integer/);
+});
+
+test("tile capacity covers every splat so no valid tile can overflow", () => {
+	assert.equal(DEFAULT_MAX_TILE_CAPACITY, 4096);
+	assert.equal(resolveTileCapacity(768), 1024);
+	assert.equal(resolveTileCapacity(1536), 2048);
+	assert.equal(resolveTileCapacity(4096), 4096);
+	assert.equal(resolveTileCapacity(4096, 4096), 4096);
+	assert.throws(() => resolveTileCapacity(4096, 2048), /cover all 4096 splats/);
+	assert.throws(() => resolveTileCapacity(4096, 4097), /at most 4096/);
+});
+
+test("active-pair indirect dispatch spans two dimensions within WebGPU limits", () => {
+	assert.equal(MAX_WORKGROUPS_PER_DIMENSION, 65535);
+	assert.deepEqual(resolvePairDispatch(0), { x: 0, y: 1, z: 1 });
+	assert.deepEqual(resolvePairDispatch(65535), { x: 65535, y: 1, z: 1 });
+	assert.deepEqual(resolvePairDispatch(65536), { x: 65535, y: 2, z: 1 });
+	assert.deepEqual(resolvePairDispatch(432 * 4096), { x: 65535, y: 28, z: 1 });
+	assert.throws(() => resolvePairDispatch(-1), /non-negative/);
+});
+
+test("checkpoint stride expands only when the raster would exceed the binding limit", () => {
+	const storageLimit = 128 * 1024 * 1024;
+	assert.deepEqual(resolveCheckpointLayout(96 * 72, 2048, storageLimit), {
+		stride: 16,
+		blocksPerTile: 128,
+		byteLength: 14_155_776,
+	});
+	assert.deepEqual(resolveCheckpointLayout(384 * 288, 2048, storageLimit), {
+		stride: 32,
+		blocksPerTile: 64,
+		byteLength: 113_246_208,
+	});
+	assert.deepEqual(resolveCheckpointLayout(384 * 288, 4096, storageLimit), {
+		stride: 64,
+		blocksPerTile: 64,
+		byteLength: 113_246_208,
+	});
+	assert.deepEqual(resolveCheckpointLayout(384 * 288, 2048, storageLimit, 8), {
+		stride: 16,
+		blocksPerTile: 128,
+		byteLength: 113_246_208,
+	});
+});
+
+test("checkpoint precision is explicit and packed FP16 does not require FP16 arithmetic", () => {
+	assert.equal(DEFAULT_CHECKPOINT_PRECISION, "packed-f16");
+	assert.equal(resolveCheckpointPrecision(), "packed-f16");
+	assert.equal(resolveCheckpointPrecision("packed-f16"), "packed-f16");
+	assert.throws(() => resolveCheckpointPrecision("f8"), /f32.*packed-f16/);
+	assert.match(source, /pack2x16float/);
+	assert.match(source, /unpack2x16float/);
+	assert.doesNotMatch(source, /enable f16/);
+});
+
+test("target paging uploads exactly one selected Float32 frame and reuses the resident page", () => {
+	const trainer = Object.create(DynamicSplatWebGpu3dTiledTrainer.prototype);
+	const writes = [];
+	trainer.dataset = {
+		width: 2,
+		height: 1,
+		frameCount: 2,
+		frames: Float32Array.from({ length: 2 * 2 * 2 * 4 }, (_, index) => index + 0.25),
+	};
+	trainer.device = { queue: { writeBuffer: (...args) => writes.push(args) } };
+	trainer.targetPageKey = null;
+	const target = { label: "target-page" };
+	assert.equal(trainer.uploadTargetPage(target, 1, 1), 6);
+	assert.equal(writes.length, 1);
+	assert.equal(writes[0][0], target);
+	assert.equal(writes[0][1], 0);
+	assert.deepEqual(Array.from(writes[0][2]), Array.from(trainer.dataset.frames.subarray(24, 32)));
+	assert.equal(trainer.uploadTargetPage(target, 1, 1), 6);
+	assert.equal(writes.length, 1);
+	assert.equal(trainer.uploadTargetPage(target, 0, 1), 2);
+	assert.equal(writes.length, 2);
+	assert.deepEqual(Array.from(writes[1][2]), Array.from(trainer.dataset.frames.subarray(8, 16)));
 });
 
 test("SSIM radius accepts the benchmark range and preserves the 11x11 default", () => {
@@ -154,9 +238,20 @@ test("tiled trainer source preserves the full-frame shared-backward contract", (
 	assert.match(source, /fn\s+ssim_gradient/);
 	assert.match(source, /fn\s+pair_backward/);
 	assert.match(source, /fn\s+reduce_update/);
+	assert.match(source, /atomicCompareExchangeWeak/);
+	assert.match(source, /wid\.y\*\$\{MAX_WORKGROUPS_PER_DIMENSION\}u\+wid\.x/);
+	assert.match(source, /f32\(stopRanks\[pixel\]\)/);
+	assert.match(source, /rank<u32\(pixelGrad\[pixel\]\.w\)/);
+	assert.doesNotMatch(source, /bitcast<f32>\(stopRanks|bitcast<u32>\(pixelGrad\[pixel\]\.w/);
+	assert.match(trainStep, /uploadTargetPage/);
+	assert.match(trainStep, /const targetOffset = 0/);
+	assert.ok(trainStep.indexOf("uploadTargetPage") < trainStep.indexOf("writeBuffer(this.buffers.tiledConfig"));
+	assert.ok(trainStep.indexOf("writeBuffer(this.buffers.tiledConfig") < trainStep.indexOf("queue.submit"));
 	assert.equal(SCALE_LR_FROM_COLOR, 0.30);
 	assert.equal(ROTATION_LR_FROM_MOTION, 1.25);
 	assert.equal(MAX_SCALE_ASPECT_RATIO, 3);
-	assert.match(source, /gaussianPairSlots/);
+	assert.match(source, /pairData/);
+	assert.match(source, /gradientAtoms/);
+	assert.doesNotMatch(source, /gaussianPairSlots|pairGradients:array/);
 	assert.doesNotMatch(trainStep, /samplesPerStep|sampleIndices/);
 });
