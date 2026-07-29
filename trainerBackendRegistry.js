@@ -37,7 +37,7 @@ export function resolveTrainerBackend(id = DEFAULT_TRAINER_BACKEND) {
 export async function loadTrainerBackend(id = DEFAULT_TRAINER_BACKEND) {
 	const descriptor = resolveTrainerBackend(id);
 	const module = descriptor.id === "tiled3d"
-		? await import("./trainerWebGpu3dTiled.js")
+		? await import("./trainerWebGpu3dTiled.js?v=20260729-randombg3")
 		: await import("./trainerWebGpu3d.js");
 	return {
 		descriptor,

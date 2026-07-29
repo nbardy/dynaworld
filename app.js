@@ -1,8 +1,8 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260729-fixedtopology4";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260729-fixedtopology4";
-import { learningRateMultipliers } from "./trainingSchedule.js?v=20260729-fixedtopology4";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260729-fixedtopology4";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260729-fixedtopology4";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260729-randombg3";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260729-randombg3";
+import { learningRateMultipliers } from "./trainingSchedule.js?v=20260729-randombg3";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260729-randombg3";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260729-randombg3";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
@@ -20,6 +20,7 @@ const controls = {
 	temporalSchedule: $("temporalScheduleToggle"), temporal: $("temporalSlider"), lr: $("lrSlider"),
 	lrSchedule: $("lrScheduleToggle"), staticWarmup: $("staticWarmupToggle"),
 	motionWeighting: $("motionWeightingToggle"),
+	randomBackground: $("randomBackgroundToggle"),
 	samples: $("samplesSlider"), motionMix: $("motionMixSlider"), staticMix: $("staticMixSlider"),
 	supportGuard: $("supportGuardSlider"),
 };
@@ -125,6 +126,7 @@ function trainOptions() {
 		motionSampleRate: effectiveMotionMix(), staticSampleRate: Number(controls.staticMix.value),
 		motionCoverageTarget: Number(controls.supportGuard.value),
 		motionWeighting: controls.motionWeighting.checked,
+		randomBackground: !sampledBackendSelected() && controls.randomBackground.checked,
 		camerasPerStep: 4,
 	};
 }
@@ -187,6 +189,8 @@ function updateControlLabels() {
 	$("staticWarmupField").toggleAttribute("data-disabled", sampledBackendSelected());
 	controls.motionWeighting.disabled = sampledBackendSelected();
 	$("motionWeightingField").toggleAttribute("data-disabled", sampledBackendSelected());
+	controls.randomBackground.disabled = sampledBackendSelected();
+	$("randomBackgroundField").toggleAttribute("data-disabled", sampledBackendSelected());
 	values.temporalLabel.textContent = controls.temporalSchedule.checked ? "Temporal Support Now" : "Temporal Support";
 	if (!controls.temporalSchedule.checked) {
 		values.temporalSchedule.textContent = "manual · fixed";
@@ -483,10 +487,14 @@ async function initWorkerTrainer() {
 	const objective = controls.motionWeighting.checked && !sampledBackendSelected()
 		? `motion-weighted ${ready.backend?.objective ?? "training"}`
 		: ready.backend?.objective ?? "training";
+	const background = controls.randomBackground.checked && !sampledBackendSelected()
+		? "random-RGB train underlay · "
+		: "";
 	setStatus(`Ready: ${ready.backend?.label ?? "WebGPU"} · `
 		+ `${ready.backend?.representation ?? "trajectory-gated dynamic 3DGS"} · `
 		+ `${objective} · `
 		+ `${checkpointPrecision ? `${checkpointPrecision} checkpoints · ` : ""}`
+		+ background
 		+ `${trainerStaticWarmupSteps ? `${trainerStaticWarmupSteps}-step train-only static warmup · ` : ""}`
 		+ `${cameraBatch?.camerasPerStep ?? 1} of ${cameraBatch?.trainViewCount ?? 17} train cameras per step; `
 		+ `${heldoutDescription}; init ${dataset.seedProvenance?.train_only_verified
@@ -649,7 +657,7 @@ for (const control of [controls.time, controls.speed, controls.temporal, control
 	control.addEventListener("input", () => { updateControlLabels(); syncWorkerOptions(); updateTargetCanvas(); });
 }
 for (const control of [controls.loop, controls.live, controls.temporalSchedule, controls.lrSchedule,
-	controls.motionWeighting]) {
+	controls.motionWeighting, controls.randomBackground]) {
 	control.addEventListener("change", () => { updateControlLabels(); syncWorkerOptions(true); });
 }
 controls.fullMetrics.addEventListener("change", () => {

@@ -4,8 +4,9 @@ import { SPLAT_FLOATS } from "./trainerWebGpu3d.js";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
 	fullFramePairForStep,
+	trainingBackgroundForStep,
 	windowedL1DssimCpu,
-} from "./trainerWebGpu3dTiled.js";
+} from "./trainerWebGpu3dTiled.js?v=20260729-randombg3";
 
 export const TILED_PARITY_DIAGNOSTIC_COMPONENTS = Object.freeze([11, 15]);
 
@@ -182,33 +183,34 @@ export function summarizeForwardParity(gpuRgba, cpuRgb, cpuCoverage) {
 	};
 }
 
+function gradientCandidates(gradients, splatCount, family) {
+	const candidates = [];
+	for (let splatIndex = 0; splatIndex < splatCount; splatIndex += 1) {
+		for (const component of family.components) {
+			if (TILED_PARITY_DIAGNOSTIC_COMPONENTS.includes(component)) {
+				throw new Error(`Gradient family ${family.name} includes diagnostic slot ${component}.`);
+			}
+			const parameterIndex = splatIndex * SPLAT_FLOATS + component;
+			candidates.push({
+				family: family.name,
+				splatIndex,
+				component,
+				parameterIndex,
+				gpuGradient: gradients[parameterIndex],
+			});
+		}
+	}
+	return candidates.sort((left, right) =>
+		Math.abs(right.gpuGradient) - Math.abs(left.gpuGradient));
+}
+
 export function selectGradientChannels(gradients, splatCount) {
 	if (!Number.isSafeInteger(splatCount) || splatCount < 1
 		|| gradients.length !== splatCount * SPLAT_FLOATS) {
 		throw new RangeError("gradients must contain complete 24-float splats.");
 	}
-	return TILED_PARITY_GRADIENT_FAMILIES.map((family) => {
-		let selected = null;
-		for (let splatIndex = 0; splatIndex < splatCount; splatIndex += 1) {
-			for (const component of family.components) {
-				if (TILED_PARITY_DIAGNOSTIC_COMPONENTS.includes(component)) {
-					throw new Error(`Gradient family ${family.name} includes diagnostic slot ${component}.`);
-				}
-				const parameterIndex = splatIndex * SPLAT_FLOATS + component;
-				const gpuGradient = gradients[parameterIndex];
-				if (!selected || Math.abs(gpuGradient) > Math.abs(selected.gpuGradient)) {
-					selected = {
-						family: family.name,
-						splatIndex,
-						component,
-						parameterIndex,
-						gpuGradient,
-					};
-				}
-			}
-		}
-		return selected;
-	});
+	return TILED_PARITY_GRADIENT_FAMILIES.map((family) =>
+		gradientCandidates(gradients, splatCount, family)[0]);
 }
 
 export function extractTiledParityTarget(dataset, viewIndex, frameIndex) {
@@ -225,6 +227,17 @@ export function extractTiledParityTarget(dataset, viewIndex, frameIndex) {
 	return { rgb, pixelWeights };
 }
 
+function compositeTrainingBackground(rgb, coverage, background) {
+	const result = rgb.slice();
+	for (let pixel = 0; pixel < coverage.length; pixel += 1) {
+		const residual = 1 - coverage[pixel];
+		for (let channel = 0; channel < 3; channel += 1) {
+			result[pixel * 3 + channel] += residual * background[channel];
+		}
+	}
+	return result;
+}
+
 function finiteDifferenceStep(component, geometryScale) {
 	if (component <= 2 || (component >= 4 && component <= 6)
 		|| (component >= 8 && component <= 10)) {
@@ -235,7 +248,7 @@ function finiteDifferenceStep(component, geometryScale) {
 	return 1e-3;
 }
 
-function objective(dataset, params, target, pixelWeights, viewIndex, frameIndex) {
+function objective(dataset, params, target, pixelWeights, viewIndex, frameIndex, background) {
 	const rendered = renderSnapshotFrame(dataset, params, {
 		viewIndex,
 		frameIndex,
@@ -243,7 +256,8 @@ function objective(dataset, params, target, pixelWeights, viewIndex, frameIndex)
 		modelMode: 0,
 		temporalSigma: 0.30,
 	});
-	return windowedL1DssimCpu(rendered.rgb, target, dataset.width, dataset.height, {
+	const prediction = compositeTrainingBackground(rendered.rgb, rendered.coverage, background);
+	return windowedL1DssimCpu(prediction, target, dataset.width, dataset.height, {
 		radius: PARITY_SSIM_RADIUS,
 		computeGradient: false,
 		pixelWeights,
@@ -259,14 +273,15 @@ function centralDifference(
 	frameIndex,
 	parameterIndex,
 	step,
+	background,
 ) {
 	const plus = params.slice();
 	const minus = params.slice();
 	plus[parameterIndex] = params[parameterIndex] + step;
 	minus[parameterIndex] = params[parameterIndex] - step;
 	const denominator = plus[parameterIndex] - minus[parameterIndex];
-	return (objective(dataset, plus, target, pixelWeights, viewIndex, frameIndex)
-		- objective(dataset, minus, target, pixelWeights, viewIndex, frameIndex)) / denominator;
+	return (objective(dataset, plus, target, pixelWeights, viewIndex, frameIndex, background)
+		- objective(dataset, minus, target, pixelWeights, viewIndex, frameIndex, background)) / denominator;
 }
 
 function closeEnough(left, right, absoluteTolerance, relativeTolerance = 0) {
@@ -282,6 +297,7 @@ function checkGradient(
 	selection,
 	viewIndex,
 	frameIndex,
+	background,
 ) {
 	const epsilon = finiteDifferenceStep(selection.component, dataset.geometryScale);
 	const finiteDifference = centralDifference(
@@ -293,6 +309,7 @@ function checkGradient(
 		frameIndex,
 		selection.parameterIndex,
 		epsilon,
+		background,
 	);
 	const halfStepFiniteDifference = centralDifference(
 		dataset,
@@ -303,6 +320,7 @@ function checkGradient(
 		frameIndex,
 		selection.parameterIndex,
 		epsilon / 2,
+		background,
 	);
 	const finiteDifferenceStable = closeEnough(
 		finiteDifference,
@@ -332,6 +350,40 @@ function checkGradient(
 			/ Math.max(Math.abs(selection.gpuGradient), Math.abs(halfStepFiniteDifference), 1e-12),
 		pass: finiteDifferenceStable && matchesGpu,
 	};
+}
+
+function checkGradientFamily(
+	dataset,
+	initialParams,
+	target,
+	pixelWeights,
+	gradients,
+	splatCount,
+	family,
+	viewIndex,
+	frameIndex,
+	background,
+) {
+	const candidates = gradientCandidates(gradients, splatCount, family);
+	let fallback = null;
+	for (let candidateRank = 0; candidateRank < candidates.length; candidateRank += 1) {
+		const checked = checkGradient(
+			dataset,
+			initialParams,
+			target,
+			pixelWeights,
+			candidates[candidateRank],
+			viewIndex,
+			frameIndex,
+			background,
+		);
+		const result = { ...checked, candidateRank, rejectedUnstableCandidates: candidateRank };
+		if (!fallback) fallback = result;
+		// Hard q/alpha support cuts are intentionally nondifferentiable. Reject
+		// a finite-difference probe that crosses one instead of blaming the VJP.
+		if (checked.active && checked.finiteDifferenceStable) return result;
+	}
+	return fallback;
 }
 
 function objectiveParity(gpuMetrics, cpuMetrics) {
@@ -409,6 +461,7 @@ export async function runTiledParityHarness({
 			modelMode: 0,
 			temporalSigma: 0.30,
 			ssimRadius: PARITY_SSIM_RADIUS,
+			randomBackground: false,
 		});
 		const submissionError = await trainer.firstStepValidation;
 		trainer.firstStepValidation = null;
@@ -433,6 +486,7 @@ export async function runTiledParityHarness({
 			temporalSigma: 0.30,
 			ssimRadius: PARITY_SSIM_RADIUS,
 			motionWeighting: true,
+			randomBackground: true,
 		});
 		const debug = await trainer.readTiledStepDebugState();
 		const dataset = trainer.dataset;
@@ -455,9 +509,15 @@ export async function runTiledParityHarness({
 			modelMode: 0,
 			temporalSigma: 0.30,
 		});
+		const trainingBackground = trainingBackgroundForStep(parityPair.step);
+		const cpuTrainingRgb = compositeTrainingBackground(
+			cpuFrame.rgb,
+			cpuFrame.coverage,
+			trainingBackground,
+		);
 		const forwardSummary = summarizeForwardParity(
 			debug.renderedRgba,
-			cpuFrame.rgb,
+			cpuTrainingRgb,
 			cpuFrame.coverage,
 		);
 		const forward = {
@@ -467,7 +527,7 @@ export async function runTiledParityHarness({
 				&& forwardSummary.alpha.maxAbs <= THRESHOLDS.forwardAlphaMaxAbs,
 		};
 		const cpuObjective = windowedL1DssimCpu(
-			cpuFrame.rgb,
+			cpuTrainingRgb,
 			target.rgb,
 			dataset.width,
 			dataset.height,
@@ -479,15 +539,18 @@ export async function runTiledParityHarness({
 		);
 
 		onProgress("Checking selected analytic gradients with central differences");
-		const gradientChecks = selectGradientChannels(debug.gradients, 8).map((selection) =>
-			checkGradient(
+		const gradientChecks = TILED_PARITY_GRADIENT_FAMILIES.map((family) =>
+			checkGradientFamily(
 				dataset,
 				initialParams,
 				target.rgb,
 				target.pixelWeights,
-				selection,
+				debug.gradients,
+				8,
+				family,
 				debug.viewIndex,
 				debug.frameIndex,
+				trainingBackground,
 			));
 		const gradients = summarizeGradientParity(gradientChecks);
 		report = {
@@ -500,6 +563,7 @@ export async function runTiledParityHarness({
 				viewIndex: debug.viewIndex,
 				camera: dataset.cameras[debug.viewIndex]?.name ?? null,
 				frameIndex: debug.frameIndex,
+				trainingBackground,
 			},
 			trainer: {
 				adapter: trainer.adapterName,

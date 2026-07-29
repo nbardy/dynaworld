@@ -35,6 +35,35 @@ export const ROTATION_LR_FROM_MOTION = 1.25;
 // needles increase tile pairs and were worse on heldout in the matched 12:1 run.
 export const MAX_SCALE_ASPECT_RATIO = 6;
 
+function hashU32(value) {
+	let result = value >>> 0;
+	result = Math.imul(result ^ (result >>> 16), 0x7feb352d);
+	result = Math.imul(result ^ (result >>> 15), 0x846ca68b);
+	return (result ^ (result >>> 16)) >>> 0;
+}
+
+export function packedTrainingBackgroundForStep(step, enabled = true) {
+	if (!Number.isSafeInteger(step) || step < 0) {
+		throw new RangeError("step must be a non-negative safe integer.");
+	}
+	if (!enabled) return 0;
+	const seed = step >>> 0;
+	const channel = (salt) => hashU32(seed ^ salt) & 0x3ff;
+	return (0x80000000
+		| channel(0x68bc21eb)
+		| (channel(0x02e5be93) << 10)
+		| (channel(0x967a889b) << 20)) >>> 0;
+}
+
+export function trainingBackgroundForStep(step) {
+	const packed = packedTrainingBackgroundForStep(step);
+	return [
+		(packed & 0x3ff) / 1023,
+		((packed >>> 10) & 0x3ff) / 1023,
+		((packed >>> 20) & 0x3ff) / 1023,
+	];
+}
+
 export function resolveSsimRadius(value = 5) {
 	if (!Number.isSafeInteger(value) || value < 0 || value > 15) {
 		throw new RangeError("ssimRadius must be an integer from 0 through 15.");
@@ -360,7 +389,8 @@ function writeTiledConfig(buffer, values) {
 	f32(88, values.lrOpacity); f32(92, values.lrMotion); f32(96, values.geometryScale);
 	f32(100, values.l1Weight); f32(104, values.dssimWeight); f32(108, values.statDecay);
 	f32(112, BROWSER_ADAM_BETA1); f32(116, BROWSER_ADAM_BETA2);
-	f32(120, BROWSER_ADAM_EPSILON); f32(124, 0);
+	f32(120, BROWSER_ADAM_EPSILON);
+	u32(124, packedTrainingBackgroundForStep(values.step, values.randomBackground));
 	u32(128, values.ssimRadius); u32(132, values.frameCount);
 	u32(136, values.staticWarmup ? 1 : 0); u32(140, values.motionWeighting ? 1 : 0);
 	f32(144, 0.0001); f32(148, 0.0009);
@@ -376,7 +406,7 @@ const CONFIG_WGSL = `
 		targetAspect:f32, temporalSigma:f32, alphaThreshold:f32, transmittanceThreshold:f32,
 		lrPosition:f32, lrColor:f32, lrOpacity:f32, lrMotion:f32,
 		geometryScale:f32, l1Weight:f32, dssimWeight:f32, statDecay:f32,
-		beta1:f32, beta2:f32, adamEpsilon:f32, _padFloat:f32,
+		beta1:f32, beta2:f32, adamEpsilon:f32, trainingBackgroundPacked:u32,
 		ssimRadius:u32, frameCount:u32, staticWarmup:u32, motionWeighting:u32,
 		c1:f32, c2:f32, minScale:f32, maxScale:f32,
 	};
@@ -423,6 +453,13 @@ const CONFIG_WGSL = `
 	fn frame_time(cfg:TiledConfig)->f32 {
 		if(cfg.staticWarmup!=0u){return 0.5;}
 		return select(0.0,f32(cfg.frameIndex)/f32(max(1u,cfg.frameCount-1u)),cfg.frameCount>1u);
+	}
+	fn training_background(packed:u32)->vec3<f32> {
+		let rgb=vec3<f32>(
+			f32(packed&0x3ffu),
+			f32((packed>>10u)&0x3ffu),
+			f32((packed>>20u)&0x3ffu))*(1.0/1023.0);
+		return select(vec3<f32>(0.0),rgb,(packed&0x80000000u)!=0u);
 	}
 `;
 
@@ -672,7 +709,11 @@ function forwardWgsl(checkpointPrecision) {
 			color+=transmittance*alpha*params[id].colorOpacity.xyz;transmittance*=1.0-alpha;
 			if(transmittance<cfg.transmittanceThreshold){stop=rank+1u;break;}
 		}
-		rendered[pixel]=vec4<f32>(color,1.0-transmittance);stopRanks[pixel]=stop;
+		// Randomizing only the train underlay breaks the color/opacity shortcut
+		// without injecting a camera image. Alpha remains true splat coverage.
+		let background=training_background(cfg.trainingBackgroundPacked);
+		rendered[pixel]=vec4<f32>(color+transmittance*background,1.0-transmittance);
+		stopRanks[pixel]=stop;
 	}`;
 }
 
@@ -898,6 +939,8 @@ function backwardWgsl(checkpointPrecision) {
 						let rawAlpha=proj.conicDepthAlpha.z*proj.conicDepthAlpha.w*gaussian;
 						let alpha=select(0.0,min(0.99,rawAlpha),rawAlpha>=cfg.alphaThreshold);
 						let denominator=transmittance*(1.0-alpha);
+						// rendered.rgb already includes the train background, so
+						// replay recovers deeper splats plus that same underlay.
 						let behind=select(vec3<f32>(0.0),(rendered[pixel].xyz-before-transmittance*alpha*p.colorOpacity.xyz)
 							/max(denominator,1e-8),denominator>1e-8);
 						let imageGrad=pixelGrad[pixel].xyz;
@@ -1312,7 +1355,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 	}
 
 	trainStep({ learningRate = 1, learningRateDecay = false, modelMode = 0,
-		temporalSigma = 0.30, ssimRadius = 5, motionWeighting = false } = {}) {
+		temporalSigma = 0.30, ssimRadius = 5, motionWeighting = false,
+		randomBackground = false } = {}) {
 		const validateSubmission = this.stepCount === 0;
 		const resolvedSsimRadius = resolveSsimRadius(ssimRadius);
 		const rates = browserLearningRates(learningRate, this.stepCount, learningRateDecay);
@@ -1353,6 +1397,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			frameCount: this.dataset.frameCount,
 			staticWarmup: selected.staticWarmup,
 			motionWeighting,
+			randomBackground,
 			checkpointStride: this.checkpointStride,
 		});
 		this.device.queue.writeBuffer(this.buffers.tiledConfig, 0, this.tiledConfigBytes);
