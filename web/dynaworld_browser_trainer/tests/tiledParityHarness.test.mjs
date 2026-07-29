@@ -112,9 +112,11 @@ test("selected parity target preserves normalized alpha motion weights", () => {
 	assert.deepEqual(target.pixelWeights, new Float32Array([1.25, 0.75]));
 });
 
-test("live parity explicitly exercises motion weighting instead of inheriting its default", () => {
+test("live parity explicitly exercises motion weighting and randomized train compositing", () => {
 	const source = readFileSync(new URL("../tiledParityHarness.js", import.meta.url), "utf8");
 	assert.match(source, /ssimRadius:\s*PARITY_SSIM_RADIUS,\s*motionWeighting:\s*true/);
+	assert.match(source, /motionWeighting:\s*true,\s*randomBackground:\s*true/);
+	assert.match(source, /trainingBackgroundForStep\(parityPair\.step\)/);
 	assert.match(source, /maximumWeight - minimumWeight < 1e-3/);
 });
 

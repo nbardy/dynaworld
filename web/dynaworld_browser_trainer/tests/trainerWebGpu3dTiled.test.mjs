@@ -12,6 +12,7 @@ import {
 	MAX_SCALE_ASPECT_RATIO,
 	MAX_WORKGROUPS_PER_DIMENSION,
 	opacityAwarePixelBounds,
+	packedTrainingBackgroundForStep,
 	ROTATION_LR_FROM_MOTION,
 	resolveCheckpointLayout,
 	resolveCheckpointPrecision,
@@ -21,6 +22,7 @@ import {
 	resolveTileCapacity,
 	resolveTiledCapacity,
 	SCALE_LR_FROM_COLOR,
+	trainingBackgroundForStep,
 	trainingPairForStep,
 	windowedL1DssimCpu,
 } from "../trainerWebGpu3dTiled.js";
@@ -98,6 +100,19 @@ test("checkpoint precision is explicit and packed FP16 does not require FP16 ari
 	assert.match(source, /pack2x16float/);
 	assert.match(source, /unpack2x16float/);
 	assert.doesNotMatch(source, /enable f16/);
+});
+
+test("train backgrounds are deterministic, step-varying RGB values", () => {
+	const first = trainingBackgroundForStep(0);
+	const repeated = trainingBackgroundForStep(0);
+	const next = trainingBackgroundForStep(1);
+	assert.deepEqual(first, repeated);
+	assert.notDeepEqual(first, next);
+	assert.ok([...first, ...next].every((value) => value >= 0 && value < 1));
+	assert.equal(packedTrainingBackgroundForStep(0, false), 0);
+	assert.equal(packedTrainingBackgroundForStep(0) >>> 31, 1);
+	assert.throws(() => trainingBackgroundForStep(-1), /non-negative/);
+	assert.throws(() => trainingBackgroundForStep(1.5), /safe integer/);
 });
 
 test("target paging uploads exactly one selected Float32 frame and reuses the resident page", () => {
@@ -381,6 +396,9 @@ test("tiled trainer source preserves the full-frame shared-backward contract", (
 	assert.match(source, /width<=sortCount/);
 	assert.doesNotMatch(source, /width<=cfg\.tileCapacity/);
 	assert.match(source, /fn\s+raster_forward/);
+	assert.match(source, /training_background\(cfg\.trainingBackgroundPacked\)/);
+	assert.match(source, /color\+transmittance\*background/);
+	assert.match(source, /rendered\[pixel\]\.xyz-before-transmittance\*alpha/);
 	assert.match(source, /fn\s+ssim_stats/);
 	assert.match(source, /fn\s+ssim_gradient/);
 	assert.match(source, /cfg\.motionWeighting!=0u/);
@@ -404,4 +422,15 @@ test("tiled trainer source preserves the full-frame shared-backward contract", (
 	assert.match(source, /gradientAtoms/);
 	assert.doesNotMatch(source, /gaussianPairSlots|pairGradients:array/);
 	assert.doesNotMatch(trainStep, /samplesPerStep|sampleIndices/);
+});
+
+test("SPA defaults to train-only random backgrounds and exposes the control", () => {
+	const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+	const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+	const worker = readFileSync(new URL("../trainingWorker.js", import.meta.url), "utf8");
+	assert.match(html, /id="randomBackgroundToggle"[^>]*checked/);
+	assert.match(app,
+		/randomBackground:\s*!sampledBackendSelected\(\)\s*&&\s*controls\.randomBackground\.checked/);
+	assert.match(worker, /randomBackground:\s*false/);
+	assert.match(html, /validation and preview remain black/);
 });

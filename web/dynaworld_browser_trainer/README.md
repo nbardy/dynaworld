@@ -252,13 +252,29 @@ their memory spans the 272 camera/time-pair cycle.
 
 ### Background And Static Warmup
 
-The 3D trainer composites over exact black; background color is not randomized.
-This matches the fixed-black default in the
-[original 3DGS implementation](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/train.py).
-It does not paste a camera-specific 2D background behind the splats, because
-doing so for `cam06` would leak heldout pixels and would make novel-view metrics
-meaningless. The temporal mean stored for each camera was previously used only
-to classify motion/static pixels.
+The SPA now defaults `Random Train BG` on for the tiled full-frame backend.
+Each optimizer step hashes its step number once on the CPU, packs one
+deterministic RGB underlay into the existing 160-byte uniform, and trains the
+source-over result
+
+```text
+prediction = accumulated_splat_rgb + residual_transmittance * train_background
+```
+
+The background is shared by the complete image for that step. It is not hashed
+per pixel, stored as an image, or sampled from a camera. The replay backward
+reconstructs the suffix from final rendered RGB, so opacity and geometry see
+the same underlay as the forward pass. The live WebGPU parity gate exercises
+this path rather than merely checking shader source.
+
+Validation, snapshot metrics, and all three live result panels still composite
+over exact black. They therefore continue to expose true splat coverage instead
+of hiding holes behind the train underlay. No camera-specific 2D background is
+pasted behind the splats: doing so for `cam06` would leak heldout pixels and
+make novel-view metrics meaningless. This follows the purpose of the optional
+random-background training path in the
+[original 3DGS implementation](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/train.py)
+while retaining black evaluation.
 
 Decoded target RGB is clamped to `[0, 1]` and every target pixel is opaque.
 Learned splat RGB is now clamped to the same range. The earlier `[0, 1.4]`
@@ -266,10 +282,19 @@ bound let a translucent overbright splat reproduce a bright target against
 black without learning the corresponding opacity. Train and heldout alpha
 coverage remain visible in the UI. There is no hidden coverage penalty.
 
-Random backgrounds are not the default fix for this capture. They can act as
-an opaque-coverage regularizer, but they also change the objective and can
-favor large opaque floaters. A camera-specific mean image would be worse:
-it is a 2D leak, not a novel-view background model.
+This changed after the fixed-black run reached step 50,544 with only 59.9%
+mean train alpha and 57.7% heldout alpha. With roughly 40% residual
+transmittance, black was a material part of every prediction, not a harmless
+rendering convention. Random train backgrounds break that opacity/color
+shortcut, but they also change the training objective and can favor large
+opaque floaters. The checkbox remains an explicit ablation, and black-eval
+PSNR/SSIM/coverage are the comparison metrics. A separate coverage penalty was
+not added in the same change; it would confound the first matched test.
+
+Random backgrounds do not solve the other evidence from that run: all 4,096
+slots were active, topology operations were zero, and 16% of splats were at the
+6:1 aspect trust region. Residual-guided fixed-budget relocation remains the
+next topology experiment if a fresh random-background run still plateaus.
 
 The optional `Static Scene Warmup` uses those means for the first 2,048
 optimizer steps, but only for the 17 training cameras. During that phase the

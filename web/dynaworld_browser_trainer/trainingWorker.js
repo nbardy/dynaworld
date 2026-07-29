@@ -1,5 +1,5 @@
-import { resolveCamerasPerStep, resolveRenderViewIndices } from "./trainerWebGpu3d.js";
-import { loadTrainerBackend } from "./trainerBackendRegistry.js";
+import { resolveCamerasPerStep, resolveRenderViewIndices } from "./trainerWebGpu3d.js?v=20260729-randombg3";
+import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260729-randombg3";
 import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
 	WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
@@ -15,6 +15,7 @@ const DEFAULT_TRAIN_OPTIONS = Object.freeze({
 	staticSampleRate: 0.08,
 	motionCoverageTarget: 0.52,
 	motionWeighting: false,
+	randomBackground: false,
 	camerasPerStep: null,
 });
 let trainer = null;
