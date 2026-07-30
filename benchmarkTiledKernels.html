@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>DynaWorld Tiled Kernel Lab</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			font-family: ui-sans-serif, system-ui, sans-serif;
+			background: #0d1217;
+			color: #e8edf2;
+		}
+		* { box-sizing: border-box; }
+		body { margin: 0; background: #0d1217; }
+		main { width: min(1180px, calc(100% - 32px)); margin: 24px auto 48px; }
+		header { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
+		h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
+		p { color: #aeb8c2; max-width: 800px; line-height: 1.5; }
+		form {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(130px, 1fr));
+			gap: 10px;
+			padding: 16px 0;
+			border-block: 1px solid #2b3742;
+		}
+		label { display: grid; gap: 6px; color: #aeb8c2; font-size: 12px; }
+		input, select, button, textarea {
+			font: inherit;
+			color: inherit;
+			background: #151d24;
+			border: 1px solid #364552;
+			border-radius: 6px;
+		}
+		input, select { min-width: 0; height: 36px; padding: 0 9px; }
+		button { height: 36px; padding: 0 16px; cursor: pointer; align-self: end; }
+		button:disabled { opacity: 0.55; cursor: wait; }
+		#kernelBenchmarkStatus {
+			min-height: 44px;
+			display: flex;
+			align-items: center;
+			color: #65d4b6;
+			font-weight: 650;
+		}
+		#kernelBenchmarkStatus[data-state="failed"] { color: #ff827a; }
+		section { margin-top: 20px; }
+		h2 { margin: 0 0 10px; font-size: 18px; letter-spacing: 0; }
+		.table-wrap { overflow-x: auto; border-block: 1px solid #2b3742; }
+		table { width: 100%; border-collapse: collapse; min-width: 760px; }
+		th, td { text-align: right; padding: 10px 12px; border-bottom: 1px solid #222d36; }
+		th:first-child, td:first-child { text-align: left; }
+		th { color: #9da9b5; font-size: 12px; font-weight: 600; }
+		textarea { width: 100%; min-height: 300px; padding: 12px; resize: vertical; }
+		@media (max-width: 900px) {
+			form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+			header { align-items: start; flex-direction: column; }
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<header>
+			<div>
+				<h1>DynaWorld Tiled Kernel Lab</h1>
+				<p>Matched full-frame training runs. The control performs the complete 3D projection VJP
+					inside every active tile-pair workgroup; the fork accumulates compact projected gradients
+					and performs one VJP per splat.</p>
+			</div>
+			<a href="./">Trainer</a>
+		</header>
+		<form id="kernelBenchmarkForm">
+			<label>Experiment
+				<select id="kernelExperiment">
+					<option value="backward">Direct vs staged backward</option>
+					<option value="projection">Monolithic vs compact projection</option>
+					<option value="ssim">Naive vs separable SSIM</option>
+				</select>
+			</label>
+			<label>Kernel variants
+				<select id="kernelVariant">
+					<option value="both">Control + candidate</option>
+					<option value="candidate">Candidate only</option>
+					<option value="control">Control only</option>
+				</select>
+			</label>
+			<label>Execution order
+				<select id="kernelOrder">
+					<option value="control-first">Control first</option>
+					<option value="candidate-first">Candidate first</option>
+				</select>
+			</label>
+			<label>Active splats
+				<input id="kernelSplats" type="number" min="8" max="32768" value="8192">
+			</label>
+			<label>Model capacity
+				<input id="kernelCapacity" type="number" min="8" max="32768" value="8192">
+			</label>
+			<label>Raster scale
+				<input id="kernelRasterScale" type="number" min="1" max="4" value="1">
+			</label>
+			<label>Warmup steps
+				<input id="kernelWarmup" type="number" min="1" max="4096" value="32">
+			</label>
+			<label>Measured steps
+				<input id="kernelSteps" type="number" min="1" max="8192" value="128">
+			</label>
+			<label>GPU profiles
+				<input id="kernelProfiles" type="number" min="1" max="64" value="5">
+			</label>
+			<label>Checkpoints
+				<select id="kernelCheckpointPrecision">
+					<option value="packed-f16">Packed FP16</option>
+					<option value="f32">FP32</option>
+				</select>
+			</label>
+			<label>Checkpoint stride
+				<select id="kernelCheckpointStride">
+					<option value="16">16 pixels</option>
+					<option value="8">8 pixels</option>
+					<option value="32">32 pixels</option>
+				</select>
+			</label>
+			<label>Checkpoint order
+				<select id="kernelCheckpointOrder">
+					<option value="pixel-major">Pixel-major (fast default)</option>
+					<option value="block-major">Block-major experiment</option>
+				</select>
+			</label>
+			<label>Staged projection packet
+				<select id="kernelProjectionLayout">
+					<option value="split-compact">Split 32 B raster packet</option>
+					<option value="monolithic">Monolithic 192 B reference</option>
+				</select>
+			</label>
+			<label>SSIM kernel
+				<select id="kernelSsimLayout">
+					<option value="separable">Separable exact adjoint</option>
+					<option value="naive-2d">Naive 2D reference</option>
+				</select>
+			</label>
+			<label>Current pair packet
+				<select id="kernelPairPacket">
+					<option value="lane">Per lane</option>
+					<option value="shared">Workgroup shared</option>
+				</select>
+			</label>
+			<label>Staged backward
+				<select id="kernelBackwardGranularity">
+					<option value="pair">One pair / workgroup</option>
+					<option value="checkpoint-block">One block / workgroup</option>
+				</select>
+			</label>
+			<label>Tile size
+				<select id="kernelTileSize">
+					<option value="16">16 x 16</option>
+					<option value="8">8 x 8</option>
+				</select>
+			</label>
+			<label>Tile capacity
+				<select id="kernelTileCapacity">
+					<option value="4096">4096</option>
+					<option value="2048">2048</option>
+					<option value="1024">1024</option>
+					<option value="512">512</option>
+					<option value="256">256</option>
+				</select>
+			</label>
+			<button id="runKernelBenchmark" type="submit">Run matched benchmark</button>
+		</form>
+		<div id="kernelBenchmarkStatus" data-state="ready">Ready</div>
+
+		<section>
+			<h2>Whole Step</h2>
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>Kernel</th><th>Steps/s</th><th>Wall time</th><th>GPU p50</th>
+							<th>GPU p95</th><th>Loss</th><th>Overflow</th><th>GPU buffers</th>
+						</tr>
+					</thead>
+					<tbody id="kernelResults"></tbody>
+				</table>
+			</div>
+		</section>
+
+		<section>
+			<h2>Pass Timing</h2>
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr><th>Phase</th><th>Control p50</th><th>Candidate p50</th><th>Speedup</th></tr>
+					</thead>
+					<tbody id="phaseResults"></tbody>
+				</table>
+			</div>
+		</section>
+
+		<section>
+			<h2>Artifact</h2>
+			<textarea id="kernelBenchmarkJson" readonly spellcheck="false"></textarea>
+		</section>
+	</main>
+	<script type="module" src="./benchmarkTiledKernels.js?v=20260731-fasttiles6"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
-import { resolveCamerasPerStep, resolveRenderViewIndices } from "./trainerWebGpu3d.js?v=20260729-randombg3";
-import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260729-randombg3";
+import { resolveCamerasPerStep, resolveRenderViewIndices } from "./trainerWebGpu3d.js?v=20260731-fasttiles6";
+import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260731-fasttiles6";
 import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
 	WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
@@ -40,6 +40,7 @@ let latestSsim = Number.NaN;
 let lastMetricStep = 0;
 let lastValidationStep = 0;
 let lastMetricRequestStep = 0;
+let lastMetricRecycled = 0;
 let lastValidationRequestStep = 0;
 let lastRenderAt = 0;
 let lastStatusMessageAt = 0;
@@ -97,12 +98,25 @@ function requestMetrics() {
 	if (metricsPending || !trainer) return false;
 	metricsPending = true;
 	const step = trainer.stepCount;
+	const totalRecycled = trainer.totalRecycled;
 	lastMetricRequestStep = step;
 	trainer.readLoss(trainOptions).then((loss) => {
 		latestLoss = loss;
 		lastMetricStep = step;
+		const pairCycle = trainer.trainViewIndices.length * trainer.dataset.frameCount;
+		const objectiveStep = Number.isFinite(trainer.lastLossBreakdown?.objectiveStep)
+			? Math.round(trainer.lastLossBreakdown.objectiveStep)
+			: step - 1;
+		const fittedStep = Math.max(0, objectiveStep - (trainer.staticWarmupSteps ?? 0));
+		const breakdown = {
+			...(trainer.lastLossBreakdown ?? {}),
+			pairCycle,
+			cyclePhase: fittedStep % pairCycle,
+			topologyOpsSinceMetric: totalRecycled - lastMetricRecycled,
+		};
+		lastMetricRecycled = totalRecycled;
 		self.postMessage(protocolMessage(WorkerEvent.METRICS, {
-			step, loss, breakdown: trainer.lastLossBreakdown ?? null,
+			step, loss, breakdown, totalRecycled,
 		}));
 	}).catch(reportError).finally(() => {
 		metricsPending = false;
@@ -193,7 +207,7 @@ async function initialize(message) {
 		trainOptions.camerasPerStep = 1;
 	}
 	renderOptions.viewIndices = resolveRenderViewIndices(trainer.dataset, renderOptions.viewIndices);
-	validationWorker = new Worker(new URL("./validationWorker.js?v=20260729-fixedtopology4", import.meta.url),
+	validationWorker = new Worker(new URL("./validationWorker.js?v=20260731-fasttiles6", import.meta.url),
 		{ type: "module" });
 	validationWorker.onmessage = ({ data }) => {
 		if (data?.type === "validation") {

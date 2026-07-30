@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
+	DEFAULT_BROWSER_GROWTH_CAPACITY,
 	DEFAULT_CHECKPOINT_PRECISION,
 	DEFAULT_MAX_TILE_CAPACITY,
 	DEFAULT_STATIC_WARMUP_STEPS,
@@ -12,25 +13,51 @@ import {
 	MAX_SCALE_ASPECT_RATIO,
 	MAX_WORKGROUPS_PER_DIMENSION,
 	opacityAwarePixelBounds,
+	packDepthSplatKey,
 	packedTrainingBackgroundForStep,
 	ROTATION_LR_FROM_MOTION,
 	resolveCheckpointLayout,
 	resolveCheckpointPrecision,
+	resolveCheckpointStride,
 	resolvePairDispatch,
 	resolveSsimRadius,
 	resolveStaticWarmupSteps,
 	resolveTileCapacity,
+	resolveTiledBackwardGranularity,
 	resolveTiledCapacity,
+	resolveTiledCheckpointOrder,
+	resolveTiledProjectionLayout,
+	resolveTiledSsimLayout,
+	resolveTiledTileSize,
 	SCALE_LR_FROM_COLOR,
+	summarizeCycleMetrics,
+	TILED_BACKWARD_GRANULARITIES,
+	TILED_CHECKPOINT_ORDERS,
+	TILED_PROJECTION_LAYOUTS,
+	TILED_SSIM_LAYOUTS,
+	TILED_DEPTH_KEY_MASK,
+	TILED_SPLAT_ID_BITS,
+	TILED_SPLAT_ID_MASK,
+	telemetryAliasPeriod,
 	trainingBackgroundForStep,
 	trainingPairForStep,
+	unpackDepthSplatId,
 	windowedL1DssimCpu,
 } from "../trainerWebGpu3dTiled.js";
+import {
+	DynamicSplatWebGpu3dTiledFastTrainer,
+	resolveFastTileCapacity,
+} from "../trainerWebGpu3dTiledFast.js";
 import { computeMultiviewSamples, normalizedMotionLossWeights } from "../dataset.js";
 import { canonicalGaussianSsim } from "../snapshotMetrics.js";
-import { FILTER_SIGMA_PIXELS, MAX_SPLAT_COLOR } from "../trainerWebGpu3d.js";
+import {
+	FILTER_SIGMA_PIXELS,
+	MAX_SPLAT_COLOR,
+	sampledOrderCacheEntries,
+} from "../trainerWebGpu3d.js";
 
 const source = readFileSync(new URL("../trainerWebGpu3dTiled.js", import.meta.url), "utf8");
+const fastSource = readFileSync(new URL("../trainerWebGpu3dTiledFast.js", import.meta.url), "utf8");
 
 function assertClose(actual, expected, tolerance = 1e-7) {
 	const scale = Math.max(1, Math.abs(actual), Math.abs(expected));
@@ -39,24 +66,199 @@ function assertClose(actual, expected, tolerance = 1e-7) {
 }
 
 test("tiled capacity reserves growth while respecting explicit bounds", () => {
+	assert.equal(DEFAULT_BROWSER_GROWTH_CAPACITY, 8192);
 	assert.equal(resolveTiledCapacity(8), 24);
 	assert.equal(resolveTiledCapacity(768), 2304);
 	assert.equal(resolveTiledCapacity(768, 512), 768);
 	assert.equal(resolveTiledCapacity(768, 1000.9), 1000);
 	assert.equal(resolveTiledCapacity(1024, 4096), 4096);
-	assert.equal(resolveTiledCapacity(2048, 8192), 4096);
-	assert.throws(() => resolveTiledCapacity(7), /at least 8/);
+	assert.equal(resolveTiledCapacity(2048, 8192), 8192);
+	assert.equal(resolveTiledCapacity(4096), 8192);
+	assert.equal(resolveTiledCapacity(8192), 8192);
+	assert.equal(resolveTiledCapacity(4096, 32768), 32768);
+	assert.equal(resolveTiledCapacity(16384), 16384);
+	assert.equal(resolveTiledCapacity(32768), 32768);
+	assert.throws(() => resolveTiledCapacity(7), /8 through 32768/);
 	assert.throws(() => resolveTiledCapacity(8.5), /integer/);
+	assert.throws(() => resolveTiledCapacity(32769), /8 through 32768/);
 });
 
-test("tile capacity covers every splat so no valid tile can overflow", () => {
+test("32K models retain a portable bounded tile-local sort", () => {
 	assert.equal(DEFAULT_MAX_TILE_CAPACITY, 4096);
 	assert.equal(resolveTileCapacity(768), 1024);
 	assert.equal(resolveTileCapacity(1536), 2048);
 	assert.equal(resolveTileCapacity(4096), 4096);
+	assert.equal(resolveTileCapacity(8192), 4096);
+	assert.equal(resolveTileCapacity(32768), 4096);
 	assert.equal(resolveTileCapacity(4096, 4096), 4096);
-	assert.throws(() => resolveTileCapacity(4096, 2048), /cover all 4096 splats/);
-	assert.throws(() => resolveTileCapacity(4096, 4097), /at most 4096/);
+	assert.equal(resolveTileCapacity(8192, 2048), 2048);
+	assert.throws(() => resolveTileCapacity(4096, 4097), /8 through 4096/);
+	assert.throws(() => resolveTileCapacity(32769), /8 through 32768/);
+});
+
+test("fast tiled defaults track measured occupancy without hiding explicit benchmark controls", () => {
+	assert.equal(resolveFastTileCapacity(4096, 8192), 1024);
+	assert.equal(resolveFastTileCapacity(8192, 16384), 2048);
+	assert.equal(resolveFastTileCapacity(4096, 24576), 4096);
+	assert.equal(resolveFastTileCapacity(4096, 32768), 4096);
+	assert.equal(resolveFastTileCapacity(4096, 8192, 2048), 2048);
+	assert.match(fastSource,
+		/backwardGranularity:\s*TILED_BACKWARD_GRANULARITIES\.CHECKPOINT_BLOCK/);
+	assert.doesNotMatch(fastSource, /checkpointOrder:/);
+	assert.match(fastSource, /checkpointStride:\s*DEFAULT_CHECKPOINT_STRIDE/);
+	assert.match(fastSource, /tileSize:\s*8/);
+	assert.match(fastSource,
+		/projectionLayout:\s*TILED_PROJECTION_LAYOUTS\.SPLIT_COMPACT/);
+	assert.match(fastSource, /ssimLayout:\s*TILED_SSIM_LAYOUTS\.SEPARABLE/);
+	assert.match(fastSource, /\.\.\.options,[\s\S]*backwardMode:\s*TILED_BACKWARD_MODES\.STAGED_PROJECT_3D/);
+	assert.equal(
+		Object.getPrototypeOf(DynamicSplatWebGpu3dTiledFastTrainer.prototype).constructor.name,
+		DynamicSplatWebGpu3dTiledTrainer.name,
+	);
+});
+
+test("kernel fork controls reject unsupported checkpoint, tile, and replay layouts", () => {
+	assert.equal(resolveCheckpointStride(8), 8);
+	assert.equal(resolveCheckpointStride(16), 16);
+	assert.equal(resolveCheckpointStride(32), 32);
+	assert.throws(() => resolveCheckpointStride(12), /power of two/);
+	assert.equal(resolveTiledTileSize(8), 8);
+	assert.equal(resolveTiledTileSize(16), 16);
+	assert.throws(() => resolveTiledTileSize(32), /8, 16/);
+	assert.equal(resolveTiledBackwardGranularity("checkpoint-block"),
+		TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK);
+	assert.throws(() => resolveTiledBackwardGranularity("pixel"), /pair, checkpoint-block/);
+	assert.equal(resolveTiledCheckpointOrder("block-major"), TILED_CHECKPOINT_ORDERS.BLOCK_MAJOR);
+	assert.equal(resolveTiledCheckpointOrder(), TILED_CHECKPOINT_ORDERS.PIXEL_MAJOR);
+	assert.throws(() => resolveTiledCheckpointOrder("row-major"), /pixel-major, block-major/);
+	assert.equal(resolveTiledProjectionLayout("split-compact"),
+		TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT);
+	assert.equal(resolveTiledProjectionLayout(), TILED_PROJECTION_LAYOUTS.MONOLITHIC);
+	assert.throws(() => resolveTiledProjectionLayout("array-of-structs"),
+		/monolithic, split-compact/);
+	assert.equal(resolveTiledSsimLayout("separable"), TILED_SSIM_LAYOUTS.SEPARABLE);
+	assert.equal(resolveTiledSsimLayout(), TILED_SSIM_LAYOUTS.NAIVE_2D);
+	assert.throws(() => resolveTiledSsimLayout("box"), /naive-2d, separable/);
+	assert.match(source, /block\*cfg\.pixelCount\+pixel/);
+	assert.match(source, /pixel\*cfg\.blocksPerTile\+block/);
+	assert.match(source, /checkpoint_index\(pixel,rank\/cfg\.checkpointStride\)/);
+});
+
+test("kernel lab preserves matched direct and staged variants with timestamped phase output", () => {
+	const benchmark = readFileSync(new URL("../benchmarkTiledKernels.js", import.meta.url), "utf8");
+	assert.match(benchmark, /id:\s*"direct-3d"/);
+	assert.match(benchmark, /id:\s*"staged-project3d"/);
+	assert.match(benchmark, /context\.trainer\.profileGpuStep/);
+	assert.match(benchmark, /round % 2 === 0/);
+	assert.match(benchmark, /candidateThroughputSpeedup/);
+	assert.match(benchmark, /stagedThroughputSpeedup/);
+	assert.match(benchmark, /allocatedByteDelta/);
+	assert.match(benchmark, /projectionLayout/);
+	assert.match(source, /TILED_GPU_PHASES/);
+	assert.match(source, /createQuerySet/);
+	assert.match(source, /timestampWrites/);
+	assert.match(source, /gpuSpanMs/);
+	assert.match(source, /phaseContract/);
+	assert.match(source, /maintenanceIncluded:\s*false/);
+	assert.match(benchmark, /gpuSpanMedianMs/);
+});
+
+test("split projection layout keeps the raster hot record at 32 bytes", () => {
+	assert.match(source, /const RASTER_PROJECTION_BYTES = 2 \* 16/);
+	assert.match(source, /const PROJECTION_VJP_BYTES = 5 \* 16/);
+	assert.match(source, /struct RasterProjection \{[\s\S]*screenConic0[\s\S]*conicDepthAlpha/);
+	assert.match(source,
+		/struct CompactProjectionVjp \{[\s\S]*cameraPointValid[\s\S]*jacobianSparse[\s\S]*basisVariance2/);
+	assert.match(source, /vec4<f32>\(j0\.x,j0\.z,j1\.y,j1\.z\)/);
+	assert.match(source, /cameras\[cfg\.viewIndex\]/);
+	assert.match(source, /rasterProjections\[index\]=raster;projectionVjps\[index\]=vjp/);
+	assert.match(source, /projectionVjp \?\? this\.buffers\.projections/);
+});
+
+test("separable SSIM keeps the exact two-dimensional objective and adjoint contract", () => {
+	assert.match(source, /fn ssim_horizontal/);
+	assert.match(source, /fn ssim_vertical/);
+	assert.match(source, /fn ssim_gradient_horizontal/);
+	assert.match(source, /fn ssim_gradient_vertical/);
+	assert.match(source, /constant\+targetCoefficient\*targetColor\+predictionCoefficient\*prediction/);
+	assert.match(source, /this\.ssimLayout === TILED_SSIM_LAYOUTS\.SEPARABLE/);
+});
+
+test("depth sort keys preserve every 15-bit 32K splat ID", () => {
+	assert.equal(TILED_SPLAT_ID_BITS, 15);
+	assert.equal(TILED_SPLAT_ID_MASK, 0x7fff);
+	assert.equal(TILED_DEPTH_KEY_MASK, 0xffff8000);
+	for (const id of [0, 4095, 8192, 16384, 32767]) {
+		assert.equal(unpackDepthSplatId(packDepthSplatKey(0x42f6a123, id)), id);
+	}
+	assert.throws(() => packDepthSplatKey(0x42f6a123, 32768), /splatId/);
+	assert.match(source, /const depthMask = .*TILED_DEPTH_KEY_MASK/);
+	assert.match(source, /const idMask = .*TILED_SPLAT_ID_MASK/);
+	assert.match(source, /depthBits&\$\{depthMask\}/);
+	assert.match(source, /depthKeys\[index\]&\$\{idMask\}/);
+});
+
+test("tiled inheritance does not reserve the sampled view-time depth-order cache", () => {
+	const entries = sampledOrderCacheEntries(17, 16, 30000);
+	assert.equal(entries, 8_160_000);
+	assert.equal(entries * Uint32Array.BYTES_PER_ELEMENT, 32_640_000);
+	assert.equal(sampledOrderCacheEntries(17, 16, 30000, false), 0);
+	assert.match(
+		readFileSync(new URL("../trainerWebGpu3d.js", import.meta.url), "utf8"),
+		/!this\.skipSampleGradientAllocation/,
+	);
+});
+
+test("telemetry cadence math explains the former 256-step camera-time alias", () => {
+	assert.deepEqual(telemetryAliasPeriod(17 * 16, 256), {
+		sampledPhases: 17,
+		repeatSamples: 17,
+		repeatSteps: 4352,
+	});
+	assert.deepEqual(telemetryAliasPeriod(17 * 16, 257), {
+		sampledPhases: 272,
+		repeatSamples: 272,
+		repeatSteps: 69904,
+	});
+	assert.throws(() => telemetryAliasPeriod(272, 0), /positive/);
+});
+
+test("GPU cycle telemetry averages each recent camera-time objective exactly once", () => {
+	const records = new Float32Array(4 * 4);
+	for (let step = 4; step <= 7; step += 1) {
+		const base = (step % 4) * 4;
+		records.set([step, step + 0.1, step + 0.2, step + 1], base);
+	}
+	assert.deepEqual(summarizeCycleMetrics(records, 7, 4), {
+		loss: 5.5,
+		l1: 5.599999904632568,
+		dssim: 5.699999809265137,
+		samples: 4,
+		complete: true,
+		oldestStep: 4,
+		newestStep: 7,
+	});
+	const partial = summarizeCycleMetrics(records, 7, 4, 6);
+	assert.equal(partial.samples, 2);
+	assert.equal(partial.complete, false);
+	assert.equal(partial.loss, 6.5);
+	assert.throws(() => summarizeCycleMetrics([], 7, 4), /Cycle metrics/);
+	assert.match(source, /cycleMetrics\[cfg\.step%arrayLength\(&cycleMetrics\)\]/);
+	assert.match(source, /copyBufferToBuffer\(\s*this\.buffers\.cycleMetrics/);
+});
+
+test("tiled telemetry retains four vec4 metrics and cumulative overflow high-water state", () => {
+	const benchmarkSource = readFileSync(
+		new URL("../benchmarkTrainerBackends.js", import.meta.url),
+		"utf8",
+	);
+	assert.match(source, /tiledMetrics:\s*makeBuffer\(64\)/);
+	assert.match(source, /copyBufferToBuffer\(this\.buffers\.tiledMetrics,\s*0,[^;]+,\s*0,\s*64\)/);
+	assert.match(source, /atomicAdd\(&counters\[4\],1u\)/);
+	assert.match(source, /atomicMax\(&counters\[5\],count\)/);
+	assert.match(source, /tileOverflowTotal:\s*values\[12\]/);
+	assert.match(source, /maxTileOccupancyEver:\s*values\[13\]/);
+	assert.match(benchmarkSource, /tileOverflowTotal\s*\?\?\s*currentOverflow/);
 });
 
 test("active-pair indirect dispatch spans two dimensions within WebGPU limits", () => {
@@ -165,6 +367,9 @@ test("density schedule fills only reserved slots and preserves active topology a
 	assert.equal(densityDispatchesForStep(1536, 3072, 120320), 0);
 	assert.equal(densityDispatchesForStep(1536, 4096, 16500), 4);
 	assert.equal(densityDispatchesForStep(1536, 4096, 16896), 0);
+	assert.equal(densityDispatchesForStep(4096, 8192, 600), 4);
+	assert.equal(densityDispatchesForStep(4096, 8192, 26100), 4);
+	assert.equal(densityDispatchesForStep(4096, 8192, 26200), 0);
 });
 
 test("full-frame schedule shuffles and visits every camera/time pair before cycling", () => {

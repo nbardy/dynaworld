@@ -1,0 +1,390 @@
+{
+  "schema": "dynaworld-browser-wgpu-kernel-forks/v2",
+  "recordedLocalDate": "2026-07-31",
+  "environment": {
+    "adapter": "Apple M4 WebGPU",
+    "browser": "Codex in-app Chromium for parity; Bun + headless Chrome/Dawn for final timing",
+    "dataset": "coffee_martini calibrated train17_holdout1",
+    "raster": [96, 72],
+    "trainViews": 17,
+    "heldoutViews": 1,
+    "frames": 16,
+    "timestampQuery": true,
+    "inAppTimestampResolutionMs": 0.065536
+  },
+  "matchedProtocol": {
+    "checkpointPrecision": "packed-f16",
+    "objective": "0.8 L1 + 0.2 (1 - Gaussian-window SSIM)",
+    "randomBackground": false,
+    "learningRateScale": 1.25,
+    "previewAndValidationExcluded": true,
+    "gpuQueueDrainedAfterMeasuredInterval": true,
+    "freshTrainerAndDevicePerVariant": true,
+    "finalTimingProtocol": "Both variants stay alive; four equal measurement chunks alternate execution order; timestamp profiles alternate order too.",
+    "savedGpuStepDefinition": "Sum of active pass timestamps. Later runner revisions also emit first-to-last gpuSpanMs.",
+    "phaseContract": {
+      "directBackward": "Raster derivative plus repeated 3D projection/covariance VJP.",
+      "stagedBackward": "Raster derivative and projected-gradient accumulation.",
+      "directUpdate": "Adam.",
+      "stagedUpdate": "One 3D projection/covariance VJP per splat plus Adam."
+    },
+    "phaseComparisonCaveat": "Backward phase ratios locate removed work but compare different semantic boundaries; end-to-end throughput and complete GPU time are primary.",
+    "headlessCommand": "bun web/dynaworld_browser_trainer/run_headless_kernel_benchmark.js"
+  },
+  "correctness": {
+    "configuration": {
+      "backwardMode": "staged-project3d",
+      "backwardGranularity": "checkpoint-block",
+      "checkpointOrder": "pixel-major",
+      "checkpointStride": 16,
+      "tileSize": 8,
+      "projectionLayout": "split-compact",
+      "ssimLayout": "separable"
+    },
+    "forwardRgbMaxAbs": 1.1920928955078125e-7,
+    "objectiveAbs": 5.4539708305156864e-8,
+    "activeGradientFamilies": 9,
+    "gradientFamilies": 9,
+    "tileOverflow": 0,
+    "pass": true
+  },
+  "promotedConfiguration": {
+    "backend": "tiled3d-fast",
+    "backwardMode": "staged-project3d",
+    "backwardGranularity": "checkpoint-block",
+    "checkpointOrder": "pixel-major",
+    "checkpointStride": 16,
+    "tileSize": 8,
+    "projectionLayout": "split-compact",
+    "rasterProjectionBytesPerSplat": 32,
+    "projectionVjpBytesPerSplat": 80,
+    "ssimLayout": "separable",
+    "tileCapacityByModelCapacity": {
+      "upTo8192": 1024,
+      "upTo16384": 2048,
+      "above16384": 4096
+    }
+  },
+  "finalAlternatingRuns": [
+    {
+      "name": "backward-8k-96x72",
+      "artifact": "2026-07-31_interleaved/backward_8k_96x72_apple_m4.json",
+      "control": {
+        "id": "direct-3d",
+        "stepsPerSecond": 356.0748313276598,
+        "gpuStepMedianMs": 1.640058,
+        "backwardMedianMs": 1.158899,
+        "allocatedBytes": 12893664
+      },
+      "candidate": {
+        "id": "staged-project3d",
+        "stepsPerSecond": 656.7470497490276,
+        "gpuStepMedianMs": 0.908819,
+        "backwardMedianMs": 0.459118,
+        "allocatedBytes": 11845088
+      },
+      "comparison": {
+        "throughputSpeedup": 1.8444073884702326,
+        "gpuStepSpeedup": 1.8046035569238759,
+        "backwardSpeedup": 2.5241877309555445,
+        "allocatedByteDelta": -1048576,
+        "tileOverflowTotal": 0
+      }
+    },
+    {
+      "name": "backward-30k-96x72",
+      "artifact": "2026-07-31_interleaved/backward_30k_96x72_apple_m4.json",
+      "control": {
+        "id": "direct-3d",
+        "stepsPerSecond": 140.02844328301916,
+        "gpuStepMedianMs": 5.802412,
+        "backwardMedianMs": 3.42399,
+        "allocatedBytes": 43852000
+      },
+      "candidate": {
+        "id": "staged-project3d",
+        "stepsPerSecond": 238.62788964520755,
+        "gpuStepMedianMs": 4.094144,
+        "backwardMedianMs": 1.225981,
+        "allocatedBytes": 40012000
+      },
+      "comparison": {
+        "throughputSpeedup": 1.7041387024699235,
+        "gpuStepSpeedup": 1.4172466820903222,
+        "backwardSpeedup": 2.792854538201652,
+        "allocatedByteDelta": -3840000,
+        "tileOverflowTotal": 0
+      }
+    },
+    {
+      "name": "projection-packet-30k-96x72-order-controlled",
+      "artifacts": [
+        "2026-07-31_interleaved/projection_30k_control_first_apple_m4.json",
+        "2026-07-31_interleaved/projection_30k_candidate_first_apple_m4.json"
+      ],
+      "control": {
+        "id": "staged-monolithic",
+        "meanStepsPerSecond": 272.41293344950384,
+        "meanGpuStepMedianMs": 4.2907475,
+        "projectionBytesPerSplat": 192
+      },
+      "candidate": {
+        "id": "staged-split-compact",
+        "meanStepsPerSecond": 285.5639197385493,
+        "meanGpuStepMedianMs": 4.0020625,
+        "projectionBytesPerSplat": 112
+      },
+      "comparison": {
+        "throughputSpeedupOfMeans": 1.048275924797393,
+        "gpuStepSpeedupOfMeans": 1.0721340558774382,
+        "perOrderThroughputSpeedups": [1.0332357860918844, 1.0618996798142313],
+        "allocatedByteDelta": -2400000,
+        "tileOverflowTotal": 0
+      }
+    },
+    {
+      "name": "separable-ssim-8k-96x72",
+      "artifact": "2026-07-31_interleaved/ssim_8k_96x72_apple_m4.json",
+      "comparison": {
+        "throughputSpeedup": 1.0976980728786752,
+        "gpuStepSpeedup": 1.2032819935741477,
+        "ssimStatsSpeedup": 2.4964827780260523,
+        "ssimGradientSpeedup": 5.699613380400068,
+        "allocatedByteDelta": 552960,
+        "tileOverflowTotal": 0
+      }
+    },
+    {
+      "name": "separable-ssim-8k-192x144",
+      "artifact": "2026-07-31_interleaved/ssim_8k_192x144_apple_m4.json",
+      "comparison": {
+        "throughputSpeedup": 1.2842497671194868,
+        "gpuStepSpeedup": 1.3177608032519788,
+        "ssimStatsSpeedup": 2.6456709245847234,
+        "ssimGradientSpeedup": 3.662761166232095,
+        "allocatedByteDelta": 2211840,
+        "tileOverflowTotal": 0
+      }
+    },
+    {
+      "name": "separable-ssim-30k-96x72",
+      "artifact": "2026-07-31_interleaved/ssim_30k_96x72_apple_m4.json",
+      "comparison": {
+        "throughputSpeedup": 1.0509496804081842,
+        "gpuStepSpeedup": 1.0737298311181613,
+        "ssimStatsSpeedup": 2.569207094840852,
+        "ssimGradientSpeedup": 3.7923044982698966,
+        "allocatedByteDelta": 552960,
+        "tileOverflowTotal": 0
+      }
+    }
+  ],
+  "historicalOneShotRuns": [
+    {
+      "name": "30k-final-pixel-major",
+      "recordedAt": "2026-07-30T17:30:56.439Z",
+      "options": {
+        "splats": 30000,
+        "capacity": 30000,
+        "warmupSteps": 24,
+        "measuredSteps": 128,
+        "profileSteps": 5,
+        "tileSize": 8,
+        "tileCapacity": 4096,
+        "checkpointStride": 16,
+        "checkpointOrder": "pixel-major"
+      },
+      "direct": {
+        "stepsPerSecond": 146.7048710601719,
+        "elapsedMs": 872.5,
+        "loss": 0.46505266427993774,
+        "cycleMeanLoss": 0.5016184196730328,
+        "gpuStepMedianMs": 8.912896,
+        "backwardMedianMs": 6.22592,
+        "allocatedBytes": 43299040,
+        "maxTileOccupancy": 2379,
+        "tileOverflowTotal": 0
+      },
+      "staged": {
+        "stepsPerSecond": 304.97974744730914,
+        "elapsedMs": 419.69999998807907,
+        "loss": 0.46497195959091187,
+        "cycleMeanLoss": 0.501611215293787,
+        "gpuStepMedianMs": 3.145728,
+        "backwardMedianMs": 0.98304,
+        "allocatedBytes": 41859040,
+        "maxTileOccupancy": 2379,
+        "tileOverflowTotal": 0
+      },
+      "comparison": {
+        "throughputSpeedup": 2.07886585662326,
+        "gpuStepSpeedup": 2.833333333333333,
+        "backwardSpeedup": 6.333333333333333,
+        "lossDelta": -0.0000807046890258789,
+        "allocatedByteDelta": -1440000
+      }
+    },
+    {
+      "name": "32k-zero-overflow-stress",
+      "options": {
+        "splats": 32768,
+        "capacity": 32768,
+        "warmupSteps": 24,
+        "measuredSteps": 192,
+        "profileSteps": 5,
+        "tileSize": 8,
+        "tileCapacity": 4096,
+        "checkpointStride": 16,
+        "checkpointOrder": "pixel-major"
+      },
+      "direct": {
+        "stepsPerSecond": 79.64161274226423,
+        "loss": 0.4842750132083893,
+        "gpuStepMedianMs": 14.155776,
+        "backwardMedianMs": 8.257536,
+        "allocatedBytes": 45469152,
+        "maxTileOccupancy": 2584,
+        "tileOverflowTotal": 0
+      },
+      "staged": {
+        "stepsPerSecond": 258.5858585858586,
+        "loss": 0.48398318886756897,
+        "gpuStepMedianMs": 4.25984,
+        "backwardMedianMs": 1.31072,
+        "allocatedBytes": 43896288,
+        "maxTileOccupancy": 2584,
+        "tileOverflowTotal": 0
+      },
+      "comparison": {
+        "throughputSpeedup": 3.246868686884742,
+        "gpuStepSpeedup": 3.3230769230769233,
+        "backwardSpeedup": 6.3,
+        "lossDelta": -0.0002918243408203125,
+        "allocatedByteDelta": -1572864
+      }
+    },
+    {
+      "name": "8k-tile8-checkpoint-block",
+      "options": {
+        "splats": 8192,
+        "capacity": 8192,
+        "tileSize": 8,
+        "tileCapacity": 4096,
+        "checkpointStride": 16,
+        "checkpointOrder": "pixel-major"
+      },
+      "direct": {
+        "stepsPerSecond": 630.23,
+        "loss": 0.41850781,
+        "gpuStepMedianMs": 1.572864,
+        "backwardMedianMs": 0.98304,
+        "tileOverflowTotal": 0
+      },
+      "staged": {
+        "stepsPerSecond": 983.48,
+        "loss": 0.41842425,
+        "gpuStepMedianMs": 1.048576,
+        "backwardMedianMs": 0.393216,
+        "maxTileOccupancy": 674,
+        "tileOverflowTotal": 0
+      },
+      "comparison": {
+        "throughputSpeedup": 1.5605,
+        "gpuStepSpeedup": 1.5,
+        "backwardSpeedup": 2.5,
+        "lossDelta": -0.00008356
+      }
+    }
+  ],
+  "ablations": [
+    {
+      "name": "compact projected gradient plus one VJP per splat",
+      "result": "promoted",
+      "eightKStepsPerSecond": 448.89,
+      "directEightKStepsPerSecond": 225.47,
+      "notes": "The 12-float projected gradient record halves accumulator traffic and removes repeated 3D covariance/quaternion VJPs from tile-pair workgroups."
+    },
+    {
+      "name": "checkpoint-block replay",
+      "result": "promoted",
+      "eightKTile16StepsPerSecond": 519.06,
+      "notes": "One workgroup owns a complete rank block and walks source-over once instead of replaying a triangular prefix for every pair."
+    },
+    {
+      "name": "8x8 tiles",
+      "result": "promoted",
+      "eightKStepsPerSecond": 983.48,
+      "thirtyKStepsPerSecond": 304.97974744730914,
+      "notes": "Lower occupancy and smaller tile-local workgroups dominate at the 96x72 training raster."
+    },
+    {
+      "name": "occupancy-sized 8K tile buffers",
+      "result": "promoted",
+      "tileCapacity": 1024,
+      "eightKStepsPerSecond": 979.34,
+      "allocatedMiB": 11.95,
+      "maxTileOccupancy": 674,
+      "tileOverflowTotal": 0
+    },
+    {
+      "name": "split hot raster and compact cold projection VJP packets",
+      "result": "promoted",
+      "rasterBytesPerSplat": 32,
+      "vjpBytesPerSplat": 80,
+      "monolithicBytesPerSplat": 192,
+      "thirtyKThroughputSpeedupOfMeans": 1.048275924797393,
+      "thirtyKGpuStepSpeedupOfMeans": 1.0721340558774382,
+      "thirtyKAllocatedByteDelta": -2400000,
+      "notes": "The cold packet stores only four nonzero Jacobian scalars and packs variance into basis padding; camera rotation is loaded once per splat from the step camera instead of copied into every packet."
+    },
+    {
+      "name": "exact separable Gaussian SSIM and adjoint",
+      "result": "promoted",
+      "eightK96x72ThroughputSpeedup": 1.0976980728786752,
+      "eightK192x144ThroughputSpeedup": 1.2842497671194868,
+      "thirtyK96x72ThroughputSpeedup": 1.0509496804081842,
+      "ssimGradientSpeedupRange": [3.662761166232095, 5.699613380400068],
+      "scratchBytesPerPixel": 80,
+      "notes": "Four one-dimensional passes preserve the 11x11 reflected Gaussian objective and exact adjoint while replacing quadratic window work with linear-radius filtering."
+    },
+    {
+      "name": "workgroup-shared current pair packet",
+      "result": "rejected",
+      "eightKStepsPerSecond": 439.18,
+      "referenceStepsPerSecond": 448.89,
+      "notes": "The compiler/cache already handles these reads; extra barriers and shared storage did not pay."
+    },
+    {
+      "name": "checkpoint stride 8",
+      "result": "rejected",
+      "eightKStepsPerSecond": 188.26,
+      "backwardMedianMs": 7.078,
+      "gpuStepMedianMs": 10.224,
+      "notes": "The doubled checkpoint tape overwhelmed the replay reduction."
+    },
+    {
+      "name": "checkpoint stride 32",
+      "result": "rejected",
+      "eightKStepsPerSecond": 232.37,
+      "backwardMedianMs": 4.522,
+      "gpuStepMedianMs": 7.93,
+      "notes": "Longer workgroup lifetime and replay lost to the stride-16 balance."
+    },
+    {
+      "name": "block-major checkpoint tape",
+      "result": "rejected-default-kept-selectable",
+      "eightKBlockMajorStepsPerSecond": 785.76,
+      "eightKPixelMajorStepsPerSecond": 843.77,
+      "thirtyKBlockMajorStepsPerSecond": 280.76,
+      "thirtyKPixelMajorStepsPerSecond": 304.97974744730914,
+      "notes": "The address transposition passed exact parity but was 6.9% slower at 8K and 8.6% slower at 30K in back-to-back runs."
+    }
+  ],
+  "caveats": [
+    "Absolute wall throughput varies with browser tab visibility, UI contention, power state, and nearby WebGPU work; use finalAlternatingRuns for claims and treat historicalOneShotRuns only as development chronology.",
+    "The final harness keeps both variants alive and alternates four equal timing chunks because one-shot process order produced contradictory winner flips at 30K.",
+    "The in-app Chromium profiler quantizes timestamp-query values to 0.065536 ms; final raw timing artifacts were produced by the headless Chrome/Dawn runner and retain its reported values.",
+    "The all-active 20K-32K runs are systems stress tests created by repeating the seed bank, not reconstruction-quality initialization recommendations.",
+    "These measurements validate source-view optimization mechanics, parity, memory, and overflow. They do not establish heldout quality or paper-baseline parity."
+  ]
+}

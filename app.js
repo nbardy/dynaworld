@@ -1,8 +1,8 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260729-randombg3";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260729-randombg3";
-import { learningRateMultipliers } from "./trainingSchedule.js?v=20260729-randombg3";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260729-randombg3";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260729-randombg3";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260731-fasttiles6";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260731-fasttiles6";
+import { learningRateMultipliers } from "./trainingSchedule.js?v=20260731-fasttiles6";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260731-fasttiles6";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260731-fasttiles6";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
@@ -14,7 +14,8 @@ const resultViewRoles = [0, 1, 2].map((index) => $(`resultViewRole${index}`));
 const controls = {
 	run: $("runButton"), step: $("stepButton"), reset: $("resetButton"), backend: $("backendSelect"),
 	precision: $("checkpointPrecisionSelect"), mode: $("modeSelect"),
-	splats: $("splatSlider"), time: $("timeSlider"), loop: $("timeLoopToggle"), live: $("livePreviewToggle"),
+	splats: $("splatSlider"), growthCapacity: $("growthCapacitySelect"),
+	time: $("timeSlider"), loop: $("timeLoopToggle"), live: $("livePreviewToggle"),
 	fullMetrics: $("fullMetricsToggle"), speed: $("timeSpeedSlider"), targetView: $("targetViewSelect"),
 	renderCamera: $("renderCameraSelect"), resultView: $("resultViewSelect"),
 	temporalSchedule: $("temporalScheduleToggle"), temporal: $("temporalSlider"), lr: $("lrSlider"),
@@ -38,6 +39,10 @@ const values = {
 	motionCoverage: $("motionCoverageValue"), staticCoverage: $("staticCoverageValue"),
 	peakAlpha: $("motionMaxAlphaValue"), active: $("activeSplatValue"), meanOpacity: $("meanOpacityValue"),
 	meanRadius: $("meanRadiusValue"), meanAspect: $("meanAspectValue"), tileOverflow: $("tileOverflowValue"),
+	metricPair: $("metricPairValue"), visibleSplats: $("visibleSplatValue"),
+	tilePairs: $("tilePairValue"), tileLoad: $("tileLoadValue"),
+	detailMae: $("detailMaeValue"), lowPassPsnr: $("lowPassPsnrValue"),
+	cameraPsnr: $("cameraPsnrValue"), gpuMemory: $("gpuMemoryValue"),
 	representation: $("representationValue"), dynamicSplats: $("dynamicSplatValue"),
 	persistentSplats: $("persistentSplatValue"), staticMixP50: $("staticMixP50Value"),
 	edgeSupport: $("edgeSupportValue"), aspectP90: $("aspectP90Value"),
@@ -185,6 +190,8 @@ function updateControlLabels() {
 	}
 	controls.precision.disabled = sampledBackendSelected();
 	$("checkpointPrecisionField").toggleAttribute("data-disabled", sampledBackendSelected());
+	controls.growthCapacity.disabled = sampledBackendSelected();
+	$("growthCapacityField").toggleAttribute("data-disabled", sampledBackendSelected());
 	controls.staticWarmup.disabled = sampledBackendSelected();
 	$("staticWarmupField").toggleAttribute("data-disabled", sampledBackendSelected());
 	controls.motionWeighting.disabled = sampledBackendSelected();
@@ -276,6 +283,8 @@ function resetMetrics() {
 		values.staticCoverage, values.peakAlpha, values.active, values.meanOpacity, values.meanRadius,
 		values.meanAspect, values.dynamicSplats, values.persistentSplats, values.staticMixP50,
 		values.edgeSupport, values.aspectP90, values.rasterDead, values.tileOverflow,
+		values.metricPair, values.visibleSplats, values.tilePairs, values.tileLoad,
+		values.detailMae, values.lowPassPsnr, values.cameraPsnr, values.gpuMemory,
 		values.parameterDelta, values.centerUpdate,
 		values.motionUpdate, values.scaleUpdate, values.rotationUpdate, values.colorUpdate,
 		values.opacityUpdate]) {
@@ -285,7 +294,7 @@ function resetMetrics() {
 	drawMetricCharts();
 }
 
-function consumeSampleMetric({ step, loss, breakdown = null }) {
+function consumeSampleMetric({ step, loss, breakdown = null, totalRecycled = Number.NaN }) {
 	if (!Number.isFinite(loss)) {
 		values.sampleLoss.textContent = "invalid";
 		const detail = breakdown ? ` (${JSON.stringify(breakdown)})` : "";
@@ -296,13 +305,43 @@ function consumeSampleMetric({ step, loss, breakdown = null }) {
 	if (loss === 0 && breakdown) {
 		setStatus(`Zero-objective diagnostic at step ${step}: ${JSON.stringify(breakdown)}.`);
 	}
-	lossEma = lossEma == null ? loss : lossEma * 0.82 + loss * 0.18;
+	const cycleMeanLoss = Number(breakdown?.cycleMeanLoss);
+	if (Number.isFinite(cycleMeanLoss)) {
+		lossEma = cycleMeanLoss;
+		const cycleSamples = Math.round(Number(breakdown.cycleSamples));
+		values.sampleLoss.title = `GPU rolling camera/time mean over ${cycleSamples} objective steps; `
+			+ `current pair ${loss.toFixed(5)}`;
+	} else {
+		lossEma = lossEma == null ? loss : lossEma * 0.82 + loss * 0.18;
+		values.sampleLoss.title = `Sampled-objective exponential moving average; current sample ${loss.toFixed(5)}`;
+	}
 	values.sampleLoss.textContent = lossEma.toFixed(5);
 	if (breakdown) {
 		const overflow = Number(breakdown.tileOverflow);
-		values.tileOverflow.textContent = Number.isFinite(overflow) ? String(Math.round(overflow)) : "--";
-		values.tileOverflow.dataset.state = overflow > 0 ? "warning" : "ok";
+		const overflowTotal = Number(breakdown.tileOverflowTotal);
+		values.tileOverflow.textContent = Number.isFinite(overflow)
+			? `${Math.round(overflow)} / ${Number.isFinite(overflowTotal) ? Math.round(overflowTotal) : "?"}`
+			: "--";
+		values.tileOverflow.dataset.state = overflow > 0 || overflowTotal > 0 ? "warning" : "ok";
+		const viewIndex = Math.round(Number(breakdown.viewIndex));
+		const frameIndex = Math.round(Number(breakdown.frameIndex));
+		const camera = dataset?.cameras?.[viewIndex]?.name ?? `cam${viewIndex}`;
+		const phase = Number.isFinite(breakdown.cyclePhase) && Number.isFinite(breakdown.pairCycle)
+			? ` · ${Math.round(breakdown.cyclePhase) + 1}/${Math.round(breakdown.pairCycle)}` : "";
+		const topology = Number(breakdown.topologyOpsSinceMetric) > 0
+			? ` · +${Math.round(breakdown.topologyOpsSinceMetric)} split` : "";
+		values.metricPair.textContent = `${camera} f${frameIndex}${phase}${topology}`;
+		setMetricText(values.visibleSplats, breakdown.visibleSplats,
+			(value) => `${Math.round(value)}/${Math.round(breakdown.capacitySplats)}`);
+		setMetricText(values.tilePairs, breakdown.pairCount, (value) => Math.round(value).toLocaleString());
+		if (Number.isFinite(breakdown.maxTileOccupancy) && Number.isFinite(breakdown.meanStopRank)) {
+			const maximumEver = Number.isFinite(breakdown.maxTileOccupancyEver)
+				? ` (${Math.round(breakdown.maxTileOccupancyEver)})` : "";
+			values.tileLoad.textContent = `${Math.round(breakdown.maxTileOccupancy)}${maximumEver} / `
+				+ `${Number(breakdown.meanStopRank).toFixed(1)}`;
+		}
 	}
+	setMetricText(values.recycled, totalRecycled, (value) => String(value));
 	recordMetric("sampleLoss", step, lossEma);
 }
 
@@ -311,6 +350,7 @@ function setMetricText(element, value, format) {
 }
 
 function consumeValidation({ step, metrics }) {
+	globalThis.__dynaworldValidationMetrics = { step, ...metrics };
 	setMetricText(values.gridLoss, metrics.gridLoss, (value) => value.toFixed(6));
 	setMetricText(values.trainMae, metrics.gridMae, (value) => value.toFixed(4));
 	setMetricText(values.trainPsnr, metrics.gridPsnr, (value) => `${value.toFixed(1)} dB`);
@@ -320,6 +360,19 @@ function consumeValidation({ step, metrics }) {
 	setMetricText(values.heldoutPsnr, metrics.heldoutPsnr, (value) => `${value.toFixed(1)} dB`);
 	setMetricText(values.heldoutSsim, metrics.heldoutSsim, (value) => value.toFixed(3));
 	setMetricText(values.heldoutCoverage, metrics.heldoutCoverage, (value) => `${(value * 100).toFixed(1)}%`);
+	if (Number.isFinite(metrics.gridDetailMae) && Number.isFinite(metrics.heldoutDetailMae)) {
+		values.detailMae.textContent = `${metrics.gridDetailMae.toFixed(3)} / `
+			+ `${metrics.heldoutDetailMae.toFixed(3)}`;
+	}
+	if (Number.isFinite(metrics.gridLowPassPsnr) && Number.isFinite(metrics.heldoutLowPassPsnr)) {
+		values.lowPassPsnr.textContent = `${metrics.gridLowPassPsnr.toFixed(1)} / `
+			+ `${metrics.heldoutLowPassPsnr.toFixed(1)} dB`;
+	}
+	if (Number.isFinite(metrics.weakestTrainCameraPsnr)
+		&& Number.isFinite(metrics.strongestTrainCameraPsnr)) {
+		values.cameraPsnr.textContent = `${metrics.weakestTrainCamera ?? "worst"} `
+			+ `${metrics.weakestTrainCameraPsnr.toFixed(1)}–${metrics.strongestTrainCameraPsnr.toFixed(1)}`;
+	}
 	setMetricText(values.motionLoss, metrics.motionLoss, (value) => value.toFixed(6));
 	setMetricText(values.motionCoverage, metrics.motionCoverage, (value) => `${(value * 100).toFixed(1)}%`);
 	setMetricText(values.staticCoverage, metrics.staticCoverage, (value) => `${(value * 100).toFixed(1)}%`);
@@ -452,6 +505,7 @@ async function initWorkerTrainer() {
 	const ready = await workerClient.init({
 		dataset, canvas: renderCanvas,
 		trainerOptions: { backend: controls.backend.value, splatCount: Number(controls.splats.value),
+			growthCapacity: sampledBackendSelected() ? null : Number(controls.growthCapacity.value),
 			checkpointPrecision: controls.precision.value,
 			staticWarmupSteps: controls.staticWarmup.checked && !sampledBackendSelected()
 				? STATIC_WARMUP_STEPS : 0 },
@@ -484,6 +538,13 @@ async function initWorkerTrainer() {
 	values.splatCount.textContent = trainerCapacity === Number(controls.splats.value)
 		? String(trainerCapacity) : `${controls.splats.value} → ${trainerCapacity}`;
 	const checkpointPrecision = ready.backend?.memoryPlan?.checkpointPrecision;
+	const allocatedBytes = ready.backend?.memoryPlan?.allocatedBytes;
+	if (Number.isFinite(allocatedBytes)) {
+		values.gpuMemory.textContent = `${(allocatedBytes / (1024 * 1024)).toFixed(1)} MiB`;
+		values.gpuMemory.title = Object.entries(ready.backend.memoryPlan.bufferBytes ?? {})
+			.map(([name, bytes]) => `${name}: ${(bytes / (1024 * 1024)).toFixed(2)} MiB`)
+			.join("\n");
+	}
 	const objective = controls.motionWeighting.checked && !sampledBackendSelected()
 		? `motion-weighted ${ready.backend?.objective ?? "training"}`
 		: ready.backend?.objective ?? "training";
@@ -648,6 +709,7 @@ controls.step.addEventListener("click", () => {
 });
 controls.reset.addEventListener("click", () => { void resetTrainer(); });
 controls.splats.addEventListener("change", () => { void resetTrainer(); });
+controls.growthCapacity.addEventListener("change", () => { void resetTrainer(); });
 controls.backend.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
 controls.precision.addEventListener("change", () => { void resetTrainer(); });
 controls.staticWarmup.addEventListener("change", () => { void resetTrainer(); });

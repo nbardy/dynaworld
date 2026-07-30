@@ -2,11 +2,12 @@ import {
 	assertStorageBufferFits,
 	DynamicSplatWebGpu3dTrainer,
 	FILTER_SIGMA_PIXELS,
+	MAX_BROWSER_RENDER_SPLATS,
 	MAX_SPLAT_COLOR,
 	SPLAT_FLOATS,
 	makeInitialSplats,
 	rgbaFloatFrameBytes,
-} from "./trainerWebGpu3d.js";
+} from "./trainerWebGpu3d.js?v=20260731-fasttiles6";
 import {
 	BROWSER_ADAM_BETA1,
 	BROWSER_ADAM_BETA2,
@@ -16,15 +17,46 @@ import {
 } from "./trainingSchedule.js";
 
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
-const TILE_SIZE = 16;
-const MIN_CHECKPOINT_STRIDE = 16;
-const PROJECTION_BYTES = 12 * 16;
+export const DEFAULT_TILE_SIZE = 16;
+export const TILED_TILE_SIZES = Object.freeze([8, 16]);
+const MIN_CHECKPOINT_STRIDE = 8;
+export const DEFAULT_CHECKPOINT_STRIDE = 16;
+const MONOLITHIC_PROJECTION_BYTES = 12 * 16;
+const RASTER_PROJECTION_BYTES = 2 * 16;
+const PROJECTION_VJP_BYTES = 5 * 16;
 const SSIM_STATS_BYTES = 5 * 16;
 const DENSITY_START_STEP = 600;
 const DENSITY_INTERVAL = 100;
 const DENSITY_DISPATCHES = 4;
 const TILED_CONFIG_BYTES = 160;
+const DIRECT_GRADIENT_FLOATS = SPLAT_FLOATS;
+const PROJECTED_GRADIENT_FLOATS = 12;
+const TILED_GPU_PHASES = Object.freeze([
+	"clear", "project", "sort", "finalize", "forward",
+	"ssimStats", "ssimGradient", "metrics", "backward", "update",
+]);
+export const TILED_BACKWARD_MODES = Object.freeze({
+	DIRECT_3D: "direct-3d",
+	STAGED_PROJECT_3D: "staged-project3d",
+});
+export const TILED_BACKWARD_GRANULARITIES = Object.freeze({
+	PAIR: "pair",
+	CHECKPOINT_BLOCK: "checkpoint-block",
+});
+export const TILED_CHECKPOINT_ORDERS = Object.freeze({
+	PIXEL_MAJOR: "pixel-major",
+	BLOCK_MAJOR: "block-major",
+});
+export const TILED_PROJECTION_LAYOUTS = Object.freeze({
+	MONOLITHIC: "monolithic",
+	SPLIT_COMPACT: "split-compact",
+});
+export const TILED_SSIM_LAYOUTS = Object.freeze({
+	NAIVE_2D: "naive-2d",
+	SEPARABLE: "separable",
+});
 export const DEFAULT_MAX_TILE_CAPACITY = 4096;
+export const DEFAULT_BROWSER_GROWTH_CAPACITY = 8192;
 export const DEFAULT_CHECKPOINT_PRECISION = "packed-f16";
 export const DEFAULT_STATIC_WARMUP_STEPS = 2048;
 export const MAX_WORKGROUPS_PER_DIMENSION = 65535;
@@ -34,6 +66,57 @@ export const ROTATION_LR_FROM_MOTION = 1.25;
 // standard-deviation ratio still allows 36:1 covariance conditioning; larger
 // needles increase tile pairs and were worse on heldout in the matched 12:1 run.
 export const MAX_SCALE_ASPECT_RATIO = 6;
+export const TILED_SPLAT_ID_BITS = Math.ceil(Math.log2(MAX_BROWSER_RENDER_SPLATS));
+export const TILED_SPLAT_ID_MASK = (2 ** TILED_SPLAT_ID_BITS) - 1;
+export const TILED_DEPTH_KEY_MASK = (~TILED_SPLAT_ID_MASK) >>> 0;
+
+export function resolveTiledBackwardMode(value = TILED_BACKWARD_MODES.DIRECT_3D) {
+	if (!Object.values(TILED_BACKWARD_MODES).includes(value)) {
+		throw new RangeError(`backwardMode must be one of: ${Object.values(TILED_BACKWARD_MODES).join(", ")}.`);
+	}
+	return value;
+}
+
+export function resolveTiledBackwardGranularity(value = TILED_BACKWARD_GRANULARITIES.PAIR) {
+	if (!Object.values(TILED_BACKWARD_GRANULARITIES).includes(value)) {
+		throw new RangeError(`backwardGranularity must be one of: `
+			+ `${Object.values(TILED_BACKWARD_GRANULARITIES).join(", ")}.`);
+	}
+	return value;
+}
+
+export function resolveTiledTileSize(value = DEFAULT_TILE_SIZE) {
+	if (!TILED_TILE_SIZES.includes(value)) {
+		throw new RangeError(`tileSize must be one of: ${TILED_TILE_SIZES.join(", ")}.`);
+	}
+	return value;
+}
+
+export function resolveTiledCheckpointOrder(value = TILED_CHECKPOINT_ORDERS.PIXEL_MAJOR) {
+	if (!Object.values(TILED_CHECKPOINT_ORDERS).includes(value)) {
+		throw new RangeError(`checkpointOrder must be one of: `
+			+ `${Object.values(TILED_CHECKPOINT_ORDERS).join(", ")}.`);
+	}
+	return value;
+}
+
+export function resolveTiledProjectionLayout(
+	value = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+) {
+	if (!Object.values(TILED_PROJECTION_LAYOUTS).includes(value)) {
+		throw new RangeError(`projectionLayout must be one of: `
+			+ `${Object.values(TILED_PROJECTION_LAYOUTS).join(", ")}.`);
+	}
+	return value;
+}
+
+export function resolveTiledSsimLayout(value = TILED_SSIM_LAYOUTS.NAIVE_2D) {
+	if (!Object.values(TILED_SSIM_LAYOUTS).includes(value)) {
+		throw new RangeError(`ssimLayout must be one of: `
+			+ `${Object.values(TILED_SSIM_LAYOUTS).join(", ")}.`);
+	}
+	return value;
+}
 
 function hashU32(value) {
 	let result = value >>> 0;
@@ -71,6 +154,15 @@ export function resolveSsimRadius(value = 5) {
 	return value;
 }
 
+export function resolveCheckpointStride(value = DEFAULT_CHECKPOINT_STRIDE) {
+	if (!Number.isSafeInteger(value) || value < MIN_CHECKPOINT_STRIDE
+		|| value > DEFAULT_MAX_TILE_CAPACITY || (value & (value - 1)) !== 0) {
+		throw new RangeError(`checkpointStride must be a power of two from `
+			+ `${MIN_CHECKPOINT_STRIDE} through ${DEFAULT_MAX_TILE_CAPACITY}.`);
+	}
+	return value;
+}
+
 function ceilDiv(value, divisor) {
 	return Math.floor((value + divisor - 1) / divisor);
 }
@@ -80,25 +172,96 @@ function nextPowerOfTwo(value) {
 }
 
 export function resolveTiledCapacity(initialSplats, requestedCapacity = null) {
-	if (!Number.isSafeInteger(initialSplats) || initialSplats < 8) {
-		throw new RangeError("initialSplats must be an integer of at least 8.");
+	if (!Number.isSafeInteger(initialSplats) || initialSplats < 8
+		|| initialSplats > MAX_BROWSER_RENDER_SPLATS) {
+		throw new RangeError(`initialSplats must be an integer from 8 through ${MAX_BROWSER_RENDER_SPLATS}.`);
 	}
-	const capacity = requestedCapacity == null ? initialSplats * 3 : Number(requestedCapacity);
-	return Math.min(4096, Math.max(initialSplats, Math.floor(capacity)));
+	const capacity = requestedCapacity == null
+		? Math.min(DEFAULT_BROWSER_GROWTH_CAPACITY, initialSplats * 3)
+		: Number(requestedCapacity);
+	return Math.min(MAX_BROWSER_RENDER_SPLATS, Math.max(initialSplats, Math.floor(capacity)));
+}
+
+export function telemetryAliasPeriod(pairCount, metricInterval) {
+	if (!Number.isSafeInteger(pairCount) || pairCount < 1
+		|| !Number.isSafeInteger(metricInterval) || metricInterval < 1) {
+		throw new RangeError("pairCount and metricInterval must be positive safe integers.");
+	}
+	let left = pairCount;
+	let right = metricInterval;
+	while (right !== 0) [left, right] = [right, left % right];
+	const sampledPhases = pairCount / left;
+	return {
+		sampledPhases,
+		repeatSamples: sampledPhases,
+		repeatSteps: sampledPhases * metricInterval,
+	};
+}
+
+export function summarizeCycleMetrics(records, objectiveStep, cycleLength, phaseStartStep = 0) {
+	if (!(records instanceof Float32Array) || records.length < cycleLength * 4
+		|| !Number.isSafeInteger(objectiveStep) || objectiveStep < 0
+		|| !Number.isSafeInteger(cycleLength) || cycleLength < 1
+		|| !Number.isSafeInteger(phaseStartStep) || phaseStartStep < 0) {
+		throw new RangeError("Cycle metrics need packed vec4 records and non-negative integer steps.");
+	}
+	let loss = 0;
+	let l1 = 0;
+	let dssim = 0;
+	let samples = 0;
+	let oldestStep = objectiveStep;
+	for (let index = 0; index < cycleLength; index += 1) {
+		const base = index * 4;
+		const stamp = Math.round(records[base + 3]);
+		if (stamp < 1) continue;
+		const sampleStep = stamp - 1;
+		const age = objectiveStep - sampleStep;
+		if (sampleStep < phaseStartStep || age < 0 || age >= cycleLength) continue;
+		if (![records[base], records[base + 1], records[base + 2]].every(Number.isFinite)) continue;
+		loss += records[base];
+		l1 += records[base + 1];
+		dssim += records[base + 2];
+		samples += 1;
+		oldestStep = Math.min(oldestStep, sampleStep);
+	}
+	return samples === 0 ? null : {
+		loss: loss / samples,
+		l1: l1 / samples,
+		dssim: dssim / samples,
+		samples,
+		complete: samples === cycleLength,
+		oldestStep,
+		newestStep: objectiveStep,
+	};
 }
 
 export function resolveTileCapacity(splatCount, requestedCapacity = null) {
-	if (!Number.isSafeInteger(splatCount) || splatCount < 8 || splatCount > 4096) {
-		throw new RangeError("splatCount must be an integer from 8 through 4096.");
+	if (!Number.isSafeInteger(splatCount) || splatCount < 8
+		|| splatCount > MAX_BROWSER_RENDER_SPLATS) {
+		throw new RangeError(`splatCount must be an integer from 8 through ${MAX_BROWSER_RENDER_SPLATS}.`);
 	}
-	const required = nextPowerOfTwo(splatCount);
-	const requested = requestedCapacity == null ? required : Math.floor(Number(requestedCapacity));
-	if (!Number.isSafeInteger(requested) || requested < splatCount
-		|| requested > DEFAULT_MAX_TILE_CAPACITY) {
-		throw new RangeError(`tileCapacity must cover all ${splatCount} splats and be at most `
-			+ `${DEFAULT_MAX_TILE_CAPACITY}.`);
+	// Tile occupancy is normally much smaller than the global model. Keeping a
+	// bounded tile-local sort avoids a non-portable 32 KiB+ workgroup allocation
+	// at 8K; counters[1] reports any scene that violates this measured bound.
+	const requested = requestedCapacity == null
+		? Math.min(nextPowerOfTwo(splatCount), DEFAULT_MAX_TILE_CAPACITY)
+		: Math.floor(Number(requestedCapacity));
+	if (!Number.isSafeInteger(requested) || requested < 8 || requested > DEFAULT_MAX_TILE_CAPACITY) {
+		throw new RangeError(`tileCapacity must be an integer from 8 through ${DEFAULT_MAX_TILE_CAPACITY}.`);
 	}
 	return nextPowerOfTwo(requested);
+}
+
+export function packDepthSplatKey(depthBits, splatId) {
+	if (!Number.isSafeInteger(depthBits) || depthBits < 0 || depthBits > 0xffffffff
+		|| !Number.isSafeInteger(splatId) || splatId < 0 || splatId >= MAX_BROWSER_RENDER_SPLATS) {
+		throw new RangeError("Depth bits must be u32 and splatId must fit the browser splat ID field.");
+	}
+	return ((depthBits & TILED_DEPTH_KEY_MASK) | splatId) >>> 0;
+}
+
+export function unpackDepthSplatId(key) {
+	return Number(key) & TILED_SPLAT_ID_MASK;
 }
 
 export function resolveCheckpointPrecision(value = DEFAULT_CHECKPOINT_PRECISION) {
@@ -127,14 +290,21 @@ export function resolvePairDispatch(pairCount) {
 	};
 }
 
-export function resolveCheckpointLayout(pixelCount, tileCapacity, storageLimit, bytesPerCheckpoint = 16) {
+export function resolveCheckpointLayout(
+	pixelCount,
+	tileCapacity,
+	storageLimit,
+	bytesPerCheckpoint = 16,
+	minimumStride = DEFAULT_CHECKPOINT_STRIDE,
+) {
 	if (!Number.isSafeInteger(pixelCount) || pixelCount < 1
-		|| !Number.isSafeInteger(tileCapacity) || tileCapacity < MIN_CHECKPOINT_STRIDE
+		|| !Number.isSafeInteger(tileCapacity) || tileCapacity < minimumStride
 		|| !Number.isSafeInteger(storageLimit) || storageLimit < 16
-		|| (bytesPerCheckpoint !== 8 && bytesPerCheckpoint !== 16)) {
+		|| (bytesPerCheckpoint !== 8 && bytesPerCheckpoint !== 16)
+		|| resolveCheckpointStride(minimumStride) !== minimumStride) {
 		throw new RangeError("Checkpoint layout inputs must be positive safe integers.");
 	}
-	for (let stride = MIN_CHECKPOINT_STRIDE; stride <= tileCapacity; stride *= 2) {
+	for (let stride = minimumStride; stride <= tileCapacity; stride *= 2) {
 		const blocksPerTile = ceilDiv(tileCapacity, stride);
 		const byteLength = pixelCount * blocksPerTile * bytesPerCheckpoint;
 		if (Number.isSafeInteger(byteLength) && byteLength <= storageLimit) {
@@ -378,7 +548,7 @@ function writeTiledConfig(buffer, values) {
 	const view = new DataView(buffer);
 	const u32 = (offset, value) => view.setUint32(offset, value, true);
 	const f32 = (offset, value) => view.setFloat32(offset, value, true);
-	u32(0, values.width); u32(4, values.height); u32(8, values.splatCount); u32(12, TILE_SIZE);
+	u32(0, values.width); u32(4, values.height); u32(8, values.splatCount); u32(12, values.tileSize);
 	u32(16, values.tilesX); u32(20, values.tilesY); u32(24, values.tileCapacity);
 	u32(28, values.blocksPerTile);
 	u32(32, values.viewIndex); u32(36, values.frameIndex); u32(40, values.step);
@@ -419,6 +589,18 @@ const CONFIG_WGSL = `
 		jacobian0:vec4<f32>, jacobian1:vec4<f32>,
 		basis0:vec4<f32>, basis1:vec4<f32>, basis2:vec4<f32>,
 		camera0:vec4<f32>, camera1:vec4<f32>, camera2:vec4<f32>, variancesPad:vec4<f32>,
+	};
+	struct RasterProjection {
+		screenConic0:vec4<f32>, conicDepthAlpha:vec4<f32>,
+	};
+	struct ProjectionVjp {
+		cameraPointValid:vec4<f32>, jacobian0:vec4<f32>, jacobian1:vec4<f32>,
+		basis0:vec4<f32>, basis1:vec4<f32>, basis2:vec4<f32>,
+		camera0:vec4<f32>, camera1:vec4<f32>, camera2:vec4<f32>, variancesPad:vec4<f32>,
+	};
+	struct CompactProjectionVjp {
+		cameraPointValid:vec4<f32>, jacobianSparse:vec4<f32>,
+		basisVariance0:vec4<f32>, basisVariance1:vec4<f32>, basisVariance2:vec4<f32>,
 	};
 	struct Camera {
 		row0:vec4<f32>, row1:vec4<f32>, row2:vec4<f32>, row3:vec4<f32>, intrinsics:vec4<f32>,
@@ -463,15 +645,52 @@ const CONFIG_WGSL = `
 	}
 `;
 
-function projectWgsl() {
+function projectWgsl(projectionLayout) {
+	const split = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
+	const vjpType = split ? "CompactProjectionVjp" : "ProjectionVjp";
+	const zeroVjp = split
+		? "CompactProjectionVjp(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0))"
+		: `ProjectionVjp(
+			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
+			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
+			vec4<f32>(0.0),vec4<f32>(0.0))`;
+	const cameraPointVjp = split
+		? "CompactProjectionVjp(vec4<f32>(cp,0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0))"
+		: `ProjectionVjp(
+			vec4<f32>(cp,0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
+			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
+			vec4<f32>(0.0),vec4<f32>(0.0))`;
+	const validVjp = split
+		? `CompactProjectionVjp(
+			vec4<f32>(cp,1.0),vec4<f32>(j0.x,j0.z,j1.y,j1.z),
+			vec4<f32>(basis[0],variances.x),vec4<f32>(basis[1],variances.y),
+			vec4<f32>(basis[2],variances.z))`
+		: `ProjectionVjp(vec4<f32>(cp,1.0),vec4<f32>(j0,0.0),vec4<f32>(j1,0.0),
+			vec4<f32>(basis[0],0.0),vec4<f32>(basis[1],0.0),vec4<f32>(basis[2],0.0),
+			vec4<f32>(cameraRotation[0],0.0),vec4<f32>(cameraRotation[1],0.0),
+			vec4<f32>(cameraRotation[2],0.0),vec4<f32>(variances,0.0))`;
+	const projectionBindings = split ? `
+	@group(0) @binding(5) var<storage,read_write> rasterProjections:array<RasterProjection>;
+	@group(0) @binding(6) var<storage,read_write> counters:array<atomic<u32>>;
+	@group(0) @binding(7) var<storage,read_write> projectionVjps:array<CompactProjectionVjp>;
+	fn write_projection(index:u32,raster:RasterProjection,vjp:CompactProjectionVjp){
+		rasterProjections[index]=raster;projectionVjps[index]=vjp;
+	}` : `
+	@group(0) @binding(5) var<storage,read_write> projections:array<Projection>;
+	@group(0) @binding(6) var<storage,read_write> counters:array<atomic<u32>>;
+	fn write_projection(index:u32,raster:RasterProjection,vjp:ProjectionVjp){
+		projections[index]=Projection(
+			raster.screenConic0,raster.conicDepthAlpha,vjp.cameraPointValid,
+			vjp.jacobian0,vjp.jacobian1,vjp.basis0,vjp.basis1,vjp.basis2,
+			vjp.camera0,vjp.camera1,vjp.camera2,vjp.variancesPad);
+	}`;
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
 	@group(0) @binding(2) var<storage,read> cameras:array<Camera>;
 	@group(0) @binding(3) var<storage,read_write> tileCounts:array<atomic<u32>>;
 	@group(0) @binding(4) var<storage,read_write> pairData:array<u32>;
-	@group(0) @binding(5) var<storage,read_write> projections:array<Projection>;
-	@group(0) @binding(6) var<storage,read_write> counters:array<atomic<u32>>;
+	${projectionBindings}
 	fn quadratic(d:vec2<f32>,q:vec3<f32>)->f32 {
 		return q.x*d.x*d.x+2.0*q.y*d.x*d.y+q.z*d.y*d.y;
 	}
@@ -494,14 +713,22 @@ function projectWgsl() {
 	}
 	@compute @workgroup_size(64)
 	fn project_and_bin(@builtin(global_invocation_id) gid:vec3<u32>){
-		let i=gid.x; if(i>=cfg.splatCount){return;} let p=params[i]; let camera=cameras[cfg.viewIndex];
+		let i=gid.x;if(i>=cfg.splatCount){return;}let p=params[i];
 		let t=frame_time(cfg);
+		let opacity=sigmoid(p.colorOpacity.w);
+		let timeWeight=select(temporal_gate(p,t,cfg.temporalSigma),1.0,cfg.staticWarmup!=0u);
+		let peak=opacity*timeWeight;
+		var raster=RasterProjection(vec4<f32>(0.0),vec4<f32>(0.0));
+		var vjp:${vjpType}=${zeroVjp};
+		// Reserved topology slots carry opacity -12 and cannot contribute or
+		// receive an image gradient. Reject them before camera covariance work;
+		// this keeps a 32K reserve cheap while it is progressively populated.
+		if(peak<=cfg.alphaThreshold){write_projection(i,raster,vjp);return;}
+		let camera=cameras[cfg.viewIndex];
 		let h=vec4<f32>(world_center(p,t,cfg.modelMode),1.0);
 		let cp=vec3<f32>(dot(camera.row0,h),dot(camera.row1,h),dot(camera.row2,h));
-		var out=Projection(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(cp,0.0),
-			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
-			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0));
-		if(cp.z<=0.1){projections[i]=out;return;}
+		vjp=${cameraPointVjp};
+		if(cp.z<=0.1){write_projection(i,raster,vjp);return;}
 		let cameraRotation=mat3x3<f32>(
 			vec3<f32>(camera.row0.x,camera.row1.x,camera.row2.x),
 			vec3<f32>(camera.row0.y,camera.row1.y,camera.row2.y),
@@ -519,19 +746,14 @@ function projectWgsl() {
 		let covariance=vec3<f32>(dot(j0,sigmaCamera*j0)+filterVariance,
 			dot(j0,sigmaCamera*j1),dot(j1,sigmaCamera*j1)+filterVariance);
 		let determinant=covariance.x*covariance.z-covariance.y*covariance.y;
-		if(determinant<=1e-16){projections[i]=out;return;}
+		if(determinant<=1e-16){write_projection(i,raster,vjp);return;}
 		let center=vec2<f32>(cfg.targetAspect*(camera.intrinsics.x*cp.x*invZ+camera.intrinsics.z),
 			camera.intrinsics.y*cp.y*invZ+camera.intrinsics.w);
 		let conic=vec3<f32>(covariance.z,-covariance.y,covariance.x)/determinant;
-		let opacity=sigmoid(p.colorOpacity.w);
-		let timeWeight=select(temporal_gate(p,t,cfg.temporalSigma),1.0,cfg.staticWarmup!=0u);
-		out=Projection(vec4<f32>(center,conic.xy),vec4<f32>(conic.z,cp.z,opacity,timeWeight),
-			vec4<f32>(cp,1.0),vec4<f32>(j0,0.0),vec4<f32>(j1,0.0),
-			vec4<f32>(basis[0],0.0),vec4<f32>(basis[1],0.0),vec4<f32>(basis[2],0.0),
-			vec4<f32>(cameraRotation[0],0.0),vec4<f32>(cameraRotation[1],0.0),
-			vec4<f32>(cameraRotation[2],0.0),vec4<f32>(variances,0.0));
-		projections[i]=out;
-		let peak=opacity*timeWeight; if(peak<=cfg.alphaThreshold){return;}
+		raster=RasterProjection(
+			vec4<f32>(center,conic.xy),vec4<f32>(conic.z,cp.z,opacity,timeWeight));
+		vjp=${validVjp};
+		write_projection(i,raster,vjp);
 		let qLimit=min(9.0,2.0*log(peak/cfg.alphaThreshold));
 		let centerPx=vec2<f32>(center.x*f32(cfg.height),center.y*f32(cfg.height));
 		let radiusPx=vec2<f32>(sqrt(max(0.0,qLimit*covariance.x)),
@@ -540,6 +762,7 @@ function projectWgsl() {
 		let maxPixel=min(vec2<i32>(i32(cfg.width)-1,i32(cfg.height)-1),
 			vec2<i32>(ceil(centerPx+radiusPx-vec2<f32>(0.5))));
 		if(any(minPixel>maxPixel)){return;}
+		atomicAdd(&counters[3],1u);
 		let minTile=vec2<u32>(minPixel)/cfg.tileSize; let maxTile=vec2<u32>(maxPixel)/cfg.tileSize;
 		for(var ty=minTile.y;ty<=maxTile.y;ty++){
 			for(var tx=minTile.x;tx<=maxTile.x;tx++){
@@ -550,14 +773,17 @@ function projectWgsl() {
 					let tile=ty*cfg.tilesX+tx; let slot=atomicAdd(&tileCounts[tile],1u);
 					if(slot<cfg.tileCapacity){
 						pairData[tile*cfg.tileCapacity+slot]=i;
-					}else{atomicAdd(&counters[1],1u);}
+					}else{
+						atomicAdd(&counters[1],1u);
+						atomicAdd(&counters[4],1u);
+					}
 				}
 			}
 		}
 	}`;
 }
 
-function clearWgsl() {
+function clearWgsl(gradientFloats) {
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read_write> tileCounts:array<atomic<u32>>;
@@ -569,24 +795,48 @@ function clearWgsl() {
 	fn clear_step(@builtin(global_invocation_id) gid:vec3<u32>){
 		let tileCount=cfg.tilesX*cfg.tilesY;
 		if(gid.x<tileCount){atomicStore(&tileCounts[gid.x],0u);}
-		if(gid.x<cfg.splatCount*24u){atomicStore(&gradientAtoms[gid.x],0u);}
+		if(gid.x<cfg.splatCount*${gradientFloats}u){atomicStore(&gradientAtoms[gid.x],0u);}
 		if(gid.x==0u){
 			atomicStore(&counters[0],0u);atomicStore(&counters[1],0u);
-			indirectArgs[0]=0u;indirectArgs[1]=1u;indirectArgs[2]=1u;metrics[0]=vec4<f32>(0.0);
+			atomicStore(&counters[2],0u);atomicStore(&counters[3],0u);
+			atomicStore(&counters[6],0u);
+			indirectArgs[0]=0u;indirectArgs[1]=1u;indirectArgs[2]=1u;
+			metrics[0]=vec4<f32>(0.0);metrics[1]=vec4<f32>(0.0);
+			metrics[2]=vec4<f32>(0.0);metrics[3]=vec4<f32>(0.0);
 		}
 	}`;
 }
 
-function sortWgsl(tileCapacity) {
+function sortWgsl(
+	tileCapacity,
+	backwardGranularity = TILED_BACKWARD_GRANULARITIES.PAIR,
+	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+) {
+	const checkpointBlocks = backwardGranularity
+		=== TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK;
+	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+		? "RasterProjection" : "Projection";
+	const depthMask = `0x${TILED_DEPTH_KEY_MASK.toString(16).padStart(8, "0")}u`;
+	const idMask = `0x${TILED_SPLAT_ID_MASK.toString(16).padStart(8, "0")}u`;
+	const compactSetup = checkpointBlocks ? `
+			atomicAdd(&counters[0],count);
+			compactCount=(count+cfg.checkpointStride-1u)/cfg.checkpointStride;
+			compactBase=atomicAdd(&counters[6],compactCount);` : `
+			compactCount=count;
+			compactBase=atomicAdd(&counters[0],count);`;
+	const compactSlot = checkpointBlocks
+		? "tile*cfg.tileCapacity+index*cfg.checkpointStride"
+		: "tile*cfg.tileCapacity+index";
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
-	@group(0) @binding(1) var<storage,read> projections:array<Projection>;
+	@group(0) @binding(1) var<storage,read> projections:array<${projectionType}>;
 	@group(0) @binding(2) var<storage,read_write> tileCounts:array<atomic<u32>>;
 	@group(0) @binding(3) var<storage,read_write> pairData:array<u32>;
 	@group(0) @binding(4) var<storage,read_write> counters:array<atomic<u32>>;
 	var<workgroup> depthKeys:array<u32,${tileCapacity}>;
 	var<workgroup> tileSortCount:u32;
-	var<workgroup> pairBase:u32;
+	var<workgroup> compactBase:u32;
+	var<workgroup> compactCount:u32;
 	@compute @workgroup_size(256)
 	fn sort_tiles(@builtin(local_invocation_id) lid:vec3<u32>,@builtin(workgroup_id) wid:vec3<u32>){
 		let tile=wid.x;let tileCount=cfg.tilesX*cfg.tilesY;if(tile>=tileCount){return;}
@@ -604,7 +854,7 @@ function sortWgsl(tileCapacity) {
 			if(index<count){
 				let id=pairData[tile*cfg.tileCapacity+index];
 				let depthBits=bitcast<u32>(max(0.0,projections[id].conicDepthAlpha.y));
-				depthKeys[index]=(depthBits&0xfffff000u)|(id&0x00000fffu);
+				depthKeys[index]=(depthBits&${depthMask})|(id&${idMask});
 			}else{depthKeys[index]=0xffffffffu;}
 		}
 		workgroupBarrier();
@@ -626,65 +876,89 @@ function sortWgsl(tileCapacity) {
 			}
 		}
 		for(var index=lid.x;index<count;index+=256u){
-			let slot=tile*cfg.tileCapacity+index;let id=depthKeys[index]&0x00000fffu;pairData[slot]=id;
+			let slot=tile*cfg.tileCapacity+index;let id=depthKeys[index]&${idMask};pairData[slot]=id;
 		}
-		if(lid.x==0u){pairBase=atomicAdd(&counters[0],count);}
+		if(lid.x==0u){
+			atomicMax(&counters[2],count);
+			atomicMax(&counters[5],count);
+			${compactSetup}
+		}
 		workgroupBarrier();
-		for(var index=lid.x;index<count;index+=256u){
-			pairData[cfg.pairCapacity+pairBase+index]=tile*cfg.tileCapacity+index;
+		for(var index=lid.x;index<compactCount;index+=256u){
+			pairData[cfg.pairCapacity+compactBase+index]=${compactSlot};
 		}
 	}`;
 }
 
-function finalizeWgsl() {
+function finalizeWgsl(
+	backwardGranularity = TILED_BACKWARD_GRANULARITIES.PAIR,
+) {
+	const counter = backwardGranularity === TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK ? 6 : 0;
 	return `
 	@group(0) @binding(0) var<storage,read_write> counters:array<atomic<u32>>;
 	@group(0) @binding(1) var<storage,read_write> indirectArgs:array<u32>;
 	@compute @workgroup_size(1) fn finalize_pairs(){
-		let pairCount=atomicLoad(&counters[0]);
-		indirectArgs[0]=min(pairCount,${MAX_WORKGROUPS_PER_DIMENSION}u);
-		indirectArgs[1]=max(1u,(pairCount+${MAX_WORKGROUPS_PER_DIMENSION - 1}u)
+		let dispatchCount=atomicLoad(&counters[${counter}]);
+		indirectArgs[0]=min(dispatchCount,${MAX_WORKGROUPS_PER_DIMENSION}u);
+		indirectArgs[1]=max(1u,(dispatchCount+${MAX_WORKGROUPS_PER_DIMENSION - 1}u)
 			/${MAX_WORKGROUPS_PER_DIMENSION}u);
 		indirectArgs[2]=1u;
 	}
 	`;
 }
 
-function checkpointForwardWgsl(precision) {
+function checkpointIndexWgsl(order) {
+	const expression = order === TILED_CHECKPOINT_ORDERS.BLOCK_MAJOR
+		? "block*cfg.pixelCount+pixel"
+		: "pixel*cfg.blocksPerTile+block";
+	return `fn checkpoint_index(pixel:u32,block:u32)->u32{return ${expression};}`;
+}
+
+function checkpointForwardWgsl(precision, order) {
 	return precision === "packed-f16" ? `
 	@group(0) @binding(6) var<storage,read_write> checkpoints:array<vec2<u32>>;
+	${checkpointIndexWgsl(order)}
 	fn write_checkpoint(index:u32,state:vec4<f32>){
 		checkpoints[index]=vec2<u32>(pack2x16float(state.xy),pack2x16float(state.zw));
 	}` : `
 	@group(0) @binding(6) var<storage,read_write> checkpoints:array<vec4<f32>>;
+	${checkpointIndexWgsl(order)}
 	fn write_checkpoint(index:u32,state:vec4<f32>){checkpoints[index]=state;}
 	`;
 }
 
-function checkpointBackwardWgsl(precision) {
+function checkpointBackwardWgsl(precision, order) {
 	return precision === "packed-f16" ? `
 	@group(0) @binding(5) var<storage,read> checkpoints:array<vec2<u32>>;
+	${checkpointIndexWgsl(order)}
 	fn read_checkpoint(index:u32)->vec4<f32>{
 		let packed=checkpoints[index];
 		return vec4<f32>(unpack2x16float(packed.x),unpack2x16float(packed.y));
 	}` : `
 	@group(0) @binding(5) var<storage,read> checkpoints:array<vec4<f32>>;
+	${checkpointIndexWgsl(order)}
 	fn read_checkpoint(index:u32)->vec4<f32>{return checkpoints[index];}
 	`;
 }
 
-function forwardWgsl(checkpointPrecision) {
+function forwardWgsl(
+	checkpointPrecision,
+	checkpointOrder,
+	tileSize = DEFAULT_TILE_SIZE,
+	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+) {
+	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+		? "RasterProjection" : "Projection";
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
-	@group(0) @binding(2) var<storage,read> projections:array<Projection>;
+	@group(0) @binding(2) var<storage,read> projections:array<${projectionType}>;
 	@group(0) @binding(3) var<storage,read_write> tileCounts:array<atomic<u32>>;
 	@group(0) @binding(4) var<storage,read> pairData:array<u32>;
 	@group(0) @binding(5) var<storage,read_write> rendered:array<vec4<f32>>;
-	${checkpointForwardWgsl(checkpointPrecision)}
+	${checkpointForwardWgsl(checkpointPrecision, checkpointOrder)}
 	@group(0) @binding(7) var<storage,read_write> stopRanks:array<u32>;
-	fn alpha_at(proj:Projection,point:vec2<f32>)->f32{
-		if(proj.cameraPointValid.w<0.5){return 0.0;}
+	fn alpha_at(proj:${projectionType},point:vec2<f32>)->f32{
 		let d=point-proj.screenConic0.xy;
 		let q=proj.screenConic0.z*d.x*d.x+2.0*proj.screenConic0.w*d.x*d.y
 			+proj.conicDepthAlpha.x*d.y*d.y;
@@ -692,7 +966,7 @@ function forwardWgsl(checkpointPrecision) {
 		let raw=proj.conicDepthAlpha.z*proj.conicDepthAlpha.w*exp(-0.5*q);
 		return select(0.0,min(0.99,raw),raw>=cfg.alphaThreshold);
 	}
-	@compute @workgroup_size(16,16)
+	@compute @workgroup_size(${tileSize},${tileSize})
 	fn raster_forward(@builtin(global_invocation_id) gid:vec3<u32>){
 		if(gid.x>=cfg.width||gid.y>=cfg.height){return;}
 		let pixel=gid.y*cfg.width+gid.x;let tile=(gid.y/cfg.tileSize)*cfg.tilesX+(gid.x/cfg.tileSize);
@@ -703,7 +977,7 @@ function forwardWgsl(checkpointPrecision) {
 		// A softmax over contributors would normalize away this visibility state.
 		for(var rank=0u;rank<count;rank++){
 			if(rank%cfg.checkpointStride==0u){
-				write_checkpoint(pixel*cfg.blocksPerTile+rank/cfg.checkpointStride,vec4<f32>(color,transmittance));
+				write_checkpoint(checkpoint_index(pixel,rank/cfg.checkpointStride),vec4<f32>(color,transmittance));
 			}
 			let id=pairData[tile*cfg.tileCapacity+rank];let alpha=alpha_at(projections[id],point);
 			color+=transmittance*alpha*params[id].colorOpacity.xyz;transmittance*=1.0-alpha;
@@ -846,42 +1120,308 @@ function ssimGradientWgsl() {
 	}`;
 }
 
+function separableSsimHorizontalWgsl() {
+	return `${CONFIG_WGSL}
+	struct SsimStats { muX:vec4<f32>,muY:vec4<f32>,varX:vec4<f32>,varY:vec4<f32>,cov:vec4<f32> };
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> rendered:array<vec4<f32>>;
+	@group(0) @binding(2) var<storage,read> targets:array<vec4<f32>>;
+	@group(0) @binding(3) var<storage,read_write> scratch:array<SsimStats>;
+	fn reflect_index(index:i32,size:u32)->u32 {
+		if(size<=1u){return 0u;}var resolved=index;let maximum=i32(size)-1;
+		loop{
+			if(resolved>=0&&resolved<=maximum){break;}
+			if(resolved<0){resolved=-resolved;}
+			if(resolved>maximum){resolved=2*maximum-resolved;}
+		}
+		return u32(resolved);
+	}
+	fn ssim_weight(offset:i32,radius:i32)->f32 {
+		if(radius==0){return 1.0;}
+		if(radius!=5){return 1.0/f32(radius*2+1);}
+		switch abs(offset) {
+			case 0: { return 0.2660117149; }
+			case 1: { return 0.2130055428; }
+			case 2: { return 0.1093606874; }
+			case 3: { return 0.0360007733; }
+			case 4: { return 0.0075987582; }
+			case 5: { return 0.0010283801; }
+			default: { return 0.0; }
+		}
+	}
+	@compute @workgroup_size(64)
+	fn ssim_horizontal(@builtin(global_invocation_id) gid:vec3<u32>){
+		let pixel=gid.x;if(pixel>=cfg.pixelCount){return;}
+		let x=i32(pixel%cfg.width);let y=pixel/cfg.width;
+		var mux=vec3<f32>(0.0);var muy=vec3<f32>(0.0);
+		var ex2=vec3<f32>(0.0);var ey2=vec3<f32>(0.0);var exy=vec3<f32>(0.0);
+		let radius=i32(cfg.ssimRadius);
+		for(var ox=-radius;ox<=radius;ox++){
+			let sx=reflect_index(x+ox,cfg.width);let sample=y*cfg.width+sx;
+			let px=rendered[sample].xyz;let py=targets[cfg.targetOffset+sample].xyz;
+			let weight=ssim_weight(ox,radius);
+			mux+=weight*px;muy+=weight*py;ex2+=weight*px*px;
+			ey2+=weight*py*py;exy+=weight*px*py;
+		}
+		scratch[pixel]=SsimStats(
+			vec4<f32>(mux,0.0),vec4<f32>(muy,0.0),vec4<f32>(ex2,0.0),
+			vec4<f32>(ey2,0.0),vec4<f32>(exy,0.0));
+	}`;
+}
+
+function separableSsimVerticalWgsl() {
+	return `${CONFIG_WGSL}
+	struct SsimStats { muX:vec4<f32>,muY:vec4<f32>,varX:vec4<f32>,varY:vec4<f32>,cov:vec4<f32> };
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> rendered:array<vec4<f32>>;
+	@group(0) @binding(2) var<storage,read> targets:array<vec4<f32>>;
+	@group(0) @binding(3) var<storage,read> scratch:array<SsimStats>;
+	@group(0) @binding(4) var<storage,read_write> stats:array<SsimStats>;
+	@group(0) @binding(5) var<storage,read_write> pixelLoss:array<vec4<f32>>;
+	fn loss_weight(targetPixel:vec4<f32>)->f32 {
+		return select(1.0,targetPixel.w,cfg.motionWeighting!=0u);
+	}
+	fn reflect_index(index:i32,size:u32)->u32 {
+		if(size<=1u){return 0u;}var resolved=index;let maximum=i32(size)-1;
+		loop{
+			if(resolved>=0&&resolved<=maximum){break;}
+			if(resolved<0){resolved=-resolved;}
+			if(resolved>maximum){resolved=2*maximum-resolved;}
+		}
+		return u32(resolved);
+	}
+	fn ssim_weight(offset:i32,radius:i32)->f32 {
+		if(radius==0){return 1.0;}
+		if(radius!=5){return 1.0/f32(radius*2+1);}
+		switch abs(offset) {
+			case 0: { return 0.2660117149; }
+			case 1: { return 0.2130055428; }
+			case 2: { return 0.1093606874; }
+			case 3: { return 0.0360007733; }
+			case 4: { return 0.0075987582; }
+			case 5: { return 0.0010283801; }
+			default: { return 0.0; }
+		}
+	}
+	@compute @workgroup_size(64)
+	fn ssim_vertical(@builtin(global_invocation_id) gid:vec3<u32>){
+		let pixel=gid.x;if(pixel>=cfg.pixelCount){return;}
+		let x=pixel%cfg.width;let y=i32(pixel/cfg.width);
+		var mux=vec3<f32>(0.0);var muy=vec3<f32>(0.0);
+		var ex2=vec3<f32>(0.0);var ey2=vec3<f32>(0.0);var exy=vec3<f32>(0.0);
+		let radius=i32(cfg.ssimRadius);
+		for(var oy=-radius;oy<=radius;oy++){
+			let sy=reflect_index(y+oy,cfg.height);let sample=sy*cfg.width+x;
+			let horizontal=scratch[sample];let weight=ssim_weight(oy,radius);
+			mux+=weight*horizontal.muX.xyz;muy+=weight*horizontal.muY.xyz;
+			ex2+=weight*horizontal.varX.xyz;ey2+=weight*horizontal.varY.xyz;
+			exy+=weight*horizontal.cov.xyz;
+		}
+		let vx=ex2-mux*mux;let vy=ey2-muy*muy;let covariance=exy-mux*muy;
+		stats[pixel]=SsimStats(
+			vec4<f32>(mux,0.0),vec4<f32>(muy,0.0),vec4<f32>(vx,0.0),
+			vec4<f32>(vy,0.0),vec4<f32>(covariance,0.0));
+		let a=2.0*mux*muy+vec3<f32>(cfg.c1);
+		let b=2.0*covariance+vec3<f32>(cfg.c2);
+		let c=mux*mux+muy*muy+vec3<f32>(cfg.c1);
+		let d=vx+vy+vec3<f32>(cfg.c2);
+		let ssim=(a*b)/max(c*d,vec3<f32>(1e-12));
+		let targetPixel=targets[cfg.targetOffset+pixel];
+		let objectiveWeight=loss_weight(targetPixel);
+		let err=rendered[pixel].xyz-targetPixel.xyz;
+		pixelLoss[pixel]=vec4<f32>(
+			objectiveWeight*(abs(err.x)+abs(err.y)+abs(err.z))/3.0,
+			objectiveWeight*(1.0-(ssim.x+ssim.y+ssim.z)/3.0),
+			rendered[pixel].w,0.0);
+	}`;
+}
+
+function separableSsimGradientHorizontalWgsl() {
+	return `${CONFIG_WGSL}
+	struct SsimStats { muX:vec4<f32>,muY:vec4<f32>,varX:vec4<f32>,varY:vec4<f32>,cov:vec4<f32> };
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> targets:array<vec4<f32>>;
+	@group(0) @binding(2) var<storage,read> stats:array<SsimStats>;
+	@group(0) @binding(3) var<storage,read_write> scratch:array<SsimStats>;
+	fn loss_weight(targetPixel:vec4<f32>)->f32 {
+		return select(1.0,targetPixel.w,cfg.motionWeighting!=0u);
+	}
+	fn ssim_weight(offset:i32,radius:i32)->f32 {
+		if(radius==0){return 1.0;}
+		if(radius!=5){return 1.0/f32(radius*2+1);}
+		switch abs(offset) {
+			case 0: { return 0.2660117149; }
+			case 1: { return 0.2130055428; }
+			case 2: { return 0.1093606874; }
+			case 3: { return 0.0360007733; }
+			case 4: { return 0.0075987582; }
+			case 5: { return 0.0010283801; }
+			default: { return 0.0; }
+		}
+	}
+	fn reflected_weight(center:i32,pixel:i32,size:i32,radius:i32)->f32 {
+		var weight=select(0.0,ssim_weight(pixel-center,radius),abs(center-pixel)<=radius);
+		if(pixel>0&&abs(center+pixel)<=radius){weight+=ssim_weight(-pixel-center,radius);}
+		let maximum=size-1;let rightOffset=2*maximum-pixel-center;
+		if(pixel<maximum&&abs(rightOffset)<=radius){weight+=ssim_weight(rightOffset,radius);}
+		return weight;
+	}
+	@compute @workgroup_size(64)
+	fn ssim_gradient_horizontal(@builtin(global_invocation_id) gid:vec3<u32>){
+		let pixel=gid.x;if(pixel>=cfg.pixelCount){return;}
+		let px=i32(pixel%cfg.width);let py=pixel/cfg.width;
+		let radius=i32(cfg.ssimRadius);
+		var constant=vec3<f32>(0.0);
+		var targetCoefficient=vec3<f32>(0.0);
+		var predictionCoefficient=vec3<f32>(0.0);
+		for(var cx=max(0,px-radius);cx<=min(i32(cfg.width)-1,px+radius);cx++){
+			let center=py*cfg.width+u32(cx);let s=stats[center];
+			let mx=s.muX.xyz;let my=s.muY.xyz;let vx=s.varX.xyz;
+			let vy=s.varY.xyz;let covariance=s.cov.xyz;
+			let a=2.0*mx*my+vec3<f32>(cfg.c1);
+			let b=2.0*covariance+vec3<f32>(cfg.c2);
+			let c=mx*mx+my*my+vec3<f32>(cfg.c1);
+			let d=vx+vy+vec3<f32>(cfg.c2);
+			let numerator=a*b;let denominatorRaw=c*d;
+			let denominator=max(denominatorRaw,vec3<f32>(1e-12));
+			let denominatorGate=select(
+				vec3<f32>(0.0),vec3<f32>(1.0),denominatorRaw>=vec3<f32>(1e-12));
+			let centerScale=loss_weight(targets[cfg.targetOffset+center])
+				/(denominator*denominator*f32(cfg.pixelCount)*3.0);
+			let constantNumerator=2.0*my*b-2.0*a*my;
+			let constantDenominator=denominatorGate*(2.0*mx*d-2.0*c*mx);
+			let kernelWeight=reflected_weight(cx,px,i32(cfg.width),radius);
+			constant+=kernelWeight*(-centerScale
+				*(constantNumerator*denominator-numerator*constantDenominator));
+			targetCoefficient+=kernelWeight*(-centerScale*(2.0*a*denominator));
+			predictionCoefficient+=kernelWeight
+				*(centerScale*numerator*denominatorGate*2.0*c);
+		}
+		scratch[pixel]=SsimStats(
+			vec4<f32>(constant,0.0),vec4<f32>(targetCoefficient,0.0),
+			vec4<f32>(predictionCoefficient,0.0),vec4<f32>(0.0),vec4<f32>(0.0));
+	}`;
+}
+
+function separableSsimGradientVerticalWgsl() {
+	return `${CONFIG_WGSL}
+	struct SsimStats { muX:vec4<f32>,muY:vec4<f32>,varX:vec4<f32>,varY:vec4<f32>,cov:vec4<f32> };
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> rendered:array<vec4<f32>>;
+	@group(0) @binding(2) var<storage,read> targets:array<vec4<f32>>;
+	@group(0) @binding(3) var<storage,read> scratch:array<SsimStats>;
+	@group(0) @binding(4) var<storage,read> stopRanks:array<u32>;
+	@group(0) @binding(5) var<storage,read_write> pixelGrad:array<vec4<f32>>;
+	fn loss_weight(targetPixel:vec4<f32>)->f32 {
+		return select(1.0,targetPixel.w,cfg.motionWeighting!=0u);
+	}
+	fn ssim_weight(offset:i32,radius:i32)->f32 {
+		if(radius==0){return 1.0;}
+		if(radius!=5){return 1.0/f32(radius*2+1);}
+		switch abs(offset) {
+			case 0: { return 0.2660117149; }
+			case 1: { return 0.2130055428; }
+			case 2: { return 0.1093606874; }
+			case 3: { return 0.0360007733; }
+			case 4: { return 0.0075987582; }
+			case 5: { return 0.0010283801; }
+			default: { return 0.0; }
+		}
+	}
+	fn reflected_weight(center:i32,pixel:i32,size:i32,radius:i32)->f32 {
+		var weight=select(0.0,ssim_weight(pixel-center,radius),abs(center-pixel)<=radius);
+		if(pixel>0&&abs(center+pixel)<=radius){weight+=ssim_weight(-pixel-center,radius);}
+		let maximum=size-1;let rightOffset=2*maximum-pixel-center;
+		if(pixel<maximum&&abs(rightOffset)<=radius){weight+=ssim_weight(rightOffset,radius);}
+		return weight;
+	}
+	@compute @workgroup_size(64)
+	fn ssim_gradient_vertical(@builtin(global_invocation_id) gid:vec3<u32>){
+		let pixel=gid.x;if(pixel>=cfg.pixelCount){return;}
+		let px=pixel%cfg.width;let py=i32(pixel/cfg.width);
+		let radius=i32(cfg.ssimRadius);
+		var constant=vec3<f32>(0.0);
+		var targetCoefficient=vec3<f32>(0.0);
+		var predictionCoefficient=vec3<f32>(0.0);
+		for(var cy=max(0,py-radius);cy<=min(i32(cfg.height)-1,py+radius);cy++){
+			let horizontal=scratch[u32(cy)*cfg.width+px];
+			let weight=reflected_weight(cy,py,i32(cfg.height),radius);
+			constant+=weight*horizontal.muX.xyz;
+			targetCoefficient+=weight*horizontal.muY.xyz;
+			predictionCoefficient+=weight*horizontal.varX.xyz;
+		}
+		let prediction=rendered[pixel].xyz;
+		let targetColor=targets[cfg.targetOffset+pixel].xyz;
+		let dssim=constant+targetCoefficient*targetColor+predictionCoefficient*prediction;
+		let l1=loss_weight(targets[cfg.targetOffset+pixel])
+			*sign(prediction-targetColor)/(f32(cfg.pixelCount)*3.0);
+		pixelGrad[pixel]=vec4<f32>(
+			cfg.l1Weight*l1+cfg.dssimWeight*dssim,f32(stopRanks[pixel]));
+	}`;
+}
+
 function metricsWgsl() {
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> pixelLoss:array<vec4<f32>>;
 	@group(0) @binding(2) var<storage,read_write> counters:array<atomic<u32>>;
 	@group(0) @binding(3) var<storage,read_write> metrics:array<vec4<f32>>;
+	@group(0) @binding(4) var<storage,read> stopRanks:array<u32>;
+	@group(0) @binding(5) var<storage,read_write> cycleMetrics:array<vec4<f32>>;
 	var<workgroup> scratch:array<vec4<f32>,256>;
+	var<workgroup> stopScratch:array<f32,256>;
 	@compute @workgroup_size(256)
 	fn reduce_metrics(@builtin(local_invocation_id) lid:vec3<u32>){
-		var total=vec4<f32>(0.0);
-		for(var pixel=lid.x;pixel<cfg.pixelCount;pixel+=256u){total+=pixelLoss[pixel];}
-		scratch[lid.x]=total;workgroupBarrier();
+		var total=vec4<f32>(0.0);var stopTotal=0.0;
+		for(var pixel=lid.x;pixel<cfg.pixelCount;pixel+=256u){
+			total+=pixelLoss[pixel];stopTotal+=f32(stopRanks[pixel]);
+		}
+		scratch[lid.x]=total;stopScratch[lid.x]=stopTotal;workgroupBarrier();
 		var stride=128u;loop{
-			if(lid.x<stride){scratch[lid.x]+=scratch[lid.x+stride];}
+			if(lid.x<stride){
+				scratch[lid.x]+=scratch[lid.x+stride];
+				stopScratch[lid.x]+=stopScratch[lid.x+stride];
+			}
 			workgroupBarrier();if(stride==1u){break;}stride/=2u;
 		}
 		if(lid.x==0u){
 			let mean=scratch[0]/f32(cfg.pixelCount);
-			metrics[0]=vec4<f32>(cfg.l1Weight*mean.x+cfg.dssimWeight*mean.y,mean.x,mean.y,
+			let pairCount=f32(atomicLoad(&counters[0]));
+			metrics[0]=vec4<f32>(
+				cfg.l1Weight*mean.x+cfg.dssimWeight*mean.y,mean.x,mean.y,
 				f32(atomicLoad(&counters[1])));
+			metrics[1]=vec4<f32>(
+				mean.z,pairCount,
+				f32(atomicLoad(&counters[2])),stopScratch[0]/f32(cfg.pixelCount));
+			metrics[2]=vec4<f32>(
+				f32(atomicLoad(&counters[3])),f32(cfg.splatCount),
+				f32(cfg.viewIndex),f32(cfg.frameIndex));
+			metrics[3]=vec4<f32>(
+				f32(atomicLoad(&counters[4])),f32(atomicLoad(&counters[5])),
+				f32(cfg.step),f32(arrayLength(&cycleMetrics)));
+			cycleMetrics[cfg.step%arrayLength(&cycleMetrics)]=vec4<f32>(
+				metrics[0].xyz,f32(cfg.step+1u));
 		}
 	}`;
 }
 
-function backwardWgsl(checkpointPrecision) {
+function backwardWgsl(
+	checkpointPrecision,
+	checkpointOrder,
+	tileSize = DEFAULT_TILE_SIZE,
+) {
+	const laneCount = tileSize * tileSize;
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
 	@group(0) @binding(2) var<storage,read> projections:array<Projection>;
 	@group(0) @binding(3) var<storage,read> pairData:array<u32>;
 	@group(0) @binding(4) var<storage,read> rendered:array<vec4<f32>>;
-	${checkpointBackwardWgsl(checkpointPrecision)}
+	${checkpointBackwardWgsl(checkpointPrecision, checkpointOrder)}
 	@group(0) @binding(6) var<storage,read> pixelGrad:array<vec4<f32>>;
 	@group(0) @binding(7) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
 	@group(0) @binding(8) var<storage,read_write> counters:array<atomic<u32>>;
-	var<workgroup> gradientScratch:array<Splat,256>;
+	var<workgroup> gradientScratch:array<Splat,${laneCount}>;
 	fn zero_splat()->Splat{return Splat(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0));}
 	fn add_splat(a:Splat,b:Splat)->Splat{return Splat(a.centerStatic+b.centerStatic,a.velocityTime+b.velocityTime,
 		a.harmonicPad+b.harmonicPad,a.logScalePad+b.logScalePad,a.rotation+b.rotation,a.colorOpacity+b.colorOpacity);}
@@ -913,9 +1453,9 @@ function backwardWgsl(checkpointPrecision) {
 		let raw=proj.conicDepthAlpha.z*proj.conicDepthAlpha.w*exp(-0.5*q);
 		return select(0.0,min(0.99,raw),raw>=cfg.alphaThreshold);
 	}
-	@compute @workgroup_size(16,16)
+	@compute @workgroup_size(${tileSize},${tileSize})
 	fn pair_backward(@builtin(local_invocation_id) lid:vec3<u32>,@builtin(workgroup_id) wid:vec3<u32>){
-		let lane=lid.y*16u+lid.x;let pair=wid.y*${MAX_WORKGROUPS_PER_DIMENSION}u+wid.x;
+		let lane=lid.y*${tileSize}u+lid.x;let pair=wid.y*${MAX_WORKGROUPS_PER_DIMENSION}u+wid.x;
 		let pairValid=pair<atomicLoad(&counters[0]);var id=0u;var gradient=zero_splat();
 		if(pairValid){
 			let slot=pairData[cfg.pairCapacity+pair];let tile=slot/cfg.tileCapacity;
@@ -926,7 +1466,7 @@ function backwardWgsl(checkpointPrecision) {
 				if(rank<u32(pixelGrad[pixel].w)){
 					let point=vec2<f32>((f32(x)+0.5)/f32(cfg.height),(f32(y)+0.5)/f32(cfg.height));
 					let block=rank/cfg.checkpointStride;
-					let checkpoint=read_checkpoint(pixel*cfg.blocksPerTile+block);
+					let checkpoint=read_checkpoint(checkpoint_index(pixel,block));
 					var before=checkpoint.xyz;var transmittance=checkpoint.w;
 					for(var replay=block*cfg.checkpointStride;replay<rank;replay++){
 						let prior=pairData[tile*cfg.tileCapacity+replay];let alpha=alpha_at(projections[prior],point);
@@ -1013,7 +1553,7 @@ function backwardWgsl(checkpointPrecision) {
 			}
 		}
 		gradientScratch[lane]=gradient;workgroupBarrier();
-		var stride=128u;loop{
+		var stride=${laneCount / 2}u;loop{
 			if(lane<stride){gradientScratch[lane]=add_splat(gradientScratch[lane],gradientScratch[lane+stride]);}
 			workgroupBarrier();if(stride==1u){break;}stride/=2u;
 		}
@@ -1021,17 +1561,453 @@ function backwardWgsl(checkpointPrecision) {
 	}`;
 }
 
-function updateWgsl() {
+function projectedGradientVjpWgsl(projectionType = "Projection") {
+	const compact = projectionType === "CompactProjectionVjp";
+	const cameraArgument = compact ? ",camera:Camera" : "";
+	const projectionUnpack = compact ? `
+			let sparse=proj.jacobianSparse;
+			let j0=vec3<f32>(sparse.x,0.0,sparse.y);
+			let j1=vec3<f32>(0.0,sparse.z,sparse.w);
+			let basis=mat3x3<f32>(
+				proj.basisVariance0.xyz,
+				proj.basisVariance1.xyz,
+				proj.basisVariance2.xyz);
+			let variances=vec3<f32>(
+				proj.basisVariance0.w,
+				proj.basisVariance1.w,
+				proj.basisVariance2.w);
+			// Camera rows are shared by every splat in the step. Rebuild the
+			// column-major world-to-camera rotation here instead of storing the
+			// same 48 bytes in every cold VJP packet.
+			let cameraRotation=mat3x3<f32>(
+				vec3<f32>(camera.row0.x,camera.row1.x,camera.row2.x),
+				vec3<f32>(camera.row0.y,camera.row1.y,camera.row2.y),
+				vec3<f32>(camera.row0.z,camera.row1.z,camera.row2.z));`
+		: `
+			let j0=proj.jacobian0.xyz;let j1=proj.jacobian1.xyz;
+			let basis=mat3x3<f32>(proj.basis0.xyz,proj.basis1.xyz,proj.basis2.xyz);
+			let variances=proj.variancesPad.xyz;
+			let cameraRotation=mat3x3<f32>(proj.camera0.xyz,proj.camera1.xyz,proj.camera2.xyz);`;
+	return `
+	struct ProjectedGradient{
+		screen0:vec4<f32>,
+		screen1:vec4<f32>,
+		colorPad:vec4<f32>,
+	};
+	fn zero_projected_gradient()->ProjectedGradient{
+		return ProjectedGradient(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0));
+	}
+	fn add_projected_gradient(a:ProjectedGradient,b:ProjectedGradient)->ProjectedGradient{
+		return ProjectedGradient(a.screen0+b.screen0,a.screen1+b.screen1,a.colorPad+b.colorPad);
+	}
+	// The raster pass accumulates derivatives of the projected mean, conic,
+	// temporal peak, color, and diagnostics. Projection is fixed for a step,
+	// so its VJP is linear: applying it once after the sum is mathematically
+	// equivalent to applying it per pixel/pair, with much less repeated work.
+	fn projected_to_splat_gradient(
+		p:Splat,proj:${projectionType},g:ProjectedGradient${cameraArgument}
+	)->Splat{
+		let barMu=g.screen0.xy;
+		let barC00=g.screen0.z;let barC01=g.screen0.w;let barC11=g.screen1.x;
+		var worldGrad=vec3<f32>(0.0);var gradLogScale=vec3<f32>(0.0);
+		var gradRotation=vec4<f32>(0.0);
+		if(proj.cameraPointValid.w>=0.5){
+			${projectionUnpack}
+			let barSigma=barC00*outer3(j0,j0)
+				+barC01*(outer3(j0,j1)+outer3(j1,j0))+barC11*outer3(j1,j1);
+			let sigmaCamera=variances.x*outer3(basis[0],basis[0])
+				+variances.y*outer3(basis[1],basis[1])
+				+variances.z*outer3(basis[2],basis[2]);
+			let sigmaJ0=sigmaCamera*j0;let sigmaJ1=sigmaCamera*j1;
+			let barJ0=2.0*(barC00*sigmaJ0+barC01*sigmaJ1);
+			let barJ1=2.0*(barC01*sigmaJ0+barC11*sigmaJ1);
+			let cp=proj.cameraPointValid.xyz;let invZ=1.0/cp.z;
+			let horizontalFocal=j0.x*cp.z;
+			let verticalFocal=j1.y*cp.z;
+			let cameraGrad=vec3<f32>(
+				barMu.x*horizontalFocal*invZ-barJ0.z*horizontalFocal*invZ*invZ,
+				barMu.y*verticalFocal*invZ-barJ1.z*verticalFocal*invZ*invZ,
+				-barMu.x*horizontalFocal*cp.x*invZ*invZ
+					-barMu.y*verticalFocal*cp.y*invZ*invZ
+					-barJ0.x*horizontalFocal*invZ*invZ
+					+barJ0.z*2.0*horizontalFocal*cp.x*invZ*invZ*invZ
+					-barJ1.y*verticalFocal*invZ*invZ
+					+barJ1.z*2.0*verticalFocal*cp.y*invZ*invZ*invZ);
+			worldGrad=transpose(cameraRotation)*cameraGrad;
+			for(var axis=0u;axis<3u;axis++){
+				let column=basis[axis];
+				gradLogScale[axis]=2.0*variances[axis]*dot(column,barSigma*column);
+			}
+			let barBasis=mat3x3<f32>(
+				2.0*variances.x*(barSigma*basis[0]),
+				2.0*variances.y*(barSigma*basis[1]),
+				2.0*variances.z*(barSigma*basis[2]));
+			let barRotation=transpose(cameraRotation)*barBasis;
+			let q=safe_quaternion(p.rotation);
+			let h00=barRotation[0].x;let h01=barRotation[1].x;let h02=barRotation[2].x;
+			let h10=barRotation[0].y;let h11=barRotation[1].y;let h12=barRotation[2].y;
+			let h20=barRotation[0].z;let h21=barRotation[1].z;let h22=barRotation[2].z;
+			let normalizedQuatGrad=vec4<f32>(
+				-4.0*q.x*(h11+h22)+2.0*q.y*(h01+h10)+2.0*q.z*(h02+h20)+2.0*q.w*(h21-h12),
+				-4.0*q.y*(h00+h22)+2.0*q.x*(h01+h10)+2.0*q.z*(h12+h21)+2.0*q.w*(h02-h20),
+				-4.0*q.z*(h00+h11)+2.0*q.x*(h02+h20)+2.0*q.y*(h12+h21)+2.0*q.w*(h10-h01),
+				2.0*q.z*(h10-h01)+2.0*q.y*(h02-h20)+2.0*q.x*(h21-h12));
+			let rawNorm2=dot(p.rotation,p.rotation);
+			if(rawNorm2>1e-16){
+				gradRotation=(normalizedQuatGrad-q*dot(q,normalizedQuatGrad))*inverseSqrt(rawNorm2);
+			}
+		}
+		let staticWarmup=cfg.staticWarmup!=0u;let t=frame_time(cfg);
+		let tc=select(t*2.0-1.0,0.0,staticWarmup);
+		let wave=select(sin(t*6.28318530718),0.0,staticWarmup);
+		let sigma=clamp(cfg.temporalSigma,0.12,0.36);
+		let staticMix=clamp(p.centerStatic.w,0.0,1.0);
+		let temporalFloor=clamp(sigma*0.30,0.035,0.12);
+		let timeDelta=t-clamp(p.velocityTime.w,0.0,1.0);
+		let dynamicGate=temporalFloor+(1.0-temporalFloor)
+			*exp(-0.5*timeDelta*timeDelta/(sigma*sigma));
+		let opacity=sigmoid(p.colorOpacity.w);
+		let timeWeight=select(dynamicGate,1.0,staticWarmup);
+		let dynamicCore=max(0.0,(timeWeight-staticMix
+			-temporalFloor*(1.0-staticMix))/max(1e-6,1.0-staticMix));
+		let gPeak=g.screen1.y;
+		let gradTime=select(gPeak*opacity*(1.0-staticMix)*dynamicCore
+			*(t-p.velocityTime.w)/(sigma*sigma),0.0,staticWarmup);
+		let gradStaticMix=select(gPeak*opacity*(1.0-dynamicGate),0.0,staticWarmup);
+		let gradOpacity=gPeak*timeWeight*opacity*(1.0-opacity);
+		return Splat(
+			vec4<f32>(worldGrad,gradStaticMix),
+			vec4<f32>(worldGrad*tc,gradTime),
+			vec4<f32>(select(vec3<f32>(0.0),worldGrad*wave,cfg.modelMode==0u),g.screen1.z),
+			vec4<f32>(gradLogScale,g.screen1.w),
+			gradRotation,
+			vec4<f32>(g.colorPad.xyz,gradOpacity));
+	}`;
+}
+
+function stagedBackwardWgsl(
+	checkpointPrecision,
+	checkpointOrder,
+	sharePairPacket = false,
+	tileSize = DEFAULT_TILE_SIZE,
+	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+) {
+	const laneCount = tileSize * tileSize;
+	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+		? "RasterProjection" : "Projection";
+	const sharedPairDeclarations = sharePairPacket ? `
+	var<workgroup> sharedPairMeta:vec4<u32>;
+	var<workgroup> sharedPairProjection:${projectionType};
+	var<workgroup> sharedPairColorOpacity:vec4<f32>;` : "";
+	const pairSetup = sharePairPacket ? `
+		if(lane==0u&&pairValid){
+			let sharedSlot=pairData[cfg.pairCapacity+pair];
+			let sharedId=pairData[sharedSlot];
+			sharedPairMeta=vec4<u32>(
+				sharedSlot,
+				sharedSlot/cfg.tileCapacity,
+				sharedSlot%cfg.tileCapacity,
+				sharedId);
+			sharedPairProjection=projections[sharedId];
+			sharedPairColorOpacity=params[sharedId].colorOpacity;
+		}
+		workgroupBarrier();
+		if(pairValid){
+			let slot=sharedPairMeta.x;let tile=sharedPairMeta.y;
+			let rank=sharedPairMeta.z;id=sharedPairMeta.w;
+			let proj=sharedPairProjection;
+			let currentColorOpacity=sharedPairColorOpacity;` : `
+		if(pairValid){
+			let slot=pairData[cfg.pairCapacity+pair];let tile=slot/cfg.tileCapacity;
+			let rank=slot%cfg.tileCapacity;id=pairData[slot];
+			let proj=projections[id];
+			let currentColorOpacity=params[id].colorOpacity;`;
 	return `${CONFIG_WGSL}
+	${projectedGradientVjpWgsl()}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
-	@group(0) @binding(1) var<storage,read> paramsIn:array<Splat>;
-	@group(0) @binding(2) var<storage,read_write> paramsOut:array<Splat>;
-	@group(0) @binding(3) var<storage,read_write> firstMoment:array<Splat>;
-	@group(0) @binding(4) var<storage,read_write> secondMoment:array<Splat>;
-	@group(0) @binding(5) var<storage,read_write> splatStats:array<vec4<f32>>;
-	@group(0) @binding(6) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
+	@group(0) @binding(1) var<storage,read> params:array<Splat>;
+	@group(0) @binding(2) var<storage,read> projections:array<${projectionType}>;
+	@group(0) @binding(3) var<storage,read> pairData:array<u32>;
+	@group(0) @binding(4) var<storage,read> rendered:array<vec4<f32>>;
+	${checkpointBackwardWgsl(checkpointPrecision, checkpointOrder)}
+	@group(0) @binding(6) var<storage,read> pixelGrad:array<vec4<f32>>;
+	@group(0) @binding(7) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
+	@group(0) @binding(8) var<storage,read_write> counters:array<atomic<u32>>;
+	var<workgroup> gradientScratch:array<ProjectedGradient,${laneCount}>;
+	${sharedPairDeclarations}
+	fn atomic_add_f32(index:u32,value:f32){
+		if(value==0.0){return;}
+		var oldBits=atomicLoad(&gradientAtoms[index]);
+		loop{
+			let newBits=bitcast<u32>(bitcast<f32>(oldBits)+value);
+			let result=atomicCompareExchangeWeak(&gradientAtoms[index],oldBits,newBits);
+			if(result.exchanged){break;}
+			oldBits=result.old_value;
+		}
+	}
+	fn accumulate_projected(id:u32,gradient:ProjectedGradient){
+		let base=id*${PROJECTED_GRADIENT_FLOATS}u;
+		for(var component=0u;component<4u;component++){
+			atomic_add_f32(base+component,gradient.screen0[component]);
+			atomic_add_f32(base+4u+component,gradient.screen1[component]);
+			atomic_add_f32(base+8u+component,gradient.colorPad[component]);
+		}
+	}
+	fn alpha_at(proj:${projectionType},point:vec2<f32>)->f32{
+		let d=point-proj.screenConic0.xy;
+		let q=proj.screenConic0.z*d.x*d.x+2.0*proj.screenConic0.w*d.x*d.y
+			+proj.conicDepthAlpha.x*d.y*d.y;
+		if(q<0.0||q>9.0){return 0.0;}
+		let raw=proj.conicDepthAlpha.z*proj.conicDepthAlpha.w*exp(-0.5*q);
+		return select(0.0,min(0.99,raw),raw>=cfg.alphaThreshold);
+	}
+	@compute @workgroup_size(${tileSize},${tileSize})
+	fn pair_backward(@builtin(local_invocation_id) lid:vec3<u32>,@builtin(workgroup_id) wid:vec3<u32>){
+		let lane=lid.y*${tileSize}u+lid.x;
+		let pair=wid.y*${MAX_WORKGROUPS_PER_DIMENSION}u+wid.x;
+		let pairValid=pair<atomicLoad(&counters[0]);
+		var id=0u;var gradient=zero_projected_gradient();
+		${pairSetup}
+			let tileX=tile%cfg.tilesX;let tileY=tile/cfg.tilesX;
+			let x=tileX*cfg.tileSize+lid.x;let y=tileY*cfg.tileSize+lid.y;
+			if(x<cfg.width&&y<cfg.height){
+				let pixel=y*cfg.width+x;
+				if(rank<u32(pixelGrad[pixel].w)){
+					let point=vec2<f32>((f32(x)+0.5)/f32(cfg.height),
+						(f32(y)+0.5)/f32(cfg.height));
+					let block=rank/cfg.checkpointStride;
+					let checkpoint=read_checkpoint(checkpoint_index(pixel,block));
+					var before=checkpoint.xyz;var transmittance=checkpoint.w;
+					for(var replay=block*cfg.checkpointStride;replay<rank;replay++){
+						let prior=pairData[tile*cfg.tileCapacity+replay];
+						let alpha=alpha_at(projections[prior],point);
+						before+=transmittance*alpha*params[prior].colorOpacity.xyz;
+						transmittance*=1.0-alpha;
+					}
+					let d=point-proj.screenConic0.xy;
+					let qform=proj.screenConic0.z*d.x*d.x
+						+2.0*proj.screenConic0.w*d.x*d.y+proj.conicDepthAlpha.x*d.y*d.y;
+					if(qform>=0.0&&qform<=9.0&&transmittance>cfg.transmittanceThreshold){
+						let gaussian=exp(-0.5*qform);
+						let rawAlpha=proj.conicDepthAlpha.z*proj.conicDepthAlpha.w*gaussian;
+						let alpha=select(0.0,min(0.99,rawAlpha),rawAlpha>=cfg.alphaThreshold);
+						let denominator=transmittance*(1.0-alpha);
+						let behind=select(vec3<f32>(0.0),
+							(rendered[pixel].xyz-before-transmittance*alpha*currentColorOpacity.xyz)
+								/max(denominator,1e-8),
+							denominator>1e-8);
+						let imageGrad=pixelGrad[pixel].xyz;
+						let alphaGrad=dot(imageGrad,transmittance*(currentColorOpacity.xyz-behind));
+						let clampGate=select(0.0,1.0,
+							rawAlpha<0.99&&rawAlpha>=cfg.alphaThreshold);
+						let barQform=-0.5*alphaGrad*rawAlpha*clampGate;
+						let conicDelta=vec2<f32>(
+							proj.screenConic0.z*d.x+proj.screenConic0.w*d.y,
+							proj.screenConic0.w*d.x+proj.conicDepthAlpha.x*d.y);
+						let barMu=-2.0*barQform*conicDelta;
+						let barC00=-barQform*conicDelta.x*conicDelta.x;
+						let barC01=-barQform*conicDelta.x*conicDelta.y;
+						let barC11=-barQform*conicDelta.y*conicDelta.y;
+						gradient=ProjectedGradient(
+							vec4<f32>(barMu,barC00,barC01),
+							vec4<f32>(barC11,clampGate*alphaGrad*gaussian,
+								alpha/f32(cfg.pixelCount),length(barMu)),
+							vec4<f32>(imageGrad*transmittance*alpha,0.0));
+					}
+				}
+			}
+		}
+		gradientScratch[lane]=gradient;workgroupBarrier();
+		var stride=${laneCount / 2}u;loop{
+			if(lane<stride){
+				gradientScratch[lane]=add_projected_gradient(
+					gradientScratch[lane],gradientScratch[lane+stride]);
+			}
+			workgroupBarrier();if(stride==1u){break;}stride/=2u;
+		}
+		if(lane==0u&&pairValid){accumulate_projected(id,gradientScratch[0]);}
+	}`;
+}
+
+function checkpointBlockBackwardWgsl(
+	checkpointPrecision,
+	checkpointOrder,
+	tileSize = DEFAULT_TILE_SIZE,
+	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+) {
+	const laneCount = tileSize * tileSize;
+	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+		? "RasterProjection" : "Projection";
+	return `${CONFIG_WGSL}
+	${projectedGradientVjpWgsl()}
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> params:array<Splat>;
+	@group(0) @binding(2) var<storage,read> projections:array<${projectionType}>;
+	@group(0) @binding(3) var<storage,read> pairData:array<u32>;
+	@group(0) @binding(4) var<storage,read> rendered:array<vec4<f32>>;
+	${checkpointBackwardWgsl(checkpointPrecision, checkpointOrder)}
+	@group(0) @binding(6) var<storage,read> pixelGrad:array<vec4<f32>>;
+	@group(0) @binding(7) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
+	@group(0) @binding(9) var<storage,read_write> tileCounts:array<atomic<u32>>;
+	var<workgroup> gradientScratch:array<ProjectedGradient,${laneCount}>;
+	var<workgroup> blockMeta:vec4<u32>;
+	var<workgroup> currentProjection:${projectionType};
+	var<workgroup> currentColorOpacity:vec4<f32>;
+	var<workgroup> currentId:u32;
+	fn atomic_add_f32(index:u32,value:f32){
+		if(value==0.0){return;}
+		var oldBits=atomicLoad(&gradientAtoms[index]);
+		loop{
+			let newBits=bitcast<u32>(bitcast<f32>(oldBits)+value);
+			let result=atomicCompareExchangeWeak(&gradientAtoms[index],oldBits,newBits);
+			if(result.exchanged){break;}
+			oldBits=result.old_value;
+		}
+	}
+	fn accumulate_projected(id:u32,gradient:ProjectedGradient){
+		let base=id*${PROJECTED_GRADIENT_FLOATS}u;
+		for(var component=0u;component<4u;component++){
+			atomic_add_f32(base+component,gradient.screen0[component]);
+			atomic_add_f32(base+4u+component,gradient.screen1[component]);
+			atomic_add_f32(base+8u+component,gradient.colorPad[component]);
+		}
+	}
+	@compute @workgroup_size(${tileSize},${tileSize})
+	fn block_backward(@builtin(local_invocation_id) lid:vec3<u32>,@builtin(workgroup_id) wid:vec3<u32>){
+		let lane=lid.y*${tileSize}u+lid.x;
+		let block=wid.y*${MAX_WORKGROUPS_PER_DIMENSION}u+wid.x;
+		if(lane==0u){
+			let startSlot=pairData[cfg.pairCapacity+block];
+			let tile=startSlot/cfg.tileCapacity;
+			blockMeta=vec4<u32>(
+				startSlot,
+				tile,
+				startSlot%cfg.tileCapacity,
+				min(atomicLoad(&tileCounts[tile]),cfg.tileCapacity));
+		}
+		workgroupBarrier();
+		let tile=blockMeta.y;let startRank=blockMeta.z;let tileCount=blockMeta.w;
+			let tileX=tile%cfg.tilesX;let tileY=tile/cfg.tilesX;
+			let x=tileX*cfg.tileSize+lid.x;let y=tileY*cfg.tileSize+lid.y;
+			let pixelValid=x<cfg.width&&y<cfg.height;
+			var pixel=0u;var stopRank=0u;
+			var point=vec2<f32>(0.0);var imageGrad=vec3<f32>(0.0);
+			var renderedColor=vec3<f32>(0.0);
+			var before=vec3<f32>(0.0);var transmittance=0.0;
+			if(pixelValid){
+				pixel=y*cfg.width+x;
+				stopRank=u32(pixelGrad[pixel].w);
+				point=vec2<f32>((f32(x)+0.5)/f32(cfg.height),
+					(f32(y)+0.5)/f32(cfg.height));
+				imageGrad=pixelGrad[pixel].xyz;
+				renderedColor=rendered[pixel].xyz;
+				if(startRank<stopRank){
+					let checkpoint=read_checkpoint(
+						checkpoint_index(pixel,startRank/cfg.checkpointStride));
+					before=checkpoint.xyz;transmittance=checkpoint.w;
+				}
+			}
+			// Owning a complete checkpoint block turns the old triangular
+			// prefix replay into one source-over walk. The reduction and atomic
+			// contract are unchanged; only redundant checkpoint/projection work
+			// and dispatches disappear.
+			for(var offset=0u;offset<cfg.checkpointStride;offset++){
+				let rank=startRank+offset;let rankValid=rank<tileCount;
+				if(lane==0u&&rankValid){
+					currentId=pairData[tile*cfg.tileCapacity+rank];
+					currentProjection=projections[currentId];
+					currentColorOpacity=params[currentId].colorOpacity;
+				}
+				workgroupBarrier();
+				var gradient=zero_projected_gradient();
+				let contributes=rankValid&&pixelValid&&rank<stopRank;
+				if(contributes){
+					let d=point-currentProjection.screenConic0.xy;
+					let qform=currentProjection.screenConic0.z*d.x*d.x
+						+2.0*currentProjection.screenConic0.w*d.x*d.y
+						+currentProjection.conicDepthAlpha.x*d.y*d.y;
+					var alpha=0.0;
+					if(qform>=0.0&&qform<=9.0&&transmittance>cfg.transmittanceThreshold){
+						let gaussian=exp(-0.5*qform);
+						let rawAlpha=currentProjection.conicDepthAlpha.z
+							*currentProjection.conicDepthAlpha.w*gaussian;
+						alpha=select(0.0,min(0.99,rawAlpha),rawAlpha>=cfg.alphaThreshold);
+						let denominator=transmittance*(1.0-alpha);
+						let behind=select(vec3<f32>(0.0),
+							(renderedColor-before-transmittance*alpha*currentColorOpacity.xyz)
+								/max(denominator,1e-8),
+							denominator>1e-8);
+						let alphaGrad=dot(
+							imageGrad,
+							transmittance*(currentColorOpacity.xyz-behind));
+						let clampGate=select(0.0,1.0,
+							rawAlpha<0.99&&rawAlpha>=cfg.alphaThreshold);
+						let barQform=-0.5*alphaGrad*rawAlpha*clampGate;
+						let conicDelta=vec2<f32>(
+							currentProjection.screenConic0.z*d.x
+								+currentProjection.screenConic0.w*d.y,
+							currentProjection.screenConic0.w*d.x
+								+currentProjection.conicDepthAlpha.x*d.y);
+						let barMu=-2.0*barQform*conicDelta;
+						gradient=ProjectedGradient(
+							vec4<f32>(
+								barMu,
+								-barQform*conicDelta.x*conicDelta.x,
+								-barQform*conicDelta.x*conicDelta.y),
+							vec4<f32>(
+								-barQform*conicDelta.y*conicDelta.y,
+								clampGate*alphaGrad*gaussian,
+								alpha/f32(cfg.pixelCount),
+								length(barMu)),
+							vec4<f32>(imageGrad*transmittance*alpha,0.0));
+					}
+					before+=transmittance*alpha*currentColorOpacity.xyz;
+					transmittance*=1.0-alpha;
+				}
+				gradientScratch[lane]=gradient;workgroupBarrier();
+				var stride=${laneCount / 2}u;loop{
+					if(lane<stride){
+						gradientScratch[lane]=add_projected_gradient(
+							gradientScratch[lane],gradientScratch[lane+stride]);
+					}
+					workgroupBarrier();if(stride==1u){break;}stride/=2u;
+				}
+				if(lane==0u&&rankValid){
+					accumulate_projected(currentId,gradientScratch[0]);
+				}
+				workgroupBarrier();
+			}
+	}`;
+}
+
+function updateWgsl(
+	backwardMode = TILED_BACKWARD_MODES.DIRECT_3D,
+	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+) {
+	const staged = backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D;
+	const compactProjection = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
+	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+		? "CompactProjectionVjp" : "Projection";
+	const gradientLoader = staged ? `
+	fn load_projected_gradient(id:u32)->ProjectedGradient{
+		let base=id*${PROJECTED_GRADIENT_FLOATS}u;
+		return ProjectedGradient(
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+1u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+2u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+3u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+4u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+5u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+6u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+7u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+8u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+9u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+10u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+11u])))
+		);
+	}` : `
 	fn load_gradient(id:u32)->Splat{
-		let base=id*24u;
+		let base=id*${DIRECT_GRADIENT_FLOATS}u;
 		return Splat(
 			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base])),
 				bitcast<f32>(atomicLoad(&gradientAtoms[base+1u])),
@@ -1058,11 +2034,29 @@ function updateWgsl() {
 				bitcast<f32>(atomicLoad(&gradientAtoms[base+22u])),
 				bitcast<f32>(atomicLoad(&gradientAtoms[base+23u])))
 		);
-	}
+	}`;
+	return `${CONFIG_WGSL}
+	${staged ? projectedGradientVjpWgsl(projectionType) : ""}
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> paramsIn:array<Splat>;
+	@group(0) @binding(2) var<storage,read_write> paramsOut:array<Splat>;
+	@group(0) @binding(3) var<storage,read_write> firstMoment:array<Splat>;
+	@group(0) @binding(4) var<storage,read_write> secondMoment:array<Splat>;
+	@group(0) @binding(5) var<storage,read_write> splatStats:array<vec4<f32>>;
+	@group(0) @binding(6) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
+	${staged ? `@group(0) @binding(7) var<storage,read> projections:array<${projectionType}>;` : ""}
+	${staged && compactProjection
+		? "@group(0) @binding(8) var<storage,read> cameras:array<Camera>;" : ""}
+	${gradientLoader}
 	@compute @workgroup_size(64)
 	fn reduce_update(@builtin(global_invocation_id) gid:vec3<u32>){
 		let i=gid.x;if(i>=cfg.splatCount){return;}
-		var gradient=load_gradient(i);
+		var gradient=${staged
+		? `projected_to_splat_gradient(
+			paramsIn[i],projections[i],load_projected_gradient(i)${compactProjection
+				? ",cameras[cfg.viewIndex]" : ""}
+		)`
+		: "load_gradient(i)"};
 		let meanAlpha=gradient.harmonicPad.w;gradient.harmonicPad.w=0.0;
 		let screenGradient=gradient.logScalePad.w;gradient.logScalePad.w=0.0;
 		var p=paramsIn[i];var m=firstMoment[i];var v=secondMoment[i];
@@ -1113,6 +2107,45 @@ function updateWgsl() {
 	}`;
 }
 
+function stagedGradientDebugWgsl(
+	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+) {
+	const compactProjection = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
+	const projectionType = compactProjection ? "CompactProjectionVjp" : "Projection";
+	return `${CONFIG_WGSL}
+	${projectedGradientVjpWgsl(projectionType)}
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> params:array<Splat>;
+	@group(0) @binding(2) var<storage,read> projections:array<${projectionType}>;
+	@group(0) @binding(3) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
+	@group(0) @binding(4) var<storage,read_write> fullGradients:array<Splat>;
+	${compactProjection ? "@group(0) @binding(5) var<storage,read> cameras:array<Camera>;" : ""}
+	fn load_projected_gradient(id:u32)->ProjectedGradient{
+		let base=id*${PROJECTED_GRADIENT_FLOATS}u;
+		return ProjectedGradient(
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+1u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+2u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+3u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+4u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+5u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+6u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+7u]))),
+			vec4<f32>(bitcast<f32>(atomicLoad(&gradientAtoms[base+8u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+9u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+10u])),
+				bitcast<f32>(atomicLoad(&gradientAtoms[base+11u])))
+		);
+	}
+	@compute @workgroup_size(64)
+	fn materialize_gradient(@builtin(global_invocation_id) gid:vec3<u32>){
+		let id=gid.x;if(id>=cfg.splatCount){return;}
+		fullGradients[id]=projected_to_splat_gradient(
+			params[id],projections[id],load_projected_gradient(id)${compactProjection
+				? ",cameras[cfg.viewIndex]" : ""});
+	}`;
+}
+
 async function checkedModule(device, name, code) {
 	const module = device.createShaderModule({ label: name, code });
 	const info = await module.getCompilationInfo();
@@ -1127,6 +2160,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		super(canvas);
 		this.initialSplatCount = 1536;
 		this.skipSampleGradientAllocation = true;
+		this.backwardMode = TILED_BACKWARD_MODES.DIRECT_3D;
+		this.gradientFloats = DIRECT_GRADIENT_FLOATS;
 		this.tiledConfigBytes = new ArrayBuffer(TILED_CONFIG_BYTES);
 	}
 
@@ -1162,47 +2197,146 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		growthCapacity = null,
 		tileCapacity = null,
 		checkpointPrecision = DEFAULT_CHECKPOINT_PRECISION,
+		checkpointStride = DEFAULT_CHECKPOINT_STRIDE,
+		checkpointOrder = TILED_CHECKPOINT_ORDERS.PIXEL_MAJOR,
 		staticWarmupSteps = 0,
+		backwardMode = TILED_BACKWARD_MODES.DIRECT_3D,
+		backwardGranularity = TILED_BACKWARD_GRANULARITIES.PAIR,
+		sharePairPacket = false,
+		tileSize = DEFAULT_TILE_SIZE,
+		projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+		ssimLayout = TILED_SSIM_LAYOUTS.NAIVE_2D,
+		profileGpu = false,
 	} = {}) {
 		this.initialSplatCount = splatCount;
 		this.requestedTileCapacity = tileCapacity;
 		this.checkpointPrecision = resolveCheckpointPrecision(checkpointPrecision);
+		this.requestedCheckpointStride = resolveCheckpointStride(checkpointStride);
+		this.checkpointOrder = resolveTiledCheckpointOrder(checkpointOrder);
 		this.staticWarmupSteps = resolveStaticWarmupSteps(staticWarmupSteps);
+		this.backwardMode = resolveTiledBackwardMode(backwardMode);
+		this.backwardGranularity = resolveTiledBackwardGranularity(backwardGranularity);
+		this.tileSize = resolveTiledTileSize(tileSize);
+		this.projectionLayout = resolveTiledProjectionLayout(projectionLayout);
+		this.ssimLayout = resolveTiledSsimLayout(ssimLayout);
+		if (this.backwardGranularity === TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK
+			&& this.backwardMode !== TILED_BACKWARD_MODES.STAGED_PROJECT_3D) {
+			throw new RangeError("checkpoint-block backward requires staged-project3d gradients.");
+		}
+		if (this.projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+			&& this.backwardMode !== TILED_BACKWARD_MODES.STAGED_PROJECT_3D) {
+			throw new RangeError("split-compact projections require staged-project3d gradients.");
+		}
+		this.gradientFloats = this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D
+			? PROJECTED_GRADIENT_FLOATS : DIRECT_GRADIENT_FLOATS;
+		this.sharePairPacket = Boolean(sharePairPacket)
+			&& this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D
+			&& this.backwardGranularity === TILED_BACKWARD_GRANULARITIES.PAIR;
+		this.requestTimestampQueries = Boolean(profileGpu);
 		const capacity = resolveTiledCapacity(splatCount, growthCapacity);
 		await super.init(dataset, { splatCount: capacity, requiredWorkgroupStorageSize: 24576 });
-		this.adapterName = `${this.adapterName} · tiled full-frame`;
+		const bindGroupError = await this.tiledBindGroupValidation;
+		if (bindGroupError) {
+			throw new Error(`Tiled WebGPU bind-group validation failed: ${bindGroupError.message}`);
+		}
+		this.adapterName = `${this.adapterName} · tiled full-frame · ${this.backwardMode}`
+			+ ` · ${this.backwardGranularity}`
+			+ ` · ${this.checkpointOrder} tape`
+			+ ` · ${this.projectionLayout} projection`
+			+ ` · ${this.ssimLayout} SSIM`
+			+ (this.sharePairPacket ? " · shared pair packet" : "");
 	}
 
 	async createPipelines() {
 		await super.createPipelines();
 		this.tileCapacity = resolveTileCapacity(this.splatCount, this.requestedTileCapacity);
-		const modules = await Promise.all([
-			checkedModule(this.device, "tiled-clear", clearWgsl()),
-			checkedModule(this.device, "tiled-project", projectWgsl()),
-			checkedModule(this.device, "tiled-sort", sortWgsl(this.tileCapacity)),
-			checkedModule(this.device, "tiled-finalize", finalizeWgsl()),
-			checkedModule(this.device, "tiled-forward", forwardWgsl(this.checkpointPrecision)),
-			checkedModule(this.device, "tiled-ssim-stats", ssimStatsWgsl()),
-			checkedModule(this.device, "tiled-ssim-gradient", ssimGradientWgsl()),
-			checkedModule(this.device, "tiled-metrics", metricsWgsl()),
-			checkedModule(this.device, "tiled-backward", backwardWgsl(this.checkpointPrecision)),
-			checkedModule(this.device, "tiled-update", updateWgsl()),
-		]);
+		const checkpointBlocks = this.backwardGranularity
+			=== TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK;
+		const backwardSource = checkpointBlocks
+			? checkpointBlockBackwardWgsl(
+				this.checkpointPrecision,
+				this.checkpointOrder,
+				this.tileSize,
+				this.projectionLayout,
+			)
+			: this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D
+				? stagedBackwardWgsl(
+					this.checkpointPrecision,
+					this.checkpointOrder,
+					this.sharePairPacket,
+					this.tileSize,
+					this.projectionLayout,
+				)
+				: backwardWgsl(
+					this.checkpointPrecision,
+					this.checkpointOrder,
+					this.tileSize,
+				);
+		const separableSsim = this.ssimLayout === TILED_SSIM_LAYOUTS.SEPARABLE;
+		const moduleSources = {
+			clear: clearWgsl(this.gradientFloats),
+			project: projectWgsl(this.projectionLayout),
+			sort: sortWgsl(this.tileCapacity, this.backwardGranularity, this.projectionLayout),
+			finalize: finalizeWgsl(this.backwardGranularity),
+			forward: forwardWgsl(
+				this.checkpointPrecision,
+				this.checkpointOrder,
+				this.tileSize,
+				this.projectionLayout,
+			),
+			metrics: metricsWgsl(),
+			backward: backwardSource,
+			update: updateWgsl(this.backwardMode, this.projectionLayout),
+			...(separableSsim ? {
+				ssimHorizontal: separableSsimHorizontalWgsl(),
+				ssimVertical: separableSsimVerticalWgsl(),
+				ssimGradientHorizontal: separableSsimGradientHorizontalWgsl(),
+				ssimGradientVertical: separableSsimGradientVerticalWgsl(),
+			} : {
+				ssimStats: ssimStatsWgsl(),
+				ssimGradient: ssimGradientWgsl(),
+			}),
+		};
+		const modules = Object.fromEntries(await Promise.all(
+			Object.entries(moduleSources).map(async ([name, source]) => [
+				name,
+				await checkedModule(this.device, `tiled-${name}`, source),
+			]),
+		));
+		const debugModule = this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D
+			? await checkedModule(this.device, "tiled-staged-gradient-debug",
+				stagedGradientDebugWgsl(this.projectionLayout))
+			: null;
 		const pipeline = (module, entryPoint) => this.device.createComputePipeline({
 			label: `tiled-${entryPoint}`, layout: "auto", compute: { module, entryPoint },
 		});
 		this.device.pushErrorScope("validation");
 		this.tiledPipelines = {
-			clear: pipeline(modules[0], "clear_step"),
-			project: pipeline(modules[1], "project_and_bin"),
-			sort: pipeline(modules[2], "sort_tiles"),
-			finalize: pipeline(modules[3], "finalize_pairs"),
-			forward: pipeline(modules[4], "raster_forward"),
-			ssimStats: pipeline(modules[5], "ssim_stats"),
-			ssimGradient: pipeline(modules[6], "ssim_gradient"),
-			metrics: pipeline(modules[7], "reduce_metrics"),
-			backward: pipeline(modules[8], "pair_backward"),
-			update: pipeline(modules[9], "reduce_update"),
+			clear: pipeline(modules.clear, "clear_step"),
+			project: pipeline(modules.project, "project_and_bin"),
+			sort: pipeline(modules.sort, "sort_tiles"),
+			finalize: pipeline(modules.finalize, "finalize_pairs"),
+			forward: pipeline(modules.forward, "raster_forward"),
+			metrics: pipeline(modules.metrics, "reduce_metrics"),
+			backward: pipeline(modules.backward,
+				checkpointBlocks ? "block_backward" : "pair_backward"),
+			update: pipeline(modules.update, "reduce_update"),
+			gradientDebug: debugModule ? pipeline(debugModule, "materialize_gradient") : null,
+			...(separableSsim ? {
+				ssimHorizontal: pipeline(modules.ssimHorizontal, "ssim_horizontal"),
+				ssimVertical: pipeline(modules.ssimVertical, "ssim_vertical"),
+				ssimGradientHorizontal: pipeline(
+					modules.ssimGradientHorizontal,
+					"ssim_gradient_horizontal",
+				),
+				ssimGradientVertical: pipeline(
+					modules.ssimGradientVertical,
+					"ssim_gradient_vertical",
+				),
+			} : {
+				ssimStats: pipeline(modules.ssimStats, "ssim_stats"),
+				ssimGradient: pipeline(modules.ssimGradient, "ssim_gradient"),
+			}),
 		};
 		const pipelineError = await this.device.popErrorScope();
 		if (pipelineError) throw new Error(`Tiled WebGPU pipeline validation failed: ${pipelineError.message}`);
@@ -1225,10 +2359,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		}
 		this.initialParams = initial.slice();
 		for (const params of this.buffers.params) this.device.queue.writeBuffer(params, 0, initial);
-		this.buffers.sampleGradients.destroy();
-		this.buffers.sampleGradients = makeBuffer(this.splatCount * SPLAT_BYTES);
-		this.tilesX = ceilDiv(this.dataset.width, TILE_SIZE);
-		this.tilesY = ceilDiv(this.dataset.height, TILE_SIZE);
+		this.tilesX = ceilDiv(this.dataset.width, this.tileSize);
+		this.tilesY = ceilDiv(this.dataset.height, this.tileSize);
 		this.tileCount = this.tilesX * this.tilesY;
 		this.pixelCount = this.dataset.width * this.dataset.height;
 		this.pairCapacity = this.tileCount * this.tileCapacity;
@@ -1237,37 +2369,30 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			this.tileCapacity,
 			this.storageBufferLimit,
 			this.checkpointPrecision === "packed-f16" ? 8 : 16,
+			this.requestedCheckpointStride,
 		);
 		this.checkpointStride = checkpointLayout.stride;
 		this.blocksPerTile = checkpointLayout.blocksPerTile;
 		const tiledBufferBytes = {
 			pairData: this.pairCapacity * 8,
 			checkpoints: checkpointLayout.byteLength,
-			gradientAccumulator: this.splatCount * SPLAT_BYTES,
+			gradientAccumulator: this.splatCount * this.gradientFloats * 4,
 		};
 		for (const [label, byteLength] of Object.entries(tiledBufferBytes)) {
 			assertStorageBufferFits(`The tiled ${label} buffer`, byteLength, this.storageBufferLimit);
 		}
-		this.memoryPlan = Object.freeze({
-			targetPageBytes: this.targetBufferByteLength(this.dataset),
-			tileCapacity: this.tileCapacity,
-			pairCapacity: this.pairCapacity,
-			checkpointStride: this.checkpointStride,
-			checkpointPrecision: this.checkpointPrecision,
-			checkpointBytes: tiledBufferBytes.checkpoints,
-			pairDataBytes: tiledBufferBytes.pairData,
-			gradientAccumulatorBytes: tiledBufferBytes.gradientAccumulator,
-			pairGradientBytes: 0,
-			storageBufferLimit: this.storageBufferLimit,
-			nativeShaderF16: this.supportsShaderF16,
-			staticWarmupSteps: this.staticWarmupSteps,
-		});
+		const splitProjection = this.projectionLayout
+			=== TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
+		const rasterProjectionBytes = this.splatCount * (splitProjection
+			? RASTER_PROJECTION_BYTES : MONOLITHIC_PROJECTION_BYTES);
+		const projectionVjpBytes = splitProjection
+			? this.splatCount * PROJECTION_VJP_BYTES : 0;
 		Object.assign(this.buffers, {
 			tiledConfig: makeBuffer(TILED_CONFIG_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST),
-			projections: makeBuffer(this.splatCount * PROJECTION_BYTES),
+			projections: makeBuffer(rasterProjectionBytes),
 			tileCounts: makeBuffer(this.tileCount * 4),
 			pairData: makeBuffer(tiledBufferBytes.pairData),
-			counters: makeBuffer(16),
+			counters: makeBuffer(32),
 			indirectArgs: makeBuffer(12, GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT
 				| GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC),
 			renderedTrain: makeBuffer(this.pixelCount * 16),
@@ -1277,27 +2402,192 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			pixelLoss: makeBuffer(this.pixelCount * 16),
 			pixelGrad: makeBuffer(this.pixelCount * 16),
 			gradientAtoms: makeBuffer(tiledBufferBytes.gradientAccumulator),
-			tiledMetrics: makeBuffer(16),
+			tiledMetrics: makeBuffer(64),
+		});
+		if (splitProjection) {
+			this.buffers.projectionVjp = makeBuffer(projectionVjpBytes);
+		}
+		if (this.ssimLayout === TILED_SSIM_LAYOUTS.SEPARABLE) {
+			this.buffers.ssimScratch = makeBuffer(this.pixelCount * SSIM_STATS_BYTES);
+		}
+		if (this.timestampQueryEnabled) {
+			const timestampBytes = TILED_GPU_PHASES.length * 2 * 8;
+			this.tiledTimestampQuerySet = this.device.createQuerySet({
+				label: "tiled-phase-timestamps",
+				type: "timestamp",
+				count: TILED_GPU_PHASES.length * 2,
+			});
+			this.buffers.tiledTimestampResolve = makeBuffer(
+				timestampBytes,
+				GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+			);
+			this.buffers.tiledTimestampReadback = makeBuffer(
+				timestampBytes,
+				GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+			);
+			this.tiledTimestampBytes = timestampBytes;
+		}
+		this.cycleMetricCount = this.trainViewIndices.length * this.dataset.frameCount;
+		this.cycleMetricBytes = this.cycleMetricCount * 16;
+		this.buffers.metricsReadback.destroy();
+		this.buffers.metricsReadback = makeBuffer(64 + this.cycleMetricBytes,
+			GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
+		this.buffers.cycleMetrics = makeBuffer(this.cycleMetricBytes);
+		const size = (value) => Number(value?.size ?? 0);
+		const total = (values) => values.reduce((sum, value) => sum + size(value), 0);
+		const bufferBytes = Object.freeze({
+			parameterPingPong: total(this.buffers.params),
+			optimizerMoments: size(this.buffers.firstMoment) + size(this.buffers.secondMoment),
+			densityStats: size(this.buffers.stats),
+			gradientAccumulator: size(this.buffers.gradientAtoms),
+			projections: size(this.buffers.projections) + size(this.buffers.projectionVjp),
+			parameterReadback: size(this.buffers.paramsReadback),
+			previewSort: total(this.buffers.renderOrder) + total(this.buffers.renderDepths),
+			sampleIndices: size(this.buffers.sampleIndices),
+			sampledWorkspace: size(this.buffers.sampleGradients) + size(this.buffers.sampleLosses),
+			targetPage: size(this.buffers.target),
+			cameraData: size(this.buffers.cameras) + size(this.buffers.trainViews)
+				+ size(this.buffers.cameraSampleIndices) + size(this.buffers.cameraSampleRanges),
+			rasterPairs: size(this.buffers.pairData) + size(this.buffers.tileCounts),
+			transmittanceCheckpoints: size(this.buffers.checkpoints),
+			fullImageWorkspace: size(this.buffers.renderedTrain) + size(this.buffers.stopRanks)
+				+ size(this.buffers.ssimStats) + size(this.buffers.ssimScratch)
+				+ size(this.buffers.pixelLoss) + size(this.buffers.pixelGrad),
+			configAndTelemetry: size(this.buffers.trainConfig) + total(this.buffers.renderConfig)
+				+ size(this.buffers.tiledConfig) + size(this.buffers.counters)
+				+ size(this.buffers.indirectArgs) + size(this.buffers.tiledMetrics)
+				+ size(this.buffers.cycleMetrics) + size(this.buffers.metricsReadback)
+				+ size(this.buffers.tiledTimestampResolve) + size(this.buffers.tiledTimestampReadback),
+			previewGeometry: size(this.buffers.quad),
+		});
+		const capacityScaledBytes = bufferBytes.parameterPingPong + bufferBytes.optimizerMoments
+			+ bufferBytes.densityStats + bufferBytes.gradientAccumulator + bufferBytes.projections
+			+ bufferBytes.parameterReadback + bufferBytes.previewSort;
+		const allocatedBytes = Object.values(bufferBytes).reduce((sum, value) => sum + value, 0);
+		this.memoryPlan = Object.freeze({
+			targetPageBytes: this.targetBufferByteLength(this.dataset),
+			tileCapacity: this.tileCapacity,
+			tileSize: this.tileSize,
+			pairCapacity: this.pairCapacity,
+			checkpointStride: this.checkpointStride,
+			requestedCheckpointStride: this.requestedCheckpointStride,
+			checkpointPrecision: this.checkpointPrecision,
+			checkpointOrder: this.checkpointOrder,
+			checkpointBytes: tiledBufferBytes.checkpoints,
+			pairDataBytes: tiledBufferBytes.pairData,
+			gradientAccumulatorBytes: tiledBufferBytes.gradientAccumulator,
+			rasterProjectionBytes,
+			projectionVjpBytes,
+			projectionLayout: this.projectionLayout,
+			ssimLayout: this.ssimLayout,
+			ssimScratchBytes: size(this.buffers.ssimScratch),
+			pairGradientBytes: 0,
+			sampledDepthOrderCacheBytes: 0,
+			capacityScaledBytes,
+			bytesPerCapacitySplat: capacityScaledBytes / this.splatCount,
+			allocatedBytes,
+			bufferBytes,
+			storageBufferLimit: this.storageBufferLimit,
+			nativeShaderF16: this.supportsShaderF16,
+			backwardMode: this.backwardMode,
+			backwardGranularity: this.backwardGranularity,
+			gradientRecordFloats: this.gradientFloats,
+			timestampQuerySupported: this.supportsTimestampQuery,
+			timestampQueryEnabled: this.timestampQueryEnabled,
+			sharePairPacket: this.sharePairPacket,
+			staticWarmupSteps: this.staticWarmupSteps,
+			metricCycleSteps: this.cycleMetricCount,
 		});
 	}
 
 	createBindGroups() {
 		super.createBindGroups();
+		this.device.pushErrorScope("validation");
 		const group = (pipeline, entries, index = 0) => this.device.createBindGroup({
 			layout: pipeline.getBindGroupLayout(index), entries,
 		});
 		const buffer = (binding, value) => ({ binding, resource: { buffer: value } });
+		const projectionVjp = this.buffers.projectionVjp ?? this.buffers.projections;
+		const updateEntries = (paramsIn, paramsOut) => {
+			const entries = [
+				buffer(0, this.buffers.tiledConfig), buffer(1, paramsIn),
+				buffer(2, paramsOut), buffer(3, this.buffers.firstMoment),
+				buffer(4, this.buffers.secondMoment), buffer(5, this.buffers.stats),
+				buffer(6, this.buffers.gradientAtoms),
+			];
+			if (this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D) {
+				entries.push(buffer(7, projectionVjp));
+				if (this.projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT) {
+					entries.push(buffer(8, this.buffers.cameras));
+				}
+			}
+			return entries;
+		};
+		const projectEntries = (params) => {
+			const entries = [
+				buffer(0, this.buffers.tiledConfig), buffer(1, params),
+				buffer(2, this.buffers.cameras), buffer(3, this.buffers.tileCounts),
+				buffer(4, this.buffers.pairData), buffer(5, this.buffers.projections),
+				buffer(6, this.buffers.counters),
+			];
+			if (this.projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT) {
+				entries.push(buffer(7, projectionVjp));
+			}
+			return entries;
+		};
+		const backwardEntries = (params) => {
+			const entries = [
+				buffer(0, this.buffers.tiledConfig), buffer(1, params),
+				buffer(2, this.buffers.projections), buffer(3, this.buffers.pairData),
+				buffer(4, this.buffers.renderedTrain), buffer(5, this.buffers.checkpoints),
+				buffer(6, this.buffers.pixelGrad), buffer(7, this.buffers.gradientAtoms),
+			];
+			if (this.backwardGranularity === TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK) {
+				entries.push(buffer(9, this.buffers.tileCounts));
+			} else {
+				entries.push(buffer(8, this.buffers.counters));
+			}
+			return entries;
+		};
+		const ssimBindGroups = this.ssimLayout === TILED_SSIM_LAYOUTS.SEPARABLE ? {
+			ssimHorizontal: group(this.tiledPipelines.ssimHorizontal, [
+				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
+				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimScratch),
+			]),
+			ssimVertical: group(this.tiledPipelines.ssimVertical, [
+				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
+				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimScratch),
+				buffer(4, this.buffers.ssimStats), buffer(5, this.buffers.pixelLoss),
+			]),
+			ssimGradientHorizontal: group(this.tiledPipelines.ssimGradientHorizontal, [
+				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.target),
+				buffer(2, this.buffers.ssimStats), buffer(3, this.buffers.ssimScratch),
+			]),
+			ssimGradientVertical: group(this.tiledPipelines.ssimGradientVertical, [
+				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
+				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimScratch),
+				buffer(4, this.buffers.stopRanks), buffer(5, this.buffers.pixelGrad),
+			]),
+		} : {
+			ssimStats: group(this.tiledPipelines.ssimStats, [
+				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
+				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimStats),
+				buffer(4, this.buffers.pixelLoss),
+			]),
+			ssimGradient: group(this.tiledPipelines.ssimGradient, [
+				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
+				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimStats),
+				buffer(4, this.buffers.stopRanks), buffer(5, this.buffers.pixelGrad),
+			]),
+		};
 		this.tiledBindGroups = {
 			clear: group(this.tiledPipelines.clear, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.tileCounts),
 				buffer(2, this.buffers.counters), buffer(3, this.buffers.indirectArgs),
 				buffer(4, this.buffers.tiledMetrics), buffer(5, this.buffers.gradientAtoms),
 			]),
-			project: this.buffers.params.map((params) => group(this.tiledPipelines.project, [
-				buffer(0, this.buffers.tiledConfig), buffer(1, params), buffer(2, this.buffers.cameras),
-				buffer(3, this.buffers.tileCounts), buffer(4, this.buffers.pairData),
-				buffer(5, this.buffers.projections), buffer(6, this.buffers.counters),
-			])),
+			project: this.buffers.params.map((params) =>
+				group(this.tiledPipelines.project, projectEntries(params))),
 			sort: group(this.tiledPipelines.sort, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.projections),
 				buffer(2, this.buffers.tileCounts), buffer(3, this.buffers.pairData),
@@ -1312,45 +2602,39 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				buffer(5, this.buffers.renderedTrain), buffer(6, this.buffers.checkpoints),
 				buffer(7, this.buffers.stopRanks),
 			])),
-			ssimStats: group(this.tiledPipelines.ssimStats, [
-				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
-				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimStats),
-				buffer(4, this.buffers.pixelLoss),
-			]),
-			ssimGradient: group(this.tiledPipelines.ssimGradient, [
-				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
-				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimStats),
-				buffer(4, this.buffers.stopRanks), buffer(5, this.buffers.pixelGrad),
-			]),
+			...ssimBindGroups,
 			metrics: group(this.tiledPipelines.metrics, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.pixelLoss),
 				buffer(2, this.buffers.counters), buffer(3, this.buffers.tiledMetrics),
+				buffer(4, this.buffers.stopRanks), buffer(5, this.buffers.cycleMetrics),
 			]),
-			backward: this.buffers.params.map((params) => group(this.tiledPipelines.backward, [
-				buffer(0, this.buffers.tiledConfig), buffer(1, params), buffer(2, this.buffers.projections),
-				buffer(3, this.buffers.pairData), buffer(4, this.buffers.renderedTrain),
-				buffer(5, this.buffers.checkpoints), buffer(6, this.buffers.pixelGrad),
-				buffer(7, this.buffers.gradientAtoms), buffer(8, this.buffers.counters),
-			])),
+			backward: this.buffers.params.map((params) =>
+				group(this.tiledPipelines.backward, backwardEntries(params))),
 			update: [
-				group(this.tiledPipelines.update, [
-					buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.params[0]),
-					buffer(2, this.buffers.params[1]), buffer(3, this.buffers.firstMoment),
-					buffer(4, this.buffers.secondMoment), buffer(5, this.buffers.stats),
-					buffer(6, this.buffers.gradientAtoms),
-				]),
-				group(this.tiledPipelines.update, [
-					buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.params[1]),
-					buffer(2, this.buffers.params[0]), buffer(3, this.buffers.firstMoment),
-					buffer(4, this.buffers.secondMoment), buffer(5, this.buffers.stats),
-					buffer(6, this.buffers.gradientAtoms),
-				]),
+				group(this.tiledPipelines.update,
+					updateEntries(this.buffers.params[0], this.buffers.params[1])),
+				group(this.tiledPipelines.update,
+					updateEntries(this.buffers.params[1], this.buffers.params[0])),
 			],
 		};
+		this.tiledBindGroupValidation = this.device.popErrorScope();
 	}
 
-	encodePass(encoder, pipeline, bindGroup, x, y = 1, z = 1) {
-		const pass = encoder.beginComputePass();
+	beginTiledComputePass(encoder, phase = null) {
+		if (!this.activeTimestampProfile || phase == null) return encoder.beginComputePass();
+		const phaseIndex = TILED_GPU_PHASES.indexOf(phase);
+		if (phaseIndex < 0) throw new Error(`Unknown tiled GPU phase "${phase}".`);
+		return encoder.beginComputePass({
+			timestampWrites: {
+				querySet: this.tiledTimestampQuerySet,
+				beginningOfPassWriteIndex: phaseIndex * 2,
+				endOfPassWriteIndex: phaseIndex * 2 + 1,
+			},
+		});
+	}
+
+	encodePass(encoder, pipeline, bindGroup, x, y = 1, z = 1, phase = null) {
+		const pass = this.beginTiledComputePass(encoder, phase);
 		pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(x, y, z); pass.end();
 	}
 
@@ -1385,6 +2669,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.lastTargetOffset = targetOffset;
 		writeTiledConfig(this.tiledConfigBytes, {
 			width: this.dataset.width, height: this.dataset.height, splatCount: this.splatCount,
+			tileSize: this.tileSize,
 			tilesX: this.tilesX, tilesY: this.tilesY, tileCapacity: this.tileCapacity,
 			blocksPerTile: this.blocksPerTile, viewIndex: selected.viewIndex, frameIndex: selected.frameIndex,
 			step: this.stepCount, modelMode, targetOffset, pixelCount: this.pixelCount,
@@ -1403,24 +2688,55 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.device.queue.writeBuffer(this.buffers.tiledConfig, 0, this.tiledConfigBytes);
 		const encoder = this.device.createCommandEncoder();
 		this.encodePass(encoder, this.tiledPipelines.clear, this.tiledBindGroups.clear,
-			ceilDiv(Math.max(this.tileCount, this.splatCount * SPLAT_FLOATS), 64));
+			ceilDiv(Math.max(this.tileCount, this.splatCount * this.gradientFloats), 64),
+			1, 1, "clear");
 		this.encodePass(encoder, this.tiledPipelines.project, this.tiledBindGroups.project[this.currentIndex],
-			ceilDiv(this.splatCount, 64));
-		this.encodePass(encoder, this.tiledPipelines.sort, this.tiledBindGroups.sort, this.tileCount);
-		this.encodePass(encoder, this.tiledPipelines.finalize, this.tiledBindGroups.finalize, 1);
+			ceilDiv(this.splatCount, 64), 1, 1, "project");
+		this.encodePass(encoder, this.tiledPipelines.sort, this.tiledBindGroups.sort,
+			this.tileCount, 1, 1, "sort");
+		this.encodePass(encoder, this.tiledPipelines.finalize, this.tiledBindGroups.finalize,
+			1, 1, 1, "finalize");
 		this.encodePass(encoder, this.tiledPipelines.forward, this.tiledBindGroups.forward[this.currentIndex],
-			this.tilesX, this.tilesY);
-		this.encodePass(encoder, this.tiledPipelines.ssimStats, this.tiledBindGroups.ssimStats,
-			ceilDiv(this.pixelCount, 64));
-		this.encodePass(encoder, this.tiledPipelines.ssimGradient, this.tiledBindGroups.ssimGradient,
-			ceilDiv(this.pixelCount, 64));
-		this.encodePass(encoder, this.tiledPipelines.metrics, this.tiledBindGroups.metrics, 1);
-		const backward = encoder.beginComputePass();
+			this.tilesX, this.tilesY, 1, "forward");
+		const ssimWorkgroups = ceilDiv(this.pixelCount, 64);
+		if (this.ssimLayout === TILED_SSIM_LAYOUTS.SEPARABLE) {
+			const statsPass = this.beginTiledComputePass(encoder, "ssimStats");
+			statsPass.setPipeline(this.tiledPipelines.ssimHorizontal);
+			statsPass.setBindGroup(0, this.tiledBindGroups.ssimHorizontal);
+			statsPass.dispatchWorkgroups(ssimWorkgroups);
+			statsPass.setPipeline(this.tiledPipelines.ssimVertical);
+			statsPass.setBindGroup(0, this.tiledBindGroups.ssimVertical);
+			statsPass.dispatchWorkgroups(ssimWorkgroups);
+			statsPass.end();
+			const gradientPass = this.beginTiledComputePass(encoder, "ssimGradient");
+			gradientPass.setPipeline(this.tiledPipelines.ssimGradientHorizontal);
+			gradientPass.setBindGroup(0, this.tiledBindGroups.ssimGradientHorizontal);
+			gradientPass.dispatchWorkgroups(ssimWorkgroups);
+			gradientPass.setPipeline(this.tiledPipelines.ssimGradientVertical);
+			gradientPass.setBindGroup(0, this.tiledBindGroups.ssimGradientVertical);
+			gradientPass.dispatchWorkgroups(ssimWorkgroups);
+			gradientPass.end();
+		} else {
+			this.encodePass(encoder, this.tiledPipelines.ssimStats, this.tiledBindGroups.ssimStats,
+				ssimWorkgroups, 1, 1, "ssimStats");
+			this.encodePass(
+				encoder,
+				this.tiledPipelines.ssimGradient,
+				this.tiledBindGroups.ssimGradient,
+				ssimWorkgroups,
+				1,
+				1,
+				"ssimGradient",
+			);
+		}
+		this.encodePass(encoder, this.tiledPipelines.metrics, this.tiledBindGroups.metrics,
+			1, 1, 1, "metrics");
+		const backward = this.beginTiledComputePass(encoder, "backward");
 		backward.setPipeline(this.tiledPipelines.backward);
 		backward.setBindGroup(0, this.tiledBindGroups.backward[this.currentIndex]);
 		backward.dispatchWorkgroupsIndirect(this.buffers.indirectArgs, 0); backward.end();
 		this.encodePass(encoder, this.tiledPipelines.update, this.tiledBindGroups.update[this.currentIndex],
-			ceilDiv(this.splatCount, 64));
+			ceilDiv(this.splatCount, 64), 1, 1, "update");
 		const nextStep = this.stepCount + 1;
 		const densityDispatches = densityDispatchesForStep(
 			this.initialSplatCount, this.splatCount, nextStep);
@@ -1431,6 +2747,23 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			for (let pass = 0; pass < densityDispatches; pass += 1) maintenance.dispatchWorkgroups(1);
 			maintenance.end(); this.totalRecycled += densityDispatches * 4;
 		}
+		if (this.activeTimestampProfile) {
+			encoder.resolveQuerySet(
+				this.tiledTimestampQuerySet,
+				0,
+				TILED_GPU_PHASES.length * 2,
+				this.buffers.tiledTimestampResolve,
+				0,
+			);
+			encoder.copyBufferToBuffer(
+				this.buffers.tiledTimestampResolve,
+				0,
+				this.buffers.tiledTimestampReadback,
+				0,
+				this.tiledTimestampBytes,
+			);
+		}
+		this.lastProjectionParamIndex = this.currentIndex;
 		this.device.queue.submit([encoder.finish()]);
 		if (validateSubmission) {
 			this.firstStepValidation = this.device.popErrorScope();
@@ -1439,21 +2772,117 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.currentIndex = 1 - this.currentIndex; this.stepCount = nextStep;
 	}
 
+	async profileGpuStep(trainOptions = {}) {
+		if (!this.timestampQueryEnabled) {
+			return {
+				supported: false,
+				reason: this.supportsTimestampQuery
+					? "Timestamp queries were not requested at initialization."
+					: "The WebGPU adapter does not expose timestamp-query.",
+			};
+		}
+		if (this.activeTimestampProfile) throw new Error("A tiled GPU profile is already active.");
+		const profiledStep = this.stepCount;
+		const maintenanceDispatches = densityDispatchesForStep(
+			this.initialSplatCount,
+			this.splatCount,
+			profiledStep + 1,
+		);
+		await this.device.queue.onSubmittedWorkDone();
+		this.activeTimestampProfile = true;
+		try {
+			this.trainStep(trainOptions);
+		} finally {
+			this.activeTimestampProfile = false;
+		}
+		await this.device.queue.onSubmittedWorkDone();
+		await this.buffers.tiledTimestampReadback.mapAsync(
+			GPUMapMode.READ,
+			0,
+			this.tiledTimestampBytes,
+		);
+		const bytes = this.buffers.tiledTimestampReadback
+			.getMappedRange(0, this.tiledTimestampBytes).slice(0);
+		this.buffers.tiledTimestampReadback.unmap();
+		const timestamps = new BigUint64Array(bytes);
+		const phases = {};
+		let totalMs = 0;
+		for (let index = 0; index < TILED_GPU_PHASES.length; index += 1) {
+			const elapsedMs = Number(timestamps[index * 2 + 1] - timestamps[index * 2]) / 1e6;
+			phases[TILED_GPU_PHASES[index]] = elapsedMs;
+			totalMs += elapsedMs;
+		}
+		const gpuSpanMs = Number(
+			timestamps[timestamps.length - 1] - timestamps[0],
+		) / 1e6;
+		const staged = this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D;
+		return {
+			supported: true,
+			totalMs,
+			gpuSpanMs,
+			phases,
+			phaseContract: {
+				backward: staged
+					? "raster derivative and projected-gradient accumulation"
+					: "raster derivative plus repeated 3D projection/covariance VJP",
+				update: staged
+					? "one 3D projection/covariance VJP per splat plus Adam"
+					: "Adam",
+			},
+			maintenanceDispatches,
+			maintenanceIncluded: false,
+		};
+	}
+
 	async readLoss() {
 		const submissionError = await this.firstStepValidation;
 		this.firstStepValidation = null;
 		if (submissionError) throw new Error(`Tiled full-frame submission failed: ${submissionError.message}`);
 		this.device.pushErrorScope("validation");
 		const encoder = this.device.createCommandEncoder();
-		encoder.copyBufferToBuffer(this.buffers.tiledMetrics, 0, this.buffers.metricsReadback, 0, 16);
+		encoder.copyBufferToBuffer(this.buffers.tiledMetrics, 0, this.buffers.metricsReadback, 0, 64);
+		encoder.copyBufferToBuffer(
+			this.buffers.cycleMetrics,
+			0,
+			this.buffers.metricsReadback,
+			64,
+			this.cycleMetricBytes,
+		);
 		this.device.queue.submit([encoder.finish()]);
 		const readbackError = await this.device.popErrorScope();
 		if (readbackError) throw new Error(`Tiled metric readback failed: ${readbackError.message}`);
-		await this.buffers.metricsReadback.mapAsync(GPUMapMode.READ, 0, 16);
-		const values = new Float32Array(this.buffers.metricsReadback.getMappedRange(0, 16).slice(0));
+		const readbackBytes = 64 + this.cycleMetricBytes;
+		await this.buffers.metricsReadback.mapAsync(GPUMapMode.READ, 0, readbackBytes);
+		const bytes = this.buffers.metricsReadback.getMappedRange(0, readbackBytes).slice(0);
 		this.buffers.metricsReadback.unmap();
+		const values = new Float32Array(bytes, 0, 16);
+		const cycleRecords = new Float32Array(bytes, 64, this.cycleMetricCount * 4);
+		const objectiveStep = Math.round(values[14]);
+		const phaseStartStep = objectiveStep < this.staticWarmupSteps ? 0 : this.staticWarmupSteps;
+		const cycle = summarizeCycleMetrics(
+			cycleRecords,
+			objectiveStep,
+			this.cycleMetricCount,
+			phaseStartStep,
+		);
 		this.lastLossBreakdown = {
 			loss: values[0], l1: values[1], dssim: values[2], tileOverflow: values[3],
+			coverage: values[4],
+			pairCount: values[5],
+			maxTileOccupancy: values[6],
+			meanStopRank: values[7],
+			visibleSplats: values[8],
+			capacitySplats: values[9],
+			viewIndex: values[10],
+			frameIndex: values[11],
+			tileOverflowTotal: values[12],
+			maxTileOccupancyEver: values[13],
+			objectiveStep,
+			cycleMeanLoss: cycle?.loss ?? values[0],
+			cycleMeanL1: cycle?.l1 ?? values[1],
+			cycleMeanDssim: cycle?.dssim ?? values[2],
+			cycleSamples: cycle?.samples ?? 1,
+			cycleComplete: cycle?.complete ?? false,
 		};
 		return values[0];
 	}
@@ -1462,16 +2891,52 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		const renderedBytes = this.pixelCount * 16;
 		const gradientBytes = this.splatCount * SPLAT_BYTES;
 		const metricsOffset = renderedBytes + gradientBytes;
+		const staged = this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D;
+		const materializedGradients = staged ? this.device.createBuffer({
+			label: "tiled-staged-full-gradients",
+			size: gradientBytes,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+		}) : null;
 		const readback = this.device.createBuffer({
 			label: "tiled-step-debug-readback",
-			size: metricsOffset + 16,
+			size: metricsOffset + 64,
 			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 		});
 		try {
 			const encoder = this.device.createCommandEncoder();
+			if (staged) {
+				const paramsIndex = this.lastProjectionParamIndex ?? this.currentIndex;
+				const debugGroup = this.device.createBindGroup({
+					layout: this.tiledPipelines.gradientDebug.getBindGroupLayout(0),
+					entries: [
+						{ binding: 0, resource: { buffer: this.buffers.tiledConfig } },
+						{ binding: 1, resource: { buffer: this.buffers.params[paramsIndex] } },
+						{ binding: 2, resource: {
+							buffer: this.buffers.projectionVjp ?? this.buffers.projections,
+						} },
+						{ binding: 3, resource: { buffer: this.buffers.gradientAtoms } },
+						{ binding: 4, resource: { buffer: materializedGradients } },
+						...(this.projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+							? [{ binding: 5, resource: { buffer: this.buffers.cameras } }]
+							: []),
+					],
+				});
+				this.encodePass(
+					encoder,
+					this.tiledPipelines.gradientDebug,
+					debugGroup,
+					ceilDiv(this.splatCount, 64),
+				);
+			}
 			encoder.copyBufferToBuffer(this.buffers.renderedTrain, 0, readback, 0, renderedBytes);
-			encoder.copyBufferToBuffer(this.buffers.gradientAtoms, 0, readback, renderedBytes, gradientBytes);
-			encoder.copyBufferToBuffer(this.buffers.tiledMetrics, 0, readback, metricsOffset, 16);
+			encoder.copyBufferToBuffer(
+				materializedGradients ?? this.buffers.gradientAtoms,
+				0,
+				readback,
+				renderedBytes,
+				gradientBytes,
+			);
+			encoder.copyBufferToBuffer(this.buffers.tiledMetrics, 0, readback, metricsOffset, 64);
 			this.device.queue.submit([encoder.finish()]);
 			await readback.mapAsync(GPUMapMode.READ);
 			const bytes = readback.getMappedRange().slice(0);
@@ -1481,11 +2946,12 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				frameIndex: this.lastFrameIndex ?? null,
 				renderedRgba: new Float32Array(bytes, 0, this.pixelCount * 4).slice(),
 				gradients: new Float32Array(bytes, renderedBytes, this.splatCount * SPLAT_FLOATS).slice(),
-				metrics: new Float32Array(bytes, metricsOffset, 4).slice(),
+				metrics: new Float32Array(bytes, metricsOffset, 16).slice(),
 			};
 		} finally {
 			if (readback.mapState === "mapped") readback.unmap();
 			readback.destroy();
+			materializedGradients?.destroy();
 		}
 	}
 
@@ -1493,5 +2959,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		const read = this.readbackChain.then(() => this.readTiledStepDebugStateUnlocked());
 		this.readbackChain = read.then(() => undefined, () => undefined);
 		return read;
+	}
+
+	dispose() {
+		this.tiledTimestampQuerySet?.destroy();
+		this.tiledTimestampQuerySet = null;
+		super.dispose();
 	}
 }

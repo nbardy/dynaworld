@@ -1,0 +1,127 @@
+{
+  "schema": "dynaworld_browser_tiled_8k/v1",
+  "date": "2026-07-30",
+  "source": {
+    "base_commit": "b8c28f3",
+    "state": "working tree with the 8K browser-capacity implementation"
+  },
+  "hardware": {
+    "adapter": "apple",
+    "machine": "Apple M4 10-core GPU",
+    "max_storage_buffer_binding_size": 134217728,
+    "native_shader_f16": true
+  },
+  "workload": {
+    "dataset": "coffee_martini calibrated train17_holdout1",
+    "views": 18,
+    "train_views": 17,
+    "heldout_view": 17,
+    "frames": 16,
+    "raster": [
+      96,
+      72
+    ],
+    "training_pixels_per_step": 6912,
+    "objective": "0.8 L1 + 0.2 (1 - 11x11 Gaussian SSIM)",
+    "checkpoint_precision": "packed-f16",
+    "tile_capacity": 4096
+  },
+  "method": {
+    "warmup_steps": 32,
+    "measured_steps": 128,
+    "repeats": 3,
+    "fresh_device_per_repeat": true,
+    "gpu_queue_drained_after_measured_steps": true,
+    "compilation_initialization_preview_validation_and_readback_excluded": true
+  },
+  "results": [
+    {
+      "initial_active_splats": 4096,
+      "global_model_capacity": 4096,
+      "elapsed_ms": [
+        383.5999999940395,
+        365.0999999940395,
+        365.5
+      ],
+      "steps_per_second": [
+        333.68091762770825,
+        350.58887976469373,
+        350.20519835841316
+      ],
+      "median_steps_per_second": 350.20519835841316,
+      "loss_after_160_steps": [
+        0.4725101590156555,
+        0.4725101888179779,
+        0.47251012921333313
+      ],
+      "tile_overflow": [
+        0,
+        0,
+        0
+      ],
+      "memory_plan_bytes": {
+        "target_page": 110592,
+        "pair_capacity": 122880,
+        "forward_checkpoints": 14155776,
+        "pair_ids_and_references": 983040,
+        "fp32_gradient_accumulator": 393216,
+        "checkpoint_stride": 16
+      }
+    },
+    {
+      "initial_active_splats": 8192,
+      "global_model_capacity": 8192,
+      "initialization_note": "The 4096-seed bank is repeated only for this all-active systems stress.",
+      "elapsed_ms": [
+        644.9000000059605,
+        679.7000000178814,
+        692.0999999940395
+      ],
+      "steps_per_second": [
+        198.48038455391062,
+        188.3183757490549,
+        184.94437220214184
+      ],
+      "median_steps_per_second": 188.3183757490549,
+      "loss_after_160_steps": [
+        0.4686796963214874,
+        0.46867984533309937,
+        0.4686736464500427
+      ],
+      "tile_overflow": [
+        0,
+        0,
+        0
+      ],
+      "memory_plan_bytes": {
+        "target_page": 110592,
+        "pair_capacity": 122880,
+        "forward_checkpoints": 14155776,
+        "pair_ids_and_references": 983040,
+        "fp32_gradient_accumulator": 786432,
+        "checkpoint_stride": 16
+      }
+    }
+  ],
+  "derived": {
+    "eight_k_throughput_retention_percent": 53.77372370021841,
+    "eight_k_step_rate_reduction_percent": 46.2262762997816,
+    "gradient_accumulator_increase_bytes": 393216,
+    "depth_key_bits_at_4k": 20,
+    "depth_key_bits_at_8k": 19
+  },
+  "validation": {
+    "browser_unit_tests": "82 passed, 0 failed",
+    "live_default_smoke": "4096 initial / 8192 capacity reached step 1218 with 112 split activations, 4201 active splats, finite loss, and zero tile overflow",
+    "live_growth_telemetry": "A clean run displayed 80 split activations through regular loss telemetry at step 1248 without waiting for full validation",
+    "all_active_8k_smoke": "Three 160-step runs completed with finite loss and zero tile overflow",
+    "sampled_ray_control": "Expected rejection above its independent 2048-splat depth-order limit"
+  },
+  "caveats": [
+    "The all-active 8K benchmark repeats seed locations and is a systems stress, not an initialization or quality recommendation.",
+    "The canonical SPA starts with 4096 active seeds and fills the hidden half through splitting by step 26100.",
+    "The benchmark measures the complete tiled optimizer step but excludes preview, validation, and UI scheduling.",
+    "Zero overflow is scene- and scale-dependent; the live Tile Overflow metric remains a required validity check.",
+    "A matched convergence run is still required to establish whether 8K capacity improves train or heldout image quality."
+  ]
+}

@@ -245,11 +245,11 @@
 	<main>
 		<h1>DynaWorld Browser Trainer Backend Benchmark</h1>
 		<p class="lede">
-			Runs both registered SPA training backends sequentially against one loaded Coffee Martini
+			Runs all registered SPA training backends sequentially against one loaded Coffee Martini
 			train17/holdout1 bundle and the same requested splat count.
 		</p>
 		<p class="warning">
-			The backends are not objective-equivalent: <strong>tiled3d</strong> supervises a complete image with
+			The backends are not all objective-equivalent: both tiled lanes supervise a complete image with
 			L1 + SSIM, while <strong>sampled3d</strong> supervises selected rays with RGB MSE and support guards.
 			Steps/s and supervised pixels/s describe throughput, not equal optimization progress or quality.
 		</p>
@@ -257,11 +257,11 @@
 		<form id="benchmarkForm">
 			<label>
 				Requested splats
-				<input id="splatCount" type="number" min="8" max="4096" step="8" value="1536" required />
+				<input id="splatCount" type="number" min="8" max="32768" step="8" value="4096" required />
 			</label>
 			<label>
-				Tiled capacity
-				<input id="tiledCapacity" type="number" min="8" max="4096" step="8" value="4096" required />
+				Global model capacity
+				<input id="tiledCapacity" type="number" min="8" max="32768" step="8" value="8192" required />
 			</label>
 			<label>
 				Warmup steps
@@ -320,8 +320,21 @@
 					</tr>
 				</thead>
 				<tbody id="resultsBody">
+					<tr data-backend="tiled3d-fast">
+						<td>Fast tiled full-frame</td>
+						<td>0.8 L1 + 0.2 (1 - SSIM)</td>
+						<td>Pending</td>
+						<td>-</td>
+						<td>-</td>
+						<td>-</td>
+						<td>-</td>
+						<td>-</td>
+						<td>-</td>
+						<td>-</td>
+						<td class="pending">Pending</td>
+					</tr>
 					<tr data-backend="tiled3d">
-						<td>Tiled full-frame</td>
+						<td>Direct tiled reference</td>
 						<td>0.8 L1 + 0.2 (1 - SSIM)</td>
 						<td>Pending</td>
 						<td>-</td>
@@ -363,12 +376,12 @@
 			Tiled growth headroom is disabled here so both lanes optimize the requested number of splats.
 			Raster scales above 1 use nearest-neighbor copies of the loaded 96x72 targets solely to
 			measure kernel scaling; they are not higher-detail training data. The SSIM control changes
-			the tiled backend's local box window for throughput ablation only. Packed FP16 affects
+			the tiled backend's local Gaussian window for throughput ablation only. Packed FP16 affects
 			only forward compositing checkpoints; projection, loss, gradients, and optimizer state
 			remain FP32.
 		</p>
 	</main>
 
-	<script type="module" src="./benchmarkTrainerBackends.js"></script>
+	<script type="module" src="./benchmarkTrainerBackends.js?v=20260731-fasttiles6"></script>
 </body>
 </html>
