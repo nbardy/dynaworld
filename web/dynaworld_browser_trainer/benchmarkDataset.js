@@ -37,7 +37,7 @@ export function resizePackedRgbaNearest(source, sourceWidth, sourceHeight, image
 	return resized;
 }
 
-export function resizeDatasetForBenchmark(dataset, scale) {
+export function resizeDatasetForBenchmark(dataset, scale, { computeSamples = true } = {}) {
 	positiveInteger(scale, "scale");
 	if (scale === 1) return dataset;
 	const width = dataset.width * scale;
@@ -56,14 +56,19 @@ export function resizeDatasetForBenchmark(dataset, scale) {
 		dataset.viewCount,
 		scale,
 	);
-	const samples = computeMultiviewSamples(
-		frames,
-		backgrounds,
-		width,
-		height,
-		dataset.frameCount,
-		dataset.trainViewCount,
-	);
+	const samples = computeSamples
+		? computeMultiviewSamples(
+			frames,
+			backgrounds,
+			width,
+			height,
+			dataset.frameCount,
+			dataset.trainViewCount,
+		)
+		: {
+			motionSamples: new Uint32Array(0),
+			staticSamples: new Uint32Array(0),
+		};
 	const valuesPerView = width * height * dataset.frameCount * 4;
 	const backgroundValuesPerView = width * height * 4;
 	const resized = {

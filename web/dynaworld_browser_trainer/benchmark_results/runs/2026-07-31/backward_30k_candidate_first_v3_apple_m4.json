@@ -1,0 +1,815 @@
+{
+  "schema": "dynaworld-browser-tiled-kernel-benchmark/v3",
+  "recordedAt": "2026-07-30T19:36:15.723Z",
+  "options": {
+    "experiment": "backward",
+    "variant": "both",
+    "order": "candidate-first",
+    "splats": 30000,
+    "capacity": 30000,
+    "scale": 1,
+    "warmup": 32,
+    "steps": 128,
+    "profiles": 5,
+    "checkpointPrecision": "packed-f16",
+    "checkpointStride": 16,
+    "checkpointOrder": "pixel-major",
+    "projectionLayout": "split-compact",
+    "ssimLayout": "separable",
+    "sharePairPacket": false,
+    "backwardGranularity": "checkpoint-block",
+    "tileSize": 8,
+    "tileCapacity": 4096,
+    "maxRoundCv": 0.1
+  },
+  "dataset": {
+    "name": "coffee_martini calibrated train17_holdout1",
+    "width": 96,
+    "height": 72,
+    "viewCount": 18,
+    "trainViewCount": 17,
+    "frameCount": 16
+  },
+  "results": [
+    {
+      "id": "staged-project3d",
+      "label": "Staged projected VJP per splat",
+      "adapter": "apple · tiled full-frame · staged-project3d · checkpoint-block · pixel-major tape · split-compact projection · separable SSIM",
+      "backwardMode": "staged-project3d",
+      "raster": [
+        96,
+        72
+      ],
+      "requestedSplats": 30000,
+      "capacity": 30000,
+      "warmupSteps": 32,
+      "measuredSteps": 128,
+      "measurementRounds": 4,
+      "roundElapsedMs": [
+        79,
+        77.89999997615814,
+        77.5,
+        77.10000002384186
+      ],
+      "rounds": [
+        {
+          "round": 0,
+          "steps": 32,
+          "elapsedMs": 79,
+          "executionPosition": 0
+        },
+        {
+          "round": 1,
+          "steps": 32,
+          "elapsedMs": 77.89999997615814,
+          "executionPosition": 1
+        },
+        {
+          "round": 2,
+          "steps": 32,
+          "elapsedMs": 77.5,
+          "executionPosition": 0
+        },
+        {
+          "round": 3,
+          "steps": 32,
+          "elapsedMs": 77.10000002384186,
+          "executionPosition": 1
+        }
+      ],
+      "roundStability": {
+        "supported": true,
+        "samples": [
+          {
+            "round": 0,
+            "steps": 32,
+            "elapsedMs": 79,
+            "executionPosition": 0,
+            "stepsPerSecond": 405.0632911392405
+          },
+          {
+            "round": 1,
+            "steps": 32,
+            "elapsedMs": 77.89999997615814,
+            "executionPosition": 1,
+            "stepsPerSecond": 410.7830553246962
+          },
+          {
+            "round": 2,
+            "steps": 32,
+            "elapsedMs": 77.5,
+            "executionPosition": 0,
+            "stepsPerSecond": 412.9032258064516
+          },
+          {
+            "round": 3,
+            "steps": 32,
+            "elapsedMs": 77.10000002384186,
+            "executionPosition": 1,
+            "stepsPerSecond": 415.045395461797
+          }
+        ],
+        "meanStepsPerSecond": 410.94874193304634,
+        "standardDeviationStepsPerSecond": 3.7171413897147736,
+        "coefficientOfVariation": 0.00904526771935072,
+        "minimumStepsPerSecond": 405.0632911392405,
+        "maximumStepsPerSecond": 415.045395461797,
+        "maxToMinRatio": 1.0246433200463114,
+        "lastToFirstRatio": 1.0246433200463114,
+        "maxAllowedCoefficientOfVariation": 0.1,
+        "stable": true,
+        "executionPositionEffect": {
+          "positions": [
+            {
+              "position": 0,
+              "samples": 2,
+              "meanStepsPerSecond": 408.98325847284605
+            },
+            {
+              "position": 1,
+              "samples": 2,
+              "meanStepsPerSecond": 412.9142253932466
+            }
+          ],
+          "secondToFirstRatio": 1.0096115594928725,
+          "relativeDifference": 0.00956558937718084
+        }
+      },
+      "profileSteps": 5,
+      "elapsedMs": 311.5,
+      "stepsPerSecond": 410.91492776886037,
+      "loss": 0.4835447371006012,
+      "lossBreakdown": {
+        "loss": 0.4835447371006012,
+        "l1": 0.3690485656261444,
+        "dssim": 0.9415291547775269,
+        "tileOverflow": 0,
+        "coverage": 0.20686952769756317,
+        "pairCount": 26212,
+        "maxTileOccupancy": 1757,
+        "meanStopRank": 242.70370483398438,
+        "visibleSplats": 21510,
+        "capacitySplats": 30000,
+        "viewIndex": 6,
+        "frameIndex": 14,
+        "tileOverflowTotal": 0,
+        "maxTileOccupancyEver": 2379,
+        "objectiveStep": 164,
+        "cycleMeanLoss": 0.5007096288782178,
+        "cycleMeanL1": 0.3853967623277144,
+        "cycleMeanDssim": 0.9619610002546599,
+        "cycleSamples": 165,
+        "cycleComplete": false
+      },
+      "profile": {
+        "supported": true,
+        "samples": 5,
+        "totalMedianMs": 2.4525099999999997,
+        "totalP95Ms": 2.5344634000000004,
+        "gpuSpanMedianMs": 2.457675,
+        "gpuSpanP95Ms": 2.542814,
+        "phaseContract": {
+          "backward": "raster derivative and projected-gradient accumulation",
+          "update": "one 3D projection/covariance VJP per splat plus Adam"
+        },
+        "maintenanceIncluded": false,
+        "maintenanceDispatches": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "phaseMedianMs": {
+          "clear": 0.027541,
+          "project": 0.064207,
+          "sort": 0.153121,
+          "finalize": 0.001709,
+          "forward": 0.99872,
+          "ssimStats": 0.023708,
+          "ssimGradient": 0.028915,
+          "metrics": 0.009042,
+          "backward": 0.920611,
+          "update": 0.210826
+        },
+        "phaseP95Ms": {
+          "clear": 0.028448599999999998,
+          "project": 0.0710564,
+          "sort": 0.1678022,
+          "finalize": 0.00195,
+          "forward": 1.0630582,
+          "ssimStats": 0.0244486,
+          "ssimGradient": 0.029599599999999997,
+          "metrics": 0.009074800000000001,
+          "backward": 0.9994864000000001,
+          "update": 0.2200608
+        }
+      },
+      "memoryPlan": {
+        "targetPageBytes": 110592,
+        "tileCapacity": 4096,
+        "tileSize": 8,
+        "pairCapacity": 442368,
+        "checkpointStride": 16,
+        "requestedCheckpointStride": 16,
+        "checkpointPrecision": "packed-f16",
+        "checkpointOrder": "pixel-major",
+        "checkpointBytes": 14155776,
+        "pairDataBytes": 3538944,
+        "gradientAccumulatorBytes": 1440000,
+        "rasterProjectionBytes": 960000,
+        "projectionVjpBytes": 2400000,
+        "projectionLayout": "split-compact",
+        "ssimLayout": "separable",
+        "ssimScratchBytes": 552960,
+        "pairGradientBytes": 0,
+        "sampledDepthOrderCacheBytes": 0,
+        "capacityScaledBytes": 20466432,
+        "bytesPerCapacitySplat": 682.2144,
+        "allocatedBytes": 39749864,
+        "bufferBytes": {
+          "parameterPingPong": 5760000,
+          "optimizerMoments": 5760000,
+          "densityStats": 480000,
+          "gradientAccumulator": 1440000,
+          "projections": 3360000,
+          "parameterReadback": 2880000,
+          "previewSort": 786432,
+          "sampleIndices": 4,
+          "sampledWorkspace": 864,
+          "targetPage": 110592,
+          "cameraData": 1800,
+          "rasterPairs": 3539376,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageWorkspace": 1465344,
+          "configAndTelemetry": 9644,
+          "previewGeometry": 32
+        },
+        "storageBufferLimit": 134217728,
+        "nativeShaderF16": true,
+        "backwardMode": "staged-project3d",
+        "backwardGranularity": "checkpoint-block",
+        "gradientRecordFloats": 12,
+        "timestampQuerySupported": true,
+        "timestampQueryEnabled": true,
+        "sharePairPacket": false,
+        "staticWarmupSteps": 0,
+        "metricCycleSteps": 272
+      },
+      "validity": {
+        "finiteLoss": true,
+        "zeroTileOverflow": true,
+        "stableRounds": true,
+        "valid": true,
+        "reasons": []
+      }
+    },
+    {
+      "id": "direct-3d",
+      "label": "Direct 3D VJP per tile pair",
+      "adapter": "apple · tiled full-frame · direct-3d · pair · pixel-major tape · monolithic projection · separable SSIM",
+      "backwardMode": "direct-3d",
+      "raster": [
+        96,
+        72
+      ],
+      "requestedSplats": 30000,
+      "capacity": 30000,
+      "warmupSteps": 32,
+      "measuredSteps": 128,
+      "measurementRounds": 4,
+      "roundElapsedMs": [
+        141.80000001192093,
+        141.29999995231628,
+        141.5,
+        141.5999999642372
+      ],
+      "rounds": [
+        {
+          "round": 0,
+          "steps": 32,
+          "elapsedMs": 141.80000001192093,
+          "executionPosition": 1
+        },
+        {
+          "round": 1,
+          "steps": 32,
+          "elapsedMs": 141.29999995231628,
+          "executionPosition": 0
+        },
+        {
+          "round": 2,
+          "steps": 32,
+          "elapsedMs": 141.5,
+          "executionPosition": 1
+        },
+        {
+          "round": 3,
+          "steps": 32,
+          "elapsedMs": 141.5999999642372,
+          "executionPosition": 0
+        }
+      ],
+      "roundStability": {
+        "supported": true,
+        "samples": [
+          {
+            "round": 0,
+            "steps": 32,
+            "elapsedMs": 141.80000001192093,
+            "executionPosition": 1,
+            "stepsPerSecond": 225.66995766791118
+          },
+          {
+            "round": 1,
+            "steps": 32,
+            "elapsedMs": 141.29999995231628,
+            "executionPosition": 0,
+            "stepsPerSecond": 226.46850679970885
+          },
+          {
+            "round": 2,
+            "steps": 32,
+            "elapsedMs": 141.5,
+            "executionPosition": 1,
+            "stepsPerSecond": 226.14840989399292
+          },
+          {
+            "round": 3,
+            "steps": 32,
+            "elapsedMs": 141.5999999642372,
+            "executionPosition": 0,
+            "stepsPerSecond": 225.98870062204793
+          }
+        ],
+        "meanStepsPerSecond": 226.0688937459152,
+        "standardDeviationStepsPerSecond": 0.2879211445935441,
+        "coefficientOfVariation": 0.0012735991220320046,
+        "minimumStepsPerSecond": 225.66995766791118,
+        "maximumStepsPerSecond": 226.46850679970885,
+        "maxToMinRatio": 1.003538570840576,
+        "lastToFirstRatio": 1.0014124297156373,
+        "maxAllowedCoefficientOfVariation": 0.1,
+        "stable": true,
+        "executionPositionEffect": {
+          "positions": [
+            {
+              "position": 0,
+              "samples": 2,
+              "meanStepsPerSecond": 226.2286037108784
+            },
+            {
+              "position": 1,
+              "samples": 2,
+              "meanStepsPerSecond": 225.90918378095205
+            }
+          ],
+          "secondToFirstRatio": 0.9985880656791988,
+          "relativeDifference": 0.0014129318042549665
+        }
+      },
+      "profileSteps": 5,
+      "elapsedMs": 566.1999999284744,
+      "stepsPerSecond": 226.06852705081187,
+      "loss": 0.48329731822013855,
+      "lossBreakdown": {
+        "loss": 0.48329731822013855,
+        "l1": 0.3688693344593048,
+        "dssim": 0.9410092234611511,
+        "tileOverflow": 0,
+        "coverage": 0.20748019218444824,
+        "pairCount": 26155,
+        "maxTileOccupancy": 1748,
+        "meanStopRank": 242.17593383789062,
+        "visibleSplats": 21516,
+        "capacitySplats": 30000,
+        "viewIndex": 6,
+        "frameIndex": 14,
+        "tileOverflowTotal": 0,
+        "maxTileOccupancyEver": 2379,
+        "objectiveStep": 164,
+        "cycleMeanLoss": 0.5006371180216471,
+        "cycleMeanL1": 0.38531081983537385,
+        "cycleMeanDssim": 0.9619422222628738,
+        "cycleSamples": 165,
+        "cycleComplete": false
+      },
+      "profile": {
+        "supported": true,
+        "samples": 5,
+        "totalMedianMs": 4.301392999999999,
+        "totalP95Ms": 4.4067748,
+        "gpuSpanMedianMs": 4.304267,
+        "gpuSpanP95Ms": 4.4129162,
+        "phaseContract": {
+          "backward": "raster derivative plus repeated 3D projection/covariance VJP",
+          "update": "Adam"
+        },
+        "maintenanceIncluded": false,
+        "maintenanceDispatches": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "phaseMedianMs": {
+          "clear": 0.050915,
+          "project": 0.091958,
+          "sort": 0.160207,
+          "finalize": 0.001709,
+          "forward": 1.154815,
+          "ssimStats": 0.023375,
+          "ssimGradient": 0.024583,
+          "metrics": 0.009042,
+          "backward": 2.577211,
+          "update": 0.185955
+        },
+        "phaseP95Ms": {
+          "clear": 0.06309920000000001,
+          "project": 0.1199644,
+          "sort": 0.1750146,
+          "finalize": 0.00175,
+          "forward": 1.2637718,
+          "ssimStats": 0.0238166,
+          "ssimGradient": 0.0279578,
+          "metrics": 0.0091668,
+          "backward": 2.7169255999999997,
+          "update": 0.1960634
+        }
+      },
+      "memoryPlan": {
+        "targetPageBytes": 110592,
+        "tileCapacity": 4096,
+        "tileSize": 8,
+        "pairCapacity": 442368,
+        "checkpointStride": 16,
+        "requestedCheckpointStride": 16,
+        "checkpointPrecision": "packed-f16",
+        "checkpointOrder": "pixel-major",
+        "checkpointBytes": 14155776,
+        "pairDataBytes": 3538944,
+        "gradientAccumulatorBytes": 2880000,
+        "rasterProjectionBytes": 5760000,
+        "projectionVjpBytes": 0,
+        "projectionLayout": "monolithic",
+        "ssimLayout": "separable",
+        "ssimScratchBytes": 552960,
+        "pairGradientBytes": 0,
+        "sampledDepthOrderCacheBytes": 0,
+        "capacityScaledBytes": 24306432,
+        "bytesPerCapacitySplat": 810.2144,
+        "allocatedBytes": 43589864,
+        "bufferBytes": {
+          "parameterPingPong": 5760000,
+          "optimizerMoments": 5760000,
+          "densityStats": 480000,
+          "gradientAccumulator": 2880000,
+          "projections": 5760000,
+          "parameterReadback": 2880000,
+          "previewSort": 786432,
+          "sampleIndices": 4,
+          "sampledWorkspace": 864,
+          "targetPage": 110592,
+          "cameraData": 1800,
+          "rasterPairs": 3539376,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageWorkspace": 1465344,
+          "configAndTelemetry": 9644,
+          "previewGeometry": 32
+        },
+        "storageBufferLimit": 134217728,
+        "nativeShaderF16": true,
+        "backwardMode": "direct-3d",
+        "backwardGranularity": "pair",
+        "gradientRecordFloats": 24,
+        "timestampQuerySupported": true,
+        "timestampQueryEnabled": true,
+        "sharePairPacket": false,
+        "staticWarmupSteps": 0,
+        "metricCycleSteps": 272
+      },
+      "validity": {
+        "finiteLoss": true,
+        "zeroTileOverflow": true,
+        "stableRounds": true,
+        "valid": true,
+        "reasons": []
+      }
+    }
+  ],
+  "experiment": {
+    "id": "backward",
+    "controlId": "direct-3d",
+    "candidateId": "staged-project3d",
+    "order": "candidate-first"
+  },
+  "comparison": {
+    "controlId": "direct-3d",
+    "candidateId": "staged-project3d",
+    "candidateThroughputSpeedup": 1.8176565005729517,
+    "candidateGpuTimeSpeedup": 1.75135727872888,
+    "lossDelta": 0.0002474188804626465,
+    "allocatedByteDelta": -3840000,
+    "validForPromotion": true,
+    "stagedThroughputSpeedup": 1.8176565005729517,
+    "stagedGpuTimeSpeedup": 1.75135727872888
+  },
+  "validity": {
+    "correctnessAndStabilityPassed": true,
+    "hostEnvironmentPassed": true,
+    "promotable": true,
+    "reasons": []
+  },
+  "execution": {
+    "orchestrator": "Bun",
+    "webGpuRuntime": "headless Chromium/Dawn",
+    "headless": true,
+    "browserExecutable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  },
+  "hostDiagnostics": {
+    "schema": "dynaworld-benchmark-host-diagnostics/v1",
+    "policy": "fail",
+    "thresholds": {
+      "maxCpuBusyFraction": 0.85,
+      "maxLoadPerLogicalCpu": 0.75,
+      "maxCompetingCpuFraction": 0.35,
+      "maxPreflightGpuUtilizationPercent": 35,
+      "minAvailableMemoryFraction": 0.1
+    },
+    "postflightCooldownMs": 5000,
+    "preflight": {
+      "schema": "dynaworld-benchmark-host-snapshot/v1",
+      "recordedAt": "2026-07-30T19:35:56.675Z",
+      "platform": "darwin",
+      "architecture": "arm64",
+      "sampleMs": 1000,
+      "logicalCpuCount": 10,
+      "loadAverage1m": 2.7944,
+      "loadAverage5m": 3.0146,
+      "loadAverage15m": 3.7529,
+      "loadPerLogicalCpu": 0.2794,
+      "cpuBusyFraction": 0.1727,
+      "cpuBusySource": "top-second-sample",
+      "totalMemoryBytes": 25769803776,
+      "availableMemoryFraction": 0.58,
+      "memoryAvailabilitySource": "memory_pressure",
+      "swap": {
+        "totalBytes": 10737418240,
+        "usedBytes": 9547158651,
+        "usedFraction": 0.8891484374999999
+      },
+      "processPressure": {
+        "activeProcessCount": 10,
+        "competingCpuPercent": 116.7,
+        "competingCpuFraction": 0.1167,
+        "categoryCpuPercent": {
+          "developer-tool": 58.3,
+          "media": 25.7,
+          "system-ui": 12.1,
+          "other": 9.9,
+          "runtime": 6.6,
+          "game-client": 4.1
+        },
+        "topProcesses": [
+          {
+            "name": "Codex (Renderer)",
+            "category": "developer-tool",
+            "cpuPercent": 45.5,
+            "memoryPercent": 4.6
+          },
+          {
+            "name": "codex",
+            "category": "developer-tool",
+            "cpuPercent": 12.8,
+            "memoryPercent": 3.2
+          },
+          {
+            "name": "WindowServer",
+            "category": "system-ui",
+            "cpuPercent": 12.1,
+            "memoryPercent": 0.3
+          },
+          {
+            "name": "WebTorrent Helper (GPU)",
+            "category": "media",
+            "cpuPercent": 10,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "coreaudiod",
+            "category": "other",
+            "cpuPercent": 9.9,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "WebTorrent Helper (Renderer)",
+            "category": "media",
+            "cpuPercent": 7.5,
+            "memoryPercent": 0.6
+          },
+          {
+            "name": "node",
+            "category": "runtime",
+            "cpuPercent": 6.6,
+            "memoryPercent": 0.7
+          },
+          {
+            "name": "WebTorrent Helper (Renderer)",
+            "category": "media",
+            "cpuPercent": 5.7,
+            "memoryPercent": 0.9
+          },
+          {
+            "name": "Battle.net",
+            "category": "game-client",
+            "cpuPercent": 4.1,
+            "memoryPercent": 0.2
+          },
+          {
+            "name": "VTDecoderXPCService",
+            "category": "media",
+            "cpuPercent": 2.5,
+            "memoryPercent": 0
+          }
+        ]
+      },
+      "appleGpu": {
+        "available": true,
+        "deviceUtilizationPercent": 0,
+        "rendererUtilizationPercent": 0,
+        "tilerUtilizationPercent": 0,
+        "allocatedSystemMemoryBytes": 5491195904,
+        "inUseSystemMemoryBytes": 269500416,
+        "lastSubmissionProcess": {
+          "name": "WindowServer",
+          "category": "system-ui"
+        }
+      },
+      "thermal": {
+        "thermalWarning": false,
+        "performanceWarning": false
+      },
+      "limitations": [
+        "Process names are sanitized basenames; command arguments and PIDs are omitted.",
+        "Driver GPU utilization is a pre/post snapshot, not per-process GPU accounting.",
+        "Round variance remains the in-run detector for nonlinear contention and throttling."
+      ],
+      "assessment": {
+        "quiet": true,
+        "warnings": [],
+        "thresholds": {
+          "maxCpuBusyFraction": 0.85,
+          "maxLoadPerLogicalCpu": 0.75,
+          "maxCompetingCpuFraction": 0.35,
+          "maxPreflightGpuUtilizationPercent": 35,
+          "minAvailableMemoryFraction": 0.1
+        }
+      }
+    },
+    "postflight": {
+      "schema": "dynaworld-benchmark-host-snapshot/v1",
+      "recordedAt": "2026-07-30T19:36:22.727Z",
+      "platform": "darwin",
+      "architecture": "arm64",
+      "sampleMs": 1000,
+      "logicalCpuCount": 10,
+      "loadAverage1m": 3.0303,
+      "loadAverage5m": 3.0454,
+      "loadAverage15m": 3.7417,
+      "loadPerLogicalCpu": 0.303,
+      "cpuBusyFraction": 0.1327,
+      "cpuBusySource": "top-second-sample",
+      "totalMemoryBytes": 25769803776,
+      "availableMemoryFraction": 0.58,
+      "memoryAvailabilitySource": "memory_pressure",
+      "swap": {
+        "totalBytes": 10737418240,
+        "usedBytes": 9488302080,
+        "usedFraction": 0.8836669921875
+      },
+      "processPressure": {
+        "activeProcessCount": 10,
+        "competingCpuPercent": 71.5,
+        "competingCpuFraction": 0.0715,
+        "categoryCpuPercent": {
+          "media": 35.2,
+          "other": 12.9,
+          "system-ui": 11.6,
+          "developer-tool": 6,
+          "game-client": 3.3,
+          "runtime": 2.5
+        },
+        "topProcesses": [
+          {
+            "name": "WebTorrent Helper (Renderer)",
+            "category": "media",
+            "cpuPercent": 19.5,
+            "memoryPercent": 0.9
+          },
+          {
+            "name": "WindowServer",
+            "category": "system-ui",
+            "cpuPercent": 11.6,
+            "memoryPercent": 0.3
+          },
+          {
+            "name": "coreaudiod",
+            "category": "other",
+            "cpuPercent": 9.2,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "WebTorrent Helper (GPU)",
+            "category": "media",
+            "cpuPercent": 8.1,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "Codex (Renderer)",
+            "category": "developer-tool",
+            "cpuPercent": 6,
+            "memoryPercent": 4.5
+          },
+          {
+            "name": "WebTorrent Helper (Renderer)",
+            "category": "media",
+            "cpuPercent": 5.6,
+            "memoryPercent": 0.5
+          },
+          {
+            "name": "Agent",
+            "category": "other",
+            "cpuPercent": 3.7,
+            "memoryPercent": 0
+          },
+          {
+            "name": "Battle.net",
+            "category": "game-client",
+            "cpuPercent": 3.3,
+            "memoryPercent": 0.2
+          },
+          {
+            "name": "node",
+            "category": "runtime",
+            "cpuPercent": 2.5,
+            "memoryPercent": 0.7
+          },
+          {
+            "name": "VTDecoderXPCService",
+            "category": "media",
+            "cpuPercent": 2,
+            "memoryPercent": 0
+          }
+        ]
+      },
+      "appleGpu": {
+        "available": true,
+        "deviceUtilizationPercent": 0,
+        "rendererUtilizationPercent": 0,
+        "tilerUtilizationPercent": 0,
+        "allocatedSystemMemoryBytes": 5481070592,
+        "inUseSystemMemoryBytes": 344719360,
+        "lastSubmissionProcess": {
+          "name": "WindowServer",
+          "category": "system-ui"
+        }
+      },
+      "thermal": {
+        "thermalWarning": false,
+        "performanceWarning": false
+      },
+      "limitations": [
+        "Process names are sanitized basenames; command arguments and PIDs are omitted.",
+        "Driver GPU utilization is a pre/post snapshot, not per-process GPU accounting.",
+        "Round variance remains the in-run detector for nonlinear contention and throttling."
+      ],
+      "assessment": {
+        "quiet": true,
+        "warnings": [],
+        "thresholds": {
+          "maxCpuBusyFraction": 0.85,
+          "maxLoadPerLogicalCpu": 0.75,
+          "maxCompetingCpuFraction": 0.35,
+          "maxPreflightGpuUtilizationPercent": 35,
+          "minAvailableMemoryFraction": 0.1
+        }
+      }
+    },
+    "assessment": {
+      "quiet": true,
+      "warnings": []
+    },
+    "limitations": [
+      "Quiet pre/post snapshots cannot prove the GPU was uncontended for every instant.",
+      "Per-round throughput variance detects intermittent stalls but not constant-rate contention.",
+      "The cooldown reduces, but cannot mathematically identify, residual driver utilization.",
+      "Use matched alternating variants and repeat reversed-start runs for promotion evidence."
+    ]
+  },
+  "artifact": {
+    "runId": "backward-30k-candidate-first-v3-apple-m4",
+    "outputMode": "explicit-path",
+    "filenameTimeZone": "Asia/Seoul"
+  }
+}

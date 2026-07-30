@@ -50,3 +50,28 @@ test("benchmark dataset scaling rebuilds view slices and packed sample indices",
 	assert.ok(resized.motionSamples.length >= 1);
 	for (const packed of resized.motionSamples) assert.ok(packed < resized.width * resized.height);
 });
+
+test("full-frame kernel benchmarks can skip unused sampled-ray preprocessing", () => {
+	const dataset = {
+		name: "fixture",
+		width: 1,
+		height: 1,
+		frameCount: 1,
+		viewCount: 1,
+		trainViewCount: 1,
+		frames: Float32Array.from([0.8, 0.1, 0.1, 1]),
+		backgrounds: Float32Array.from([0.1, 0.1, 0.1, 1]),
+		background: Float32Array.from([0.1, 0.1, 0.1, 1]),
+		cameras: [{ name: "cam00", role: "train" }],
+		comparisonViewIndices: [0],
+	};
+	const resized = resizeDatasetForBenchmark(
+		dataset,
+		2,
+		{ computeSamples: false },
+	);
+	assert.equal(resized.frames.length, 2 * 2 * 4);
+	assert.equal(resized.motionSamples.length, 0);
+	assert.equal(resized.staticSamples.length, 0);
+	assert.deepEqual([...resized.frames.filter((_value, index) => index % 4 === 3)], [1, 1, 1, 1]);
+});

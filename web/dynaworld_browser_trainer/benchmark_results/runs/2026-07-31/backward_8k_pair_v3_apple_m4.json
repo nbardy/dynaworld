@@ -1,0 +1,68 @@
+{
+  "schema": "dynaworld-browser-tiled-kernel-benchmark-pair/v1",
+  "recordedAt": "2026-07-30T19:54:55.344Z",
+  "experiment": "backward",
+  "workload": {
+    "splats": 8192,
+    "capacity": 8192,
+    "raster": [
+      96,
+      72
+    ],
+    "measuredSteps": 128,
+    "tileSize": 8,
+    "tileCapacity": 1024
+  },
+  "runs": [
+    {
+      "recordedAt": "2026-07-30T19:30:20.004Z",
+      "order": "control-first",
+      "promotable": true,
+      "preflightGpuUtilizationPercent": 2,
+      "postflightGpuUtilizationPercent": 3,
+      "candidateThroughputSpeedup": 1.7310679607020998,
+      "candidateGpuTimeSpeedup": 1.7954097257963424
+    },
+    {
+      "recordedAt": "2026-07-30T19:30:38.403Z",
+      "order": "candidate-first",
+      "promotable": true,
+      "preflightGpuUtilizationPercent": 0,
+      "postflightGpuUtilizationPercent": 0,
+      "candidateThroughputSpeedup": 1.7519685035258838,
+      "candidateGpuTimeSpeedup": 1.7243297417902064
+    }
+  ],
+  "drift": {
+    "wallSpeedupRelative": 0.012001334489856784,
+    "gpuSpeedupRelative": 0.0403893439617989,
+    "maxVariantThroughputRelative": 0.013685239257038212,
+    "variantThroughput": [
+      {
+        "id": "direct-3d",
+        "leftStepsPerSecond": 717.8911948078055,
+        "rightStepsPerSecond": 719.1011235955057,
+        "relativeDrift": 0.0016839739116275242
+      },
+      {
+        "id": "staged-project3d",
+        "leftStepsPerSecond": 1242.7184466019417,
+        "rightStepsPerSecond": 1259.8425193893997,
+        "relativeDrift": 0.013685239257038212
+      }
+    ]
+  },
+  "thresholds": {
+    "maxWallSpeedupDrift": 0.05,
+    "maxGpuSpeedupDrift": 0.1,
+    "maxVariantThroughputDrift": 0.05
+  },
+  "validity": {
+    "promotable": true,
+    "reasons": []
+  },
+  "sources": [
+    "backward_8k_control_first_v3_apple_m4.json",
+    "backward_8k_candidate_first_v3_apple_m4.json"
+  ]
+}

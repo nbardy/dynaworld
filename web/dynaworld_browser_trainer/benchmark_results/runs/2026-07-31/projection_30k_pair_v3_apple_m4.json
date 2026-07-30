@@ -1,0 +1,68 @@
+{
+  "schema": "dynaworld-browser-tiled-kernel-benchmark-pair/v1",
+  "recordedAt": "2026-07-30T19:54:55.344Z",
+  "experiment": "projection",
+  "workload": {
+    "splats": 30000,
+    "capacity": 30000,
+    "raster": [
+      96,
+      72
+    ],
+    "measuredSteps": 128,
+    "tileSize": 8,
+    "tileCapacity": 4096
+  },
+  "runs": [
+    {
+      "recordedAt": "2026-07-30T19:37:45.723Z",
+      "order": "control-first",
+      "promotable": true,
+      "preflightGpuUtilizationPercent": 0,
+      "postflightGpuUtilizationPercent": 2,
+      "candidateThroughputSpeedup": 1.0988052957394692,
+      "candidateGpuTimeSpeedup": 1.1033025990693504
+    },
+    {
+      "recordedAt": "2026-07-30T19:38:20.627Z",
+      "order": "candidate-first",
+      "promotable": true,
+      "preflightGpuUtilizationPercent": 1,
+      "postflightGpuUtilizationPercent": 1,
+      "candidateThroughputSpeedup": 1.0837628870045073,
+      "candidateGpuTimeSpeedup": 1.0865457326628196
+    }
+  ],
+  "drift": {
+    "wallSpeedupRelative": 0.013784136370988607,
+    "gpuSpeedupRelative": 0.015304134230406772,
+    "maxVariantThroughputRelative": 0.011526525715629662,
+    "variantThroughput": [
+      {
+        "id": "staged-monolithic",
+        "leftStepsPerSecond": 376.13870113287123,
+        "rightStepsPerSecond": 380.4994054292279,
+        "relativeDrift": 0.011526525715629662
+      },
+      {
+        "id": "staged-split-compact",
+        "leftStepsPerSecond": 413.3031967373644,
+        "rightStepsPerSecond": 412.3711341314785,
+        "relativeDrift": 0.002257700333023683
+      }
+    ]
+  },
+  "thresholds": {
+    "maxWallSpeedupDrift": 0.05,
+    "maxGpuSpeedupDrift": 0.1,
+    "maxVariantThroughputDrift": 0.05
+  },
+  "validity": {
+    "promotable": true,
+    "reasons": []
+  },
+  "sources": [
+    "projection_30k_control_first_v3_apple_m4.json",
+    "projection_30k_candidate_first_v3_apple_m4.json"
+  ]
+}

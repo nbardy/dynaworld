@@ -1,0 +1,68 @@
+{
+  "schema": "dynaworld-browser-tiled-kernel-benchmark-pair/v1",
+  "recordedAt": "2026-07-30T19:54:55.344Z",
+  "experiment": "ssim",
+  "workload": {
+    "splats": 8192,
+    "capacity": 8192,
+    "raster": [
+      192,
+      144
+    ],
+    "measuredSteps": 512,
+    "tileSize": 8,
+    "tileCapacity": 1024
+  },
+  "runs": [
+    {
+      "recordedAt": "2026-07-30T19:41:28.547Z",
+      "order": "control-first",
+      "promotable": true,
+      "preflightGpuUtilizationPercent": 0,
+      "postflightGpuUtilizationPercent": 1,
+      "candidateThroughputSpeedup": 1.2875613748734596,
+      "candidateGpuTimeSpeedup": 1.2799610247858004
+    },
+    {
+      "recordedAt": "2026-07-30T19:41:57.191Z",
+      "order": "candidate-first",
+      "promotable": true,
+      "preflightGpuUtilizationPercent": 0,
+      "postflightGpuUtilizationPercent": 0,
+      "candidateThroughputSpeedup": 1.2829324168054457,
+      "candidateGpuTimeSpeedup": 1.2922666298664842
+    }
+  ],
+  "drift": {
+    "wallSpeedupRelative": 0.0036016099964906022,
+    "gpuSpeedupRelative": 0.009568052857551032,
+    "maxVariantThroughputRelative": 0.0034379577351613014,
+    "variantThroughput": [
+      {
+        "id": "staged-naive-2d",
+        "leftStepsPerSecond": 650.8198804740898,
+        "rightStepsPerSecond": 653.0612245394458,
+        "relativeDrift": 0.0034379577351613014
+      },
+      {
+        "id": "staged-separable",
+        "leftStepsPerSecond": 837.9705400981996,
+        "rightStepsPerSecond": 837.833415120315,
+        "relativeDrift": 0.00016365276792393733
+      }
+    ]
+  },
+  "thresholds": {
+    "maxWallSpeedupDrift": 0.05,
+    "maxGpuSpeedupDrift": 0.1,
+    "maxVariantThroughputDrift": 0.05
+  },
+  "validity": {
+    "promotable": true,
+    "reasons": []
+  },
+  "sources": [
+    "ssim_8k_192x144_control_first_v3_apple_m4.json",
+    "ssim_8k_192x144_candidate_first_v3_apple_m4.json"
+  ]
+}
