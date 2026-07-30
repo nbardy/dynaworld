@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
 	assertStorageBufferFits,
+	MAX_BROWSER_RENDER_SPLATS,
 	rgbaFloatFrameBytes,
 	sampleGradientBufferBytes,
 } from "../trainerWebGpu3d.js";
@@ -10,6 +11,7 @@ import {
 const source = readFileSync(new URL("../trainerWebGpu3d.js", import.meta.url), "utf8");
 
 test("gradient storage scales beyond the former 768-splat ceiling", () => {
+	assert.equal(MAX_BROWSER_RENDER_SPLATS, 32768);
 	assert.equal(sampleGradientBufferBytes(769), 192 * 769 * 96);
 	assert.equal(sampleGradientBufferBytes(4096), 192 * 4096 * 96);
 	assert.throws(() => sampleGradientBufferBytes(0), /positive safe integer/);
@@ -45,4 +47,5 @@ test("training WGSL keeps the 768 fast tape and uses storage above it", () => {
 test("sampled trainer rejects counts beyond its fixed 2048-entry order cache", () => {
 	assert.match(source, /splatCount > 2048 && !this\.skipSampleGradientAllocation/);
 	assert.match(source, /sampled-ray depth-order cache supports at most 2048 splats/);
+	assert.match(source, /this\.skipSampleGradientAllocation\s*\?\s*SPLAT_BYTES/);
 });

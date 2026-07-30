@@ -476,6 +476,57 @@ export function canonicalGaussianSsim(prediction, target, width, height) {
 	return sum / (pixels * 3);
 }
 
+export function spatialDetailMetrics(prediction, target, width, height) {
+	assertRgbImages(prediction, target, width, height);
+	let detailError = 0;
+	let targetDetail = 0;
+	let detailValues = 0;
+	const accumulateEdge = (left, right) => {
+		for (let channel = 0; channel < 3; channel += 1) {
+			const predictedGradient = prediction[right + channel] - prediction[left + channel];
+			const targetGradient = target[right + channel] - target[left + channel];
+			detailError += Math.abs(predictedGradient - targetGradient);
+			targetDetail += Math.abs(targetGradient);
+			detailValues += 1;
+		}
+	};
+	for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+		const pixel = (y * width + x) * 3;
+		if (x + 1 < width) accumulateEdge(pixel, pixel + 3);
+		if (y + 1 < height) accumulateEdge(pixel, pixel + width * 3);
+	}
+	let lowPassSquaredError = 0;
+	let lowPassValues = 0;
+	for (let y = 0; y < height; y += 2) for (let x = 0; x < width; x += 2) {
+		for (let channel = 0; channel < 3; channel += 1) {
+			let predictedMean = 0;
+			let targetMean = 0;
+			let samples = 0;
+			for (let offsetY = 0; offsetY < 2 && y + offsetY < height; offsetY += 1) {
+				for (let offsetX = 0; offsetX < 2 && x + offsetX < width; offsetX += 1) {
+					const packed = ((y + offsetY) * width + x + offsetX) * 3 + channel;
+					predictedMean += prediction[packed];
+					targetMean += target[packed];
+					samples += 1;
+				}
+			}
+			const error = predictedMean / samples - targetMean / samples;
+			lowPassSquaredError += error * error;
+			lowPassValues += 1;
+		}
+	}
+	const detailMae = detailError / Math.max(1, detailValues);
+	const targetDetailMae = targetDetail / Math.max(1, detailValues);
+	const lowPassMse = lowPassSquaredError / Math.max(1, lowPassValues);
+	return {
+		detailMae,
+		targetDetailMae,
+		detailErrorRatio: detailMae / Math.max(targetDetailMae, 1e-8),
+		lowPassMse,
+		lowPassPsnr: lowPassMse === 0 ? Number.POSITIVE_INFINITY : -10 * Math.log10(lowPassMse),
+	};
+}
+
 export function computeFullImageMetrics(prediction, target, width, height) {
 	assertRgbImages(prediction, target, width, height);
 	let squaredError = 0;
@@ -491,6 +542,7 @@ export function computeFullImageMetrics(prediction, target, width, height) {
 		mae: absoluteError / prediction.length,
 		psnr: mse === 0 ? Number.POSITIVE_INFINITY : -10 * Math.log10(mse),
 		ssim: canonicalGaussianSsim(prediction, target, width, height),
+		...spatialDetailMetrics(prediction, target, width, height),
 	};
 }
 
@@ -560,6 +612,11 @@ export function computeSnapshotMetrics(dataset, params, {
 	let coverage = 0;
 	let coverageValues = 0;
 	let ssim = 0;
+	let detailMae = 0;
+	let targetDetailMae = 0;
+	let lowPassMse = 0;
+	let primitiveEvaluations = 0;
+	let binnedReferences = 0;
 	const snapshots = resolved.map(({ viewIndex, frameIndex }) => {
 		const rendered = renderSnapshotFrame(dataset, params, {
 			...renderOptions, viewIndex, frameIndex,
@@ -572,9 +629,17 @@ export function computeSnapshotMetrics(dataset, params, {
 		for (const value of rendered.coverage) coverage += value;
 		coverageValues += rendered.coverage.length;
 		ssim += metrics.ssim;
+		detailMae += metrics.detailMae;
+		targetDetailMae += metrics.targetDetailMae;
+		lowPassMse += metrics.lowPassMse;
+		primitiveEvaluations += rendered.primitiveEvaluations;
+		binnedReferences += rendered.binnedReferences;
 		return { viewIndex, frameIndex, target, ...rendered, metrics };
 	});
 	const mse = squaredError / rgbValues;
+	const meanDetailMae = detailMae / snapshots.length;
+	const meanTargetDetailMae = targetDetailMae / snapshots.length;
+	const meanLowPassMse = lowPassMse / snapshots.length;
 	return {
 		selectionCount: snapshots.length,
 		pixelCount: coverageValues,
@@ -583,6 +648,14 @@ export function computeSnapshotMetrics(dataset, params, {
 		psnr: mse === 0 ? Number.POSITIVE_INFINITY : -10 * Math.log10(mse),
 		ssim: ssim / snapshots.length,
 		coverage: coverage / coverageValues,
+		detailMae: meanDetailMae,
+		targetDetailMae: meanTargetDetailMae,
+		detailErrorRatio: meanDetailMae / Math.max(meanTargetDetailMae, 1e-8),
+		lowPassMse: meanLowPassMse,
+		lowPassPsnr: meanLowPassMse === 0
+			? Number.POSITIVE_INFINITY : -10 * Math.log10(meanLowPassMse),
+		primitiveEvaluations,
+		binnedReferences,
 		snapshots,
 	};
 }

@@ -1,16 +1,35 @@
-export const DEFAULT_TRAINER_BACKEND = "tiled3d";
+export const DEFAULT_TRAINER_BACKEND = "tiled3d-fast";
+// This only controls asynchronous UI readback cadence. The tiled kernel keeps
+// a GPU-resident full camera/time-cycle mean, so burst quantization cannot
+// alias the chart back onto a small recurring set of training pairs.
+export const TILED_METRIC_INTERVAL = 256;
 
 export const TRAINER_BACKENDS = Object.freeze({
-	tiled3d: Object.freeze({
-		id: "tiled3d",
-		label: "Tiled full-frame",
+	"tiled3d-fast": Object.freeze({
+		id: "tiled3d-fast",
+		label: "Fast tiled full-frame",
 		parameterSchema: "dynamic-splat-24f/v1",
 		representation: "trajectory-gated dynamic 3DGS",
 		objective: "0.8 L1 + 0.2 (1 - SSIM)",
 		trainingUnit: "full image",
 		maxAspectRatio: 6,
 		sampledControls: false,
-		defaultSchedule: Object.freeze({ burstSteps: 8, metricEvery: 256, maxQueuedSteps: 32 }),
+		defaultSchedule: Object.freeze({
+			burstSteps: 8, metricEvery: TILED_METRIC_INTERVAL, maxQueuedSteps: 32,
+		}),
+	}),
+	tiled3d: Object.freeze({
+		id: "tiled3d",
+		label: "Direct tiled reference",
+		parameterSchema: "dynamic-splat-24f/v1",
+		representation: "trajectory-gated dynamic 3DGS",
+		objective: "0.8 L1 + 0.2 (1 - SSIM)",
+		trainingUnit: "full image",
+		maxAspectRatio: 6,
+		sampledControls: false,
+		defaultSchedule: Object.freeze({
+			burstSteps: 8, metricEvery: TILED_METRIC_INTERVAL, maxQueuedSteps: 32,
+		}),
 	}),
 	sampled3d: Object.freeze({
 		id: "sampled3d",
@@ -36,13 +55,17 @@ export function resolveTrainerBackend(id = DEFAULT_TRAINER_BACKEND) {
 
 export async function loadTrainerBackend(id = DEFAULT_TRAINER_BACKEND) {
 	const descriptor = resolveTrainerBackend(id);
-	const module = descriptor.id === "tiled3d"
-		? await import("./trainerWebGpu3dTiled.js?v=20260729-randombg3")
-		: await import("./trainerWebGpu3d.js");
+	if (descriptor.id === "tiled3d-fast") {
+		const module = await import("./trainerWebGpu3dTiledFast.js?v=20260731-fasttiles6");
+		return { descriptor, Trainer: module.DynamicSplatWebGpu3dTiledFastTrainer };
+	}
+	if (descriptor.id === "tiled3d") {
+		const module = await import("./trainerWebGpu3dTiled.js?v=20260731-fasttiles6");
+		return { descriptor, Trainer: module.DynamicSplatWebGpu3dTiledTrainer };
+	}
+	const module = await import("./trainerWebGpu3d.js?v=20260731-fasttiles6");
 	return {
 		descriptor,
-		Trainer: descriptor.id === "tiled3d"
-			? module.DynamicSplatWebGpu3dTiledTrainer
-			: module.DynamicSplatWebGpu3dTrainer,
+		Trainer: module.DynamicSplatWebGpu3dTrainer,
 	};
 }

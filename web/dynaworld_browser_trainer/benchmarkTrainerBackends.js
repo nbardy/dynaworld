@@ -1,8 +1,11 @@
-import { loadPresetDataset } from "./dataset.js";
-import { resizeDatasetForBenchmark } from "./benchmarkDataset.js";
-import { loadTrainerBackend, resolveTrainerBackend } from "./trainerBackendRegistry.js";
+import { loadPresetDataset } from "./dataset.js?v=20260731-fasttiles6";
+import { resizeDatasetForBenchmark } from "./benchmarkDataset.js?v=20260731-fasttiles6";
+import {
+	loadTrainerBackend,
+	resolveTrainerBackend,
+} from "./trainerBackendRegistry.js?v=20260731-fasttiles6";
 
-const BACKEND_IDS = Object.freeze(["tiled3d", "sampled3d"]);
+const BACKEND_IDS = Object.freeze(["tiled3d-fast", "tiled3d", "sampled3d"]);
 const TRAIN_OPTIONS = Object.freeze({
 	learningRate: 1.25,
 	modelMode: 0,
@@ -48,7 +51,7 @@ function positiveInteger(input, label) {
 function readOptions() {
 	const options = {
 		splatCount: positiveInteger(inputs.splatCount, "Requested splats"),
-		tiledCapacity: positiveInteger(inputs.tiledCapacity, "Tiled capacity"),
+		tiledCapacity: positiveInteger(inputs.tiledCapacity, "Global model capacity"),
 		warmupSteps: positiveInteger(inputs.warmupSteps, "Warmup steps"),
 		measuredSteps: positiveInteger(inputs.measuredSteps, "Measured steps"),
 		sampledPixels: positiveInteger(inputs.sampledPixels, "Sampled rays per step"),
@@ -57,7 +60,7 @@ function readOptions() {
 		checkpointPrecision: inputs.checkpointPrecision.value,
 	};
 	if (options.tiledCapacity < options.splatCount) {
-		throw new RangeError("Tiled capacity must be at least the requested splat count.");
+		throw new RangeError("Global model capacity must be at least the requested splat count.");
 	}
 	if (options.ssimWindow % 2 !== 1) {
 		throw new RangeError("SSIM window must be odd.");
@@ -155,10 +158,12 @@ function setRowResult(result) {
 	cells[7].textContent = formatNumber(result.stepsPerSecond, 2);
 	cells[8].textContent = formatNumber(result.supervisedPixelsPerSecond, 0);
 	cells[9].textContent = formatNumber(result.loss, 6);
-	cells[10].textContent = result.lossBreakdown?.tileOverflow == null
+	const currentOverflow = result.lossBreakdown?.tileOverflow;
+	const totalOverflow = result.lossBreakdown?.tileOverflowTotal ?? currentOverflow;
+	cells[10].textContent = currentOverflow == null
 		? "-"
-		: formatNumber(result.lossBreakdown.tileOverflow, 0);
-	cells[10].className = result.lossBreakdown?.tileOverflow > 0 ? "failed" : "complete";
+		: `${formatNumber(currentOverflow, 0)} now / ${formatNumber(totalOverflow, 0)} total`;
+	cells[10].className = totalOverflow > 0 ? "failed" : "complete";
 }
 
 function setRowError(backendId, error) {
@@ -178,7 +183,7 @@ async function benchmarkBackend(backendId, dataset, options) {
 	try {
 		setRowRunning(backendId, "Initializing");
 		const trainerOptions = { splatCount: options.splatCount };
-		if (backendId === "tiled3d") {
+		if (!loaded.descriptor.sampledControls) {
 			trainerOptions.growthCapacity = options.tiledCapacity;
 			trainerOptions.checkpointPrecision = options.checkpointPrecision;
 		}
@@ -271,7 +276,7 @@ async function runBenchmark(options) {
 	jsonOutput.textContent = JSON.stringify(globalThis.__trainerBackendBenchmarkResults, null, 2);
 	const completed = results.filter((result) => !result.error).length;
 	if (completed === BACKEND_IDS.length) {
-		setStatus("Benchmark complete. Both timed intervals drained their GPU queues.", "complete");
+		setStatus("Benchmark complete. Every timed interval drained its GPU queue.", "complete");
 	} else {
 		setStatus(`Benchmark finished with ${BACKEND_IDS.length - completed} backend error(s).`, "failed");
 	}

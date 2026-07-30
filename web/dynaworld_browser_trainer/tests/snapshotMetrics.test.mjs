@@ -7,6 +7,7 @@ import {
 	renderSnapshotFrame,
 	resolveSnapshotSelections,
 	snapshotUpdateRatios,
+	spatialDetailMetrics,
 	summarizeSplatParameters,
 } from "../snapshotMetrics.js";
 import { SPLAT_FLOATS, projectAnisotropicGaussianCpu } from "../trainerWebGpu3d.js";
@@ -162,6 +163,29 @@ test("changed pixels degrade MSE, MAE, PSNR, and Gaussian SSIM", () => {
 	assert.ok(metrics.mae > 0);
 	assert.ok(Number.isFinite(metrics.psnr));
 	assert.ok(metrics.ssim < 1);
+	assert.ok(metrics.detailMae > 0);
+	assert.ok(metrics.lowPassMse > 0);
+});
+
+test("detail diagnostics separate a color bias from missing spatial structure", () => {
+	const width = 6;
+	const height = 4;
+	const target = Float32Array.from({ length: width * height * 3 },
+		(_, index) => ((Math.floor(index / 3) + index % 3) % 5) / 5);
+	const biased = Float32Array.from(target, (value) => value + 0.1);
+	const blurred = Float32Array.from(target);
+	for (let y = 0; y < height; y += 1) for (let x = 1; x + 1 < width; x += 1) {
+		for (let channel = 0; channel < 3; channel += 1) {
+			const packed = (y * width + x) * 3 + channel;
+			blurred[packed] = (target[packed - 3] + target[packed] + target[packed + 3]) / 3;
+		}
+	}
+	const biasMetrics = spatialDetailMetrics(biased, target, width, height);
+	const blurMetrics = spatialDetailMetrics(blurred, target, width, height);
+	assert.ok(biasMetrics.detailMae < 1e-6);
+	assert.ok(biasMetrics.lowPassMse > 0);
+	assert.ok(blurMetrics.detailMae > biasMetrics.detailMae);
+	assert.ok(blurMetrics.detailErrorRatio > 0);
 });
 
 test("tile-binned snapshot rendering agrees with a tiny all-splats-per-pixel reference", () => {
@@ -210,8 +234,11 @@ test("train and heldout selections aggregate only their requested view/frame pix
 	assert.equal(train.selectionCount, 2);
 	assert.equal(train.mse, 0);
 	assert.equal(train.ssim, 1);
+	assert.equal(train.detailMae, 0);
+	assert.equal(train.lowPassMse, 0);
 	assert.ok(heldout.mse > 0);
 	assert.ok(heldout.ssim < 1);
+	assert.ok(heldout.lowPassMse > 0);
 });
 
 test("snapshot update ratios report independent 24-float parameter families", () => {

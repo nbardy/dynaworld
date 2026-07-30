@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Dynaworld Browser Trainer</title>
-		<link rel="stylesheet" href="./styles.css?v=20260726-tiled1" />
+		<link rel="stylesheet" href="./styles.css?v=20260731-fasttiles6" />
 	</head>
 	<body>
 		<div class="app-shell">
@@ -12,6 +12,10 @@
 				<header class="brand">
 					<h1>Dynaworld Browser Trainer</h1>
 					<p id="datasetName">preloading dataset</p>
+					<nav class="diagnostic-nav" aria-label="Developer diagnostics">
+						<a href="./benchmarkTiledKernels.html">Kernel Lab</a>
+						<a href="./tiledParityHarness.html?backwardMode=staged-project3d&amp;backwardGranularity=checkpoint-block&amp;checkpointOrder=pixel-major&amp;projectionLayout=split-compact&amp;ssimLayout=separable&amp;tileSize=8">Parity Gate</a>
+					</nav>
 				</header>
 
 				<section class="controls" aria-label="Training controls">
@@ -24,7 +28,8 @@
 					<label class="field">
 						<span>Training Backend</span>
 						<select id="backendSelect">
-							<option value="tiled3d">Tiled full-frame</option>
+							<option value="tiled3d-fast">Fast tiled full-frame</option>
+							<option value="tiled3d">Direct tiled reference</option>
 							<option value="sampled3d">Sampled rays (control)</option>
 						</select>
 					</label>
@@ -47,8 +52,18 @@
 
 					<label class="field">
 						<span>Initial Splats</span>
-						<input id="splatSlider" title="Use all 4,096 checked-in SfM seeds by default; lower values reserve up to 3x capacity and fill duplicate slots by splitting" type="range" min="96" max="4096" step="32" value="4096" />
+						<input id="splatSlider" title="Use up to all 4,096 checked-in SfM seeds before GPU splitting fills the selected capacity" type="range" min="96" max="4096" step="32" value="4096" />
 						<strong id="splatSliderValue">4096</strong>
+					</label>
+
+					<label id="growthCapacityField" class="field">
+						<span>Max Splats</span>
+						<select id="growthCapacitySelect" title="Reserve model state now; dormant slots skip projection until GPU splitting activates them">
+								<option value="8192">8,192</option>
+								<option value="16384">16,384</option>
+								<option value="24576">24,576</option>
+								<option value="30000">30,000 (stress)</option>
+						</select>
 					</label>
 
 					<label class="field">
@@ -197,6 +212,14 @@
 							<span>Tile Overflow</span>
 							<strong id="tileOverflowValue">--</strong>
 						</div>
+						<div><span>Metric Pair</span><strong id="metricPairValue">--</strong></div>
+						<div><span>Visible Splats</span><strong id="visibleSplatValue">--</strong></div>
+						<div><span>Tile Pairs</span><strong id="tilePairValue">--</strong></div>
+						<div><span>Max Tile / Stop</span><strong id="tileLoadValue">--</strong></div>
+						<div><span>Detail MAE</span><strong id="detailMaeValue">--</strong></div>
+						<div><span>Lowpass PSNR</span><strong id="lowPassPsnrValue">--</strong></div>
+						<div><span>Camera PSNR</span><strong id="cameraPsnrValue">--</strong></div>
+						<div><span>GPU Buffers</span><strong id="gpuMemoryValue">--</strong></div>
 					<div>
 						<span>Heldout Cov</span>
 						<strong id="heldoutCoverageValue">--</strong>
@@ -312,7 +335,7 @@
 					</div>
 					<canvas id="lossChartCanvas" width="300" height="132" aria-label="Loss history chart"></canvas>
 						<div class="loss-chart-legend" aria-hidden="true">
-							<span><i class="sample-line"></i>Objective EMA</span>
+								<span><i class="sample-line"></i>Objective trend</span>
 							<span><i class="train-line"></i>Train full</span>
 							<span><i class="heldout-line"></i>Heldout full</span>
 						</div>
@@ -381,6 +404,6 @@
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260729-randombg3"></script>
+		<script type="module" src="./app.js?v=20260731-fasttiles6"></script>
 	</body>
 </html>

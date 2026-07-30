@@ -1,0 +1,80 @@
+{
+  "schema": "dynaworld_browser_tiled_large_capacity/v1",
+  "date": "2026-07-30",
+  "source": {
+    "base_commit": "b8c28f3",
+    "state": "working tree with 15-bit splat IDs, cumulative overflow counters, and GPU cycle metrics"
+  },
+  "hardware": {
+    "adapter": "apple",
+    "machine": "Apple M4 10-core GPU",
+    "max_storage_buffer_binding_size": 134217728,
+    "native_shader_f16": true
+  },
+  "workload": {
+    "dataset": "coffee_martini calibrated train17_holdout1",
+    "train_views": 17,
+    "heldout_view": 17,
+    "frames": 16,
+    "camera_time_pairs": 272,
+    "raster": [96, 72],
+    "training_pixels_per_step": 6912,
+    "objective": "0.8 L1 + 0.2 (1 - 11x11 Gaussian SSIM)",
+    "checkpoint_precision": "packed-f16",
+    "tile_capacity": 4096
+  },
+  "method": {
+    "warmup_steps": 8,
+    "measured_steps": 272,
+    "fresh_device_per_count": true,
+    "gpu_queue_drained_after_measured_steps": true,
+    "compilation_initialization_preview_validation_and_readback_excluded": true,
+    "note": "The all-active stress repeats the 4096-point seed bank. Cumulative overflow covers all 280 submitted steps."
+  },
+  "results": [
+    {
+      "active_splats": 20000,
+      "elapsed_ms": 2732.699999988079,
+      "steps_per_second": 99.53525817001008,
+      "allocated_gpu_buffer_bytes": 32902504,
+      "capacity_scaled_bytes": 16466432,
+      "last_pair_count": 17052,
+      "last_visible_splats": 14490,
+      "maximum_tile_occupancy_over_run": 2680,
+      "cumulative_tile_overflow": 0,
+      "cycle_mean_loss": 0.4871068333878237
+    },
+    {
+      "active_splats": 30000,
+      "elapsed_ms": 4254.400000035763,
+      "steps_per_second": 63.933809702358396,
+      "allocated_gpu_buffer_bytes": 40742504,
+      "capacity_scaled_bytes": 24306432,
+      "last_pair_count": 24818,
+      "last_visible_splats": 21715,
+      "maximum_tile_occupancy_over_run": 3993,
+      "cumulative_tile_overflow": 0,
+      "cycle_mean_loss": 0.48393626971279874
+    },
+    {
+      "active_splats": 32768,
+      "elapsed_ms": 4625.699999988079,
+      "steps_per_second": 58.801911062261055,
+      "allocated_gpu_buffer_bytes": 42912616,
+      "capacity_scaled_bytes": 26476544,
+      "last_pair_count": 26799,
+      "last_visible_splats": 23655,
+      "maximum_tile_occupancy_over_run": 4096,
+      "cumulative_tile_overflow": 9125,
+      "cycle_mean_loss": 0.48720035943038326,
+      "valid": false,
+      "rejection_reason": "At least one camera/time pair exceeded the portable 4096-contributor tile bound."
+    }
+  ],
+  "conclusions": [
+    "GPU memory is not the 20K-30K blocker at the current raster.",
+    "20K and 30K completed one full camera/time cycle with zero dropped tile references.",
+    "32K is an internal stress ceiling, not a valid SPA preset for this dataset.",
+    "The 30K high-water mark is close to the tile bound, so cumulative overflow telemetry remains mandatory as training changes footprints."
+  ]
+}

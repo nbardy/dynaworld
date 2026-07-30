@@ -1,10 +1,13 @@
-import { SPLAT_FLOATS, resolveTrainViewIndices } from "./trainerWebGpu3d.js";
+import {
+	SPLAT_FLOATS,
+	resolveTrainViewIndices,
+} from "./trainerWebGpu3d.js?v=20260731-fasttiles6";
 import {
 	computeSnapshotMetrics,
 	snapshotUpdateRatios,
 	summarizeSplatParameters,
-} from "./snapshotMetrics.js";
-import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js";
+} from "./snapshotMetrics.js?v=20260731-fasttiles6";
+import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260731-fasttiles6";
 
 let dataset = null;
 let initialParams = null;
@@ -67,17 +70,52 @@ self.onmessage = ({ data }) => {
 			views: heldoutViewIndices,
 			frames: "all",
 		});
+		// Keep the longitudinal metric on two representative cameras x all
+		// times, then add one coherent center-time image from every train
+		// camera. This exposes a weak camera without repeating a 17 x 16 CPU
+		// sweep in the validation worker.
+		const cameraSweepFrame = Math.floor((dataset.frameCount - 1) / 2);
+		const cameraSweep = computeSnapshotMetrics(dataset, params, {
+			...options,
+			views: resolveTrainViewIndices(dataset),
+			frames: [cameraSweepFrame],
+		});
+		const cameraPsnr = cameraSweep.snapshots
+			.map(({ viewIndex, metrics }) => ({
+				viewIndex,
+				name: dataset.cameras[viewIndex].name,
+				psnr: metrics.psnr,
+				ssim: metrics.ssim,
+			}))
+			.sort((left, right) => left.psnr - right.psnr);
+		const weakestCamera = cameraPsnr[0];
+		const medianCamera = cameraPsnr[Math.floor((cameraPsnr.length - 1) / 2)];
+		const strongestCamera = cameraPsnr.at(-1);
 		const splatCount = options.splatCount ?? params.length / SPLAT_FLOATS;
 		const metrics = {
 			gridLoss: train.mse,
 			gridMae: train.mae,
 			gridPsnr: train.psnr,
 			gridSsim: train.ssim,
+			gridDetailMae: train.detailMae,
+			gridDetailErrorRatio: train.detailErrorRatio,
+			gridLowPassPsnr: train.lowPassPsnr,
 			heldoutLoss: heldout.mse,
 			heldoutMae: heldout.mae,
 			heldoutPsnr: heldout.psnr,
 			heldoutSsim: heldout.ssim,
+			heldoutDetailMae: heldout.detailMae,
+			heldoutDetailErrorRatio: heldout.detailErrorRatio,
+			heldoutLowPassPsnr: heldout.lowPassPsnr,
 			heldoutCoverage: heldout.coverage,
+			trainPrimitiveEvaluationsPerPixel: train.primitiveEvaluations / train.pixelCount,
+			trainBinnedReferencesPerImage: train.binnedReferences / train.selectionCount,
+			cameraSweepFrame,
+			weakestTrainCamera: weakestCamera?.name ?? null,
+			weakestTrainCameraPsnr: weakestCamera?.psnr ?? Number.NaN,
+			medianTrainCameraPsnr: medianCamera?.psnr ?? Number.NaN,
+			strongestTrainCameraPsnr: strongestCamera?.psnr ?? Number.NaN,
+			weakestTrainCameraSsim: weakestCamera?.ssim ?? Number.NaN,
 			motionLoss: Number.NaN,
 			motionCoverage: train.coverage,
 			staticCoverage: Number.NaN,
@@ -96,6 +134,8 @@ self.onmessage = ({ data }) => {
 				allPixels: true,
 				frames: dataset.frameCount,
 				trainViews: trainViewIndices.map((view) => dataset.cameras[view].name),
+				cameraSweepViews: cameraPsnr.map(({ name }) => name),
+				cameraSweepFrame,
 				heldoutViews: heldoutViewIndices.map((view) => dataset.cameras[view].name),
 				ssim: "channelwise_11x11_gaussian_sigma1.5_reflect",
 			},

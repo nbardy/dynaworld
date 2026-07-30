@@ -23,10 +23,34 @@ Useful diagnostics:
 
 ```text
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/benchmarkTrainerBackends.html
+http://127.0.0.1:8080/web/dynaworld_browser_trainer/benchmarkTiledKernels.html
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/benchmarkLegacy2d.html
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/tiledParityHarness.html
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/workerSmoke.html
 ```
+
+The kernel benchmark does not require an interactive page. Bun owns a tiny
+no-store server, launches a private headless Chrome/Dawn process, waits for the
+WebGPU work, writes JSON, and closes both processes:
+
+```bash
+bun web/dynaworld_browser_trainer/run_headless_kernel_benchmark.js \
+  --experiment backward --variant both --splats 30000 \
+  --warmup 32 --steps 128 --profiles 5 \
+  --out /tmp/dynaworld_backward_30k.json
+
+bun web/dynaworld_browser_trainer/run_headless_kernel_benchmark.js \
+  --experiment projection --variant both --order candidate-first \
+  --splats 30000 --warmup 32 --steps 128 --profiles 5
+
+bun web/dynaworld_browser_trainer/run_headless_kernel_benchmark.js \
+  --experiment ssim --variant both --splats 8192 --scale 2 \
+  --warmup 32 --steps 128 --profiles 5
+```
+
+Bun itself does not expose `navigator.gpu`; the hidden browser is the WebGPU
+runtime, not the benchmark UI. The HTML lab remains available as an optional
+interactive microscope for inspecting individual variants.
 
 Run the browser unit suite:
 
@@ -118,14 +142,16 @@ initialization/densification quality run.
 
 ## Active Training Backends
 
-The SPA exposes two production selectors:
+The SPA exposes three selectors:
 
-1. `tiled3d`, the default full-frame path.
-2. `sampled3d`, the older sampled-ray control.
+1. `tiled3d-fast`, the default full-frame path.
+2. `tiled3d`, the direct-backward full-frame reference.
+3. `sampled3d`, the older sampled-ray control.
 
 They share the same 24-float primitive schema, initialization, cameras, render
-path, worker protocol, and UI. They do not share an objective, so raw steps per
-second are not a quality comparison.
+path, worker protocol, and UI. The two tiled paths share the same full-image
+objective; their one-step parity is checked directly. The sampled path does not
+share that objective, so raw steps per second are not a quality comparison.
 
 `trainerWebGpuStar.js` and `trainerWebGpuDynamicGs.js` are bounded,
 correctness-first probes. They are not hidden SPA backends:
@@ -146,16 +172,24 @@ The GPU command buffer then performs:
 
 1. clear tile counts, metrics, and pair bookkeeping;
 2. project every splat through the calibrated pinhole camera;
-3. bin exact opacity-aware ellipse support into 16x16 tiles;
+3. bin exact opacity-aware ellipse support into 8x8 tiles;
 4. depth-sort each tile;
 5. front-to-back alpha compositing with storage-bounded transmittance checkpoints;
-6. local SSIM statistics and image-space RGB gradient;
-7. pair-owned shared raster backward;
-8. per-splat reduction and Adam update;
+6. exact separable local SSIM statistics and transpose image gradient;
+7. checkpoint-block raster backward into compact projected gradients;
+8. one projection/covariance VJP plus Adam update per splat;
 9. optional fixed-capacity split/recycle maintenance.
 
 This is a real full-raster training step. It does not evaluate every splat for
 every image pixel, and it does not materialize a pixel-by-splat gradient tensor.
+
+The default projection writes a 32-byte hot raster packet used by bin/sort/
+raster and an 80-byte cold VJP packet used only by the per-splat 3D update.
+The default backward reduces each block's pixel lanes in workgroup memory and
+atomically adds a 12-float screen/conic/color/opacity gradient per splat. This
+keeps the expensive camera/covariance/quaternion VJP out of the tile/splat
+inner loop. The direct `tiled3d` selector preserves the previous monolithic
+projection and repeated 3D VJP as a live correctness/performance control.
 
 The default objective is:
 
@@ -225,18 +259,23 @@ camera, keeps points visible from at least one training camera, and takes a
 deterministic farthest-point subset. Initial scale and rotation come from local
 point-cloud neighborhoods; opacity starts at 0.1.
 
-The trainer uses fixed GPU capacity. The SPA defaults to all 4,096 checked-in
-SfM seeds. This replaces the short-lived 2,048-plus-growth default, which
-discarded half of the available point scaffold and asked deterministic splitting
-to recreate it. Lower slider values remain useful growth ablations:
+The trainer uses fixed GPU capacity. The SPA initializes all 4,096 checked-in
+SfM seeds and reserves 8,192 slots by default, then fills the second half
+through splitting. This preserves the complete point scaffold while testing
+the 1.19-splats-per-training-pixel capacity requested for the 96x72 raster.
+Larger 16K, 24K, and 30K reserves are explicit scaling experiments; dormant
+slots skip projection but still consume parameter, optimizer, clear, update,
+readback, and preview-sort capacity. Lower slider values remain useful growth
+ablations:
 
 - when requested splats are below capacity, hidden slots are filled by
   split/recycle events beginning at step 600;
 - after the reserved slots are filled, topology maintenance stops;
-- selecting 4,096 initial splats uses the complete seed bank at full capacity
-  and performs no proxy-driven replacements.
+- selecting 4,096 initial splats uses the complete seed bank and grows to 8,192
+  by step 26,100; no proxy-driven replacements occur after reserved capacity is
+  full.
 
-Lower-count growth is dynamic topology within a fixed allocation. It supports
+Growth is dynamic topology within a fixed allocation. It supports
 relocation, spatial scale shrinkage, opacity-mass preservation, temporal
 separation, and moment reset only while filling initially hidden slots. It is
 not a dynamic buffer resize, residual/depth-guided densification, canonical
@@ -244,6 +283,15 @@ not a dynamic buffer resize, residual/depth-guided densification, canonical
 recycling after fill was removed because it would replace 3,744 of 4,096 slots
 by step 120,000 in the default run, erasing the SfM scaffold and producing
 repeated split chains.
+
+The global model and tile-local sort capacities are deliberately separate.
+The internal model/preview path accepts 32,768 IDs, while each 8x8 tile sorts
+at most 4,096 contributors. This keeps workgroup storage portable instead of
+requiring more than a 32 KiB tile-local array. The SPA stops at a labeled 30K
+stress preset because the full-cycle 32K Coffee Martini test overflowed.
+`Tile Overflow` reports current and cumulative dropped tile/splat references;
+both must remain zero for a run to be valid. The sort key uses 15 splat-ID
+bits, so IDs 0 through 32,767 survive depth sorting.
 
 Adam uses `beta1=0.9`, `beta2=0.999`, and `epsilon=1e-8`. The default-on,
 toggleable schedule decays geometry learning rates by 100x and appearance
@@ -376,19 +424,27 @@ Live rendering is capped at 20 GPU frames per second and shows two training
 cameras plus the heldout camera at a looping time. It can be disabled without
 stopping optimization.
 
-Loss readback runs every 256 steps. Every 8,192 steps, full metrics request an
-asynchronous parameter snapshot and send it to a separate validation worker.
-The optimizer pump continues submitting work while the GPU copy/map completes;
-the full-image raster and metric pass never runs in the training worker.
+The optimizer writes objective/L1/DSSIM into a 272-entry GPU ring every step.
+Asynchronous readback runs every 256 requested steps and reports the latest raw
+camera/time pair plus the mean of the most recent full 17-camera x 16-time
+cycle. This avoids the old 256-versus-272 cadence alias, which sampled only 17
+recurring phases and created a false 4,352-step ripple. It adds no optimizer
+wait: the worker continues submitting work while the copy/map completes.
+
+Every 8,192 steps, full metrics request an asynchronous parameter snapshot and
+send it to a separate validation worker. The full-image raster and metric pass
+never runs in the training worker.
 
 The validation worker also reports active versus raster-dead slots,
 dynamic/persistent counts, static-mix quantiles, endpoint temporal support,
 anisotropy saturation, and per-family update RMS. These diagnostics never block
 the optimizer pump.
 
-The validation selection is all pixels from `cam04` and `cam09` over all 16
-times, plus all pixels from heldout `cam06` over all 16 times. The charts retain
-full decimated history and show:
+Longitudinal validation uses all pixels from `cam04` and `cam09` over all 16
+times, plus all pixels from heldout `cam06` over all 16 times. A second
+center-time sweep evaluates every one of the 17 train cameras and reports the
+weakest, median, and strongest PSNR. The charts retain full decimated history
+and show:
 
 - optimizer objective;
 - full-image train and heldout MSE/MAE/PSNR;
@@ -397,8 +453,8 @@ full decimated history and show:
   validation snapshots.
 
 This is a deterministic browser diagnostic, not the Python paper evaluator:
-it currently omits LPIPS and evaluates two representative train cameras rather
-than all 17. A measured 4,096-splat validation pass took about 4.5 seconds on
+it currently omits LPIPS, and only the center-time camera sweep covers all 17
+train cameras. A measured 4,096-splat validation pass took about 4.5 seconds on
 the local Apple browser in the earlier contended run and 1.4-1.9 seconds in the
 final clean smoke, without pausing the optimizer.
 
@@ -443,12 +499,14 @@ down from a 486 MiB all-camera/all-time binding, without changing target
 precision or the objective. Queue writes and compute submissions remain ordered
 on one `GPUQueue`; training does not drain or synchronize between pages.
 
-Each tile now reserves enough IDs to cover every splat, so a valid frame cannot
-overflow its bin. Active tile/splat pairs are compacted, backward dispatch uses
-two workgroup dimensions, and pair-owned gradients accumulate into one FP32
-record per splat with compare/exchange atomics. Checkpoint stride expands only
-enough to keep each storage binding within the device limit. On the Apple M4's
-128 MiB binding limit, the 384x288/4,096-splat plan is:
+Through 4,096 global splats, each tile reserves enough IDs to cover every
+splat. The 8,192-splat path deliberately retains this 4,096-contributor
+tile-local bound and reports violations through `Tile Overflow`; valid measured
+runs must remain at zero. Active tile/splat pairs are compacted, backward
+dispatch uses two workgroup dimensions, and pair-owned gradients accumulate
+into one FP32 record per splat with compare/exchange atomics. Checkpoint stride
+expands only enough to keep each storage binding within the device limit. On
+the Apple M4's 128 MiB binding limit, the 384x288/4,096-splat plan is:
 
 | Buffer | Old reservation | Current reservation |
 | --- | ---: | ---: |
@@ -482,17 +540,155 @@ Full measurements and repeats are in
 `benchmark_results/2026-07-28_tiled_scaling_apple_m4.json` and
 `benchmark_results/2026-07-28_tiled_memory_precision_apple_m4.json`.
 
+## July 30 8K Splat Result
+
+The tiled backend now supports 8,192 global splats. The live SPA starts from
+the 4,096 checked-in SfM seeds, allocates the 8K model once, and activates the
+hidden half through opacity-preserving splits from step 600 through step
+26,100. The tile-local sorter remains bounded at 4,096 entries, and its packed
+depth key now preserves 13-bit splat IDs.
+
+A synchronized 96x72 Apple M4 benchmark used packed-FP16 checkpoints, an 11x11
+Gaussian SSIM window, 32 warmup steps, 128 measured GPU-drained steps, and
+three fresh devices per count:
+
+| Active splats | Median steps/s | Relative throughput | Tile overflow |
+| --- | ---: | ---: | ---: |
+| 4,096 | 350.2 | 100.0% | 0 |
+| 8,192 | 188.3 | 53.8% | 0 |
+
+The large tile-pair and checkpoint buffers stay fixed because tile capacity
+does not grow with global capacity. Per-splat state does grow; for example, the
+FP32 gradient accumulator rises from 0.375 MiB to 0.75 MiB. Giving the sort key
+one more ID bit also reduces its positive-depth field from 20 to 19 bits.
+
+The 8K benchmark activates a repeated copy of the 4,096-seed bank to stress
+IDs above 4,095 and worst-case occupancy. It validates execution, finite loss,
+and zero overflow, not reconstruction quality. The canonical growth path avoids
+those visible duplicates, but still needs a matched convergence run to show
+whether the added capacity recovers high-frequency detail.
+
+Full repeats and memory plans are in
+`benchmark_results/2026-07-30_tiled_8k_apple_m4.json`.
+
+## July 30 20K-30K Scaling Result
+
+The tiled allocation no longer inherits the sampled backend's
+`view x time x splat` depth-order cache. That avoids 32.64 MB at 30K. It also
+omits the unused sampled-gradient slab. At the current 96x72 raster, raw GPU
+buffer capacity is therefore not the 20K-30K limit.
+
+A synchronized full-cycle Apple M4 stress used 8 warmup steps followed by 272
+measured GPU-drained steps. All splats were active by repeating the 4,096 seed
+bank; this is deliberately a systems/occupancy stress, not an initialization
+recommendation.
+
+| Active splats | Steps/s | GPU buffers | Max tile | Total overflow |
+| ---: | ---: | ---: | ---: | ---: |
+| 20,000 | 99.5 | 31.4 MiB | 2,680 | 0 |
+| 30,000 | 63.9 | 38.9 MiB | 3,993 | 0 |
+| 32,768 | 58.8 | 40.9 MiB | 4,096 | 9,125 |
+
+The 32K row is rejected. Its final camera/time pair happened to report zero
+current overflow, but the new cumulative counter caught dropped references
+earlier in the cycle. The 30K row completed cleanly but is close to the 4,096
+tile bound, so the live cumulative counter remains a validity requirement as
+optimization changes footprints.
+
+The dominant next speed patch identified here was implemented and measured on
+July 31: projected-space gradient staging now runs the expensive 3D VJP once
+per splat rather than once per tile/splat pair. Other measured risks remain the
+three-panel global preview bitonic sorts and the serial topology selector.
+Full pre-fork data is in
+`benchmark_results/2026-07-30_tiled_20k_30k_apple_m4.json`.
+
+## July 31 WebGPU Kernel Fork Result
+
+The fast tiled backend was forked behind explicit controls, compared against
+the direct reference, and promoted only after active Apple WebGPU parity.
+The accepted configuration is:
+
+| Component | Fast default | Live control |
+| --- | --- | --- |
+| Raster backward | staged projected gradient, one 3D VJP/splat | repeated direct 3D VJP |
+| Backward work | checkpoint block | tile/splat pair |
+| Tile edge | 8 | 16 |
+| Projection storage | 32 B hot + 80 B cold/splat | 192 B monolithic/splat |
+| SSIM | exact separable 11x11 | direct 11x11 2D |
+| Checkpoints | pixel-major packed FP16 | selectable |
+
+One-step parity passes with maximum RGB error `1.19e-7`, objective error
+`5.45e-8`, all 9 active gradient families accepted, and zero tile overflow.
+The exact separable SSIM uses
+
+```text
+H = H_y H_x
+H^T = H_x^T H_y^T
+```
+
+for the Gaussian window and its adjoint. It changes neither the objective nor
+the reflected-boundary convention; it replaces a quadratic 2D neighborhood
+walk with four one-dimensional passes and 80 bytes of scratch per pixel.
+
+Final timings use an order-controlled protocol: both variants remain alive,
+both are warmed, four equal measurement chunks alternate execution order, GPU
+timestamp profiles alternate order, and the queue is drained only at
+measurement boundaries.
+
+The saved rows below use the sum of active pass timestamps for `GPU step`.
+New artifacts also report first-pass-begin to last-pass-end as `gpuSpanMs`.
+Phase contracts are explicit: direct `backward` includes its repeated 3D VJP,
+while staged `backward` emits projected gradients and staged `update` contains
+the one-per-splat 3D VJP plus Adam. The inner backward ratio is therefore a
+useful location-of-savings diagnostic, not a matched standalone-kernel claim.
+End-to-end throughput and complete GPU span are the primary comparisons.
+
+| Fork | Matched workload | Throughput | GPU step | Inner phase | Memory |
+| --- | --- | ---: | ---: | ---: | ---: |
+| staged vs direct backward | 8K, 96x72 | 1.84x | 1.80x | 2.52x reported backward | -1.00 MiB |
+| staged vs direct backward | 30K, 96x72 | 1.70x | 1.42x | 2.79x reported backward | -3.66 MiB |
+| compact vs monolithic projection | 30K, 96x72 | 1.05x | 1.07x | packet/VJP aggregate | -2.29 MiB |
+| separable vs 2D SSIM | 8K, 96x72 | 1.10x | 1.20x | 2.50x stats, 5.70x adjoint | +0.53 MiB |
+| separable vs 2D SSIM | 8K, 192x144 | 1.28x | 1.32x | 2.65x stats, 3.66x adjoint | +2.11 MiB |
+| separable vs 2D SSIM | 30K, 96x72 | 1.05x | 1.07x | 2.57x stats, 3.79x adjoint | +0.53 MiB |
+
+The compact packet's two reversed-start runs improved throughput by 1.03x and
+1.06x, so its modest gain is less sensitive to process order than the earlier
+one-shot benchmark. Historical one-shot numbers remain in the artifact but
+are explicitly non-headline evidence.
+
+Rejected or parked forks are also part of the result:
+
+- a shared pair packet was slower than lane-local accumulation;
+- checkpoint strides 8 and 32 lost to 16 on this workload;
+- block-major checkpoints lost to pixel-major;
+- the 32K full camera/time cycle overflowed the 4,096-entry tile bound;
+- one-shot control-then-candidate timing changed materially when order flipped,
+  which motivated the alternating protocol.
+
+Raw order-controlled artifacts live under
+`benchmark_results/2026-07-31_interleaved/`. The consolidated result and
+historical context are in
+`benchmark_results/2026-07-31_wgpu_kernel_forks_apple_m4.json`. The full
+scientist reflection, derivations, backtracks, and next falsification lanes are
+in
+`../../agent_notes/loose_notes/2026-07-31_03-36-30_browser_wgpu_kernel_forks_scientist_reflection.md`.
+
 ## What The Numbers Do Not Prove
 
 - The live SPA is slower than the isolated table because preview, worker
   scheduling, status publication, metric readback, and validation coexist with
-  training. A recent 4,096-splat observation was about 250-280 completed
-  steps/s.
+  training. The final 4,096-active/8,192-capacity smoke reported 170.5
+  completed steps/s at step 1,248; a prior 4,096-capacity observation was about
+  250-280 steps/s.
 - Historical 7.3, 584-824, and 793 steps/s observations belong to different
   sampled-ray kernels, splat counts, objectives, and UI schedules.
 - No saved Metal measurement matches this complete browser step. Projection,
   raster-only, or synthetic Metal microbenchmarks cannot establish a
   WebGPU-versus-Metal percentage.
+- Historical million-scale counts were frame/batch-expanded projected
+  instances or pre-compaction segment records, not one million distinct
+  trainable scene splats through a complete optimizer step.
 - Throughput does not establish convergence or novel-view quality.
 
 ## Baseline Status
@@ -511,16 +707,14 @@ The highest-value remaining evidence is:
 1. compare the verified 768-point train-only cloud plus growth against the
    legacy unverified 4,096-point seed under matched settings, or produce a
    denser verified cloud with a stronger matcher;
-2. phase timing for bin/sort, raster, SSIM, backward, update, preview, and
-   validation;
-3. residual/depth-guided densification and pruning, compared against the new
+2. residual/depth-guided densification and pruning, compared against the new
    fixed-topology default rather than the removed proxy recycler;
-4. matched initialization, normalized-scale-bound, LR-family, and splat-capacity
+3. matched initialization, normalized-scale-bound, LR-family, and splat-capacity
    ablations;
-5. full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed;
-6. a complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
+4. full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed;
+5. a complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
    World Tubes to a selectable browser backend;
-7. canonical byte targets plus shared host storage before presenting 384x288 as
+6. canonical byte targets plus shared host storage before presenting 384x288 as
    a normal SPA dataset mode rather than an isolated GPU benchmark.
 
 The latest corrected diagnostic reached `16.2/15.5 dB` train/heldout and

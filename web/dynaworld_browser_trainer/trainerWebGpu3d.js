@@ -7,6 +7,7 @@ import {
 } from "./trainingSchedule.js";
 
 export const SPLAT_FLOATS = 24;
+export const MAX_BROWSER_RENDER_SPLATS = 32768;
 export const INITIAL_SPLAT_OPACITY = 0.1;
 // Targets are bounded RGB. Matching that support prevents opacity from trading
 // against an unphysical overbright color during optimization.
@@ -34,6 +35,18 @@ export function sampleGradientBufferBytes(splatCount) {
 	const bytes = MAX_SAMPLES_PER_STEP * splatCount * SPLAT_BYTES;
 	if (!Number.isSafeInteger(bytes)) throw new RangeError("splatCount requires an unsafe buffer size.");
 	return bytes;
+}
+
+export function sampledOrderCacheEntries(trainViewCount, frameCount, splatCount, enabled = true) {
+	for (const [label, value] of Object.entries({ trainViewCount, frameCount, splatCount })) {
+		if (!Number.isSafeInteger(value) || value < 1) {
+			throw new RangeError(`${label} must be a positive safe integer.`);
+		}
+	}
+	if (!enabled) return 0;
+	const entries = trainViewCount * frameCount * splatCount;
+	if (!Number.isSafeInteger(entries)) throw new RangeError("The sampled depth-order cache is too large.");
+	return entries;
 }
 
 export function assertStorageBufferFits(label, requiredBytes, storageLimit) {
@@ -1406,6 +1419,9 @@ export class DynamicSplatWebGpu3dTrainer {
 	constructor(canvas) {
 		this.canvas = canvas; this.device = null; this.dataset = null; this.currentIndex = 0;
 		this.stepCount = 0; this.splatCount = 768; this.totalRecycled = 0; this.readbackChain = Promise.resolve();
+		this.requestTimestampQueries = false;
+		this.supportsTimestampQuery = false;
+		this.timestampQueryEnabled = false;
 		this.configBytes = new ArrayBuffer(144);
 		this.renderConfigBytes = Array.from({ length: MAX_RENDER_VIEWS }, () => new ArrayBuffer(48));
 	}
@@ -1419,16 +1435,23 @@ export class DynamicSplatWebGpu3dTrainer {
 	}
 
 	async init(dataset, { splatCount = 768, requiredWorkgroupStorageSize = 0 } = {}) {
-		if (splatCount > 4096) throw new RangeError("The browser render path supports at most 4096 splats.");
+		if (splatCount > MAX_BROWSER_RENDER_SPLATS) {
+			throw new RangeError(`The browser render path supports at most ${MAX_BROWSER_RENDER_SPLATS} splats.`);
+		}
 		if (splatCount > 2048 && !this.skipSampleGradientAllocation) {
 			throw new RangeError("The sampled-ray depth-order cache supports at most 2048 splats; "
 				+ "use the tiled full-frame backend above that count.");
 		}
-		const sampleGradientBytes = sampleGradientBufferBytes(splatCount);
+		const sampleGradientBytes = this.skipSampleGradientAllocation
+			? SPLAT_BYTES : sampleGradientBufferBytes(splatCount);
 		if (!navigator.gpu) throw new Error("WebGPU unavailable in this browser.");
 		const adapter = await navigator.gpu.requestAdapter(); if (!adapter) throw new Error("WebGPU adapter unavailable.");
 		this.adapterName = adapter.info?.description || adapter.info?.vendor || "WebGPU";
 		this.supportsShaderF16 = adapter.features.has("shader-f16");
+		this.supportsTimestampQuery = adapter.features.has("timestamp-query");
+		const requiredFeatures = this.requestTimestampQueries && this.supportsTimestampQuery
+			? ["timestamp-query"] : [];
+		this.timestampQueryEnabled = requiredFeatures.length > 0;
 		const requiredStorageBuffers = 9;
 		if (adapter.limits.maxStorageBuffersPerShaderStage < requiredStorageBuffers) {
 			throw new Error(`This trainer needs ${requiredStorageBuffers} storage buffers per shader stage; `
@@ -1443,6 +1466,7 @@ export class DynamicSplatWebGpu3dTrainer {
 			requiredLimits.maxComputeWorkgroupStorageSize = requiredWorkgroupStorageSize;
 		}
 		this.device = await adapter.requestDevice({
+			requiredFeatures,
 			requiredLimits,
 		});
 		this.storageBufferLimit = Math.min(this.device.limits.maxStorageBufferBindingSize,
@@ -1528,7 +1552,16 @@ export class DynamicSplatWebGpu3dTrainer {
 		this.device.queue.writeBuffer(cameraSampleIndices, 0, cameraSamples.indices);
 		this.device.queue.writeBuffer(cameraSampleRanges, 0, cameraSamples.ranges);
 		const packedSampleCount = this.dataset.motionSamples.length + this.dataset.staticSamples.length;
-		const orderCount = this.trainViewIndices.length * this.dataset.frameCount * this.splatCount;
+		// The tiled backend owns depth ordering in its tile bins and never
+		// dispatches the sampled-ray order kernel. Avoid reserving a second
+		// view x time x splat order cache merely because it inherits preview
+		// and maintenance pipelines from this class.
+		const orderCount = sampledOrderCacheEntries(
+			this.trainViewIndices.length,
+			this.dataset.frameCount,
+			this.splatCount,
+			!this.skipSampleGradientAllocation,
+		);
 		const sampleData = new Uint32Array(Math.max(1, packedSampleCount + orderCount));
 		sampleData.set(this.dataset.motionSamples, 0);
 		sampleData.set(this.dataset.staticSamples, this.dataset.motionSamples.length);

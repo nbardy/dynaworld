@@ -4,9 +4,14 @@ import { SPLAT_FLOATS } from "./trainerWebGpu3d.js";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
 	fullFramePairForStep,
+	TILED_BACKWARD_GRANULARITIES,
+	TILED_BACKWARD_MODES,
+	TILED_CHECKPOINT_ORDERS,
+	TILED_PROJECTION_LAYOUTS,
+	TILED_SSIM_LAYOUTS,
 	trainingBackgroundForStep,
 	windowedL1DssimCpu,
-} from "./trainerWebGpu3dTiled.js?v=20260729-randombg3";
+} from "./trainerWebGpu3dTiled.js?v=20260731-fasttiles6";
 
 export const TILED_PARITY_DIAGNOSTIC_COMPONENTS = Object.freeze([11, 15]);
 
@@ -439,6 +444,13 @@ export class TiledParityError extends Error {
 export async function runTiledParityHarness({
 	throwOnFailure = true,
 	onProgress = () => {},
+	backwardMode = TILED_BACKWARD_MODES.DIRECT_3D,
+	backwardGranularity = TILED_BACKWARD_GRANULARITIES.PAIR,
+	checkpointOrder = TILED_CHECKPOINT_ORDERS.PIXEL_MAJOR,
+	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+	ssimLayout = TILED_SSIM_LAYOUTS.NAIVE_2D,
+	sharePairPacket = false,
+	tileSize = 16,
 } = {}) {
 	if (!navigator.gpu) throw new Error("WebGPU is unavailable in this browser.");
 	onProgress("Loading calibrated Coffee Martini preset");
@@ -452,6 +464,13 @@ export async function runTiledParityHarness({
 			growthCapacity: 8,
 			tileCapacity: 16,
 			checkpointPrecision: "f32",
+			backwardMode,
+			backwardGranularity,
+			checkpointOrder,
+			projectionLayout,
+			ssimLayout,
+			sharePairPacket,
+			tileSize,
 		});
 		await trainer.device.queue.onSubmittedWorkDone();
 
@@ -571,6 +590,13 @@ export async function runTiledParityHarness({
 				growthCapacity: 8,
 				tileCapacity: 16,
 				checkpointPrecision: "f32",
+				backwardMode: trainer.backwardMode,
+				backwardGranularity: trainer.backwardGranularity,
+				checkpointOrder: trainer.checkpointOrder,
+				projectionLayout: trainer.projectionLayout,
+				ssimLayout: trainer.ssimLayout,
+				sharePairPacket: trainer.sharePairPacket,
+				tileSize: trainer.tileSize,
 				step: debug.step,
 				fixtureStep: parityPair.step,
 				fixtureTime: parityPair.time,
@@ -626,7 +652,26 @@ function renderPage(report, error = null) {
 async function main() {
 	const detail = document.querySelector("#parityDetail");
 	try {
+		const backwardMode = new URLSearchParams(location.search).get("backwardMode")
+			?? TILED_BACKWARD_MODES.DIRECT_3D;
+		const sharePairPacket = new URLSearchParams(location.search).get("sharePairPacket") === "1";
+		const backwardGranularity = new URLSearchParams(location.search).get("backwardGranularity")
+			?? TILED_BACKWARD_GRANULARITIES.PAIR;
+		const checkpointOrder = new URLSearchParams(location.search).get("checkpointOrder")
+			?? TILED_CHECKPOINT_ORDERS.PIXEL_MAJOR;
+		const projectionLayout = new URLSearchParams(location.search).get("projectionLayout")
+			?? TILED_PROJECTION_LAYOUTS.MONOLITHIC;
+		const ssimLayout = new URLSearchParams(location.search).get("ssimLayout")
+			?? TILED_SSIM_LAYOUTS.NAIVE_2D;
+		const tileSize = Number(new URLSearchParams(location.search).get("tileSize") ?? 16);
 		const report = await runTiledParityHarness({
+			backwardMode,
+			backwardGranularity,
+			checkpointOrder,
+			projectionLayout,
+			ssimLayout,
+			sharePairPacket,
+			tileSize,
 			onProgress(message) {
 				detail.textContent = message;
 			},
