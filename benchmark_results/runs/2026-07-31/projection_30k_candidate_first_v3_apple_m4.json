@@ -1,0 +1,755 @@
+{
+  "schema": "dynaworld-browser-tiled-kernel-benchmark/v3",
+  "recordedAt": "2026-07-30T19:38:20.627Z",
+  "options": {
+    "experiment": "projection",
+    "variant": "both",
+    "order": "candidate-first",
+    "splats": 30000,
+    "capacity": 30000,
+    "scale": 1,
+    "warmup": 32,
+    "steps": 128,
+    "profiles": 5,
+    "checkpointPrecision": "packed-f16",
+    "checkpointStride": 16,
+    "checkpointOrder": "pixel-major",
+    "projectionLayout": "split-compact",
+    "ssimLayout": "separable",
+    "sharePairPacket": false,
+    "backwardGranularity": "checkpoint-block",
+    "tileSize": 8,
+    "tileCapacity": 4096,
+    "maxRoundCv": 0.1
+  },
+  "dataset": {
+    "name": "coffee_martini calibrated train17_holdout1",
+    "width": 96,
+    "height": 72,
+    "viewCount": 18,
+    "trainViewCount": 17,
+    "frameCount": 16
+  },
+  "results": [
+    {
+      "id": "staged-split-compact",
+      "label": "Staged split 32 B + 80 B projection",
+      "adapter": "apple · tiled full-frame · staged-project3d · checkpoint-block · pixel-major tape · split-compact projection · separable SSIM",
+      "backwardMode": "staged-project3d",
+      "raster": [
+        96,
+        72
+      ],
+      "requestedSplats": 30000,
+      "capacity": 30000,
+      "warmupSteps": 32,
+      "measuredSteps": 128,
+      "measurementRounds": 4,
+      "roundElapsedMs": [
+        79,
+        77.39999997615814,
+        76.89999997615814,
+        77.09999996423721
+      ],
+      "rounds": [
+        {
+          "round": 0,
+          "steps": 32,
+          "elapsedMs": 79,
+          "executionPosition": 0
+        },
+        {
+          "round": 1,
+          "steps": 32,
+          "elapsedMs": 77.39999997615814,
+          "executionPosition": 1
+        },
+        {
+          "round": 2,
+          "steps": 32,
+          "elapsedMs": 76.89999997615814,
+          "executionPosition": 0
+        },
+        {
+          "round": 3,
+          "steps": 32,
+          "elapsedMs": 77.09999996423721,
+          "executionPosition": 1
+        }
+      ],
+      "roundStability": {
+        "supported": true,
+        "samples": [
+          {
+            "round": 0,
+            "steps": 32,
+            "elapsedMs": 79,
+            "executionPosition": 0,
+            "stepsPerSecond": 405.0632911392405
+          },
+          {
+            "round": 1,
+            "steps": 32,
+            "elapsedMs": 77.39999997615814,
+            "executionPosition": 1,
+            "stepsPerSecond": 413.43669263381264
+          },
+          {
+            "round": 2,
+            "steps": 32,
+            "elapsedMs": 76.89999997615814,
+            "executionPosition": 0,
+            "stepsPerSecond": 416.12483758024956
+          },
+          {
+            "round": 3,
+            "steps": 32,
+            "elapsedMs": 77.09999996423721,
+            "executionPosition": 1,
+            "stepsPerSecond": 415.0453957826612
+          }
+        ],
+        "meanStepsPerSecond": 412.41755428399097,
+        "standardDeviationStepsPerSecond": 4.3523938746155455,
+        "coefficientOfVariation": 0.010553367162491063,
+        "minimumStepsPerSecond": 405.0632911392405,
+        "maximumStepsPerSecond": 416.12483758024956,
+        "maxToMinRatio": 1.027308192776241,
+        "lastToFirstRatio": 1.024643320838445,
+        "maxAllowedCoefficientOfVariation": 0.1,
+        "stable": true,
+        "executionPositionEffect": {
+          "positions": [
+            {
+              "position": 0,
+              "samples": 2,
+              "meanStepsPerSecond": 410.59406435974506
+            },
+            {
+              "position": 1,
+              "samples": 2,
+              "meanStepsPerSecond": 414.24104420823693
+            }
+          ],
+          "secondToFirstRatio": 1.0088822030444564,
+          "relativeDifference": 0.008842930691501445
+        }
+      },
+      "profileSteps": 5,
+      "elapsedMs": 310.3999999165535,
+      "stepsPerSecond": 412.3711341314785,
+      "loss": 0.48353368043899536,
+      "lossBreakdown": {
+        "loss": 0.48353368043899536,
+        "l1": 0.36906448006629944,
+        "dssim": 0.941410481929779,
+        "tileOverflow": 0,
+        "coverage": 0.2068098783493042,
+        "pairCount": 26230,
+        "maxTileOccupancy": 1750,
+        "meanStopRank": 242.87037658691406,
+        "visibleSplats": 21510,
+        "capacitySplats": 30000,
+        "viewIndex": 6,
+        "frameIndex": 14,
+        "tileOverflowTotal": 0,
+        "maxTileOccupancyEver": 2379,
+        "objectiveStep": 164,
+        "cycleMeanLoss": 0.5007093608379364,
+        "cycleMeanL1": 0.3853966064525373,
+        "cycleMeanDssim": 0.9619602842764421,
+        "cycleSamples": 165,
+        "cycleComplete": false
+      },
+      "profile": {
+        "supported": true,
+        "samples": 5,
+        "totalMedianMs": 2.428719,
+        "totalP95Ms": 2.5355404,
+        "gpuSpanMedianMs": 2.434551,
+        "gpuSpanP95Ms": 2.542464,
+        "phaseContract": {
+          "backward": "raster derivative and projected-gradient accumulation",
+          "update": "one 3D projection/covariance VJP per splat plus Adam"
+        },
+        "maintenanceIncluded": false,
+        "maintenanceDispatches": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "phaseMedianMs": {
+          "clear": 0.026291,
+          "project": 0.066457,
+          "sort": 0.152413,
+          "finalize": 0.00175,
+          "forward": 1.019428,
+          "ssimStats": 0.024,
+          "ssimGradient": 0.029333,
+          "metrics": 0.008999,
+          "backward": 0.924403,
+          "update": 0.206828
+        },
+        "phaseP95Ms": {
+          "clear": 0.0299412,
+          "project": 0.07370639999999999,
+          "sort": 0.15941160000000001,
+          "finalize": 0.0019496000000000001,
+          "forward": 1.0384346,
+          "ssimStats": 0.0244988,
+          "ssimGradient": 0.029782199999999998,
+          "metrics": 0.0092664,
+          "backward": 1.0022862,
+          "update": 0.2160766
+        }
+      },
+      "memoryPlan": {
+        "targetPageBytes": 110592,
+        "tileCapacity": 4096,
+        "tileSize": 8,
+        "pairCapacity": 442368,
+        "checkpointStride": 16,
+        "requestedCheckpointStride": 16,
+        "checkpointPrecision": "packed-f16",
+        "checkpointOrder": "pixel-major",
+        "checkpointBytes": 14155776,
+        "pairDataBytes": 3538944,
+        "gradientAccumulatorBytes": 1440000,
+        "rasterProjectionBytes": 960000,
+        "projectionVjpBytes": 2400000,
+        "projectionLayout": "split-compact",
+        "ssimLayout": "separable",
+        "ssimScratchBytes": 552960,
+        "pairGradientBytes": 0,
+        "sampledDepthOrderCacheBytes": 0,
+        "capacityScaledBytes": 20466432,
+        "bytesPerCapacitySplat": 682.2144,
+        "allocatedBytes": 39749864,
+        "bufferBytes": {
+          "parameterPingPong": 5760000,
+          "optimizerMoments": 5760000,
+          "densityStats": 480000,
+          "gradientAccumulator": 1440000,
+          "projections": 3360000,
+          "parameterReadback": 2880000,
+          "previewSort": 786432,
+          "sampleIndices": 4,
+          "sampledWorkspace": 864,
+          "targetPage": 110592,
+          "cameraData": 1800,
+          "rasterPairs": 3539376,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageWorkspace": 1465344,
+          "configAndTelemetry": 9644,
+          "previewGeometry": 32
+        },
+        "storageBufferLimit": 134217728,
+        "nativeShaderF16": true,
+        "backwardMode": "staged-project3d",
+        "backwardGranularity": "checkpoint-block",
+        "gradientRecordFloats": 12,
+        "timestampQuerySupported": true,
+        "timestampQueryEnabled": true,
+        "sharePairPacket": false,
+        "staticWarmupSteps": 0,
+        "metricCycleSteps": 272
+      },
+      "validity": {
+        "finiteLoss": true,
+        "zeroTileOverflow": true,
+        "stableRounds": true,
+        "valid": true,
+        "reasons": []
+      }
+    },
+    {
+      "id": "staged-monolithic",
+      "label": "Staged monolithic 192 B projection",
+      "adapter": "apple · tiled full-frame · staged-project3d · checkpoint-block · pixel-major tape · monolithic projection · separable SSIM",
+      "backwardMode": "staged-project3d",
+      "raster": [
+        96,
+        72
+      ],
+      "requestedSplats": 30000,
+      "capacity": 30000,
+      "warmupSteps": 32,
+      "measuredSteps": 128,
+      "measurementRounds": 4,
+      "roundElapsedMs": [
+        84.5,
+        83.70000004768372,
+        84.60000002384186,
+        83.59999996423721
+      ],
+      "rounds": [
+        {
+          "round": 0,
+          "steps": 32,
+          "elapsedMs": 84.5,
+          "executionPosition": 1
+        },
+        {
+          "round": 1,
+          "steps": 32,
+          "elapsedMs": 83.70000004768372,
+          "executionPosition": 0
+        },
+        {
+          "round": 2,
+          "steps": 32,
+          "elapsedMs": 84.60000002384186,
+          "executionPosition": 1
+        },
+        {
+          "round": 3,
+          "steps": 32,
+          "elapsedMs": 83.59999996423721,
+          "executionPosition": 0
+        }
+      ],
+      "roundStability": {
+        "supported": true,
+        "samples": [
+          {
+            "round": 0,
+            "steps": 32,
+            "elapsedMs": 84.5,
+            "executionPosition": 1,
+            "stepsPerSecond": 378.698224852071
+          },
+          {
+            "round": 1,
+            "steps": 32,
+            "elapsedMs": 83.70000004768372,
+            "executionPosition": 0,
+            "stepsPerSecond": 382.31780145483475
+          },
+          {
+            "round": 2,
+            "steps": 32,
+            "elapsedMs": 84.60000002384186,
+            "executionPosition": 1,
+            "stepsPerSecond": 378.2505909099504
+          },
+          {
+            "round": 3,
+            "steps": 32,
+            "elapsedMs": 83.59999996423721,
+            "executionPosition": 0,
+            "stepsPerSecond": 382.77511978097016
+          }
+        ],
+        "meanStepsPerSecond": 380.5104342494566,
+        "standardDeviationStepsPerSecond": 2.0485587366979767,
+        "coefficientOfVariation": 0.005383712382917138,
+        "minimumStepsPerSecond": 378.2505909099504,
+        "maximumStepsPerSecond": 382.77511978097016,
+        "maxToMinRatio": 1.0119617232061295,
+        "lastToFirstRatio": 1.0107655506716242,
+        "maxAllowedCoefficientOfVariation": 0.1,
+        "stable": true,
+        "executionPositionEffect": {
+          "positions": [
+            {
+              "position": 0,
+              "samples": 2,
+              "meanStepsPerSecond": 382.5464606179024
+            },
+            {
+              "position": 1,
+              "samples": 2,
+              "meanStepsPerSecond": 378.47440788101073
+            }
+          ],
+          "secondToFirstRatio": 0.9893554034448147,
+          "relativeDifference": 0.010701553414490913
+        }
+      },
+      "profileSteps": 5,
+      "elapsedMs": 336.4000000357628,
+      "stepsPerSecond": 380.4994054292279,
+      "loss": 0.4835432767868042,
+      "lossBreakdown": {
+        "loss": 0.4835432767868042,
+        "l1": 0.369066447019577,
+        "dssim": 0.9414504766464233,
+        "tileOverflow": 0,
+        "coverage": 0.20681048929691315,
+        "pairCount": 26229,
+        "maxTileOccupancy": 1750,
+        "meanStopRank": 242.86111450195312,
+        "visibleSplats": 21510,
+        "capacitySplats": 30000,
+        "viewIndex": 6,
+        "frameIndex": 14,
+        "tileOverflowTotal": 0,
+        "maxTileOccupancyEver": 2379,
+        "objectiveStep": 164,
+        "cycleMeanLoss": 0.5007094392270753,
+        "cycleMeanL1": 0.3853968795501825,
+        "cycleMeanDssim": 0.9619595816641143,
+        "cycleSamples": 165,
+        "cycleComplete": false
+      },
+      "profile": {
+        "supported": true,
+        "samples": 5,
+        "totalMedianMs": 2.636127,
+        "totalP95Ms": 2.7308003999999997,
+        "gpuSpanMedianMs": 2.645251,
+        "gpuSpanP95Ms": 2.7404338,
+        "phaseContract": {
+          "backward": "raster derivative and projected-gradient accumulation",
+          "update": "one 3D projection/covariance VJP per splat plus Adam"
+        },
+        "maintenanceIncluded": false,
+        "maintenanceDispatches": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "phaseMedianMs": {
+          "clear": 0.02804,
+          "project": 0.090624,
+          "sort": 0.165206,
+          "finalize": 0.001709,
+          "forward": 1.150982,
+          "ssimStats": 0.02325,
+          "ssimGradient": 0.028874,
+          "metrics": 0.009042,
+          "backward": 0.911444,
+          "update": 0.235121
+        },
+        "phaseP95Ms": {
+          "clear": 0.028641,
+          "project": 0.0933808,
+          "sort": 0.178672,
+          "finalize": 0.0019587999999999997,
+          "forward": 1.1849394,
+          "ssimStats": 0.0252912,
+          "ssimGradient": 0.029191800000000004,
+          "metrics": 0.0091494,
+          "backward": 0.9993323999999999,
+          "update": 0.23631300000000002
+        }
+      },
+      "memoryPlan": {
+        "targetPageBytes": 110592,
+        "tileCapacity": 4096,
+        "tileSize": 8,
+        "pairCapacity": 442368,
+        "checkpointStride": 16,
+        "requestedCheckpointStride": 16,
+        "checkpointPrecision": "packed-f16",
+        "checkpointOrder": "pixel-major",
+        "checkpointBytes": 14155776,
+        "pairDataBytes": 3538944,
+        "gradientAccumulatorBytes": 1440000,
+        "rasterProjectionBytes": 5760000,
+        "projectionVjpBytes": 0,
+        "projectionLayout": "monolithic",
+        "ssimLayout": "separable",
+        "ssimScratchBytes": 552960,
+        "pairGradientBytes": 0,
+        "sampledDepthOrderCacheBytes": 0,
+        "capacityScaledBytes": 22866432,
+        "bytesPerCapacitySplat": 762.2144,
+        "allocatedBytes": 42149864,
+        "bufferBytes": {
+          "parameterPingPong": 5760000,
+          "optimizerMoments": 5760000,
+          "densityStats": 480000,
+          "gradientAccumulator": 1440000,
+          "projections": 5760000,
+          "parameterReadback": 2880000,
+          "previewSort": 786432,
+          "sampleIndices": 4,
+          "sampledWorkspace": 864,
+          "targetPage": 110592,
+          "cameraData": 1800,
+          "rasterPairs": 3539376,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageWorkspace": 1465344,
+          "configAndTelemetry": 9644,
+          "previewGeometry": 32
+        },
+        "storageBufferLimit": 134217728,
+        "nativeShaderF16": true,
+        "backwardMode": "staged-project3d",
+        "backwardGranularity": "checkpoint-block",
+        "gradientRecordFloats": 12,
+        "timestampQuerySupported": true,
+        "timestampQueryEnabled": true,
+        "sharePairPacket": false,
+        "staticWarmupSteps": 0,
+        "metricCycleSteps": 272
+      },
+      "validity": {
+        "finiteLoss": true,
+        "zeroTileOverflow": true,
+        "stableRounds": true,
+        "valid": true,
+        "reasons": []
+      }
+    }
+  ],
+  "experiment": {
+    "id": "projection",
+    "controlId": "staged-monolithic",
+    "candidateId": "staged-split-compact",
+    "order": "candidate-first"
+  },
+  "comparison": {
+    "controlId": "staged-monolithic",
+    "candidateId": "staged-split-compact",
+    "candidateThroughputSpeedup": 1.0837628870045073,
+    "candidateGpuTimeSpeedup": 1.0865457326628196,
+    "lossDelta": -0.00000959634780883789,
+    "allocatedByteDelta": -2400000,
+    "validForPromotion": true
+  },
+  "validity": {
+    "correctnessAndStabilityPassed": true,
+    "hostEnvironmentPassed": true,
+    "promotable": true,
+    "reasons": []
+  },
+  "execution": {
+    "orchestrator": "Bun",
+    "webGpuRuntime": "headless Chromium/Dawn",
+    "headless": true,
+    "browserExecutable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  },
+  "hostDiagnostics": {
+    "schema": "dynaworld-benchmark-host-diagnostics/v1",
+    "policy": "fail",
+    "thresholds": {
+      "maxCpuBusyFraction": 0.85,
+      "maxLoadPerLogicalCpu": 0.75,
+      "maxCompetingCpuFraction": 0.35,
+      "maxPreflightGpuUtilizationPercent": 35,
+      "minAvailableMemoryFraction": 0.1
+    },
+    "postflightCooldownMs": 5000,
+    "preflight": {
+      "schema": "dynaworld-benchmark-host-snapshot/v1",
+      "recordedAt": "2026-07-30T19:38:01.694Z",
+      "platform": "darwin",
+      "architecture": "arm64",
+      "sampleMs": 1000,
+      "logicalCpuCount": 10,
+      "loadAverage1m": 3.1118,
+      "loadAverage5m": 3.082,
+      "loadAverage15m": 3.6763,
+      "loadPerLogicalCpu": 0.3112,
+      "cpuBusyFraction": 0.3051,
+      "cpuBusySource": "top-second-sample",
+      "totalMemoryBytes": 25769803776,
+      "availableMemoryFraction": 0.57,
+      "memoryAvailabilitySource": "memory_pressure",
+      "swap": {
+        "totalBytes": 10737418240,
+        "usedBytes": 9446359040,
+        "usedFraction": 0.8797607421875
+      },
+      "processPressure": {
+        "activeProcessCount": 6,
+        "competingCpuPercent": 169.2,
+        "competingCpuFraction": 0.1692,
+        "categoryCpuPercent": {
+          "game-client": 102.8,
+          "developer-tool": 56.6,
+          "media": 6.8,
+          "runtime": 3
+        },
+        "topProcesses": [
+          {
+            "name": "steam_osx",
+            "category": "game-client",
+            "cpuPercent": 99.7,
+            "memoryPercent": 0.2
+          },
+          {
+            "name": "Codex (Renderer)",
+            "category": "developer-tool",
+            "cpuPercent": 46.4,
+            "memoryPercent": 4.5
+          },
+          {
+            "name": "codex",
+            "category": "developer-tool",
+            "cpuPercent": 10.2,
+            "memoryPercent": 2.7
+          },
+          {
+            "name": "WebTorrent Helper (Renderer)",
+            "category": "media",
+            "cpuPercent": 6.8,
+            "memoryPercent": 0.7
+          },
+          {
+            "name": "Battle.net",
+            "category": "game-client",
+            "cpuPercent": 3.1,
+            "memoryPercent": 0.2
+          },
+          {
+            "name": "node",
+            "category": "runtime",
+            "cpuPercent": 3,
+            "memoryPercent": 0.7
+          }
+        ]
+      },
+      "appleGpu": {
+        "available": true,
+        "deviceUtilizationPercent": 1,
+        "rendererUtilizationPercent": 1,
+        "tilerUtilizationPercent": 1,
+        "allocatedSystemMemoryBytes": 5462917120,
+        "inUseSystemMemoryBytes": 234962944,
+        "lastSubmissionProcess": {
+          "name": "iTerm2",
+          "category": "other"
+        }
+      },
+      "thermal": {
+        "thermalWarning": false,
+        "performanceWarning": false
+      },
+      "limitations": [
+        "Process names are sanitized basenames; command arguments and PIDs are omitted.",
+        "Driver GPU utilization is a pre/post snapshot, not per-process GPU accounting.",
+        "Round variance remains the in-run detector for nonlinear contention and throttling."
+      ],
+      "assessment": {
+        "quiet": true,
+        "warnings": [],
+        "thresholds": {
+          "maxCpuBusyFraction": 0.85,
+          "maxLoadPerLogicalCpu": 0.75,
+          "maxCompetingCpuFraction": 0.35,
+          "maxPreflightGpuUtilizationPercent": 35,
+          "minAvailableMemoryFraction": 0.1
+        }
+      }
+    },
+    "postflight": {
+      "schema": "dynaworld-benchmark-host-snapshot/v1",
+      "recordedAt": "2026-07-30T19:38:27.701Z",
+      "platform": "darwin",
+      "architecture": "arm64",
+      "sampleMs": 1000,
+      "logicalCpuCount": 10,
+      "loadAverage1m": 2.894,
+      "loadAverage5m": 3.04,
+      "loadAverage15m": 3.6436,
+      "loadPerLogicalCpu": 0.2894,
+      "cpuBusyFraction": 0.1076,
+      "cpuBusySource": "top-second-sample",
+      "totalMemoryBytes": 25769803776,
+      "availableMemoryFraction": 0.55,
+      "memoryAvailabilitySource": "memory_pressure",
+      "swap": {
+        "totalBytes": 10737418240,
+        "usedBytes": 9395964477,
+        "usedFraction": 0.8750673828125001
+      },
+      "processPressure": {
+        "activeProcessCount": 5,
+        "competingCpuPercent": 45.1,
+        "competingCpuFraction": 0.0451,
+        "categoryCpuPercent": {
+          "developer-tool": 32.5,
+          "media": 5.6,
+          "runtime": 4.2,
+          "game-client": 2.8
+        },
+        "topProcesses": [
+          {
+            "name": "Codex (Renderer)",
+            "category": "developer-tool",
+            "cpuPercent": 27.7,
+            "memoryPercent": 4.8
+          },
+          {
+            "name": "WebTorrent Helper (Renderer)",
+            "category": "media",
+            "cpuPercent": 5.6,
+            "memoryPercent": 0.4
+          },
+          {
+            "name": "ChatGPT",
+            "category": "developer-tool",
+            "cpuPercent": 4.8,
+            "memoryPercent": 1
+          },
+          {
+            "name": "node",
+            "category": "runtime",
+            "cpuPercent": 4.2,
+            "memoryPercent": 0.7
+          },
+          {
+            "name": "Battle.net",
+            "category": "game-client",
+            "cpuPercent": 2.8,
+            "memoryPercent": 0.2
+          }
+        ]
+      },
+      "appleGpu": {
+        "available": true,
+        "deviceUtilizationPercent": 1,
+        "rendererUtilizationPercent": 1,
+        "tilerUtilizationPercent": 1,
+        "allocatedSystemMemoryBytes": 5471961088,
+        "inUseSystemMemoryBytes": 224886784,
+        "lastSubmissionProcess": {
+          "name": "Codex (Service)",
+          "category": "developer-tool"
+        }
+      },
+      "thermal": {
+        "thermalWarning": false,
+        "performanceWarning": false
+      },
+      "limitations": [
+        "Process names are sanitized basenames; command arguments and PIDs are omitted.",
+        "Driver GPU utilization is a pre/post snapshot, not per-process GPU accounting.",
+        "Round variance remains the in-run detector for nonlinear contention and throttling."
+      ],
+      "assessment": {
+        "quiet": true,
+        "warnings": [],
+        "thresholds": {
+          "maxCpuBusyFraction": 0.85,
+          "maxLoadPerLogicalCpu": 0.75,
+          "maxCompetingCpuFraction": 0.35,
+          "maxPreflightGpuUtilizationPercent": 35,
+          "minAvailableMemoryFraction": 0.1
+        }
+      }
+    },
+    "assessment": {
+      "quiet": true,
+      "warnings": []
+    },
+    "limitations": [
+      "Quiet pre/post snapshots cannot prove the GPU was uncontended for every instant.",
+      "Per-round throughput variance detects intermittent stalls but not constant-rate contention.",
+      "The cooldown reduces, but cannot mathematically identify, residual driver utilization.",
+      "Use matched alternating variants and repeat reversed-start runs for promotion evidence."
+    ]
+  },
+  "artifact": {
+    "runId": "projection-30k-candidate-first-v3-apple-m4",
+    "outputMode": "explicit-path",
+    "filenameTimeZone": "Asia/Seoul"
+  }
+}

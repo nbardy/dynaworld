@@ -32,7 +32,18 @@ const OPTION_SPECS = Object.freeze({
 	"--granularity": ["granularity", String, "checkpoint-block"],
 	"--tile": ["tile", Number, 8],
 	"--tile-capacity": ["tileCapacity", Number, 1024],
+	"--max-round-cv": ["maxRoundCv", Number, 0.10],
+	"--contention-policy": ["contentionPolicy", String, "warn"],
+	"--contention-sample-ms": ["contentionSampleMs", Number, 1000],
+	"--postflight-cooldown-ms": ["postflightCooldownMs", Number, 10000],
+	"--max-cpu-busy-fraction": ["maxCpuBusyFraction", Number, 0.85],
+	"--max-load-per-cpu": ["maxLoadPerLogicalCpu", Number, 0.75],
+	"--max-competing-cpu-fraction": ["maxCompetingCpuFraction", Number, 0.35],
+	"--max-gpu-utilization-percent": ["maxPreflightGpuUtilizationPercent", Number, 35],
+	"--min-available-memory-fraction": ["minAvailableMemoryFraction", Number, 0.10],
 	"--out": ["out", String, null],
+	"--out-dir": ["outDir", String, null],
+	"--run-id": ["runId", String, null],
 	"--port": ["port", Number, 0],
 	"--timeout-ms": ["timeoutMs", Number, 180000],
 	"--browser-executable": ["browserExecutable", String, null],
@@ -62,7 +73,21 @@ The browser is the WebGPU runtime; Bun owns orchestration and artifact output.
   --granularity MODE         pair or checkpoint-block
   --tile N                   tile edge: 8 or 16
   --tile-capacity N          256, 512, 1024, 2048, or 4096
+  --max-round-cv N           maximum per-variant throughput CV (default: 0.10)
+  --contention-policy MODE   record, warn, or fail (default: warn)
+  --contention-sample-ms N   host sample duration (default: 1000)
+  --postflight-cooldown-ms N wait after owned Chrome closes (default: 10000)
+  --max-cpu-busy-fraction N  pre/post CPU busy threshold (default: 0.85)
+  --max-load-per-cpu N       1-minute load / logical CPU threshold (default: 0.75)
+  --max-competing-cpu-fraction N
+                              process CPU / host capacity threshold (default: 0.35)
+  --max-gpu-utilization-percent N
+                              preflight Apple GPU threshold (default: 35)
+  --min-available-memory-fraction N
+                              memory-pressure availability floor (default: 0.10)
   --out PATH                 write JSON artifact instead of stdout
+  --out-dir PATH             auto-name artifact under PATH/YYYY-MM-DD/
+  --run-id ID                sanitized artifact identity for --out-dir
   --timeout-ms N             completion timeout (default: 180000)
   --browser-executable PATH  explicit Chromium executable
 `;
@@ -86,6 +111,24 @@ function parseArgs(argv) {
 		}
 	}
 	args.capacity ??= args.splats;
+	if (!["record", "warn", "fail"].includes(args.contentionPolicy)) {
+		throw new Error("--contention-policy must be record, warn, or fail.");
+	}
+	if (args.out && args.outDir) throw new Error("--out and --out-dir are mutually exclusive.");
+	for (const [name, value, minimum, maximum] of [
+		["--max-round-cv", args.maxRoundCv, 0.001, 1],
+		["--contention-sample-ms", args.contentionSampleMs, 100, 10000],
+		["--postflight-cooldown-ms", args.postflightCooldownMs, 0, 10000],
+		["--max-cpu-busy-fraction", args.maxCpuBusyFraction, 0, 1],
+		["--max-load-per-cpu", args.maxLoadPerLogicalCpu, 0, 10],
+		["--max-competing-cpu-fraction", args.maxCompetingCpuFraction, 0, 1],
+		["--max-gpu-utilization-percent", args.maxPreflightGpuUtilizationPercent, 0, 100],
+		["--min-available-memory-fraction", args.minAvailableMemoryFraction, 0, 1],
+	]) {
+		if (value < minimum || value > maximum) {
+			throw new Error(`${name} must be from ${minimum} through ${maximum}.`);
+		}
+	}
 	return args;
 }
 
@@ -225,6 +268,7 @@ function benchmarkUrl(port, args) {
 		granularity: args.granularity,
 		tile: String(args.tile),
 		tileCapacity: String(args.tileCapacity),
+		maxRoundCv: String(args.maxRoundCv),
 	});
 	return `http://127.0.0.1:${port}/benchmarkTiledKernels.html?${query}`;
 }
@@ -269,17 +313,37 @@ async function runBenchmark(args) {
 		page.setDefaultNavigationTimeout(args.timeoutMs);
 		page.on("console", (message) => process.stderr.write(`[page] ${message.text()}\n`));
 		page.on("pageerror", (error) => process.stderr.write(`[page error] ${error.message}\n`));
+		page.on("requestfailed", (request) => process.stderr.write(
+			`[request failed] ${request.url()} (${request.failure()?.errorText ?? "unknown"})\n`,
+		));
+		page.on("response", (response) => {
+			if (response.status() >= 400) {
+				process.stderr.write(`[response ${response.status()}] ${response.url()}\n`);
+			}
+		});
 		await page.setViewport({ width: 1280, height: 960 });
 		await page.goto(benchmarkUrl(port, args), {
 			waitUntil: "domcontentloaded",
 			timeout: args.timeoutMs,
 		});
-		await page.waitForFunction(
-			() => ["complete", "failed"].includes(
-				document.documentElement.dataset.kernelBenchmarkState,
-			),
-			{ timeout: args.timeoutMs, polling: 100 },
-		);
+		try {
+			await page.waitForFunction(
+				() => ["complete", "failed"].includes(
+					document.documentElement.dataset.kernelBenchmarkState,
+				),
+				{ timeout: args.timeoutMs, polling: 100 },
+			);
+		} catch (error) {
+			const progress = await page.evaluate(() => ({
+				state: document.documentElement.dataset.kernelBenchmarkState ?? "unset",
+				status: document.querySelector("#kernelBenchmarkStatus")?.textContent ?? "unavailable",
+			})).catch(() => ({ state: "unavailable", status: "page evaluation failed" }));
+			throw new Error(
+				`Kernel benchmark timed out after ${args.timeoutMs} ms `
+				+ `(state=${progress.state}, status=${progress.status}).`,
+				{ cause: error },
+			);
+		}
 		const state = await page.evaluate(
 			() => document.documentElement.dataset.kernelBenchmarkState,
 		);
@@ -303,20 +367,151 @@ async function runBenchmark(args) {
 	}
 }
 
+function contentionThresholds(args) {
+	return {
+		maxCpuBusyFraction: args.maxCpuBusyFraction,
+		maxLoadPerLogicalCpu: args.maxLoadPerLogicalCpu,
+		maxCompetingCpuFraction: args.maxCompetingCpuFraction,
+		maxPreflightGpuUtilizationPercent: args.maxPreflightGpuUtilizationPercent,
+		minAvailableMemoryFraction: args.minAvailableMemoryFraction,
+	};
+}
+
+function sanitizeRunId(runId) {
+	if (!runId) return null;
+	const sanitized = runId
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 100);
+	if (!sanitized) throw new Error("--run-id must contain an ASCII letter or number.");
+	return sanitized;
+}
+
+function fallbackRunId(args, report) {
+	return [
+		report.experiment.id,
+		`${args.splats}s`,
+		`${report.dataset.width}x${report.dataset.height}`,
+		args.order,
+	].join("_");
+}
+
+function autoOutputPath(args, report, runId) {
+	if (!args.outDir) return args.out ? path.resolve(args.out) : null;
+	const timestamp = new Date(report.recordedAt);
+	const pad = (value) => String(value).padStart(2, "0");
+	const day = [
+		timestamp.getFullYear(),
+		pad(timestamp.getMonth() + 1),
+		pad(timestamp.getDate()),
+	].join("-");
+	const time = [
+		pad(timestamp.getHours()),
+		pad(timestamp.getMinutes()),
+		pad(timestamp.getSeconds()),
+	].join("-");
+	return path.resolve(args.outDir, day, `${time}_${runId}.json`);
+}
+
+function attachBenchmarkValidity(
+	report,
+	preflight,
+	postflight,
+	policy,
+	thresholds,
+	postflightCooldownMs,
+) {
+	const hostWarnings = [
+		...preflight.assessment.warnings.map((warning) => `preflight: ${warning}`),
+		...postflight.assessment.warnings.map((warning) => `postflight: ${warning}`),
+	];
+	const pageReasons = report.validity?.reasons ?? [];
+	const correctnessAndStabilityPassed =
+		report.validity?.correctnessAndStabilityPassed === true;
+	report.hostDiagnostics = {
+		schema: "dynaworld-benchmark-host-diagnostics/v1",
+		policy,
+		thresholds,
+		postflightCooldownMs,
+		preflight,
+		postflight,
+		assessment: {
+			quiet: hostWarnings.length === 0,
+			warnings: hostWarnings,
+		},
+		limitations: [
+			"Quiet pre/post snapshots cannot prove the GPU was uncontended for every instant.",
+			"Per-round throughput variance detects intermittent stalls but not constant-rate contention.",
+			"The cooldown reduces, but cannot mathematically identify, residual driver utilization.",
+			"Use matched alternating variants and repeat reversed-start runs for promotion evidence.",
+		],
+	};
+	report.validity = {
+		correctnessAndStabilityPassed,
+		hostEnvironmentPassed: hostWarnings.length === 0,
+		promotable: correctnessAndStabilityPassed && hostWarnings.length === 0,
+		reasons: [...pageReasons, ...hostWarnings],
+	};
+	if (report.comparison) {
+		report.comparison.validForPromotion = report.validity.promotable;
+	}
+}
+
 async function main() {
 	const args = parseArgs(process.argv);
 	if (args.help) {
 		process.stdout.write(usage());
 		return;
 	}
+	const { captureHostSnapshot } = await import("./benchmarkHostDiagnostics.js");
+	const thresholds = contentionThresholds(args);
+	const preflight = await captureHostSnapshot({
+		sampleMs: args.contentionSampleMs,
+		thresholds,
+	});
+	if (!preflight.assessment.quiet && args.contentionPolicy !== "record") {
+		process.stderr.write(
+			`Benchmark host contention: ${preflight.assessment.warnings.join(" ")}\n`,
+		);
+	}
+	if (!preflight.assessment.quiet && args.contentionPolicy === "fail") {
+		throw new Error(
+			"Strict contention preflight failed. Close competing work or use "
+			+ "--contention-policy warn to save a diagnostic-only run.",
+		);
+	}
 	const report = await runBenchmark(args);
+	await delay(args.postflightCooldownMs);
+	const postflight = await captureHostSnapshot({
+		sampleMs: args.contentionSampleMs,
+		thresholds,
+	});
+	attachBenchmarkValidity(
+		report,
+		preflight,
+		postflight,
+		args.contentionPolicy,
+		thresholds,
+		args.postflightCooldownMs,
+	);
+	const runId = sanitizeRunId(args.runId)
+		?? (args.outDir ? fallbackRunId(args, report) : null);
+	report.artifact = {
+		runId,
+		outputMode: args.outDir ? "auto-named" : args.out ? "explicit-path" : "stdout",
+		filenameTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+	};
 	const json = `${JSON.stringify(report, null, 2)}\n`;
-	if (args.out) {
-		const outputPath = path.resolve(args.out);
+	const outputPath = autoOutputPath(args, report, runId);
+	if (outputPath) {
 		fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 		fs.writeFileSync(outputPath, json);
 		process.stderr.write(
-			`Wrote ${report.results.length} kernel results (${report.results[0].adapter}) to ${outputPath}\n`,
+			`Wrote ${report.results.length} kernel results (${report.results[0].adapter}, `
+			+ `${report.validity.promotable ? "promotable" : "diagnostic only"}) `
+			+ `to ${outputPath}\n`,
 		);
 		return;
 	}

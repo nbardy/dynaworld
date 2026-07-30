@@ -449,7 +449,7 @@ export function computeMultiviewSamples(frames, backgrounds, width, height, fram
 	};
 }
 
-export async function loadCalibratedMulticamDataset() {
+export async function loadCalibratedMulticamDataset({ computeSamples = true } = {}) {
 	const response = await fetch(CALIBRATED_MULTICAM_URL);
 	if (!response.ok) {
 		throw new Error(`Calibrated browser bundle unavailable: ${response.status}`);
@@ -478,7 +478,19 @@ export async function loadCalibratedMulticamDataset() {
 	if (!trainViewIndices.every((view, index) => view === index) || heldoutViewIndex !== trainViewCount) {
 		throw new Error("Browser trainer requires train cameras first and the heldout camera last.");
 	}
-	const samples = computeMultiviewSamples(frames, backgrounds, width, height, frameCount, trainViewCount);
+	const samples = computeSamples
+		? computeMultiviewSamples(
+			frames,
+			backgrounds,
+			width,
+			height,
+			frameCount,
+			trainViewCount,
+		)
+		: {
+			motionSamples: new Uint32Array(0),
+			staticSamples: new Uint32Array(0),
+		};
 	const cameras = bundle.cameras.map((camera) => ({
 		...camera,
 		intrinsics: new Float32Array(camera.intrinsics),
@@ -530,9 +542,12 @@ export async function loadCalibratedMulticamDataset() {
 	return dataset;
 }
 
-export async function loadPresetDataset({ allowLegacyFallback = false } = {}) {
+export async function loadPresetDataset({
+	allowLegacyFallback = false,
+	computeSamples = true,
+} = {}) {
 	try {
-		return await loadCalibratedMulticamDataset();
+		return await loadCalibratedMulticamDataset({ computeSamples });
 	} catch (error) {
 		if (!allowLegacyFallback) {
 			throw error;

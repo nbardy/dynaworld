@@ -146,6 +146,10 @@ test("kernel fork controls reject unsupported checkpoint, tile, and replay layou
 
 test("kernel lab preserves matched direct and staged variants with timestamped phase output", () => {
 	const benchmark = readFileSync(new URL("../benchmarkTiledKernels.js", import.meta.url), "utf8");
+	const benchmarkHtml = readFileSync(
+		new URL("../benchmarkTiledKernels.html", import.meta.url),
+		"utf8",
+	);
 	assert.match(benchmark, /id:\s*"direct-3d"/);
 	assert.match(benchmark, /id:\s*"staged-project3d"/);
 	assert.match(benchmark, /context\.trainer\.profileGpuStep/);
@@ -161,6 +165,14 @@ test("kernel lab preserves matched direct and staged variants with timestamped p
 	assert.match(source, /phaseContract/);
 	assert.match(source, /maintenanceIncluded:\s*false/);
 	assert.match(benchmark, /gpuSpanMedianMs/);
+	assert.match(benchmark, /summarizeRoundStability/);
+	assert.match(benchmark, /validForPromotion/);
+	assert.match(benchmark, /maxRoundCv/);
+	assert.match(benchmark, /loadPresetDataset\(\{ computeSamples: false \}\)/);
+	assert.match(
+		benchmarkHtml,
+		/id="kernelMaxRoundCv"[^>]*min="0\.001"[^>]*step="0\.001"[^>]*value="0\.100"/,
+	);
 });
 
 test("split projection layout keeps the raster hot record at 32 bytes", () => {

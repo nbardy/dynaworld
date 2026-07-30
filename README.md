@@ -36,21 +36,54 @@ WebGPU work, writes JSON, and closes both processes:
 ```bash
 bun web/dynaworld_browser_trainer/run_headless_kernel_benchmark.js \
   --experiment backward --variant both --splats 30000 \
-  --warmup 32 --steps 128 --profiles 5 \
+  --warmup 32 --steps 128 --profiles 5 --tile-capacity 4096 \
   --out /tmp/dynaworld_backward_30k.json
 
 bun web/dynaworld_browser_trainer/run_headless_kernel_benchmark.js \
   --experiment projection --variant both --order candidate-first \
-  --splats 30000 --warmup 32 --steps 128 --profiles 5
+  --splats 30000 --warmup 32 --steps 128 --profiles 5 \
+  --tile-capacity 4096
 
 bun web/dynaworld_browser_trainer/run_headless_kernel_benchmark.js \
   --experiment ssim --variant both --splats 8192 --scale 2 \
   --warmup 32 --steps 128 --profiles 5
+
+bun web/dynaworld_browser_trainer/run_headless_kernel_benchmark.js \
+  --experiment backward --variant both --splats 8192 \
+  --warmup 32 --steps 128 --profiles 5 \
+  --out-dir web/dynaworld_browser_trainer/benchmark_results/runs \
+  --run-id staged-backward-8k-control-first
+
+bun web/dynaworld_browser_trainer/summarize_headless_kernel_pair.js \
+  web/dynaworld_browser_trainer/benchmark_results/runs/2026-07-31/backward_8k_control_first_v3_apple_m4.json \
+  web/dynaworld_browser_trainer/benchmark_results/runs/2026-07-31/backward_8k_candidate_first_v3_apple_m4.json
 ```
 
 Bun itself does not expose `navigator.gpu`; the hidden browser is the WebGPU
 runtime, not the benchmark UI. The HTML lab remains available as an optional
 interactive microscope for inspecting individual variants.
+
+New `v3` artifacts fail closed for performance promotion. A run is promotable
+only when all variants have finite loss, zero tile overflow, at least two
+measurement rounds, per-round throughput coefficient of variation at or below
+`0.10`, and a quiet host preflight/postflight. The Bun runner records:
+
+- CPU busy fraction over a timed sample;
+- load per logical CPU and aggregate process pressure;
+- macOS memory pressure, swap occupancy, and thermal warnings;
+- Apple driver GPU/renderer/tiler utilization before Chrome starts;
+- the same host checks after a ten-second owned-queue cooldown;
+- sanitized top-process basenames and categories, never arguments or PIDs;
+- per-round throughput, CV, first/last drift, and execution-position bias.
+
+The default `--contention-policy warn` still writes a diagnostic artifact but
+sets `validity.promotable=false`. Use `--contention-policy fail` when running a
+canonical sweep so a busy machine is rejected before Chrome starts. A quiet
+snapshot is necessary but not sufficient: constant-rate GPU contention can
+evade round CV, so promoted comparisons still need alternating execution order
+and a reversed-start repeat. See
+[`benchmark_results/README.md`](benchmark_results/README.md) for artifact
+layout and naming.
 
 Run the browser unit suite:
 
@@ -673,6 +706,57 @@ historical context are in
 scientist reflection, derivations, backtracks, and next falsification lanes are
 in
 `../../agent_notes/loose_notes/2026-07-31_03-36-30_browser_wgpu_kernel_forks_scientist_reflection.md`.
+
+### Contention-qualified v3 rerun
+
+The stronger `v3` protocol reran the 8K backward comparison after adding host
+contention capture, round-CV validity, execution-position diagnostics, and a
+five-second postflight GPU cooldown:
+
+| Initial order | Staged wall speedup | Staged GPU-span speedup | Maximum round CV | Maximum position bias |
+| --- | ---: | ---: | ---: | ---: |
+| control first | 1.731x | 1.795x | 0.60% | 0.39% |
+| candidate first | 1.752x | 1.724x | 1.00% | 0.45% |
+
+Both artifacts have `validity.promotable=true`, finite loss, zero overflow,
+preflight Apple GPU utilization of `0–2%`, postflight utilization of `0–3%`,
+and quiet CPU/load/process-pressure checks. They are:
+
+- `benchmark_results/runs/2026-07-31/backward_8k_control_first_v3_apple_m4.json`
+- `benchmark_results/runs/2026-07-31/backward_8k_candidate_first_v3_apple_m4.json`
+
+The headless lab also stopped constructing sampled-ray motion/static banks.
+That preprocessing sorted candidates from roughly 1.9 million train pixels but
+is not read by this full-frame benchmark, which fixes `motionWeighting=false`.
+Calibrated targets, camera/time scheduling, initialization, objective, and WGSL
+steps are unchanged.
+
+Several runs were intentionally not promoted: preflight Apple GPU utilization
+reached `69–96%` while media analysis was active; two autoruns timed out before
+training because an invalid HTML number-step lattice silently blocked form
+submission; and a 256-splat timer smoke exceeded the `10%` CV limit. Those
+failures informed the harness but remain `/tmp` diagnostics rather than durable
+performance evidence.
+
+The same protocol now covers the important scaling lanes:
+
+| Pair | Candidate wall speedup | Candidate GPU-span speedup | Pair wall drift | Max absolute throughput drift |
+| --- | ---: | ---: | ---: | ---: |
+| staged backward, 8K, 96x72 | 1.731–1.752x | 1.724–1.795x | 1.20% | 1.37% |
+| staged backward, 30K, 96x72 | 1.818–1.818x | 1.741–1.751x | 0.03% | 0.28% |
+| compact projection, 30K, 96x72 | 1.084–1.099x | 1.087–1.103x | 1.38% | 1.15% |
+| separable SSIM, 8K, 192x144 | 1.283–1.288x | 1.280–1.292x | 0.36% | 0.34% |
+
+All four pair summaries are promotable under maximum relative drifts of `5%`
+for wall speedup, `10%` for GPU speedup, and `5%` for either variant's absolute
+throughput. The 30K runs require a 4,096-entry tile capacity; a 1,024-entry
+diagnostic dropped about 388K tile/splat pairs and was rejected before it could
+be mistaken for a nearly 2x result. The 192x144 SSIM pair uses 512 measured
+steps and nine profiles because the shorter 128-step pair sat too close to the
+CV threshold.
+
+Pair summaries and their source artifacts live together under
+`benchmark_results/runs/2026-07-31/`.
 
 ## What The Numbers Do Not Prove
 

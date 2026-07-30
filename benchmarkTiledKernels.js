@@ -1,4 +1,5 @@
 import { resizeDatasetForBenchmark } from "./benchmarkDataset.js?v=20260731-fasttiles6";
+import { summarizeRoundStability } from "./benchmarkStatistics.js?v=20260731-contention1";
 import { loadPresetDataset } from "./dataset.js?v=20260731-fasttiles6";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
@@ -98,6 +99,7 @@ const inputs = {
 	backwardGranularity: document.querySelector("#kernelBackwardGranularity"),
 	tileSize: document.querySelector("#kernelTileSize"),
 	tileCapacity: document.querySelector("#kernelTileCapacity"),
+	maxRoundCv: document.querySelector("#kernelMaxRoundCv"),
 };
 
 let running = false;
@@ -106,6 +108,14 @@ function integerValue(input, label) {
 	const value = Number(input.value);
 	if (!Number.isSafeInteger(value) || value < Number(input.min) || value > Number(input.max)) {
 		throw new RangeError(`${label} must be an integer from ${input.min} through ${input.max}.`);
+	}
+	return value;
+}
+
+function numberValue(input, label) {
+	const value = Number(input.value);
+	if (!Number.isFinite(value) || value < Number(input.min) || value > Number(input.max)) {
+		throw new RangeError(`${label} must be from ${input.min} through ${input.max}.`);
 	}
 	return value;
 }
@@ -130,6 +140,7 @@ function readOptions() {
 		backwardGranularity: inputs.backwardGranularity.value,
 		tileSize: Number(inputs.tileSize.value),
 		tileCapacity: Number(inputs.tileCapacity.value),
+		maxRoundCv: numberValue(inputs.maxRoundCv, "Maximum round CV"),
 	};
 	if (options.capacity < options.splats) {
 		throw new RangeError("Model capacity must be at least the active splat count.");
@@ -253,12 +264,24 @@ async function initializeVariant(variant, dataset, options) {
 	await trainer.device.queue.onSubmittedWorkDone();
 	await submitAndDrain(trainer, options.warmup);
 	await validateFirstStep(trainer);
-	return { variant, trainer, elapsedMs: 0, roundElapsedMs: [], profiles: [] };
+	return { variant, trainer, elapsedMs: 0, rounds: [], profiles: [] };
 }
 
 async function summarizeVariant(context, dataset, options) {
-	const { variant, trainer, elapsedMs, roundElapsedMs, profiles } = context;
+	const { variant, trainer, elapsedMs, rounds, profiles } = context;
 	const loss = await trainer.readLoss();
+	const roundStability = summarizeRoundStability(rounds, options.maxRoundCv);
+	const overflow = trainer.lastLossBreakdown?.tileOverflowTotal ?? 0;
+	const validityReasons = [];
+	if (!Number.isFinite(loss)) validityReasons.push("The final loss is not finite.");
+	if (overflow !== 0) validityReasons.push(`Tile overflow is ${overflow}, not zero.`);
+	if (!roundStability.supported) validityReasons.push(roundStability.reason);
+	else if (!roundStability.stable) {
+		validityReasons.push(
+			`Round throughput CV ${roundStability.coefficientOfVariation.toFixed(4)} exceeds `
+			+ `${options.maxRoundCv}.`,
+		);
+	}
 	return {
 		id: variant.id,
 		label: variant.label,
@@ -269,8 +292,10 @@ async function summarizeVariant(context, dataset, options) {
 		capacity: trainer.splatCount,
 		warmupSteps: options.warmup,
 		measuredSteps: options.steps,
-		measurementRounds: roundElapsedMs.length,
-		roundElapsedMs,
+		measurementRounds: rounds.length,
+		roundElapsedMs: rounds.map((round) => round.elapsedMs),
+		rounds,
+		roundStability,
 		profileSteps: options.profiles,
 		elapsedMs,
 		stepsPerSecond: options.steps * 1000 / Math.max(elapsedMs, 0.001),
@@ -278,6 +303,13 @@ async function summarizeVariant(context, dataset, options) {
 		lossBreakdown: trainer.lastLossBreakdown ?? null,
 		profile: summarizeProfiles(profiles),
 		memoryPlan: trainer.memoryPlan,
+		validity: {
+			finiteLoss: Number.isFinite(loss),
+			zeroTileOverflow: overflow === 0,
+			stableRounds: roundStability.supported && roundStability.stable,
+			valid: validityReasons.length === 0,
+			reasons: validityReasons,
+		},
 	};
 }
 
@@ -288,6 +320,8 @@ function renderResults(results, controlId, candidateId) {
 		const cells = [
 			result.label,
 			number(result.stepsPerSecond),
+			result.roundStability.supported
+				? number(result.roundStability.coefficientOfVariation, 4) : "-",
 			`${number(result.elapsedMs)} ms`,
 			number(result.profile.gpuSpanMedianMs, 3),
 			number(result.profile.gpuSpanP95Ms, 3),
@@ -326,8 +360,16 @@ function renderResults(results, controlId, candidateId) {
 }
 
 async function runBenchmark(options) {
-	const preset = await loadPresetDataset();
-	const dataset = resizeDatasetForBenchmark(preset, options.scale);
+	setState("Loading calibrated benchmark targets");
+	// Full-frame tiled training does not read sampled-ray banks, and this lab
+	// keeps motion weighting disabled. Skip the million-candidate sample sort
+	// so harness startup does not dominate or time out an isolated kernel run.
+	const preset = await loadPresetDataset({ computeSamples: false });
+	const dataset = resizeDatasetForBenchmark(
+		preset,
+		options.scale,
+		{ computeSamples: false },
+	);
 	const results = [];
 	const experimentVariants = EXPERIMENTS[options.experiment];
 	const [controlVariant, candidateVariant] = experimentVariants;
@@ -351,13 +393,18 @@ async function runBenchmark(options) {
 		for (let round = 0; round < roundCount; round += 1) {
 			const roundSteps = baseRoundSteps + (round < extraRoundSteps ? 1 : 0);
 			const roundOrder = round % 2 === 0 ? contexts : [...contexts].reverse();
-			for (const context of roundOrder) {
+			for (const [executionPosition, context] of roundOrder.entries()) {
 				setState(
 					`Measuring ${context.variant.label}, round ${round + 1}/${roundCount}`,
 				);
 				const elapsedMs = await submitAndDrain(context.trainer, roundSteps);
 				context.elapsedMs += elapsedMs;
-				context.roundElapsedMs.push(elapsedMs);
+				context.rounds.push({
+					round,
+					steps: roundSteps,
+					elapsedMs,
+					executionPosition,
+				});
 			}
 		}
 		for (let sample = 0; sample < options.profiles; sample += 1) {
@@ -383,14 +430,16 @@ async function runBenchmark(options) {
 			control.profile.gpuSpanMedianMs / candidate.profile.gpuSpanMedianMs,
 		lossDelta: candidate.loss - control.loss,
 		allocatedByteDelta: candidate.memoryPlan.allocatedBytes - control.memoryPlan.allocatedBytes,
+		validForPromotion: control.validity.valid && candidate.validity.valid,
 		...(options.experiment === "backward" ? {
 			stagedThroughputSpeedup: candidate.stepsPerSecond / control.stepsPerSecond,
 			stagedGpuTimeSpeedup:
 				control.profile.gpuSpanMedianMs / candidate.profile.gpuSpanMedianMs,
 		} : {}),
 	} : null;
+	const invalidResults = results.filter((result) => !result.validity.valid);
 	const report = {
-		schema: "dynaworld-browser-tiled-kernel-benchmark/v2",
+		schema: "dynaworld-browser-tiled-kernel-benchmark/v3",
 		recordedAt: new Date().toISOString(),
 		options,
 		dataset: {
@@ -409,6 +458,13 @@ async function runBenchmark(options) {
 			order: options.order,
 		},
 		comparison,
+		validity: {
+			correctnessAndStabilityPassed: invalidResults.length === 0,
+			promotable: invalidResults.length === 0,
+			reasons: invalidResults.flatMap((result) => (
+				result.validity.reasons.map((reason) => `${result.id}: ${reason}`)
+			)),
+		},
 	};
 	renderResults(results, controlVariant.id, candidateVariant.id);
 	jsonOutput.value = JSON.stringify(report, null, 2);
@@ -417,7 +473,10 @@ async function runBenchmark(options) {
 		? `candidate ${number(report.comparison.candidateThroughputSpeedup, 2)}x wall throughput, `
 			+ `${number(report.comparison.candidateGpuTimeSpeedup, 2)}x timestamped GPU time`
 		: `${results[0].label} ${number(results[0].stepsPerSecond)} steps/s`;
-	setState(`Complete: ${summary}.`, "complete");
+	const validitySuffix = report.validity.promotable
+		? "measurement stable"
+		: `diagnostic only: ${report.validity.reasons.join(" ")}`;
+	setState(`Complete: ${summary}; ${validitySuffix}.`, "complete");
 	return report;
 }
 
@@ -442,6 +501,7 @@ function applyQueryOptions() {
 		granularity: inputs.backwardGranularity,
 		tile: inputs.tileSize,
 		tileCapacity: inputs.tileCapacity,
+		maxRoundCv: inputs.maxRoundCv,
 	};
 	for (const [key, input] of Object.entries(mappings)) {
 		if (query.has(key)) input.value = query.get(key);

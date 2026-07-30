@@ -165,6 +165,9 @@
 					<option value="256">256</option>
 				</select>
 			</label>
+			<label>Maximum round CV
+				<input id="kernelMaxRoundCv" type="number" min="0.001" max="1" step="0.001" value="0.100">
+			</label>
 			<button id="runKernelBenchmark" type="submit">Run matched benchmark</button>
 		</form>
 		<div id="kernelBenchmarkStatus" data-state="ready">Ready</div>
@@ -175,7 +178,7 @@
 				<table>
 					<thead>
 						<tr>
-							<th>Kernel</th><th>Steps/s</th><th>Wall time</th><th>GPU p50</th>
+							<th>Kernel</th><th>Steps/s</th><th>Round CV</th><th>Wall time</th><th>GPU p50</th>
 							<th>GPU p95</th><th>Loss</th><th>Overflow</th><th>GPU buffers</th>
 						</tr>
 					</thead>
@@ -201,6 +204,6 @@
 			<textarea id="kernelBenchmarkJson" readonly spellcheck="false"></textarea>
 		</section>
 	</main>
-	<script type="module" src="./benchmarkTiledKernels.js?v=20260731-fasttiles6"></script>
+	<script type="module" src="./benchmarkTiledKernels.js?v=20260731-contention1"></script>
 </body>
 </html>
