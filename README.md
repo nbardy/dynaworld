@@ -123,11 +123,18 @@ The default checked-in bundle is
 | Heldout cameras | `cam06` only |
 | Checked-in initialization | 4,096 train-visible external Ex4DGS XYZRGB points |
 | Anchor coordinates | `cam04` OpenCV camera frame |
+| Pose convention | LLFF raw `[down, right, back]` to OpenCV `[right, down, forward]` (`v2`) |
 
 The browser does not run COLMAP. The bundle exporter is a thin adapter over
 `src/train/multicam_video_data.py`; it preserves the canonical manifest,
 camera calibration, train/heldout split, synchronized frame indices, and
 initialization provenance. Heldout pixels are never used by the optimizer.
+
+The pose-source identifier is
+`neural_3d_llff_opencv_relative_pinhole_v2`. Raw `poses_bounds.npy` rows store
+camera basis columns as `[down, right, backwards]`; the loader reorders them to
+OpenCV `[right, down, forwards]` before forming anchor-relative poses. The
+superseded sign-only conversion is intentionally a different artifact identity.
 
 The checked-in bundle predates the provenance report contract. Its external
 Ex4DGS cloud is filtered after loading to points visible from at least one
@@ -165,8 +172,10 @@ PYTHONPATH=src/train uv run --with pycolmap==4.0.4 python \
 The builder writes both the PLY and a same-stem JSON report. The report declares
 the input cameras, train-only verification, and `model` coordinate frame. The
 2026-07-28 run produced 815 bounded points from 71,890 keypoints and 38 verified
-camera pairs. That is a valid sparse scaffold, but it does not satisfy the
-current 4,096-seed bundle. A valid 768-seed ablation export is:
+camera pairs, but it used the superseded LLFF axis conversion. Retain that
+artifact as failure evidence only and rerun the builder under the `v2` pose
+source before using a sparse scaffold. Once rebuilt, a 768-seed ablation export
+is:
 
 ```bash
 PYTHONPATH=src/train uv run python src/train/export_dynaworld_browser_bundle.py \
