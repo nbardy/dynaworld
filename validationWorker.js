@@ -8,6 +8,7 @@ import {
 	summarizeSplatParameters,
 } from "./snapshotMetrics.js?v=20260731-fasttiles6";
 import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260731-fasttiles6";
+import { hydrateDatasetSharedViews } from "./datasetSharing.js";
 
 let dataset = null;
 let initialParams = null;
@@ -43,10 +44,24 @@ function meanAbsoluteDelta(before, after) {
 self.onmessage = ({ data }) => {
 	if (data?.version !== WORKER_PROTOCOL_VERSION) return;
 	if (data.type === "init") {
-		dataset = data.dataset;
-		initialParams = new Float32Array(data.initialParams);
-		previousParams = initialParams.slice();
-		self.postMessage({ version: WORKER_PROTOCOL_VERSION, type: "ready" });
+		try {
+			const hydrated = hydrateDatasetSharedViews(data.dataset);
+			dataset = hydrated.dataset;
+			initialParams = new Float32Array(data.initialParams);
+			previousParams = initialParams.slice();
+			self.postMessage({
+				version: WORKER_PROTOCOL_VERSION,
+				type: "ready",
+				datasetSharing: hydrated.telemetry,
+			});
+		} catch (error) {
+			self.postMessage({
+				version: WORKER_PROTOCOL_VERSION,
+				type: "error",
+				message: error?.message ?? String(error),
+				stack: error?.stack,
+			});
+		}
 		return;
 	}
 	if (data.type !== "validate" || !dataset) return;

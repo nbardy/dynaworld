@@ -4,6 +4,11 @@ import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
 	WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
 } from "./workerProtocol.js";
+import {
+	combineDatasetSharingTelemetry,
+	hydrateDatasetSharedViews,
+	summarizeDatasetSharing,
+} from "./datasetSharing.js";
 
 const DEFAULT_TRAIN_OPTIONS = Object.freeze({
 	learningRate: 1.25,
@@ -154,6 +159,52 @@ function render(now) {
 	lastRenderAt = now;
 }
 
+function initializeValidationWorker(dataset, initialParams) {
+	validationWorker = new Worker(new URL("./validationWorker.js?v=20260731-dataset-sharing1", import.meta.url),
+		{ type: "module" });
+	return new Promise((resolve, reject) => {
+		let ready = false;
+		validationWorker.onmessage = ({ data }) => {
+			if (data?.type === "ready") {
+				ready = true;
+				resolve(data.datasetSharing);
+			} else if (data?.type === "validation") {
+				validationPending = false;
+				lastValidationStep = data.step;
+				latestPsnr = data.metrics.gridPsnr;
+				latestSsim = data.metrics.gridSsim;
+				self.postMessage(protocolMessage(WorkerEvent.VALIDATION, data));
+				publish();
+			} else if (data?.type === "error") {
+				const error = new Error(data.message || "Validation worker failed.");
+				if (!ready) {
+					validationWorker.terminate();
+					reject(error);
+					return;
+				}
+				validationPending = false;
+				self.postMessage(protocolMessage(WorkerEvent.ERROR, data));
+				publish();
+			}
+		};
+		validationWorker.onerror = (event) => {
+			const error = new Error(event.message || "Validation worker failed.");
+			if (!ready) {
+				validationWorker.terminate();
+				reject(error);
+			} else {
+				reportError(error);
+			}
+		};
+		validationWorker.postMessage({
+			version: WORKER_PROTOCOL_VERSION,
+			type: "init",
+			dataset,
+			initialParams,
+		});
+	});
+}
+
 function schedulePump(token, delay = 0) {
 	setTimeout(() => pump(token), delay);
 }
@@ -199,7 +250,8 @@ async function initialize(message) {
 	validationEvery = Math.max(0, message.schedule?.validationEvery ?? validationEvery);
 	renderFps = Math.max(0, Math.min(60, message.schedule?.renderFps ?? renderFps));
 	trainer = new loadedBackend.Trainer(message.canvas ?? null);
-	await trainer.init(message.dataset, message.trainerOptions);
+	const incomingDataset = hydrateDatasetSharedViews(message.dataset);
+	await trainer.init(incomingDataset.dataset, message.trainerOptions);
 	if (backendDescriptor.sampledControls) {
 		trainOptions.camerasPerStep = resolveCamerasPerStep(trainer.trainViewIndices.length,
 			trainOptions.camerasPerStep);
@@ -207,24 +259,13 @@ async function initialize(message) {
 		trainOptions.camerasPerStep = 1;
 	}
 	renderOptions.viewIndices = resolveRenderViewIndices(trainer.dataset, renderOptions.viewIndices);
-	validationWorker = new Worker(new URL("./validationWorker.js?v=20260731-fasttiles6", import.meta.url),
-		{ type: "module" });
-	validationWorker.onmessage = ({ data }) => {
-		if (data?.type === "validation") {
-			validationPending = false;
-			lastValidationStep = data.step;
-			latestPsnr = data.metrics.gridPsnr;
-			latestSsim = data.metrics.gridSsim;
-			self.postMessage(protocolMessage(WorkerEvent.VALIDATION, data));
-			publish();
-		} else if (data?.type === "error") {
-			validationPending = false;
-			self.postMessage(protocolMessage(WorkerEvent.ERROR, data));
-			publish();
-		}
-	};
-	validationWorker.postMessage({ version: WORKER_PROTOCOL_VERSION, type: "init", dataset: trainer.dataset,
-		initialParams: trainer.initialParams });
+	const trainingDatasetSharing = summarizeDatasetSharing(trainer.dataset);
+	const validationDatasetSharing = await initializeValidationWorker(trainer.dataset, trainer.initialParams);
+	const datasetSharing = combineDatasetSharingTelemetry(
+		message.datasetSharing ?? incomingDataset.telemetry,
+		trainingDatasetSharing,
+		validationDatasetSharing,
+	);
 	trainer.render(renderOptions.time, renderOptions.modelMode, renderOptions.temporalSigma,
 		renderOptions.renderMode, renderOptions.viewIndex, renderOptions.viewIndices);
 	lastRenderAt = performance.now();
@@ -238,7 +279,7 @@ async function initialize(message) {
 				? trainOptions.samplesPerStep : trainer.dataset.width * trainer.dataset.height,
 		},
 		capabilities: { sharedStatus: Boolean(statusSlots), offscreenRender: Boolean(trainer.context),
-			validationWorker: true },
+			validationWorker: true, datasetSharing },
 		cameraBatch: { camerasPerStep: trainOptions.camerasPerStep,
 			trainViewCount: trainer.trainViewIndices.length, trainViewIndices: trainer.trainViewIndices,
 			renderViewIndices: renderOptions.viewIndices, sameTimeGrouped: false },

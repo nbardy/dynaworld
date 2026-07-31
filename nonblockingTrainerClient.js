@@ -1,6 +1,7 @@
 import {
 	createSharedStatusBuffer, protocolMessage, readSharedStatus, TrainerState, WorkerCommand, WorkerEvent,
 } from "./workerProtocol.js";
+import { prepareDatasetForWorkerSharing } from "./datasetSharing.js";
 
 function canTransferCanvas(canvas) {
 	return Boolean(canvas && typeof canvas.transferControlToOffscreen === "function"
@@ -8,13 +9,13 @@ function canTransferCanvas(canvas) {
 }
 
 export class NonblockingTrainerClient extends EventTarget {
-	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260731-fasttiles6", import.meta.url) } = {}) {
+	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260731-dataset-sharing1", import.meta.url) } = {}) {
 		super();
 		this.worker = new Worker(workerUrl, { type: "module", name: "dynaworld-webgpu-trainer" });
 		this.statusBuffer = createSharedStatusBuffer();
 		this.lastMessageStatus = { state: TrainerState.BOOTING, step: 0, stepsPerSecond: 0 };
 		this.capabilities = { sharedStatus: Boolean(this.statusBuffer), offscreenRender: false,
-			validationWorker: false };
+			validationWorker: false, datasetSharing: null };
 		this.ready = new Promise((resolve, reject) => {
 			this.resolveReady = resolve;
 			this.rejectReady = reject;
@@ -28,6 +29,8 @@ export class NonblockingTrainerClient extends EventTarget {
 	}
 
 	async init({ dataset, canvas = null, trainerOptions = {}, trainOptions = {}, renderOptions = {}, schedule = {} }) {
+		const sharedDataset = prepareDatasetForWorkerSharing(dataset);
+		this.capabilities.datasetSharing = sharedDataset.telemetry;
 		let offscreen = null;
 		const transfer = [];
 		if (canTransferCanvas(canvas)) {
@@ -43,8 +46,14 @@ export class NonblockingTrainerClient extends EventTarget {
 				reason: "OffscreenCanvas transfer is unavailable; optimization remains worker-owned." });
 		}
 		this.worker.postMessage(protocolMessage(WorkerCommand.INIT, {
-			dataset, canvas: offscreen, statusBuffer: this.statusBuffer, trainerOptions, trainOptions,
-			renderOptions, schedule,
+			dataset: sharedDataset.dataset,
+			datasetSharing: sharedDataset.telemetry,
+			canvas: offscreen,
+			statusBuffer: this.statusBuffer,
+			trainerOptions,
+			trainOptions,
+			renderOptions,
+			schedule,
 		}), transfer);
 		return this.ready;
 	}
