@@ -29,6 +29,7 @@ import {
 	resolveTiledCapacity,
 	resolveTiledCheckpointOrder,
 	resolveTiledProjectionLayout,
+	resolveTiledProjectionVjpPrecision,
 	resolveTiledSsimLayout,
 	resolveTiledTileSize,
 	SCALE_LR_FROM_COLOR,
@@ -36,6 +37,7 @@ import {
 	TILED_BACKWARD_GRANULARITIES,
 	TILED_CHECKPOINT_ORDERS,
 	TILED_PROJECTION_LAYOUTS,
+	TILED_PROJECTION_VJP_PRECISIONS,
 	TILED_SSIM_LAYOUTS,
 	TILED_DEPTH_KEY_MASK,
 	TILED_SPLAT_ID_BITS,
@@ -87,6 +89,7 @@ test("tiled capacity reserves growth while respecting explicit bounds", () => {
 
 test("32K models retain a portable bounded tile-local sort", () => {
 	assert.equal(DEFAULT_MAX_TILE_CAPACITY, 4096);
+	assert.equal(resolveTileCapacity(8), 16);
 	assert.equal(resolveTileCapacity(768), 1024);
 	assert.equal(resolveTileCapacity(1536), 2048);
 	assert.equal(resolveTileCapacity(4096), 4096);
@@ -138,6 +141,10 @@ test("kernel fork controls reject unsupported checkpoint, tile, and replay layou
 	assert.equal(resolveTiledProjectionLayout(), TILED_PROJECTION_LAYOUTS.MONOLITHIC);
 	assert.throws(() => resolveTiledProjectionLayout("array-of-structs"),
 		/monolithic, split-compact/);
+	assert.equal(resolveTiledProjectionVjpPrecision("packed-f16"),
+		TILED_PROJECTION_VJP_PRECISIONS.PACKED_F16);
+	assert.equal(resolveTiledProjectionVjpPrecision(), TILED_PROJECTION_VJP_PRECISIONS.F32);
+	assert.throws(() => resolveTiledProjectionVjpPrecision("f8"), /f32, packed-f16/);
 	assert.equal(resolveTiledSsimLayout("separable"), TILED_SSIM_LAYOUTS.SEPARABLE);
 	assert.equal(resolveTiledSsimLayout(), TILED_SSIM_LAYOUTS.NAIVE_2D);
 	assert.throws(() => resolveTiledSsimLayout("box"), /naive-2d, separable/);
@@ -154,12 +161,16 @@ test("kernel lab preserves matched direct and staged variants with timestamped p
 	);
 	assert.match(benchmark, /id:\s*"direct-3d"/);
 	assert.match(benchmark, /id:\s*"staged-project3d"/);
+	assert.match(benchmark, /id:\s*"staged-split-f32"/);
+	assert.match(benchmark, /id:\s*"staged-split-packed-f16"/);
 	assert.match(benchmark, /context\.trainer\.profileGpuStep/);
 	assert.match(benchmark, /round % 2 === 0/);
 	assert.match(benchmark, /candidateThroughputSpeedup/);
 	assert.match(benchmark, /stagedThroughputSpeedup/);
 	assert.match(benchmark, /allocatedByteDelta/);
 	assert.match(benchmark, /projectionLayout/);
+	assert.match(benchmark, /projectionVjpPrecision/);
+	assert.match(benchmarkHtml, /id="kernelProjectionVjpPrecision"/);
 	assert.match(source, /TILED_GPU_PHASES/);
 	assert.match(source, /createQuerySet/);
 	assert.match(source, /timestampWrites/);
@@ -170,7 +181,9 @@ test("kernel lab preserves matched direct and staged variants with timestamped p
 	assert.match(benchmark, /summarizeRoundStability/);
 	assert.match(benchmark, /validForPromotion/);
 	assert.match(benchmark, /maxRoundCv/);
-	assert.match(benchmark, /loadPresetDataset\(\{ computeSamples: false \}\)/);
+	assert.match(benchmark, /computeSamples:\s*false/);
+	assert.match(benchmark, /frameBankFormat:\s*options\.frameBank/);
+	assert.match(benchmarkHtml, /id="kernelFrameBank"/);
 	assert.match(
 		benchmarkHtml,
 		/id="kernelMaxRoundCv"[^>]*min="0\.001"[^>]*step="0\.001"[^>]*value="0\.100"/,
@@ -180,10 +193,17 @@ test("kernel lab preserves matched direct and staged variants with timestamped p
 test("split projection layout keeps the raster hot record at 32 bytes", () => {
 	assert.match(source, /const RASTER_PROJECTION_BYTES = 2 \* 16/);
 	assert.match(source, /const PROJECTION_VJP_BYTES = 5 \* 16/);
+	assert.match(source, /const PACKED_PROJECTION_VJP_BYTES = 3 \* 16/);
 	assert.match(source, /struct RasterProjection \{[\s\S]*screenConic0[\s\S]*conicDepthAlpha/);
 	assert.match(source,
 		/struct CompactProjectionVjp \{[\s\S]*cameraPointValid[\s\S]*jacobianSparse[\s\S]*basisVariance2/);
+	assert.match(source,
+		/struct PackedCompactProjectionVjp \{[\s\S]*cameraPointValid[\s\S]*packed0[\s\S]*packed1/);
 	assert.match(source, /vec4<f32>\(j0\.x,j0\.z,j1\.y,j1\.z\)/);
+	assert.match(source, /let storedVariances=variances\/varianceScale/);
+	assert.match(source,
+		/let variances=normalizedVariances[\s\S]*cfg\.geometryScale\*cfg\.geometryScale/);
+	assert.match(source, /atomicAdd\(&counters\[8\],1u\)/);
 	assert.match(source, /cameras\[cfg\.viewIndex\]/);
 	assert.match(source, /rasterProjections\[index\]=raster;projectionVjps\[index\]=vjp/);
 	assert.match(source, /projectionVjp \?\? this\.buffers\.projections/);
@@ -261,13 +281,15 @@ test("GPU cycle telemetry averages each recent camera-time objective exactly onc
 	assert.match(source, /copyBufferToBuffer\(\s*this\.buffers\.cycleMetrics/);
 });
 
-test("tiled telemetry retains four vec4 metrics and cumulative overflow high-water state", () => {
+test("tiled telemetry retains loss fields plus FP16 saturation and overflow high-water state", () => {
 	const benchmarkSource = readFileSync(
 		new URL("../benchmarkTrainerBackends.js", import.meta.url),
 		"utf8",
 	);
-	assert.match(source, /tiledMetrics:\s*makeBuffer\(64\)/);
-	assert.match(source, /copyBufferToBuffer\(this\.buffers\.tiledMetrics,\s*0,[^;]+,\s*0,\s*64\)/);
+	assert.match(source, /const TILED_METRICS_BYTES = 5 \* 16/);
+	assert.match(source, /tiledMetrics:\s*makeBuffer\(TILED_METRICS_BYTES\)/);
+	assert.match(source,
+		/copyBufferToBuffer\([\s\S]*this\.buffers\.tiledMetrics,[\s\S]*TILED_METRICS_BYTES/);
 	assert.match(source, /atomicAdd\(&counters\[4\],1u\)/);
 	assert.match(source, /atomicMax\(&counters\[5\],count\)/);
 	assert.match(source, /tileOverflowTotal:\s*values\[12\]/);
@@ -275,6 +297,9 @@ test("tiled telemetry retains four vec4 metrics and cumulative overflow high-wat
 	assert.match(source, /f32\(cfg\.step\),f32\(cfg\.activeSplatCount\)/);
 	assert.match(source, /activeUpdateSplats:\s*values\[15\]/);
 	assert.match(source, /dormantUpdateSplats:\s*values\[9\]\s*-\s*values\[15\]/);
+	assert.match(source, /projectionVjpHalfSaturations:\s*values\[16\]/);
+	assert.match(source, /projectionVjpHalfSaturationsTotal:\s*values\[17\]/);
+	assert.match(source, /atomicAdd\(&counters\[9\],1u\)/);
 	assert.match(source, /initialActiveUpdateSlots:\s*this\.activeSplatCount/);
 	assert.match(source, /updateSlotCapacity:\s*this\.splatCount/);
 	assert.match(source, /dormantSlotSparseUpdate:\s*true/);
@@ -367,6 +392,44 @@ test("target paging uploads exactly one selected Float32 frame and reuses the re
 	assert.deepEqual(Array.from(writes[2][2]), Array.from(trainer.dataset.backgrounds.subarray(8, 16)));
 	assert.equal(trainer.uploadTargetPage(target, 1, 1, { staticWarmup: true }), 2);
 	assert.equal(writes.length, 3);
+});
+
+test("compact target paging uploads bytes and schedules one GPU page decode", () => {
+	const trainer = Object.create(DynamicSplatWebGpu3dTiledTrainer.prototype);
+	const writes = [];
+	trainer.dataset = {
+		width: 2,
+		height: 1,
+		frameCount: 1,
+		frames: Uint8Array.from([
+			1, 2, 3, 127, 4, 5, 6, 254,
+			7, 8, 9, 0, 10, 11, 12, 64,
+		]),
+		backgrounds: Float32Array.from({ length: 16 }, (_, index) => index + 0.5),
+	};
+	trainer.device = { queue: { writeBuffer: (...args) => writes.push(args) } };
+	trainer.buffers = { targetPacked: { label: "packed-target-page" } };
+	trainer.compactTargetFrames = true;
+	trainer.targetDecodePending = false;
+	trainer.targetPageKey = null;
+	const target = { label: "float-target-page" };
+
+	assert.equal(trainer.uploadTargetPage(target, 1, 0), 2);
+	assert.equal(writes.length, 1);
+	assert.equal(writes[0][0], trainer.buffers.targetPacked);
+	assert.deepEqual(Array.from(writes[0][2]), Array.from(trainer.dataset.frames.subarray(8, 16)));
+	assert.equal(trainer.targetDecodePending, true);
+
+	assert.equal(trainer.uploadTargetPage(target, 1, 0, { staticWarmup: true }), 2);
+	assert.equal(writes.length, 2);
+	assert.equal(writes[1][0], target);
+	assert.deepEqual(
+		Array.from(writes[1][2]),
+		Array.from(trainer.dataset.backgrounds.subarray(8, 16)),
+	);
+	assert.equal(trainer.targetDecodePending, false);
+	assert.match(source, /unpack4x8unorm\(packed\)/);
+	assert.match(source, /f32\(\(packed>>24u\)&0xffu\)\/127\.0/);
 });
 
 test("SSIM radius accepts the benchmark range and preserves the 11x11 default", () => {

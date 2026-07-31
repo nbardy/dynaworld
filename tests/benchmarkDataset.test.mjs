@@ -4,6 +4,10 @@ import {
 	resizeDatasetForBenchmark,
 	resizePackedRgbaNearest,
 } from "../benchmarkDataset.js";
+import {
+	FRAME_BANK_FORMAT_RGBA8,
+	FRAME_WEIGHT_BYTE_SCALE,
+} from "../dataset.js";
 
 test("nearest RGBA scaling preserves image boundaries and channels", () => {
 	const source = Float32Array.from([
@@ -74,4 +78,39 @@ test("full-frame kernel benchmarks can skip unused sampled-ray preprocessing", (
 	assert.equal(resized.motionSamples.length, 0);
 	assert.equal(resized.staticSamples.length, 0);
 	assert.deepEqual([...resized.frames.filter((_value, index) => index % 4 === 3)], [1, 1, 1, 1]);
+});
+
+test("benchmark resizing preserves compact frame construction, format, and exact RGB bytes", () => {
+	const frames = Uint8Array.from([
+		1, 2, 3, FRAME_WEIGHT_BYTE_SCALE,
+		4, 5, 6, FRAME_WEIGHT_BYTE_SCALE,
+	]);
+	const backgrounds = Float32Array.from([
+		1 / 255, 2 / 255, 3 / 255, 1,
+		4 / 255, 5 / 255, 6 / 255, 1,
+	]);
+	const dataset = {
+		name: "compact fixture",
+		width: 2,
+		height: 1,
+		frameCount: 1,
+		viewCount: 1,
+		trainViewCount: 1,
+		frames,
+		frameBank: { format: FRAME_BANK_FORMAT_RGBA8, data: frames },
+		backgrounds,
+		backgroundBank: { format: "rgba32float/v1", data: backgrounds },
+		background: backgrounds,
+		cameras: [{ name: "cam00", role: "train" }],
+		comparisonViewIndices: [0],
+	};
+	const resized = resizeDatasetForBenchmark(dataset, 2, { computeSamples: false });
+	assert.ok(resized.frames instanceof Uint8Array);
+	assert.equal(resized.frameBank.format, FRAME_BANK_FORMAT_RGBA8);
+	assert.equal(resized.frameBank.data, resized.frames);
+	assert.deepEqual([...resized.frames], [
+		1, 2, 3, 127, 1, 2, 3, 127, 4, 5, 6, 127, 4, 5, 6, 127,
+		1, 2, 3, 127, 1, 2, 3, 127, 4, 5, 6, 127, 4, 5, 6, 127,
+	]);
+	assert.equal(resized.viewDatasets[0].frameBank.data.buffer, resized.frames.buffer);
 });

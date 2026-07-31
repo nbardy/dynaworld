@@ -1,9 +1,9 @@
-import { loadPresetDataset } from "./dataset.js?v=20260731-fasttiles6";
-import { resizeDatasetForBenchmark } from "./benchmarkDataset.js?v=20260731-fasttiles6";
+import { loadPresetDataset } from "./dataset.js?v=20260731-compactfp16-5";
+import { resizeDatasetForBenchmark } from "./benchmarkDataset.js?v=20260731-compactfp16-5";
 import {
 	loadTrainerBackend,
 	resolveTrainerBackend,
-} from "./trainerBackendRegistry.js?v=20260731-fasttiles6";
+} from "./trainerBackendRegistry.js?v=20260731-compactfp16-5";
 
 const BACKEND_IDS = Object.freeze(["tiled3d-fast", "tiled3d", "sampled3d"]);
 const TRAIN_OPTIONS = Object.freeze({

@@ -45,6 +45,7 @@ function variantDefinitions(options) {
 		checkpointPrecision: options.checkpointPrecision,
 		checkpointStride: options.checkpointStride,
 		projectionLayout: options.projectionLayout,
+		projectionVjpPrecision: options.projectionVjpPrecision ?? "f32",
 		ssimLayout: options.ssimLayout,
 	};
 	const variants = {
@@ -73,6 +74,22 @@ function variantDefinitions(options) {
 				...base,
 				backwardMode: "staged-project3d",
 				projectionLayout: "split-compact",
+			},
+		],
+		precision: [
+			{
+				id: "staged-split-f32",
+				...base,
+				backwardMode: "staged-project3d",
+				projectionLayout: "split-compact",
+				projectionVjpPrecision: "f32",
+			},
+			{
+				id: "staged-split-packed-f16",
+				...base,
+				backwardMode: "staged-project3d",
+				projectionLayout: "split-compact",
+				projectionVjpPrecision: "packed-f16",
 			},
 		],
 		ssim: [
@@ -111,8 +128,10 @@ export function estimateTiledTrainerBuffers({
 	checkpointPrecision,
 	checkpointStride,
 	projectionLayout,
+	projectionVjpPrecision = "f32",
 	ssimLayout,
 	backwardMode,
+	compactTargetFrames = false,
 	storageBufferLimit = PORTABLE_STORAGE_BUFFER_LIMIT,
 }) {
 	for (const [label, value] of Object.entries({
@@ -127,6 +146,9 @@ export function estimateTiledTrainerBuffers({
 		checkpointStride,
 		storageBufferLimit,
 	})) positiveInteger(value, label);
+	if (!["f32", "packed-f16"].includes(projectionVjpPrecision)) {
+		throw new RangeError("projectionVjpPrecision must be f32 or packed-f16.");
+	}
 	const pixelCount = width * height;
 	const tileCount = ceilDiv(width, tileSize) * ceilDiv(height, tileSize);
 	const pairCapacity = tileCount * tileCapacity;
@@ -141,9 +163,12 @@ export function estimateTiledTrainerBuffers({
 	const staged = backwardMode === "staged-project3d";
 	const splitProjection = projectionLayout === "split-compact";
 	const gradientFloats = staged ? 12 : 24;
-	const projectionBytesPerSplat = splitProjection ? 32 + 80 : 192;
+	const projectionVjpBytesPerSplat = projectionVjpPrecision === "packed-f16" ? 48 : 80;
+	const projectionBytesPerSplat = splitProjection ? 32 + projectionVjpBytesPerSplat : 192;
+	const rasterProjectionBytes = capacity * (splitProjection ? 32 : 192);
+	const projectionVjpBytes = splitProjection ? capacity * projectionVjpBytesPerSplat : 0;
 	const cycleMetricBytes = trainViewCount * frameCount * 16;
-	const timestampBytes = 10 * 2 * BigUint64Array.BYTES_PER_ELEMENT;
+	const timestampBytes = 11 * 2 * BigUint64Array.BYTES_PER_ELEMENT;
 	const bufferBytes = {
 		parameterPingPong: capacity * SPLAT_BYTES * 2,
 		optimizerMoments: capacity * SPLAT_BYTES * 2,
@@ -155,6 +180,7 @@ export function estimateTiledTrainerBuffers({
 		sampleIndices: 4,
 		sampledWorkspace: SPLAT_BYTES + MAX_SAMPLES_PER_STEP * 4,
 		targetPage: pixelCount * 4 * Float32Array.BYTES_PER_ELEMENT,
+		packedTargetPage: compactTargetFrames ? pixelCount * 4 : 4,
 		cameraData: viewCount * 20 * 4 + trainViewCount * 4 + 4 + viewCount * 4 * 4,
 		rasterPairs: pairCapacity * 8 + tileCount * 4,
 		transmittanceCheckpoints: checkpoint.byteLength,
@@ -166,14 +192,15 @@ export function estimateTiledTrainerBuffers({
 			+ 16
 			+ 16
 		),
-		configAndTelemetry: 144 + MAX_RENDER_VIEWS * 48 + TILED_CONFIG_BYTES + 32 + 12 + 64
-			+ cycleMetricBytes + (64 + cycleMetricBytes) + timestampBytes * 2,
+		configAndTelemetry: 144 + MAX_RENDER_VIEWS * 48 + TILED_CONFIG_BYTES + 40 + 12 + 80
+			+ cycleMetricBytes + (80 + cycleMetricBytes) + timestampBytes * 2,
 		previewGeometry: 32,
 	};
 	const allocatedBytes = Object.values(bufferBytes).reduce((sum, value) => sum + value, 0);
 	const bindingBytes = {
 		gradientAccumulator: bufferBytes.gradientAccumulator,
-		projections: bufferBytes.projections,
+		rasterProjections: rasterProjectionBytes,
+		projectionVjp: projectionVjpBytes,
 		targetPage: bufferBytes.targetPage,
 		pairData: pairCapacity * 8,
 		transmittanceCheckpoints: bufferBytes.transmittanceCheckpoints,
@@ -193,6 +220,7 @@ export function estimateTiledTrainerBuffers({
 		pixelCount,
 		tileCount,
 		pairCapacity,
+		projectionVjpPrecision: splitProjection ? projectionVjpPrecision : "f32",
 	};
 }
 
@@ -214,23 +242,27 @@ export function estimateDatasetResidentBytes({
 		frameCount,
 		channelBytes,
 	})) positiveInteger(value, label);
-	const bankBytes = (rasterWidth, rasterHeight, bytesPerChannel) => (
-		viewCount * (frameCount + 1) * rasterWidth * rasterHeight * 4 * bytesPerChannel
+	const frameBytes = (rasterWidth, rasterHeight, bytesPerChannel) => (
+		viewCount * frameCount * rasterWidth * rasterHeight * 4 * bytesPerChannel
 	);
-	const sourceFloatBytes = bankBytes(
-		sourceWidth,
-		sourceHeight,
-		Float32Array.BYTES_PER_ELEMENT,
+	const backgroundBytes = (rasterWidth, rasterHeight) => (
+		viewCount * rasterWidth * rasterHeight * 4 * Float32Array.BYTES_PER_ELEMENT
 	);
+	const sourceFrameBytes = frameBytes(sourceWidth, sourceHeight, channelBytes);
+	const sourceBackgroundBytes = backgroundBytes(sourceWidth, sourceHeight);
+	const sourceResidentBytes = sourceFrameBytes + sourceBackgroundBytes;
 	const scaledBytes = width === sourceWidth && height === sourceHeight
 		? 0
-		: bankBytes(width, height, channelBytes);
-	const decodedAtlasBytes = viewCount * sourceWidth * frameCount * sourceHeight * 4;
+		: frameBytes(width, height, channelBytes) + backgroundBytes(width, height);
+	// Atlas decode is sequential, so one camera atlas is the transient peak.
+	const decodedAtlasBytes = sourceWidth * frameCount * sourceHeight * 4;
 	return {
-		sourceFloatBytes,
+		sourceFrameBytes,
+		sourceBackgroundBytes,
+		sourceResidentBytes,
 		scaledBytes,
 		decodedAtlasBytes,
-		totalBytes: sourceFloatBytes + scaledBytes + decodedAtlasBytes,
+		totalBytes: sourceResidentBytes + scaledBytes + decodedAtlasBytes,
 		channelBytes,
 	};
 }
@@ -252,6 +284,7 @@ export function estimateTiledBenchmarkResources(metadata, options, {
 		capacity: options.capacity,
 		tileSize: options.tileSize,
 		tileCapacity: options.tileCapacity,
+		compactTargetFrames: datasetChannelBytes === Uint8Array.BYTES_PER_ELEMENT,
 		storageBufferLimit,
 	};
 	const variants = variantDefinitions(options).map((variant) => ({

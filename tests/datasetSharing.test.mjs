@@ -7,6 +7,10 @@ import {
 	hydrateDatasetSharedViews,
 	prepareDatasetForWorkerSharing,
 } from "../datasetSharing.js";
+import {
+	BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+	FRAME_BANK_FORMAT_RGBA8,
+} from "../dataset.js";
 
 function makeDataset() {
 	const width = 2;
@@ -105,6 +109,42 @@ test("decoded Float32 target banks share one backing while aliases keep their co
 	prepareDatasetForWorkerSharing(dataset, sharedScope);
 	assert.equal(dataset.frames, sharedFrames);
 	assert.equal(dataset.backgrounds, sharedBackgrounds);
+});
+
+test("compact frames and FP32 backgrounds share mixed typed roots without losing metadata", () => {
+	const dataset = makeDataset();
+	const compact = Uint8Array.from(dataset.frames, (value, index) =>
+		index % 4 === 3 ? 127 : Math.round(Math.min(1, value) * 255));
+	dataset.frames = compact;
+	dataset.frameBank = { format: FRAME_BANK_FORMAT_RGBA8, data: compact };
+	dataset.backgroundBank = {
+		format: BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+		data: dataset.backgrounds,
+	};
+	const prepared = prepareDatasetForWorkerSharing(dataset, sharedScope);
+	assert.ok(dataset.frames instanceof Uint8Array);
+	assert.ok(dataset.frames.buffer instanceof SharedArrayBuffer);
+	assert.ok(dataset.backgrounds instanceof Float32Array);
+	assert.ok(dataset.backgrounds.buffer instanceof SharedArrayBuffer);
+	assert.equal(dataset.frameBank.data, dataset.frames);
+	assert.equal(dataset.backgroundBank.data, dataset.backgrounds);
+	assert.equal(dataset.viewDatasets[1].frameBank.format, FRAME_BANK_FORMAT_RGBA8);
+	assert.equal(dataset.viewDatasets[1].frameBank.data.buffer, dataset.frames.buffer);
+	assert.equal(dataset.viewDatasets[1].backgroundBank.data.buffer, dataset.backgrounds.buffer);
+	assert.equal(prepared.telemetry.frameBankFormat, FRAME_BANK_FORMAT_RGBA8);
+	assert.equal(prepared.telemetry.frameBankBytes, dataset.frames.byteLength);
+	assert.equal(prepared.telemetry.backgroundBankFormat, BACKGROUND_BANK_FORMAT_RGBA32_FLOAT);
+	assert.equal(
+		prepared.telemetry.readOnlyBytes,
+		dataset.frames.byteLength + dataset.backgrounds.byteLength,
+	);
+
+	const worker = hydrateDatasetSharedViews(structuredClone(dataset), sharedScope).dataset;
+	assert.ok(worker.frames instanceof Uint8Array);
+	worker.frames[0] = 211;
+	assert.equal(dataset.frames[0], 211);
+	assert.equal(worker.frameBank.data, worker.frames);
+	assert.equal(worker.viewDatasets[0].frames, worker.viewDatasets[0].frameBank.data);
 });
 
 test("structured-cloned workers observe shared targets but keep mutable state private", () => {

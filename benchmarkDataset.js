@@ -1,4 +1,10 @@
-import { computeMultiviewSamples } from "./dataset.js";
+import {
+	BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+	computeMultiviewSamples,
+	FRAME_BANK_FORMAT_RGBA8,
+	FRAME_BANK_FORMAT_RGBA32_FLOAT,
+	resolveFrameBank,
+} from "./dataset.js";
 
 function positiveInteger(value, label) {
 	if (!Number.isSafeInteger(value) || value < 1) {
@@ -16,11 +22,14 @@ export function resizePackedRgbaNearest(source, sourceWidth, sourceHeight, image
 	if (source.length !== sourcePixels * imageCount * 4) {
 		throw new RangeError("source must contain imageCount packed RGBA images.");
 	}
-	if (scale === 1) return Float32Array.from(source);
+	if (!(source instanceof Uint8Array) && !(source instanceof Float32Array)) {
+		throw new TypeError("source must be a Uint8Array or Float32Array.");
+	}
+	if (scale === 1) return new source.constructor(source);
 	const width = sourceWidth * scale;
 	const height = sourceHeight * scale;
 	const targetPixels = width * height;
-	const resized = new Float32Array(targetPixels * imageCount * 4);
+	const resized = new source.constructor(targetPixels * imageCount * 4);
 	for (let image = 0; image < imageCount; image += 1) {
 		const sourceImage = image * sourcePixels * 4;
 		const targetImage = image * targetPixels * 4;
@@ -42,8 +51,9 @@ export function resizeDatasetForBenchmark(dataset, scale, { computeSamples = tru
 	if (scale === 1) return dataset;
 	const width = dataset.width * scale;
 	const height = dataset.height * scale;
+	const sourceFrameBank = resolveFrameBank(dataset);
 	const frames = resizePackedRgbaNearest(
-		dataset.frames,
+		sourceFrameBank.data,
 		dataset.width,
 		dataset.height,
 		dataset.viewCount * dataset.frameCount,
@@ -77,7 +87,16 @@ export function resizeDatasetForBenchmark(dataset, scale, { computeSamples = tru
 		width,
 		height,
 		frames,
+		frameBank: {
+			format: sourceFrameBank.format === FRAME_BANK_FORMAT_RGBA8
+				? FRAME_BANK_FORMAT_RGBA8 : FRAME_BANK_FORMAT_RGBA32_FLOAT,
+			data: frames,
+		},
 		backgrounds,
+		backgroundBank: {
+			format: BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+			data: backgrounds,
+		},
 		background: backgrounds.subarray(0, backgroundValuesPerView),
 		benchmarkSourceRaster: [dataset.width, dataset.height],
 		benchmarkRasterScale: scale,
@@ -89,10 +108,21 @@ export function resizeDatasetForBenchmark(dataset, scale, { computeSamples = tru
 		height,
 		frameCount: dataset.frameCount,
 		frames: frames.subarray(view * valuesPerView, (view + 1) * valuesPerView),
+		frameBank: {
+			format: resized.frameBank.format,
+			data: frames.subarray(view * valuesPerView, (view + 1) * valuesPerView),
+		},
 		background: backgrounds.subarray(
 			view * backgroundValuesPerView,
 			(view + 1) * backgroundValuesPerView,
 		),
+		backgroundBank: {
+			format: BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+			data: backgrounds.subarray(
+				view * backgroundValuesPerView,
+				(view + 1) * backgroundValuesPerView,
+			),
+		},
 		viewIndex: view,
 	}));
 	resized.previewViews = resized.comparisonViewIndices.map((view) => resized.viewDatasets[view]);

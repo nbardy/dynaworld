@@ -21,6 +21,7 @@ const OPTION_SPECS = Object.freeze({
 	"--splats": ["splats", Number, 8192],
 	"--capacity": ["capacity", Number, null],
 	"--scale": ["scale", Number, 1],
+	"--frame-bank": ["frameBank", String, "f32"],
 	"--warmup": ["warmup", Number, 32],
 	"--steps": ["steps", Number, 128],
 	"--profiles": ["profiles", Number, 5],
@@ -28,6 +29,7 @@ const OPTION_SPECS = Object.freeze({
 	"--stride": ["stride", Number, 16],
 	"--checkpoint-order": ["checkpointOrder", String, "pixel-major"],
 	"--projection-layout": ["projectionLayout", String, "split-compact"],
+	"--projection-vjp-precision": ["projectionVjpPrecision", String, "f32"],
 	"--ssim-layout": ["ssimLayout", String, "separable"],
 	"--pair-packet": ["pairPacket", String, "lane"],
 	"--granularity": ["granularity", String, "checkpoint-block"],
@@ -58,12 +60,13 @@ function usage() {
 Runs the tiled WebGPU kernel benchmark in headless Chromium and emits JSON.
 The browser is the WebGPU runtime; Bun owns orchestration and artifact output.
 
-  --experiment MODE          backward, projection, or ssim
+  --experiment MODE          backward, projection, precision, or ssim
   --variant MODE             both, control, candidate, or a concrete variant id
   --order MODE               control-first or candidate-first
   --splats N                 active splats (default: 8192)
   --capacity N               model capacity (default: active splats)
   --scale N                  raster scale, 1..4 (default: 1)
+  --frame-bank MODE          f32 or rgba8 (default: f32)
   --warmup N                 warmup steps (default: 32)
   --steps N                  measured steps (default: 128)
   --profiles N               timestamped profile steps (default: 5)
@@ -71,6 +74,8 @@ The browser is the WebGPU runtime; Bun owns orchestration and artifact output.
   --stride N                 checkpoint stride: 8, 16, or 32
   --checkpoint-order MODE    pixel-major or block-major
   --projection-layout MODE   split-compact or monolithic
+  --projection-vjp-precision MODE
+                              f32 or packed-f16
   --ssim-layout MODE         separable or naive-2d
   --pair-packet MODE         lane or shared
   --granularity MODE         pair or checkpoint-block
@@ -270,6 +275,7 @@ function benchmarkUrl(port, args) {
 		splats: String(args.splats),
 		capacity: String(args.capacity),
 		scale: String(args.scale),
+		frameBank: args.frameBank,
 		warmup: String(args.warmup),
 		steps: String(args.steps),
 		profiles: String(args.profiles),
@@ -277,6 +283,7 @@ function benchmarkUrl(port, args) {
 		stride: String(args.stride),
 		checkpointOrder: args.checkpointOrder,
 		projectionLayout: args.projectionLayout,
+		projectionVjpPrecision: args.projectionVjpPrecision,
 		ssimLayout: args.ssimLayout,
 		pairPacket: args.pairPacket,
 		granularity: args.granularity,
@@ -517,6 +524,8 @@ async function main() {
 		tileCapacity: args.tileCapacity,
 		checkpointPrecision: args.checkpoint,
 		checkpointStride: args.stride,
+	}, {
+		datasetChannelBytes: args.frameBank === "rgba8" ? 1 : 4,
 	});
 	if (!resourcePlan.valid) {
 		throw new Error(`Requested benchmark resource plan is invalid: ${resourcePlan.reasons.join(" ")}`);

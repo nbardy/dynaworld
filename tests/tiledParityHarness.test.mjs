@@ -11,6 +11,7 @@ import {
 	selectTiledParityTrainingStep,
 	summarizeForwardParity,
 	summarizeGradientParity,
+	summarizeTargetParity,
 } from "../tiledParityHarness.js";
 
 test("gradient selections cover trainable families and exclude diagnostic slots", () => {
@@ -118,6 +119,12 @@ test("live parity explicitly exercises motion weighting and randomized train com
 	assert.match(source, /motionWeighting:\s*true,\s*randomBackground:\s*true/);
 	assert.match(source, /trainingBackgroundForStep\(parityPair\.step\)/);
 	assert.match(source, /maximumWeight - minimumWeight < 1e-3/);
+	assert.match(source, /readFrameLossWeight\(dataset, source \+ pixel \* 4\)/);
+	assert.match(source, /frameBankFormat/);
+	assert.match(source, /projectionVjpPrecision/);
+	assert.match(source, /halfSaturations:\s*debug\.metrics\[16\]/);
+	assert.match(source, /halfSaturationsTotal:\s*debug\.metrics\[17\]/);
+	assert.match(source, /projection VJP FP16 saturation/);
 });
 
 test("forward summary reports RGB and alpha errors separately", () => {
@@ -130,4 +137,15 @@ test("forward summary reports RGB and alpha errors separately", () => {
 	assert.equal(summary.alpha.maxAbs, Math.abs(gpu[7] - coverage[1]));
 	assert.equal(summary.rgb.worstIndex, 6);
 	assert.equal(summary.alpha.worstIndex, 7);
+});
+
+test("target summary reports compact RGB and loss-weight decode errors separately", () => {
+	const gpu = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
+	const rgb = new Float32Array([0.1, 0.2, 0.3, 0.5, 0.6, 0.65]);
+	const weights = new Float32Array([0.4, 0.75]);
+	const summary = summarizeTargetParity(gpu, rgb, weights);
+
+	assert.equal(summary.rgbMaxAbs, Math.abs(gpu[6] - rgb[5]));
+	assert.equal(summary.weightMaxAbs, Math.abs(gpu[7] - weights[1]));
+	assert.equal(summary.pass, false);
 });

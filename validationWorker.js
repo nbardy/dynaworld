@@ -1,13 +1,13 @@
 import {
 	SPLAT_FLOATS,
 	resolveTrainViewIndices,
-} from "./trainerWebGpu3d.js?v=20260731-fasttiles6";
+} from "./trainerWebGpu3d.js?v=20260731-compactfp16-5";
 import {
 	computeSnapshotMetrics,
 	snapshotUpdateRatios,
 	summarizeSplatParameters,
-} from "./snapshotMetrics.js?v=20260731-fasttiles6";
-import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260731-fasttiles6";
+} from "./snapshotMetrics.js?v=20260731-compactfp16-5";
+import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260731-compactfp16-5";
 import { hydrateDatasetSharedViews } from "./datasetSharing.js";
 
 let dataset = null;

@@ -1,8 +1,8 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260731-fasttiles6";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260731-fasttiles6";
-import { learningRateMultipliers } from "./trainingSchedule.js?v=20260731-fasttiles6";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260731-fasttiles6";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260731-fasttiles6";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260731-compactfp16-5";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260731-compactfp16-5";
+import { learningRateMultipliers } from "./trainingSchedule.js?v=20260731-compactfp16-5";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260731-compactfp16-5";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260731-compactfp16-5";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");

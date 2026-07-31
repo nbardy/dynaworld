@@ -26,6 +26,7 @@ const baseOptions = Object.freeze({
 	checkpointPrecision: "packed-f16",
 	checkpointStride: 16,
 	projectionLayout: "split-compact",
+	projectionVjpPrecision: "f32",
 	ssimLayout: "separable",
 });
 
@@ -34,8 +35,8 @@ test("resource estimator tracks the saved 30K/96 allocations plus sparse-prefix 
 	assert.deepEqual(
 		report.variants.map(({ id, allocatedBytes }) => ({ id, allocatedBytes })),
 		[
-			{ id: "direct-3d", allocatedBytes: 43_589_880 },
-			{ id: "staged-project3d", allocatedBytes: 39_749_880 },
+			{ id: "direct-3d", allocatedBytes: 43_589_956 },
+			{ id: "staged-project3d", allocatedBytes: 39_749_956 },
 		],
 	);
 });
@@ -59,7 +60,7 @@ test("30K/384 packed checkpoints fit the portable 128 MiB binding floor", () => 
 	assert.ok(report.minimumAvailableMemoryBytes < 2.5 * 1024 ** 3);
 });
 
-test("RGBA8 sharing cuts the scaled 384 frame bank to one quarter of Float32", () => {
+test("RGBA8 sharing cuts 384 frames by four while backgrounds remain FP32", () => {
 	const floatBank = estimateDatasetResidentBytes({
 		sourceWidth: 96,
 		sourceHeight: 72,
@@ -78,8 +79,42 @@ test("RGBA8 sharing cuts the scaled 384 frame bank to one quarter of Float32", (
 		frameCount: 16,
 		channelBytes: 1,
 	});
-	assert.equal(floatBank.scaledBytes, byteBank.scaledBytes * 4);
-	assert.equal(byteBank.scaledBytes / MIB, 516.375 / 4);
+	assert.equal(floatBank.scaledBytes / MIB, 516.375);
+	assert.equal(byteBank.scaledBytes / MIB, 151.875);
+	assert.equal((floatBank.scaledBytes - byteBank.scaledBytes) / MIB, 364.5);
+	assert.equal(byteBank.decodedAtlasBytes / MIB, 0.421875);
+});
+
+test("compact target planning includes the packed GPU page and lower host bank", () => {
+	const compact = estimateTiledBenchmarkResources(metadata, {
+		...baseOptions,
+		variant: "candidate",
+		scale: 4,
+		projectionVjpPrecision: "packed-f16",
+	}, {
+		datasetChannelBytes: 1,
+	});
+	assert.equal(compact.variants[0].bufferBytes.packedTargetPage, 384 * 288 * 4);
+	assert.equal(compact.dataset.scaledBytes / MIB, 151.875);
+	assert.equal(compact.dataset.channelBytes, 1);
+});
+
+test("packed projection VJP storage removes 32 bytes per capacity splat", () => {
+	const f32 = estimateTiledBenchmarkResources(metadata, {
+		...baseOptions,
+		variant: "candidate",
+	});
+	const packed = estimateTiledBenchmarkResources(metadata, {
+		...baseOptions,
+		variant: "candidate",
+		projectionVjpPrecision: "packed-f16",
+	});
+	assert.equal(f32.variants[0].projectionVjpPrecision, "f32");
+	assert.equal(packed.variants[0].projectionVjpPrecision, "packed-f16");
+	assert.equal(
+		f32.variants[0].allocatedBytes - packed.variants[0].allocatedBytes,
+		baseOptions.capacity * 32,
+	);
 });
 
 test("single-trainer estimates fail when no checkpoint layout fits", () => {

@@ -1,14 +1,19 @@
-import { resizeDatasetForBenchmark } from "./benchmarkDataset.js?v=20260731-fasttiles6";
-import { summarizeRoundStability } from "./benchmarkStatistics.js?v=20260731-contention1";
-import { loadPresetDataset } from "./dataset.js?v=20260731-fasttiles6";
+import { resizeDatasetForBenchmark } from "./benchmarkDataset.js?v=20260731-compactfp16-5";
+import { summarizeRoundStability } from "./benchmarkStatistics.js?v=20260731-compactfp16-5";
+import {
+	FRAME_BANK_FORMAT_RGBA8,
+	FRAME_BANK_FORMAT_RGBA32_FLOAT,
+	loadPresetDataset,
+} from "./dataset.js?v=20260731-compactfp16-5";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
 	TILED_BACKWARD_GRANULARITIES,
 	TILED_BACKWARD_MODES,
 	TILED_CHECKPOINT_ORDERS,
 	TILED_PROJECTION_LAYOUTS,
+	TILED_PROJECTION_VJP_PRECISIONS,
 	TILED_SSIM_LAYOUTS,
-} from "./trainerWebGpu3dTiled.js?v=20260731-fasttiles6";
+} from "./trainerWebGpu3dTiled.js?v=20260731-compactfp16-5";
 const EXPERIMENTS = Object.freeze({
 	backward: Object.freeze([
 		Object.freeze({
@@ -37,10 +42,30 @@ const EXPERIMENTS = Object.freeze({
 		}),
 		Object.freeze({
 			id: "staged-split-compact",
-			label: "Staged split 32 B + 80 B projection",
+			label: "Staged split projection with selected VJP storage",
 			init: Object.freeze({
 				backwardMode: TILED_BACKWARD_MODES.STAGED_PROJECT_3D,
 				projectionLayout: TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT,
+			}),
+		}),
+	]),
+	precision: Object.freeze([
+		Object.freeze({
+			id: "staged-split-f32",
+			label: "Staged split 32 B + 80 B FP32 VJP",
+			init: Object.freeze({
+				backwardMode: TILED_BACKWARD_MODES.STAGED_PROJECT_3D,
+				projectionLayout: TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT,
+				projectionVjpPrecision: TILED_PROJECTION_VJP_PRECISIONS.F32,
+			}),
+		}),
+		Object.freeze({
+			id: "staged-split-packed-f16",
+			label: "Staged split 32 B + 48 B packed-FP16 VJP",
+			init: Object.freeze({
+				backwardMode: TILED_BACKWARD_MODES.STAGED_PROJECT_3D,
+				projectionLayout: TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT,
+				projectionVjpPrecision: TILED_PROJECTION_VJP_PRECISIONS.PACKED_F16,
 			}),
 		}),
 	]),
@@ -87,6 +112,7 @@ const inputs = {
 	splats: document.querySelector("#kernelSplats"),
 	capacity: document.querySelector("#kernelCapacity"),
 	scale: document.querySelector("#kernelRasterScale"),
+	frameBank: document.querySelector("#kernelFrameBank"),
 	warmup: document.querySelector("#kernelWarmup"),
 	steps: document.querySelector("#kernelSteps"),
 	profiles: document.querySelector("#kernelProfiles"),
@@ -94,6 +120,7 @@ const inputs = {
 	checkpointStride: document.querySelector("#kernelCheckpointStride"),
 	checkpointOrder: document.querySelector("#kernelCheckpointOrder"),
 	projectionLayout: document.querySelector("#kernelProjectionLayout"),
+	projectionVjpPrecision: document.querySelector("#kernelProjectionVjpPrecision"),
 	ssimLayout: document.querySelector("#kernelSsimLayout"),
 	pairPacket: document.querySelector("#kernelPairPacket"),
 	backwardGranularity: document.querySelector("#kernelBackwardGranularity"),
@@ -128,6 +155,7 @@ function readOptions() {
 		splats: integerValue(inputs.splats, "Active splats"),
 		capacity: integerValue(inputs.capacity, "Model capacity"),
 		scale: integerValue(inputs.scale, "Raster scale"),
+		frameBank: inputs.frameBank.value,
 		warmup: integerValue(inputs.warmup, "Warmup steps"),
 		steps: integerValue(inputs.steps, "Measured steps"),
 		profiles: integerValue(inputs.profiles, "Profile samples"),
@@ -135,6 +163,7 @@ function readOptions() {
 		checkpointStride: Number(inputs.checkpointStride.value),
 		checkpointOrder: inputs.checkpointOrder.value,
 		projectionLayout: inputs.projectionLayout.value,
+		projectionVjpPrecision: inputs.projectionVjpPrecision.value,
 		ssimLayout: inputs.ssimLayout.value,
 		sharePairPacket: inputs.pairPacket.value === "shared",
 		backwardGranularity: inputs.backwardGranularity.value,
@@ -154,6 +183,9 @@ function readOptions() {
 	if (!["control-first", "candidate-first"].includes(options.order)) {
 		throw new RangeError("Unknown kernel execution order.");
 	}
+	if (!["f32", "rgba8"].includes(options.frameBank)) {
+		throw new RangeError("Host frame bank must be f32 or rgba8.");
+	}
 	if (![8, 16, 32].includes(options.checkpointStride)) {
 		throw new RangeError("Checkpoint stride must be 8, 16, or 32.");
 	}
@@ -162,6 +194,9 @@ function readOptions() {
 	}
 	if (!Object.values(TILED_PROJECTION_LAYOUTS).includes(options.projectionLayout)) {
 		throw new RangeError("Unknown projection packet layout.");
+	}
+	if (!Object.values(TILED_PROJECTION_VJP_PRECISIONS).includes(options.projectionVjpPrecision)) {
+		throw new RangeError("Unknown projection VJP storage precision.");
 	}
 	if (!Object.values(TILED_SSIM_LAYOUTS).includes(options.ssimLayout)) {
 		throw new RangeError("Unknown SSIM kernel layout.");
@@ -252,6 +287,7 @@ async function initializeVariant(variant, dataset, options) {
 		checkpointStride: options.checkpointStride,
 		checkpointOrder: options.checkpointOrder,
 		projectionLayout: options.projectionLayout,
+		projectionVjpPrecision: options.projectionVjpPrecision,
 		ssimLayout: options.ssimLayout,
 		sharePairPacket: options.sharePairPacket,
 		backwardGranularity: options.backwardGranularity,
@@ -272,9 +308,16 @@ async function summarizeVariant(context, dataset, options) {
 	const loss = await trainer.readLoss();
 	const roundStability = summarizeRoundStability(rounds, options.maxRoundCv);
 	const overflow = trainer.lastLossBreakdown?.tileOverflowTotal ?? 0;
+	const halfSaturations =
+		trainer.lastLossBreakdown?.projectionVjpHalfSaturationsTotal ?? 0;
 	const validityReasons = [];
 	if (!Number.isFinite(loss)) validityReasons.push("The final loss is not finite.");
 	if (overflow !== 0) validityReasons.push(`Tile overflow is ${overflow}, not zero.`);
+	if (halfSaturations !== 0) {
+		validityReasons.push(
+			`Cumulative projection VJP FP16 saturation count is ${halfSaturations}, not zero.`,
+		);
+	}
 	if (!roundStability.supported) validityReasons.push(roundStability.reason);
 	else if (!roundStability.stable) {
 		validityReasons.push(
@@ -287,6 +330,8 @@ async function summarizeVariant(context, dataset, options) {
 		label: variant.label,
 		adapter: trainer.adapterName,
 		backwardMode: trainer.backwardMode,
+		requestedProjectionVjpPrecision: options.projectionVjpPrecision,
+		effectiveProjectionVjpPrecision: trainer.projectionVjpPrecision,
 		raster: [dataset.width, dataset.height],
 		requestedSplats: options.splats,
 		capacity: trainer.splatCount,
@@ -306,6 +351,7 @@ async function summarizeVariant(context, dataset, options) {
 		validity: {
 			finiteLoss: Number.isFinite(loss),
 			zeroTileOverflow: overflow === 0,
+			zeroProjectionVjpHalfSaturations: halfSaturations === 0,
 			stableRounds: roundStability.supported && roundStability.stable,
 			valid: validityReasons.length === 0,
 			reasons: validityReasons,
@@ -364,7 +410,11 @@ async function runBenchmark(options) {
 	// Full-frame tiled training does not read sampled-ray banks, and this lab
 	// keeps motion weighting disabled. Skip the million-candidate sample sort
 	// so harness startup does not dominate or time out an isolated kernel run.
-	const preset = await loadPresetDataset({ computeSamples: false });
+	const preset = await loadPresetDataset({
+		computeSamples: false,
+		frameBankFormat: options.frameBank === "rgba8"
+			? FRAME_BANK_FORMAT_RGBA8 : FRAME_BANK_FORMAT_RGBA32_FLOAT,
+	});
 	const dataset = resizeDatasetForBenchmark(
 		preset,
 		options.scale,
@@ -489,6 +539,7 @@ function applyQueryOptions() {
 		splats: inputs.splats,
 		capacity: inputs.capacity,
 		scale: inputs.scale,
+		frameBank: inputs.frameBank,
 		warmup: inputs.warmup,
 		steps: inputs.steps,
 		profiles: inputs.profiles,
@@ -496,6 +547,7 @@ function applyQueryOptions() {
 		stride: inputs.checkpointStride,
 		checkpointOrder: inputs.checkpointOrder,
 		projectionLayout: inputs.projectionLayout,
+		projectionVjpPrecision: inputs.projectionVjpPrecision,
 		ssimLayout: inputs.ssimLayout,
 		pairPacket: inputs.pairPacket,
 		granularity: inputs.backwardGranularity,

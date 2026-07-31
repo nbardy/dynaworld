@@ -6,7 +6,7 @@ import {
 	TILED_BACKWARD_MODES,
 	TILED_PROJECTION_LAYOUTS,
 	TILED_SSIM_LAYOUTS,
-} from "./trainerWebGpu3dTiled.js?v=20260731-fasttiles6";
+} from "./trainerWebGpu3dTiled.js?v=20260731-compactfp16-5";
 
 export function resolveFastTileCapacity(
 	initialSplats,
