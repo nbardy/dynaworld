@@ -85,6 +85,23 @@ and a reversed-start repeat. See
 [`benchmark_results/README.md`](benchmark_results/README.md) for artifact
 layout and naming.
 
+Swap occupancy is part of promotion validity, not just recorded metadata. The
+default `--max-swap-used-fraction 0.90` rejects canonical timing runs on a
+heavily paged host even when macOS still reports an acceptable free-memory
+percentage. The independent `--max-swap-to-memory-fraction 0.25` ceiling also
+prevents macOS growing the swap pool from making the same used bytes appear
+healthy.
+
+Before launching Chromium, the runner also derives the requested dataset,
+per-variant WebGPU buffers, largest storage binding, and conservative unified
+memory headroom. The plan is saved as `requestedResourcePlan`; its byte model
+is regression-checked against the saved 30K/96 allocation artifacts plus
+subsequent explicitly tested layout deltas. A
+30K/384x288 packed-checkpoint run resolves to a 108 MiB largest binding and
+requires about 2 GiB of estimated available host memory before browser startup.
+Use `--preflight-only` to print this plan and host assessment without creating
+a browser or WebGPU device.
+
 Run the browser unit suite:
 
 ```bash

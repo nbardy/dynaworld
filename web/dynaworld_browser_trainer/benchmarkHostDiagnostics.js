@@ -11,6 +11,9 @@ const DEFAULT_THRESHOLDS = Object.freeze({
 	maxCompetingCpuFraction: 0.35,
 	maxPreflightGpuUtilizationPercent: 35,
 	minAvailableMemoryFraction: 0.10,
+	minAvailableMemoryBytes: 0,
+	maxSwapUsedFraction: 0.90,
+	maxSwapUsedToMemoryFraction: 0.25,
 });
 
 function round(value, digits = 4) {
@@ -254,6 +257,37 @@ export function evaluateHostSnapshot(snapshot, thresholds = DEFAULT_THRESHOLDS) 
 			+ `${thresholds.minAvailableMemoryFraction}.`,
 		);
 	}
+	if (
+		Number.isFinite(snapshot.availableMemoryBytes)
+		&& snapshot.availableMemoryBytes < thresholds.minAvailableMemoryBytes
+	) {
+		warnings.push(
+			`Estimated available memory ${snapshot.availableMemoryBytes} bytes is below the requested `
+			+ `${thresholds.minAvailableMemoryBytes}-byte benchmark headroom.`,
+		);
+	}
+	if (
+		Number.isFinite(snapshot.swap?.usedFraction)
+		&& snapshot.swap.usedFraction > thresholds.maxSwapUsedFraction
+	) {
+		warnings.push(
+			`Swap used fraction ${round(snapshot.swap.usedFraction, 3)} exceeds `
+			+ `${thresholds.maxSwapUsedFraction}.`,
+		);
+	}
+	const swapUsedToMemoryFraction = Number.isFinite(snapshot.swap?.usedBytes)
+		&& Number.isFinite(snapshot.totalMemoryBytes)
+		&& snapshot.totalMemoryBytes > 0
+		? snapshot.swap.usedBytes / snapshot.totalMemoryBytes : null;
+	if (
+		Number.isFinite(swapUsedToMemoryFraction)
+		&& swapUsedToMemoryFraction > thresholds.maxSwapUsedToMemoryFraction
+	) {
+		warnings.push(
+			`Swap uses ${round(swapUsedToMemoryFraction, 3)} of physical memory, exceeding `
+			+ `${thresholds.maxSwapUsedToMemoryFraction}.`,
+		);
+	}
 	if (snapshot.thermal.thermalWarning || snapshot.thermal.performanceWarning) {
 		warnings.push("macOS reports thermal or performance pressure.");
 	}
@@ -335,6 +369,8 @@ export async function captureHostSnapshot({
 			? "top-second-sample" : "os.cpus-delta",
 		totalMemoryBytes: os.totalmem(),
 		availableMemoryFraction: round(availableMemoryFraction),
+		availableMemoryBytes: Number.isFinite(availableMemoryFraction)
+			? Math.round(availableMemoryFraction * os.totalmem()) : null,
 		memoryAvailabilitySource: commandResults.memoryPressure?.available
 			? "memory_pressure" : "os.freemem",
 		swap: commandResults.swap?.available
