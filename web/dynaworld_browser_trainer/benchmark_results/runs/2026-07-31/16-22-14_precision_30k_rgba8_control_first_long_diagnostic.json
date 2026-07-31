@@ -1,0 +1,1042 @@
+{
+  "schema": "dynaworld-browser-tiled-kernel-benchmark/v3",
+  "recordedAt": "2026-07-31T07:22:14.326Z",
+  "options": {
+    "experiment": "precision",
+    "variant": "both",
+    "order": "control-first",
+    "splats": 30000,
+    "capacity": 30000,
+    "scale": 1,
+    "frameBank": "rgba8",
+    "warmup": 128,
+    "steps": 256,
+    "profiles": 7,
+    "checkpointPrecision": "packed-f16",
+    "checkpointStride": 16,
+    "checkpointOrder": "pixel-major",
+    "projectionLayout": "split-compact",
+    "projectionVjpPrecision": "packed-f16",
+    "ssimLayout": "separable",
+    "sharePairPacket": false,
+    "backwardGranularity": "checkpoint-block",
+    "tileSize": 8,
+    "tileCapacity": 4096,
+    "maxRoundCv": 0.1
+  },
+  "dataset": {
+    "name": "coffee_martini calibrated train17_holdout1",
+    "width": 96,
+    "height": 72,
+    "viewCount": 18,
+    "trainViewCount": 17,
+    "frameCount": 16
+  },
+  "results": [
+    {
+      "id": "staged-split-f32",
+      "label": "Staged split 32 B + 80 B FP32 VJP",
+      "adapter": "apple · tiled full-frame · staged-project3d · checkpoint-block · pixel-major tape · split-compact projection · separable SSIM",
+      "backwardMode": "staged-project3d",
+      "requestedProjectionVjpPrecision": "packed-f16",
+      "effectiveProjectionVjpPrecision": "f32",
+      "raster": [
+        96,
+        72
+      ],
+      "requestedSplats": 30000,
+      "capacity": 30000,
+      "warmupSteps": 128,
+      "measuredSteps": 256,
+      "measurementRounds": 4,
+      "roundElapsedMs": [
+        185.39999997615814,
+        173.10000002384186,
+        167.5,
+        168.39999997615814
+      ],
+      "rounds": [
+        {
+          "round": 0,
+          "steps": 64,
+          "elapsedMs": 185.39999997615814,
+          "executionPosition": 0
+        },
+        {
+          "round": 1,
+          "steps": 64,
+          "elapsedMs": 173.10000002384186,
+          "executionPosition": 1
+        },
+        {
+          "round": 2,
+          "steps": 64,
+          "elapsedMs": 167.5,
+          "executionPosition": 0
+        },
+        {
+          "round": 3,
+          "steps": 64,
+          "elapsedMs": 168.39999997615814,
+          "executionPosition": 1
+        }
+      ],
+      "roundStability": {
+        "supported": true,
+        "samples": [
+          {
+            "round": 0,
+            "steps": 64,
+            "elapsedMs": 185.39999997615814,
+            "executionPosition": 0,
+            "stepsPerSecond": 345.19956854493097
+          },
+          {
+            "round": 1,
+            "steps": 64,
+            "elapsedMs": 173.10000002384186,
+            "executionPosition": 1,
+            "stepsPerSecond": 369.72848059610044
+          },
+          {
+            "round": 2,
+            "steps": 64,
+            "elapsedMs": 167.5,
+            "executionPosition": 0,
+            "stepsPerSecond": 382.089552238806
+          },
+          {
+            "round": 3,
+            "steps": 64,
+            "elapsedMs": 168.39999997615814,
+            "executionPosition": 1,
+            "stepsPerSecond": 380.0475059920489
+          }
+        ],
+        "meanStepsPerSecond": 369.26627684297154,
+        "standardDeviationStepsPerSecond": 14.663657238686314,
+        "coefficientOfVariation": 0.03971025289407067,
+        "minimumStepsPerSecond": 345.19956854493097,
+        "maximumStepsPerSecond": 382.089552238806,
+        "maxToMinRatio": 1.1068656714994516,
+        "lastToFirstRatio": 1.100950118779138,
+        "maxAllowedCoefficientOfVariation": 0.1,
+        "stable": true,
+        "executionPositionEffect": {
+          "positions": [
+            {
+              "position": 0,
+              "samples": 2,
+              "meanStepsPerSecond": 363.6445603918685
+            },
+            {
+              "position": 1,
+              "samples": 2,
+              "meanStepsPerSecond": 374.8879932940747
+            }
+          ],
+          "secondToFirstRatio": 1.0309187435392686,
+          "relativeDifference": 0.030448036030616004
+        }
+      },
+      "profileSteps": 7,
+      "elapsedMs": 694.3999999761581,
+      "stepsPerSecond": 368.66359448270396,
+      "loss": 0.43641170859336853,
+      "lossBreakdown": {
+        "loss": 0.43641170859336853,
+        "l1": 0.3199031352996826,
+        "dssim": 0.902445912361145,
+        "tileOverflow": 0,
+        "coverage": 0.25290319323539734,
+        "pairCount": 26709,
+        "maxTileOccupancy": 2150,
+        "meanStopRank": 247.21600341796875,
+        "visibleSplats": 21718,
+        "capacitySplats": 30000,
+        "viewIndex": 1,
+        "frameIndex": 5,
+        "tileOverflowTotal": 0,
+        "maxTileOccupancyEver": 2379,
+        "objectiveStep": 390,
+        "activeUpdateSplats": 30000,
+        "dormantUpdateSplats": 0,
+        "projectionVjpHalfSaturations": 0,
+        "projectionVjpHalfSaturationsTotal": 0,
+        "cycleMeanLoss": 0.45357774176141796,
+        "cycleMeanL1": 0.3393245653851944,
+        "cycleMeanDssim": 0.9105903598315576,
+        "cycleSamples": 272,
+        "cycleComplete": true
+      },
+      "profile": {
+        "supported": true,
+        "samples": 7,
+        "totalMedianMs": 2.529336,
+        "totalP95Ms": 3.7713207000000004,
+        "gpuSpanMedianMs": 2.531377,
+        "gpuSpanP95Ms": 3.7750630999999997,
+        "phaseContract": {
+          "backward": "raster derivative and projected-gradient accumulation",
+          "update": "one 3D projection/covariance VJP per splat plus Adam"
+        },
+        "maintenanceIncluded": false,
+        "maintenanceDispatches": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "phaseMedianMs": {
+          "targetDecode": 0.002167,
+          "clear": 0.025124,
+          "project": 0.063957,
+          "sort": 0.100999,
+          "finalize": 0.00175,
+          "forward": 0.94036,
+          "ssimStats": 0.0235,
+          "ssimGradient": 0.024833,
+          "metrics": 0.009208,
+          "backward": 0.997569,
+          "update": 0.22783
+        },
+        "phaseP95Ms": {
+          "targetDecode": 0.0024830999999999994,
+          "clear": 0.06984919999999996,
+          "project": 0.08849829999999999,
+          "sort": 0.1614979,
+          "finalize": 0.0018795,
+          "forward": 1.2647473,
+          "ssimStats": 0.3519492999999997,
+          "ssimGradient": 0.3620983999999997,
+          "metrics": 0.023466099999999986,
+          "backward": 1.8750211999999995,
+          "update": 0.24835480000000001
+        }
+      },
+      "memoryPlan": {
+        "targetPageBytes": 110592,
+        "packedTargetPageBytes": 27648,
+        "targetFrameBankFormat": "rgba8unorm-rgb+weight-u8x127/v1",
+        "tileCapacity": 4096,
+        "tileSize": 8,
+        "pairCapacity": 442368,
+        "checkpointStride": 16,
+        "requestedCheckpointStride": 16,
+        "checkpointPrecision": "packed-f16",
+        "checkpointOrder": "pixel-major",
+        "checkpointBytes": 14155776,
+        "pairDataBytes": 3538944,
+        "gradientAccumulatorBytes": 1440000,
+        "rasterProjectionBytes": 960000,
+        "projectionVjpBytes": 2400000,
+        "projectionVjpPrecision": "f32",
+        "projectionLayout": "split-compact",
+        "ssimLayout": "separable",
+        "ssimScratchBytes": 552960,
+        "pairGradientBytes": 0,
+        "sampledDepthOrderCacheBytes": 0,
+        "capacityScaledBytes": 20466432,
+        "bytesPerCapacitySplat": 682.2144,
+        "allocatedBytes": 39777600,
+        "bufferBytes": {
+          "parameterPingPong": 5760000,
+          "optimizerMoments": 5760000,
+          "densityStats": 480000,
+          "gradientAccumulator": 1440000,
+          "projections": 3360000,
+          "parameterReadback": 2880000,
+          "previewSort": 786432,
+          "sampleIndices": 4,
+          "sampledWorkspace": 864,
+          "targetPage": 110592,
+          "packedTargetPage": 27648,
+          "cameraData": 1800,
+          "rasterPairs": 3539376,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageWorkspace": 1465344,
+          "configAndTelemetry": 9732,
+          "previewGeometry": 32
+        },
+        "storageBufferLimit": 134217728,
+        "nativeShaderF16": true,
+        "backwardMode": "staged-project3d",
+        "backwardGranularity": "checkpoint-block",
+        "gradientRecordFloats": 12,
+        "timestampQuerySupported": true,
+        "timestampQueryEnabled": true,
+        "sharePairPacket": false,
+        "staticWarmupSteps": 0,
+        "metricCycleSteps": 272,
+        "dormantSlotSparseUpdate": true,
+        "initialActiveUpdateSlots": 30000,
+        "updateSlotCapacity": 30000,
+        "initialDormantUpdateSlots": 0
+      },
+      "validity": {
+        "finiteLoss": true,
+        "zeroTileOverflow": true,
+        "zeroProjectionVjpHalfSaturations": true,
+        "stableRounds": true,
+        "valid": true,
+        "reasons": []
+      }
+    },
+    {
+      "id": "staged-split-packed-f16",
+      "label": "Staged split 32 B + 48 B packed-FP16 VJP",
+      "adapter": "apple · tiled full-frame · staged-project3d · checkpoint-block · pixel-major tape · split-compact projection · separable SSIM",
+      "backwardMode": "staged-project3d",
+      "requestedProjectionVjpPrecision": "packed-f16",
+      "effectiveProjectionVjpPrecision": "packed-f16",
+      "raster": [
+        96,
+        72
+      ],
+      "requestedSplats": 30000,
+      "capacity": 30000,
+      "warmupSteps": 128,
+      "measuredSteps": 256,
+      "measurementRounds": 4,
+      "roundElapsedMs": [
+        171.19999998807907,
+        171.39999997615814,
+        168.30000001192093,
+        169.30000001192093
+      ],
+      "rounds": [
+        {
+          "round": 0,
+          "steps": 64,
+          "elapsedMs": 171.19999998807907,
+          "executionPosition": 1
+        },
+        {
+          "round": 1,
+          "steps": 64,
+          "elapsedMs": 171.39999997615814,
+          "executionPosition": 0
+        },
+        {
+          "round": 2,
+          "steps": 64,
+          "elapsedMs": 168.30000001192093,
+          "executionPosition": 1
+        },
+        {
+          "round": 3,
+          "steps": 64,
+          "elapsedMs": 169.30000001192093,
+          "executionPosition": 0
+        }
+      ],
+      "roundStability": {
+        "supported": true,
+        "samples": [
+          {
+            "round": 0,
+            "steps": 64,
+            "elapsedMs": 171.19999998807907,
+            "executionPosition": 1,
+            "stepsPerSecond": 373.8317757269651
+          },
+          {
+            "round": 1,
+            "steps": 64,
+            "elapsedMs": 171.39999997615814,
+            "executionPosition": 0,
+            "stepsPerSecond": 373.3955659795942
+          },
+          {
+            "round": 2,
+            "steps": 64,
+            "elapsedMs": 168.30000001192093,
+            "executionPosition": 1,
+            "stepsPerSecond": 380.2733214228567
+          },
+          {
+            "round": 3,
+            "steps": 64,
+            "elapsedMs": 169.30000001192093,
+            "executionPosition": 0,
+            "stepsPerSecond": 378.0271706762762
+          }
+        ],
+        "meanStepsPerSecond": 376.38195845142303,
+        "standardDeviationStepsPerSecond": 2.8840683488854477,
+        "coefficientOfVariation": 0.007662610505433337,
+        "minimumStepsPerSecond": 373.3955659795942,
+        "maximumStepsPerSecond": 380.2733214228567,
+        "maxToMinRatio": 1.0184194887939253,
+        "lastToFirstRatio": 1.0112226814886258,
+        "maxAllowedCoefficientOfVariation": 0.1,
+        "stable": true,
+        "executionPositionEffect": {
+          "positions": [
+            {
+              "position": 0,
+              "samples": 2,
+              "meanStepsPerSecond": 375.71136832793525
+            },
+            {
+              "position": 1,
+              "samples": 2,
+              "meanStepsPerSecond": 377.05254857491093
+            }
+          ],
+          "secondToFirstRatio": 1.0035697089841717,
+          "relativeDifference": 0.0035633489248363603
+        }
+      },
+      "profileSteps": 7,
+      "elapsedMs": 680.1999999880791,
+      "stepsPerSecond": 376.3598941553757,
+      "loss": 0.4367745816707611,
+      "lossBreakdown": {
+        "loss": 0.4367745816707611,
+        "l1": 0.32023194432258606,
+        "dssim": 0.9029451608657837,
+        "tileOverflow": 0,
+        "coverage": 0.25284069776535034,
+        "pairCount": 26646,
+        "maxTileOccupancy": 2153,
+        "meanStopRank": 246.63339233398438,
+        "visibleSplats": 21696,
+        "capacitySplats": 30000,
+        "viewIndex": 1,
+        "frameIndex": 5,
+        "tileOverflowTotal": 0,
+        "maxTileOccupancyEver": 2379,
+        "objectiveStep": 390,
+        "activeUpdateSplats": 30000,
+        "dormantUpdateSplats": 0,
+        "projectionVjpHalfSaturations": 0,
+        "projectionVjpHalfSaturationsTotal": 0,
+        "cycleMeanLoss": 0.4536654016769984,
+        "cycleMeanL1": 0.3394371187862228,
+        "cycleMeanDssim": 0.910578449640204,
+        "cycleSamples": 272,
+        "cycleComplete": true
+      },
+      "profile": {
+        "supported": true,
+        "samples": 7,
+        "totalMedianMs": 2.361674,
+        "totalP95Ms": 2.5508588999999997,
+        "gpuSpanMedianMs": 2.364464,
+        "gpuSpanP95Ms": 2.5634433,
+        "phaseContract": {
+          "backward": "raster derivative and projected-gradient accumulation",
+          "update": "one 3D projection/covariance VJP per splat plus Adam"
+        },
+        "maintenanceIncluded": false,
+        "maintenanceDispatches": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "phaseMedianMs": {
+          "targetDecode": 0.002167,
+          "clear": 0.023917,
+          "project": 0.060374,
+          "sort": 0.103582,
+          "finalize": 0.001792,
+          "forward": 0.920152,
+          "ssimStats": 0.024207,
+          "ssimGradient": 0.024666,
+          "metrics": 0.009208,
+          "backward": 0.955652,
+          "update": 0.196497
+        },
+        "phaseP95Ms": {
+          "targetDecode": 0.002762699999999999,
+          "clear": 0.07781109999999994,
+          "project": 0.07661969999999999,
+          "sort": 0.1568808,
+          "finalize": 0.0019454000000000001,
+          "forward": 1.0930738999999998,
+          "ssimStats": 0.0244457,
+          "ssimGradient": 0.0268329,
+          "metrics": 0.009403400000000001,
+          "backward": 1.0835332,
+          "update": 0.2060596
+        }
+      },
+      "memoryPlan": {
+        "targetPageBytes": 110592,
+        "packedTargetPageBytes": 27648,
+        "targetFrameBankFormat": "rgba8unorm-rgb+weight-u8x127/v1",
+        "tileCapacity": 4096,
+        "tileSize": 8,
+        "pairCapacity": 442368,
+        "checkpointStride": 16,
+        "requestedCheckpointStride": 16,
+        "checkpointPrecision": "packed-f16",
+        "checkpointOrder": "pixel-major",
+        "checkpointBytes": 14155776,
+        "pairDataBytes": 3538944,
+        "gradientAccumulatorBytes": 1440000,
+        "rasterProjectionBytes": 960000,
+        "projectionVjpBytes": 1440000,
+        "projectionVjpPrecision": "packed-f16",
+        "projectionLayout": "split-compact",
+        "ssimLayout": "separable",
+        "ssimScratchBytes": 552960,
+        "pairGradientBytes": 0,
+        "sampledDepthOrderCacheBytes": 0,
+        "capacityScaledBytes": 19506432,
+        "bytesPerCapacitySplat": 650.2144,
+        "allocatedBytes": 38817600,
+        "bufferBytes": {
+          "parameterPingPong": 5760000,
+          "optimizerMoments": 5760000,
+          "densityStats": 480000,
+          "gradientAccumulator": 1440000,
+          "projections": 2400000,
+          "parameterReadback": 2880000,
+          "previewSort": 786432,
+          "sampleIndices": 4,
+          "sampledWorkspace": 864,
+          "targetPage": 110592,
+          "packedTargetPage": 27648,
+          "cameraData": 1800,
+          "rasterPairs": 3539376,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageWorkspace": 1465344,
+          "configAndTelemetry": 9732,
+          "previewGeometry": 32
+        },
+        "storageBufferLimit": 134217728,
+        "nativeShaderF16": true,
+        "backwardMode": "staged-project3d",
+        "backwardGranularity": "checkpoint-block",
+        "gradientRecordFloats": 12,
+        "timestampQuerySupported": true,
+        "timestampQueryEnabled": true,
+        "sharePairPacket": false,
+        "staticWarmupSteps": 0,
+        "metricCycleSteps": 272,
+        "dormantSlotSparseUpdate": true,
+        "initialActiveUpdateSlots": 30000,
+        "updateSlotCapacity": 30000,
+        "initialDormantUpdateSlots": 0
+      },
+      "validity": {
+        "finiteLoss": true,
+        "zeroTileOverflow": true,
+        "zeroProjectionVjpHalfSaturations": true,
+        "stableRounds": true,
+        "valid": true,
+        "reasons": []
+      }
+    }
+  ],
+  "experiment": {
+    "id": "precision",
+    "controlId": "staged-split-f32",
+    "candidateId": "staged-split-packed-f16",
+    "order": "control-first"
+  },
+  "comparison": {
+    "controlId": "staged-split-f32",
+    "candidateId": "staged-split-packed-f16",
+    "candidateThroughputSpeedup": 1.0208762128614053,
+    "candidateGpuTimeSpeedup": 1.0705923202890804,
+    "lossDelta": 0.0003628730773925781,
+    "allocatedByteDelta": -960000,
+    "validForPromotion": false
+  },
+  "validity": {
+    "correctnessAndStabilityPassed": true,
+    "hostEnvironmentPassed": false,
+    "promotable": false,
+    "reasons": [
+      "preflight: Competing process CPU fraction 0.4031 exceeds 0.35.",
+      "preflight: Apple GPU utilization 48% exceeds 35%.",
+      "preflight: Swap used fraction 0.975 exceeds 0.9.",
+      "preflight: Swap uses 0.487 of physical memory, exceeding 0.25.",
+      "postflight: Apple GPU utilization 39% exceeds 35%.",
+      "postflight: Swap used fraction 0.972 exceeds 0.9.",
+      "postflight: Swap uses 0.486 of physical memory, exceeding 0.25."
+    ]
+  },
+  "execution": {
+    "orchestrator": "Bun",
+    "webGpuRuntime": "headless Chromium/Dawn",
+    "headless": true,
+    "browserExecutable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  },
+  "requestedResourcePlan": {
+    "schema": "dynaworld-browser-tiled-resource-plan/v1",
+    "raster": [
+      96,
+      72
+    ],
+    "sourceRaster": [
+      96,
+      72
+    ],
+    "dataset": {
+      "sourceFrameBytes": 7962624,
+      "sourceBackgroundBytes": 1990656,
+      "sourceResidentBytes": 9953280,
+      "scaledBytes": 0,
+      "decodedAtlasBytes": 442368,
+      "totalBytes": 10395648,
+      "channelBytes": 1
+    },
+    "variants": [
+      {
+        "id": "staged-split-f32",
+        "allocatedBytes": 39777600,
+        "bufferBytes": {
+          "parameterPingPong": 5760000,
+          "optimizerMoments": 5760000,
+          "densityStats": 480000,
+          "gradientAccumulator": 1440000,
+          "projections": 3360000,
+          "parameterReadback": 2880000,
+          "previewSort": 786432,
+          "sampleIndices": 4,
+          "sampledWorkspace": 864,
+          "targetPage": 110592,
+          "packedTargetPage": 27648,
+          "cameraData": 1800,
+          "rasterPairs": 3539376,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageWorkspace": 1465344,
+          "configAndTelemetry": 9732,
+          "previewGeometry": 32
+        },
+        "bindingBytes": {
+          "gradientAccumulator": 1440000,
+          "rasterProjections": 960000,
+          "projectionVjp": 2400000,
+          "targetPage": 110592,
+          "pairData": 3538944,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageRecord": 552960
+        },
+        "largestBinding": {
+          "label": "transmittanceCheckpoints",
+          "byteLength": 14155776
+        },
+        "checkpoint": {
+          "stride": 16,
+          "blocksPerTile": 256,
+          "byteLength": 14155776
+        },
+        "pixelCount": 6912,
+        "tileCount": 108,
+        "pairCapacity": 442368,
+        "projectionVjpPrecision": "f32"
+      },
+      {
+        "id": "staged-split-packed-f16",
+        "allocatedBytes": 38817600,
+        "bufferBytes": {
+          "parameterPingPong": 5760000,
+          "optimizerMoments": 5760000,
+          "densityStats": 480000,
+          "gradientAccumulator": 1440000,
+          "projections": 2400000,
+          "parameterReadback": 2880000,
+          "previewSort": 786432,
+          "sampleIndices": 4,
+          "sampledWorkspace": 864,
+          "targetPage": 110592,
+          "packedTargetPage": 27648,
+          "cameraData": 1800,
+          "rasterPairs": 3539376,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageWorkspace": 1465344,
+          "configAndTelemetry": 9732,
+          "previewGeometry": 32
+        },
+        "bindingBytes": {
+          "gradientAccumulator": 1440000,
+          "rasterProjections": 960000,
+          "projectionVjp": 1440000,
+          "targetPage": 110592,
+          "pairData": 3538944,
+          "transmittanceCheckpoints": 14155776,
+          "fullImageRecord": 552960
+        },
+        "largestBinding": {
+          "label": "transmittanceCheckpoints",
+          "byteLength": 14155776
+        },
+        "checkpoint": {
+          "stride": 16,
+          "blocksPerTile": 256,
+          "byteLength": 14155776
+        },
+        "pixelCount": 6912,
+        "tileCount": 108,
+        "pairCapacity": 442368,
+        "projectionVjpPrecision": "packed-f16"
+      }
+    ],
+    "gpuBufferBytes": 78595200,
+    "retainedInitialParamsBytes": 5760000,
+    "knownWorkingSetBytes": 94750848,
+    "fixedBrowserHeadroomBytes": 536870912,
+    "workingSetMultiplier": 1.5,
+    "minimumAvailableMemoryBytes": 678997184,
+    "portableStorageBufferLimit": 134217728,
+    "valid": true,
+    "reasons": [],
+    "limitations": [
+      "GPU bytes are WebGPU buffer allocations; Apple unified memory is shared with the host.",
+      "Decoded image and browser-runtime peaks are estimated, not driver allocation telemetry.",
+      "The browser still validates every binding against the selected adapter before training."
+    ]
+  },
+  "hostDiagnostics": {
+    "schema": "dynaworld-benchmark-host-diagnostics/v1",
+    "policy": "record",
+    "thresholds": {
+      "maxCpuBusyFraction": 0.85,
+      "maxLoadPerLogicalCpu": 0.75,
+      "maxCompetingCpuFraction": 0.35,
+      "maxPreflightGpuUtilizationPercent": 35,
+      "minAvailableMemoryFraction": 0.1,
+      "minAvailableMemoryBytes": 678997184,
+      "maxSwapUsedFraction": 0.9,
+      "maxSwapUsedToMemoryFraction": 0.25
+    },
+    "postflightCooldownMs": 10000,
+    "preflight": {
+      "schema": "dynaworld-benchmark-host-snapshot/v1",
+      "recordedAt": "2026-07-31T07:21:53.646Z",
+      "platform": "darwin",
+      "architecture": "arm64",
+      "sampleMs": 1000,
+      "logicalCpuCount": 10,
+      "loadAverage1m": 4.2827,
+      "loadAverage5m": 4.2988,
+      "loadAverage15m": 4.1855,
+      "loadPerLogicalCpu": 0.4283,
+      "cpuBusyFraction": 0.2505,
+      "cpuBusySource": "top-second-sample",
+      "totalMemoryBytes": 25769803776,
+      "availableMemoryFraction": 0.41,
+      "availableMemoryBytes": 10565619548,
+      "memoryAvailabilitySource": "memory_pressure",
+      "swap": {
+        "totalBytes": 12884901888,
+        "usedBytes": 12561940480,
+        "usedFraction": 0.9749348958333334
+      },
+      "processPressure": {
+        "available": true,
+        "activeProcessCount": 16,
+        "competingCpuPercent": 403.1,
+        "competingCpuFraction": 0.4031,
+        "categoryCpuPercent": {
+          "developer-tool": 305.4,
+          "system-ui": 38.4,
+          "browser": 31.8,
+          "other": 12.1,
+          "game-client": 10.1,
+          "media": 3.2,
+          "runtime": 2.1
+        },
+        "topProcesses": [
+          {
+            "name": "Codex (Renderer)",
+            "category": "developer-tool",
+            "cpuPercent": 279.8,
+            "memoryPercent": 5.1
+          },
+          {
+            "name": "WindowServer",
+            "category": "system-ui",
+            "cpuPercent": 38.4,
+            "memoryPercent": 0.3
+          },
+          {
+            "name": "Google Chrome Helper",
+            "category": "browser",
+            "cpuPercent": 15.3,
+            "memoryPercent": 0.3
+          },
+          {
+            "name": "codex",
+            "category": "developer-tool",
+            "cpuPercent": 14.3,
+            "memoryPercent": 2.5
+          },
+          {
+            "name": "Codex (Service)",
+            "category": "developer-tool",
+            "cpuPercent": 11.3,
+            "memoryPercent": 0.3
+          },
+          {
+            "name": "Google Chrome Helper (Renderer)",
+            "category": "browser",
+            "cpuPercent": 11,
+            "memoryPercent": 1.5
+          },
+          {
+            "name": "Battle.net",
+            "category": "game-client",
+            "cpuPercent": 6,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "coreaudiod",
+            "category": "other",
+            "cpuPercent": 5.5,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "duetexpertd",
+            "category": "other",
+            "cpuPercent": 3.4,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "Activity Monitor",
+            "category": "other",
+            "cpuPercent": 3.2,
+            "memoryPercent": 0.2
+          },
+          {
+            "name": "VTDecoderXPCService",
+            "category": "media",
+            "cpuPercent": 3.2,
+            "memoryPercent": 0
+          },
+          {
+            "name": "Google Chrome Helper (Renderer)",
+            "category": "browser",
+            "cpuPercent": 3.1,
+            "memoryPercent": 0.6
+          }
+        ]
+      },
+      "appleGpu": {
+        "available": true,
+        "deviceUtilizationPercent": 48,
+        "rendererUtilizationPercent": 47,
+        "tilerUtilizationPercent": 48,
+        "allocatedSystemMemoryBytes": 6441287680,
+        "inUseSystemMemoryBytes": 972832768,
+        "lastSubmissionProcess": {
+          "name": "Google Chrome Helper",
+          "category": "browser"
+        }
+      },
+      "thermal": {
+        "thermalWarning": false,
+        "performanceWarning": false
+      },
+      "limitations": [
+        "Process names are sanitized basenames; command arguments and PIDs are omitted.",
+        "Driver GPU utilization is a pre/post snapshot, not per-process GPU accounting.",
+        "Round variance remains the in-run detector for nonlinear contention and throttling."
+      ],
+      "assessment": {
+        "quiet": false,
+        "warnings": [
+          "Competing process CPU fraction 0.4031 exceeds 0.35.",
+          "Apple GPU utilization 48% exceeds 35%.",
+          "Swap used fraction 0.975 exceeds 0.9.",
+          "Swap uses 0.487 of physical memory, exceeding 0.25."
+        ],
+        "thresholds": {
+          "maxCpuBusyFraction": 0.85,
+          "maxLoadPerLogicalCpu": 0.75,
+          "maxCompetingCpuFraction": 0.35,
+          "maxPreflightGpuUtilizationPercent": 35,
+          "minAvailableMemoryFraction": 0.1,
+          "minAvailableMemoryBytes": 678997184,
+          "maxSwapUsedFraction": 0.9,
+          "maxSwapUsedToMemoryFraction": 0.25
+        }
+      }
+    },
+    "postflight": {
+      "schema": "dynaworld-benchmark-host-snapshot/v1",
+      "recordedAt": "2026-07-31T07:22:26.674Z",
+      "platform": "darwin",
+      "architecture": "arm64",
+      "sampleMs": 1000,
+      "logicalCpuCount": 10,
+      "loadAverage1m": 3.4429,
+      "loadAverage5m": 4.0938,
+      "loadAverage15m": 4.1143,
+      "loadPerLogicalCpu": 0.3443,
+      "cpuBusyFraction": 0.2002,
+      "cpuBusySource": "top-second-sample",
+      "totalMemoryBytes": 25769803776,
+      "availableMemoryFraction": 0.42,
+      "availableMemoryBytes": 10823317586,
+      "memoryAvailabilitySource": "memory_pressure",
+      "swap": {
+        "totalBytes": 12884901888,
+        "usedBytes": 12519997440,
+        "usedFraction": 0.9716796875
+      },
+      "processPressure": {
+        "available": true,
+        "activeProcessCount": 16,
+        "competingCpuPercent": 136,
+        "competingCpuFraction": 0.136,
+        "categoryCpuPercent": {
+          "system-ui": 40.5,
+          "browser": 34.9,
+          "developer-tool": 31.9,
+          "game-client": 16.4,
+          "other": 6.2,
+          "media": 6.1
+        },
+        "topProcesses": [
+          {
+            "name": "WindowServer",
+            "category": "system-ui",
+            "cpuPercent": 40.5,
+            "memoryPercent": 0.4
+          },
+          {
+            "name": "Codex (Service)",
+            "category": "developer-tool",
+            "cpuPercent": 17.4,
+            "memoryPercent": 0.3
+          },
+          {
+            "name": "Google Chrome Helper",
+            "category": "browser",
+            "cpuPercent": 14.1,
+            "memoryPercent": 0.4
+          },
+          {
+            "name": "Codex (Renderer)",
+            "category": "developer-tool",
+            "cpuPercent": 10.6,
+            "memoryPercent": 3
+          },
+          {
+            "name": "Google Chrome Helper (Renderer)",
+            "category": "browser",
+            "cpuPercent": 8.8,
+            "memoryPercent": 1.1
+          },
+          {
+            "name": "Battle.net",
+            "category": "game-client",
+            "cpuPercent": 6.9,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "coreaudiod",
+            "category": "other",
+            "cpuPercent": 6.2,
+            "memoryPercent": 0.1
+          },
+          {
+            "name": "Google Chrome Helper (Renderer)",
+            "category": "browser",
+            "cpuPercent": 4.4,
+            "memoryPercent": 0.9
+          },
+          {
+            "name": "VTDecoderXPCService",
+            "category": "media",
+            "cpuPercent": 4.1,
+            "memoryPercent": 0
+          },
+          {
+            "name": "Google Chrome",
+            "category": "browser",
+            "cpuPercent": 3.9,
+            "memoryPercent": 1.5
+          },
+          {
+            "name": "codex",
+            "category": "developer-tool",
+            "cpuPercent": 3.9,
+            "memoryPercent": 3.2
+          },
+          {
+            "name": "Google Chrome Helper",
+            "category": "browser",
+            "cpuPercent": 3.7,
+            "memoryPercent": 0.3
+          }
+        ]
+      },
+      "appleGpu": {
+        "available": true,
+        "deviceUtilizationPercent": 39,
+        "rendererUtilizationPercent": 38,
+        "tilerUtilizationPercent": 39,
+        "allocatedSystemMemoryBytes": 6509559808,
+        "inUseSystemMemoryBytes": 860389376,
+        "lastSubmissionProcess": {
+          "name": "Codex (Service)",
+          "category": "developer-tool"
+        }
+      },
+      "thermal": {
+        "thermalWarning": false,
+        "performanceWarning": false
+      },
+      "limitations": [
+        "Process names are sanitized basenames; command arguments and PIDs are omitted.",
+        "Driver GPU utilization is a pre/post snapshot, not per-process GPU accounting.",
+        "Round variance remains the in-run detector for nonlinear contention and throttling."
+      ],
+      "assessment": {
+        "quiet": false,
+        "warnings": [
+          "Apple GPU utilization 39% exceeds 35%.",
+          "Swap used fraction 0.972 exceeds 0.9.",
+          "Swap uses 0.486 of physical memory, exceeding 0.25."
+        ],
+        "thresholds": {
+          "maxCpuBusyFraction": 0.85,
+          "maxLoadPerLogicalCpu": 0.75,
+          "maxCompetingCpuFraction": 0.35,
+          "maxPreflightGpuUtilizationPercent": 35,
+          "minAvailableMemoryFraction": 0.1,
+          "minAvailableMemoryBytes": 678997184,
+          "maxSwapUsedFraction": 0.9,
+          "maxSwapUsedToMemoryFraction": 0.25
+        }
+      }
+    },
+    "assessment": {
+      "quiet": false,
+      "warnings": [
+        "preflight: Competing process CPU fraction 0.4031 exceeds 0.35.",
+        "preflight: Apple GPU utilization 48% exceeds 35%.",
+        "preflight: Swap used fraction 0.975 exceeds 0.9.",
+        "preflight: Swap uses 0.487 of physical memory, exceeding 0.25.",
+        "postflight: Apple GPU utilization 39% exceeds 35%.",
+        "postflight: Swap used fraction 0.972 exceeds 0.9.",
+        "postflight: Swap uses 0.486 of physical memory, exceeding 0.25."
+      ]
+    },
+    "limitations": [
+      "Quiet pre/post snapshots cannot prove the GPU was uncontended for every instant.",
+      "Per-round throughput variance detects intermittent stalls but not constant-rate contention.",
+      "The cooldown reduces, but cannot mathematically identify, residual driver utilization.",
+      "Use matched alternating variants and repeat reversed-start runs for promotion evidence."
+    ]
+  },
+  "artifact": {
+    "runId": "precision_30k_rgba8_control_first_long_diagnostic",
+    "outputMode": "auto-named",
+    "filenameTimeZone": "Asia/Seoul"
+  }
+}

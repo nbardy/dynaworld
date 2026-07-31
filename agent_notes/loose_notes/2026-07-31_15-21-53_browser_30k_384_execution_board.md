@@ -47,6 +47,22 @@ This is browser systems work. It does not promote trajectory-gated dynamic
 - That run was correctly rejected for timing: Apple GPU utilization was 36%,
   and 10.15 GiB of used swap equaled 39.4% of physical memory. No performance
   result from that host state is promotable.
+- The storage-only packed projection VJP now uses a 48-byte cold packet instead
+  of 80 bytes. World-space variances are normalized by `geometryScale^2`
+  before half packing and restored before the VJP; an explicit counter rejects
+  NaNs or FP16-range saturation. A live Apple WebGPU A/B with eight visible
+  anisotropic splats measured relative gradient L2 `2.87e-4`, cosine
+  `0.99999996`, zero sign flips, zero saturation, and bit-identical forward
+  pixels and objective.
+- `e56de5e` prepares the canonical 384x288 export through the existing
+  calibrated loader and exporter contracts. Its sparse timestamp replay fixed
+  a 6.67 GiB retained-RGB defect in the legacy eager export path; real 96x72
+  equivalence was pixel exact. The actual 384 bundle remains ungenerated
+  because swap occupancy is above the explicit 75% export ceiling.
+- The RGBA8 frame-bank audit found a larger host-memory lever than projection
+  FP16: source PNG RGB is already 8-bit, so a shared compact 384 bank is
+  121.5 MiB rather than 486 MiB. Motion weights require an explicit
+  `u8 / 127` alpha contract; backgrounds remain FP32 in the first lane.
 
 ## Resource Derivation For 30K / 384x288
 
@@ -63,7 +79,7 @@ checkpoint storage     = 110,592 * 128 * 8 bytes = 108 MiB
 image/SSIM workspace   ~= 22.4 MiB
 30K capacity state     ~= 19.5 MiB
 one RGBA32F page       = 1.6875 MiB
-estimated GPU buffers  ~= 206 MiB total
+estimated GPU buffers  ~= 204.7 MiB with the 48-byte projection VJP
 largest one binding    = 108 MiB < 128 MiB adapter binding limit
 ```
 
@@ -221,3 +237,35 @@ Stop and preserve a diagnostic artifact when:
 - an apparent speedup depends on initial variant order;
 - a precision lane wins throughput but produces a material matched-loss or
   short-convergence regression.
+
+## 2026-07-31 Completion Update
+
+- **T1 complete:** the main thread, optimizer worker, and validation worker
+  share one immutable mixed-format dataset backing when cross-origin isolation
+  permits `SharedArrayBuffer`; structured clone remains the explicit fallback.
+- **T2 complete:** clear and Adam dispatch over the exact active prefix, and
+  newly activated tail slots start with zero gradients and moments.
+- **T3 correctness complete, promotion deferred:** the 48-byte packed-FP16 VJP
+  packet passes forward/objective parity and all 9 gradient-family gates with
+  zero current or cumulative half-range saturation. Reversed-order timings do
+  not establish a speed win, so FP32 VJP remains the conservative default.
+- **T4 code complete, asset generation pending:** the canonical exporter can
+  emit real 384x288 atlases without retaining the legacy multi-gigabyte RGB
+  fanout. The real bundle was not generated under the current swap pressure.
+- **T5 core mechanical cycle complete; promotion acceptance incomplete:** the
+  30K/384x288 packed path finished all 272 train-camera/time pairs at finite
+  loss, zero current/cumulative tile overflow, zero half saturation, and a
+  205.09 MiB WebGPU allocation. The observed 239.3 steps/s and 4.369 ms median
+  timestamped GPU span are diagnostic only: host contention failed, no
+  reversed-start repeat ran, and preview, validation, and topology maintenance
+  were excluded.
+- **T6 remains:** the 384 benchmark deliberately nearest-expands the checked-in
+  96x72 targets. It proves allocation, scheduling, raster coverage, and
+  backward execution, not recovery of real 384-detail content or a quality
+  improvement over the canonical 96x72 run.
+
+The compact host contract is now RGBA8 RGB plus `u8 / 127` normalized loss
+weights, with FP32 backgrounds. At 384x288 this makes the scaled frame plus
+background bank 151.875 MiB instead of 516.375 MiB. RGBA8 is storage only: the
+selected target page is decoded to FP32, and the raster, SSIM statistics, loss,
+gradients, and optimizer remain floating point.

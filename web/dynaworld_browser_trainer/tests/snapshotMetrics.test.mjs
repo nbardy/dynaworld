@@ -10,6 +10,7 @@ import {
 	spatialDetailMetrics,
 	summarizeSplatParameters,
 } from "../snapshotMetrics.js";
+import { FRAME_BANK_FORMAT_RGBA8 } from "../dataset.js";
 import { SPLAT_FLOATS, projectAnisotropicGaussianCpu } from "../trainerWebGpu3d.js";
 
 const identityCamera = {
@@ -239,6 +240,34 @@ test("train and heldout selections aggregate only their requested view/frame pix
 	assert.ok(heldout.mse > 0);
 	assert.ok(heldout.ssim < 1);
 	assert.ok(heldout.lowPassMse > 0);
+});
+
+test("snapshot metrics decode compact targets on demand without changing RGB metrics", () => {
+	const dataset = makeDataset({ width: 12, height: 12 });
+	const params = makeParams([
+		{ center: [0, 0, 2], scales: [0.22, 0.18, 0.14], color: [0.8, 0.25, 0.1], opacity: 0.8 },
+	]);
+	const target = renderSnapshotFrame(dataset, params);
+	setTarget(dataset, 0, 0, target.rgb);
+	for (let pixel = 0; pixel < dataset.width * dataset.height; pixel += 1) {
+		for (let channel = 0; channel < 3; channel += 1) {
+			const index = pixel * 4 + channel;
+			dataset.frames[index] = Math.round(dataset.frames[index] * 255) / 255;
+		}
+	}
+	const floatMetrics = computeSnapshotMetrics(dataset, params);
+	const compactFrames = Uint8Array.from(dataset.frames, (value, index) =>
+		index % 4 === 3 ? 127 : Math.round(value * 255));
+	const compactDataset = {
+		...dataset,
+		frames: compactFrames,
+		frameBank: { format: FRAME_BANK_FORMAT_RGBA8, data: compactFrames },
+	};
+	const compactMetrics = computeSnapshotMetrics(compactDataset, params);
+	for (const metric of ["mse", "mae", "psnr", "ssim", "detailMae", "lowPassMse"]) {
+		assert.equal(compactMetrics[metric], floatMetrics[metric], metric);
+	}
+	assert.deepEqual(compactMetrics.snapshots[0].target, floatMetrics.snapshots[0].target);
 });
 
 test("snapshot update ratios report independent 24-float parameter families", () => {

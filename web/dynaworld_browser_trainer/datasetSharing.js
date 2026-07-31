@@ -1,3 +1,8 @@
+import {
+	BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+	resolveFrameBank,
+} from "./dataset.js";
+
 const SHARED_MODE = "shared-array-buffer";
 const CLONED_MODE = "structured-clone";
 
@@ -18,9 +23,10 @@ function isSharedBuffer(buffer, scope = globalThis) {
 }
 
 function readOnlyRoots(dataset) {
-	const roots = [requireFloat32Array(dataset?.frames, "dataset.frames")];
-	if (dataset.backgrounds != null) {
-		roots.push(requireFloat32Array(dataset.backgrounds, "dataset.backgrounds"));
+	const roots = [resolveFrameBank(dataset).data];
+	const backgrounds = dataset?.backgroundBank?.data ?? dataset?.backgrounds;
+	if (backgrounds != null) {
+		roots.push(requireFloat32Array(backgrounds, "dataset.backgroundBank.data"));
 	} else if (dataset.background != null) {
 		roots.push(requireFloat32Array(dataset.background, "dataset.background"));
 	}
@@ -36,6 +42,17 @@ function copyToShared(view, SharedBuffer) {
 }
 
 function rebuildDatasetAliases(dataset) {
+	const frameBank = resolveFrameBank(dataset);
+	dataset.frameBank = frameBank;
+	dataset.frames = frameBank.data;
+	const backgroundData = dataset.backgroundBank?.data ?? dataset.backgrounds ?? dataset.background;
+	if (backgroundData != null) {
+		dataset.backgroundBank = {
+			format: dataset.backgroundBank?.format ?? BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+			data: requireFloat32Array(backgroundData, "dataset.backgroundBank.data"),
+		};
+		dataset.backgrounds = dataset.backgroundBank.data;
+	}
 	const pixels = Number(dataset.width) * Number(dataset.height);
 	const frameValuesPerView = pixels * Number(dataset.frameCount) * 4;
 	const backgroundValuesPerView = pixels * 4;
@@ -54,13 +71,22 @@ function rebuildDatasetAliases(dataset) {
 				view * frameValuesPerView,
 				(view + 1) * frameValuesPerView,
 			);
+			viewDataset.frameBank = {
+				format: dataset.frameBank.format,
+				data: viewDataset.frames,
+			};
 			if (dataset.backgrounds) {
 				viewDataset.background = dataset.backgrounds.subarray(
 					view * backgroundValuesPerView,
 					(view + 1) * backgroundValuesPerView,
 				);
+				viewDataset.backgroundBank = {
+					format: dataset.backgroundBank.format,
+					data: viewDataset.background,
+				};
 			} else if (view === 0 && dataset.background) {
 				viewDataset.background = dataset.background;
+				viewDataset.backgroundBank = dataset.backgroundBank;
 			}
 		}
 	}
@@ -90,6 +116,8 @@ export function datasetSharingCapability(scope = globalThis) {
 
 export function summarizeDatasetSharing(dataset, scope = globalThis) {
 	const roots = readOnlyRoots(dataset);
+	const frameBank = resolveFrameBank(dataset);
+	const backgrounds = dataset.backgroundBank?.data ?? dataset.backgrounds ?? dataset.background;
 	const readOnlyBytes = roots.reduce((sum, view) => sum + view.byteLength, 0);
 	const sharedRoots = roots.filter((view) => isSharedBuffer(view.buffer, scope));
 	const sharedBytes = sharedRoots.reduce((sum, view) => sum + view.byteLength, 0);
@@ -98,6 +126,10 @@ export function summarizeDatasetSharing(dataset, scope = globalThis) {
 		readOnlyBytes,
 		sharedBytes,
 		sharedBufferCount: sharedRoots.length,
+		frameBankFormat: frameBank.format,
+		frameBankBytes: frameBank.data.byteLength,
+		backgroundBankFormat: backgrounds ? BACKGROUND_BANK_FORMAT_RGBA32_FLOAT : null,
+		backgroundBankBytes: backgrounds?.byteLength ?? 0,
 	};
 }
 
@@ -128,17 +160,30 @@ export function prepareDatasetForWorkerSharing(dataset, scope = globalThis) {
 	const SharedBuffer = sharedArrayBufferConstructor(scope);
 	// SharedArrayBuffer cannot enforce read-only access. Admit only the decoded
 	// target banks; optimizer, seed, camera, and sampling arrays remain private.
-	dataset.frames = copyToShared(requireFloat32Array(dataset.frames, "dataset.frames"), SharedBuffer);
-	if (dataset.backgrounds != null) {
+	const frameBank = resolveFrameBank(dataset);
+	dataset.frames = copyToShared(frameBank.data, SharedBuffer);
+	dataset.frameBank = { format: frameBank.format, data: dataset.frames };
+	if (dataset.backgroundBank?.data != null || dataset.backgrounds != null) {
 		dataset.backgrounds = copyToShared(
-			requireFloat32Array(dataset.backgrounds, "dataset.backgrounds"),
+			requireFloat32Array(
+				dataset.backgroundBank?.data ?? dataset.backgrounds,
+				"dataset.backgroundBank.data",
+			),
 			SharedBuffer,
 		);
+		dataset.backgroundBank = {
+			format: dataset.backgroundBank?.format ?? BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+			data: dataset.backgrounds,
+		};
 	} else if (dataset.background != null) {
 		dataset.background = copyToShared(
 			requireFloat32Array(dataset.background, "dataset.background"),
 			SharedBuffer,
 		);
+		dataset.backgroundBank = {
+			format: BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+			data: dataset.background,
+		};
 	}
 	const hydrated = hydrateDatasetSharedViews(dataset, scope);
 	return {

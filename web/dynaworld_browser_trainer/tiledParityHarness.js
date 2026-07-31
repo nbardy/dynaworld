@@ -1,6 +1,12 @@
-import { loadCalibratedMulticamDataset } from "./dataset.js";
-import { renderSnapshotFrame } from "./snapshotMetrics.js";
-import { SPLAT_FLOATS } from "./trainerWebGpu3d.js";
+import {
+	FRAME_BANK_FORMAT_RGBA8,
+	FRAME_BANK_FORMAT_RGBA32_FLOAT,
+	loadCalibratedMulticamDataset,
+	readFrameBankValue,
+	readFrameLossWeight,
+} from "./dataset.js?v=20260731-compactfp16-5";
+import { renderSnapshotFrame } from "./snapshotMetrics.js?v=20260731-compactfp16-5";
+import { SPLAT_FLOATS } from "./trainerWebGpu3d.js?v=20260731-compactfp16-5";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
 	fullFramePairForStep,
@@ -8,10 +14,11 @@ import {
 	TILED_BACKWARD_MODES,
 	TILED_CHECKPOINT_ORDERS,
 	TILED_PROJECTION_LAYOUTS,
+	TILED_PROJECTION_VJP_PRECISIONS,
 	TILED_SSIM_LAYOUTS,
 	trainingBackgroundForStep,
 	windowedL1DssimCpu,
-} from "./trainerWebGpu3dTiled.js?v=20260731-fasttiles6";
+} from "./trainerWebGpu3dTiled.js?v=20260731-compactfp16-5";
 
 export const TILED_PARITY_DIAGNOSTIC_COMPONENTS = Object.freeze([11, 15]);
 
@@ -31,6 +38,9 @@ const THRESHOLDS = Object.freeze({
 	forwardRgbMaxAbs: 2e-4,
 	forwardRgbRmse: 2e-5,
 	forwardAlphaMaxAbs: 2e-4,
+	targetRgbMaxAbs: 1e-7,
+	// The compact weight reaches 2.0, where one f32 ULP is about 1.19e-7.
+	targetWeightMaxAbs: 2e-7,
 	objectiveAbs: 5e-5,
 	gradientAbs: 5e-5,
 	gradientRelative: 0.12,
@@ -108,7 +118,7 @@ function parityWeightRange(dataset, viewIndex, frameIndex) {
 	let minimum = Number.POSITIVE_INFINITY;
 	let maximum = Number.NEGATIVE_INFINITY;
 	for (let pixel = 0; pixel < pixels; pixel += 1) {
-		const weight = dataset.frames[source + pixel * 4 + 3];
+		const weight = readFrameLossWeight(dataset, source + pixel * 4);
 		minimum = Math.min(minimum, weight);
 		maximum = Math.max(maximum, weight);
 	}
@@ -188,6 +198,34 @@ export function summarizeForwardParity(gpuRgba, cpuRgb, cpuCoverage) {
 	};
 }
 
+export function summarizeTargetParity(gpuRgba, cpuRgb, cpuWeights) {
+	if (gpuRgba.length % 4 !== 0
+		|| cpuRgb.length !== gpuRgba.length / 4 * 3
+		|| cpuWeights.length !== gpuRgba.length / 4) {
+		throw new RangeError("Target parity requires matching packed RGBA, RGB, and weight arrays.");
+	}
+	let rgbMaxAbs = 0;
+	let weightMaxAbs = 0;
+	for (let pixel = 0; pixel < cpuWeights.length; pixel += 1) {
+		for (let channel = 0; channel < 3; channel += 1) {
+			rgbMaxAbs = Math.max(
+				rgbMaxAbs,
+				Math.abs(gpuRgba[pixel * 4 + channel] - cpuRgb[pixel * 3 + channel]),
+			);
+		}
+		weightMaxAbs = Math.max(
+			weightMaxAbs,
+			Math.abs(gpuRgba[pixel * 4 + 3] - cpuWeights[pixel]),
+		);
+	}
+	return {
+		rgbMaxAbs,
+		weightMaxAbs,
+		pass: rgbMaxAbs <= THRESHOLDS.targetRgbMaxAbs
+			&& weightMaxAbs <= THRESHOLDS.targetWeightMaxAbs,
+	};
+}
+
 function gradientCandidates(gradients, splatCount, family) {
 	const candidates = [];
 	for (let splatIndex = 0; splatIndex < splatCount; splatIndex += 1) {
@@ -224,10 +262,11 @@ export function extractTiledParityTarget(dataset, viewIndex, frameIndex) {
 	const rgb = new Float32Array(pixels * 3);
 	const pixelWeights = new Float32Array(pixels);
 	for (let pixel = 0; pixel < pixels; pixel += 1) {
-		rgb[pixel * 3] = dataset.frames[source + pixel * 4];
-		rgb[pixel * 3 + 1] = dataset.frames[source + pixel * 4 + 1];
-		rgb[pixel * 3 + 2] = dataset.frames[source + pixel * 4 + 2];
-		pixelWeights[pixel] = dataset.frames[source + pixel * 4 + 3];
+		const sourceBase = source + pixel * 4;
+		rgb[pixel * 3] = readFrameBankValue(dataset, sourceBase);
+		rgb[pixel * 3 + 1] = readFrameBankValue(dataset, sourceBase + 1);
+		rgb[pixel * 3 + 2] = readFrameBankValue(dataset, sourceBase + 2);
+		pixelWeights[pixel] = readFrameLossWeight(dataset, sourceBase);
 	}
 	return { rgb, pixelWeights };
 }
@@ -427,9 +466,11 @@ export function summarizeGradientParity(gradientChecks) {
 
 function failuresFor(report) {
 	const failures = [];
+	if (!report.target.pass) failures.push("GPU target-page decode parity");
 	if (!report.forward.pass) failures.push("forward raster parity");
 	if (!report.objective.pass) failures.push("training objective parity");
 	if (!report.gradients.pass) failures.push("analytic gradient parity");
+	if (!report.packing.pass) failures.push("projection VJP FP16 saturation");
 	return failures;
 }
 
@@ -448,13 +489,15 @@ export async function runTiledParityHarness({
 	backwardGranularity = TILED_BACKWARD_GRANULARITIES.PAIR,
 	checkpointOrder = TILED_CHECKPOINT_ORDERS.PIXEL_MAJOR,
 	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+	projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
 	ssimLayout = TILED_SSIM_LAYOUTS.NAIVE_2D,
 	sharePairPacket = false,
 	tileSize = 16,
+	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
 } = {}) {
 	if (!navigator.gpu) throw new Error("WebGPU is unavailable in this browser.");
 	onProgress("Loading calibrated Coffee Martini preset");
-	const sourceDataset = await loadCalibratedMulticamDataset();
+	const sourceDataset = await loadCalibratedMulticamDataset({ frameBankFormat });
 	const trainer = new DynamicSplatWebGpu3dTiledTrainer(null);
 	let report;
 	try {
@@ -468,6 +511,7 @@ export async function runTiledParityHarness({
 			backwardGranularity,
 			checkpointOrder,
 			projectionLayout,
+			projectionVjpPrecision,
 			ssimLayout,
 			sharePairPacket,
 			tileSize,
@@ -545,6 +589,11 @@ export async function runTiledParityHarness({
 				&& forwardSummary.rgb.rmse <= THRESHOLDS.forwardRgbRmse
 				&& forwardSummary.alpha.maxAbs <= THRESHOLDS.forwardAlphaMaxAbs,
 		};
+		const targetParity = summarizeTargetParity(
+			debug.targetRgba,
+			target.rgb,
+			target.pixelWeights,
+		);
 		const cpuObjective = windowedL1DssimCpu(
 			cpuTrainingRgb,
 			target.rgb,
@@ -579,6 +628,7 @@ export async function runTiledParityHarness({
 				name: dataset.name,
 				width: dataset.width,
 				height: dataset.height,
+				frameBankFormat,
 				viewIndex: debug.viewIndex,
 				camera: dataset.cameras[debug.viewIndex]?.name ?? null,
 				frameIndex: debug.frameIndex,
@@ -594,6 +644,7 @@ export async function runTiledParityHarness({
 				backwardGranularity: trainer.backwardGranularity,
 				checkpointOrder: trainer.checkpointOrder,
 				projectionLayout: trainer.projectionLayout,
+				projectionVjpPrecision: trainer.projectionVjpPrecision,
 				ssimLayout: trainer.ssimLayout,
 				sharePairPacket: trainer.sharePairPacket,
 				tileSize: trainer.tileSize,
@@ -608,9 +659,15 @@ export async function runTiledParityHarness({
 				motionWeighting: true,
 			},
 			thresholds: THRESHOLDS,
+			target: targetParity,
 			forward,
 			objective: objectiveParity(debug.metrics, cpuObjective),
 			gradients,
+			packing: {
+				halfSaturations: debug.metrics[16] ?? 0,
+				halfSaturationsTotal: debug.metrics[17] ?? 0,
+				pass: (debug.metrics[16] ?? 0) === 0 && (debug.metrics[17] ?? 0) === 0,
+			},
 			failures: [],
 		};
 		report.failures = failuresFor(report);
@@ -661,17 +718,23 @@ async function main() {
 			?? TILED_CHECKPOINT_ORDERS.PIXEL_MAJOR;
 		const projectionLayout = new URLSearchParams(location.search).get("projectionLayout")
 			?? TILED_PROJECTION_LAYOUTS.MONOLITHIC;
+		const projectionVjpPrecision = new URLSearchParams(location.search)
+			.get("projectionVjpPrecision") ?? TILED_PROJECTION_VJP_PRECISIONS.F32;
 		const ssimLayout = new URLSearchParams(location.search).get("ssimLayout")
 			?? TILED_SSIM_LAYOUTS.NAIVE_2D;
 		const tileSize = Number(new URLSearchParams(location.search).get("tileSize") ?? 16);
+		const frameBankFormat = new URLSearchParams(location.search).get("frameBank") === "f32"
+			? FRAME_BANK_FORMAT_RGBA32_FLOAT : FRAME_BANK_FORMAT_RGBA8;
 		const report = await runTiledParityHarness({
 			backwardMode,
 			backwardGranularity,
 			checkpointOrder,
 			projectionLayout,
+			projectionVjpPrecision,
 			ssimLayout,
 			sharePairPacket,
 			tileSize,
+			frameBankFormat,
 			onProgress(message) {
 				detail.textContent = message;
 			},

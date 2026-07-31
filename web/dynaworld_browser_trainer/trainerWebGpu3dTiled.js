@@ -7,14 +7,18 @@ import {
 	SPLAT_FLOATS,
 	makeInitialSplats,
 	rgbaFloatFrameBytes,
-} from "./trainerWebGpu3d.js?v=20260731-fasttiles6";
+} from "./trainerWebGpu3d.js?v=20260731-compactfp16-5";
+import {
+	FRAME_BANK_FORMAT_RGBA8,
+	resolveFrameBank,
+} from "./dataset.js?v=20260731-compactfp16-5";
 import {
 	BROWSER_ADAM_BETA1,
 	BROWSER_ADAM_BETA2,
 	BROWSER_ADAM_EPSILON,
 	DENSITY_STAT_DECAY,
 	browserLearningRates,
-} from "./trainingSchedule.js";
+} from "./trainingSchedule.js?v=20260731-compactfp16-5";
 
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 export const DEFAULT_TILE_SIZE = 16;
@@ -24,6 +28,9 @@ export const DEFAULT_CHECKPOINT_STRIDE = 16;
 const MONOLITHIC_PROJECTION_BYTES = 12 * 16;
 const RASTER_PROJECTION_BYTES = 2 * 16;
 const PROJECTION_VJP_BYTES = 5 * 16;
+const PACKED_PROJECTION_VJP_BYTES = 3 * 16;
+const TILED_COUNTER_BYTES = 10 * Uint32Array.BYTES_PER_ELEMENT;
+const TILED_METRICS_BYTES = 5 * 16;
 const SSIM_STATS_BYTES = 5 * 16;
 const DENSITY_START_STEP = 600;
 const DENSITY_INTERVAL = 100;
@@ -33,7 +40,7 @@ const TILED_CONFIG_BYTES = 176;
 const DIRECT_GRADIENT_FLOATS = SPLAT_FLOATS;
 const PROJECTED_GRADIENT_FLOATS = 12;
 const TILED_GPU_PHASES = Object.freeze([
-	"clear", "project", "sort", "finalize", "forward",
+	"targetDecode", "clear", "project", "sort", "finalize", "forward",
 	"ssimStats", "ssimGradient", "metrics", "backward", "update",
 ]);
 export const TILED_BACKWARD_MODES = Object.freeze({
@@ -51,6 +58,10 @@ export const TILED_CHECKPOINT_ORDERS = Object.freeze({
 export const TILED_PROJECTION_LAYOUTS = Object.freeze({
 	MONOLITHIC: "monolithic",
 	SPLIT_COMPACT: "split-compact",
+});
+export const TILED_PROJECTION_VJP_PRECISIONS = Object.freeze({
+	F32: "f32",
+	PACKED_F16: "packed-f16",
 });
 export const TILED_SSIM_LAYOUTS = Object.freeze({
 	NAIVE_2D: "naive-2d",
@@ -107,6 +118,16 @@ export function resolveTiledProjectionLayout(
 	if (!Object.values(TILED_PROJECTION_LAYOUTS).includes(value)) {
 		throw new RangeError(`projectionLayout must be one of: `
 			+ `${Object.values(TILED_PROJECTION_LAYOUTS).join(", ")}.`);
+	}
+	return value;
+}
+
+export function resolveTiledProjectionVjpPrecision(
+	value = TILED_PROJECTION_VJP_PRECISIONS.F32,
+) {
+	if (!Object.values(TILED_PROJECTION_VJP_PRECISIONS).includes(value)) {
+		throw new RangeError(`projectionVjpPrecision must be one of: `
+			+ `${Object.values(TILED_PROJECTION_VJP_PRECISIONS).join(", ")}.`);
 	}
 	return value;
 }
@@ -295,7 +316,10 @@ export function resolveTileCapacity(splatCount, requestedCapacity = null) {
 	// bounded tile-local sort avoids a non-portable 32 KiB+ workgroup allocation
 	// at 8K; counters[1] reports any scene that violates this measured bound.
 	const requested = requestedCapacity == null
-		? Math.min(nextPowerOfTwo(splatCount), DEFAULT_MAX_TILE_CAPACITY)
+		? Math.max(
+			DEFAULT_CHECKPOINT_STRIDE,
+			Math.min(nextPowerOfTwo(splatCount), DEFAULT_MAX_TILE_CAPACITY),
+		)
 		: Math.floor(Number(requestedCapacity));
 	if (!Number.isSafeInteger(requested) || requested < 8 || requested > DEFAULT_MAX_TILE_CAPACITY) {
 		throw new RangeError(`tileCapacity must be an integer from 8 through ${DEFAULT_MAX_TILE_CAPACITY}.`);
@@ -615,7 +639,7 @@ function writeTiledConfig(buffer, values) {
 	f32(144, 0.0001); f32(148, 0.0009);
 	f32(152, 0.03 * values.geometryScale); f32(156, values.geometryScale);
 	u32(160, values.activeSplatCount);
-	u32(164, 0); u32(168, 0); u32(172, 0);
+	u32(164, values.targetPacked ? 1 : 0); u32(168, 0); u32(172, 0);
 }
 
 const CONFIG_WGSL = `
@@ -653,6 +677,9 @@ const CONFIG_WGSL = `
 	struct CompactProjectionVjp {
 		cameraPointValid:vec4<f32>, jacobianSparse:vec4<f32>,
 		basisVariance0:vec4<f32>, basisVariance1:vec4<f32>, basisVariance2:vec4<f32>,
+	};
+	struct PackedCompactProjectionVjp {
+		cameraPointValid:vec4<f32>, packed0:vec4<u32>, packed1:vec4<u32>,
 	};
 	struct Camera {
 		row0:vec4<f32>, row1:vec4<f32>, row2:vec4<f32>, row3:vec4<f32>, intrinsics:vec4<f32>,
@@ -695,28 +722,112 @@ const CONFIG_WGSL = `
 			f32((packed>>20u)&0x3ffu))*(1.0/1023.0);
 		return select(vec3<f32>(0.0),rgb,(packed&0x80000000u)!=0u);
 	}
+	fn pack_compact_projection_vjp(
+		cameraPointValid:vec4<f32>,
+		jacobianSparse:vec4<f32>,
+		basisVariance0:vec4<f32>,
+		basisVariance1:vec4<f32>,
+		basisVariance2:vec4<f32>
+	)->PackedCompactProjectionVjp {
+		return PackedCompactProjectionVjp(
+			cameraPointValid,
+			vec4<u32>(
+				pack2x16float(clamp(jacobianSparse.xy,vec2<f32>(-65504.0),vec2<f32>(65504.0))),
+				pack2x16float(clamp(jacobianSparse.zw,vec2<f32>(-65504.0),vec2<f32>(65504.0))),
+				pack2x16float(clamp(basisVariance0.xy,vec2<f32>(-65504.0),vec2<f32>(65504.0))),
+				pack2x16float(clamp(basisVariance0.zw,vec2<f32>(-65504.0),vec2<f32>(65504.0)))),
+			vec4<u32>(
+				pack2x16float(clamp(basisVariance1.xy,vec2<f32>(-65504.0),vec2<f32>(65504.0))),
+				pack2x16float(clamp(basisVariance1.zw,vec2<f32>(-65504.0),vec2<f32>(65504.0))),
+				pack2x16float(clamp(basisVariance2.xy,vec2<f32>(-65504.0),vec2<f32>(65504.0))),
+				pack2x16float(clamp(basisVariance2.zw,vec2<f32>(-65504.0),vec2<f32>(65504.0)))));
+	}
+	fn half_packable(value:vec4<f32>)->bool {
+		// Comparisons also reject NaNs: both ordered bounds are false.
+		return all(value>=vec4<f32>(-65504.0))&&all(value<=vec4<f32>(65504.0));
+	}
 `;
 
-function projectWgsl(projectionLayout) {
+function targetDecodeWgsl() {
+	return `${CONFIG_WGSL}
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> packedTargets:array<u32>;
+	@group(0) @binding(2) var<storage,read_write> floatTargets:array<vec4<f32>>;
+	@compute @workgroup_size(256)
+	fn decode_target_page(@builtin(global_invocation_id) gid:vec3<u32>){
+		if(cfg.configPad0==0u||gid.x>=cfg.pixelCount){return;}
+		let packed=packedTargets[gid.x];
+		// RGBA8 is only the immutable dataset storage contract. Decode the selected
+		// page before training so raster values and loss gradients stay continuous.
+		let rgba=unpack4x8unorm(packed);
+		floatTargets[gid.x]=vec4<f32>(
+			rgba.xyz,
+			f32((packed>>24u)&0xffu)/127.0);
+	}`;
+}
+
+function projectWgsl(
+	projectionLayout,
+	projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
+) {
 	const split = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
-	const vjpType = split ? "CompactProjectionVjp" : "ProjectionVjp";
+	const packed = split
+		&& projectionVjpPrecision === TILED_PROJECTION_VJP_PRECISIONS.PACKED_F16;
+	const vjpType = packed
+		? "PackedCompactProjectionVjp"
+		: split ? "CompactProjectionVjp" : "ProjectionVjp";
+	const compactVjp = (cameraPoint, jacobian, basis0, basis1, basis2) => packed
+		? `pack_compact_projection_vjp(${cameraPoint},${jacobian},${basis0},${basis1},${basis2})`
+		: `CompactProjectionVjp(${cameraPoint},${jacobian},${basis0},${basis1},${basis2})`;
+	const storedVariances = packed ? "storedVariances" : "variances";
+	const packedVjpPreflight = packed ? `
+		// World-space variances can be subnormal in f16. Store them relative
+		// to scene scale, then restore world units in the one-per-splat VJP.
+		let varianceScale=max(cfg.geometryScale*cfg.geometryScale,1e-12);
+		let storedVariances=variances/varianceScale;
+		let packedJacobian=vec4<f32>(j0.x,j0.z,j1.y,j1.z);
+		let packedBasisVariance0=vec4<f32>(basis[0],storedVariances.x);
+		let packedBasisVariance1=vec4<f32>(basis[1],storedVariances.y);
+		let packedBasisVariance2=vec4<f32>(basis[2],storedVariances.z);
+		if(!half_packable(packedJacobian)
+			||!half_packable(packedBasisVariance0)
+			||!half_packable(packedBasisVariance1)
+			||!half_packable(packedBasisVariance2)){
+			atomicAdd(&counters[8],1u);
+			atomicAdd(&counters[9],1u);
+		}` : "";
 	const zeroVjp = split
-		? "CompactProjectionVjp(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0))"
+		? compactVjp(
+			"vec4<f32>(0.0)",
+			"vec4<f32>(0.0)",
+			"vec4<f32>(0.0)",
+			"vec4<f32>(0.0)",
+			"vec4<f32>(0.0)",
+		)
 		: `ProjectionVjp(
 			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
 			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
 			vec4<f32>(0.0),vec4<f32>(0.0))`;
 	const cameraPointVjp = split
-		? "CompactProjectionVjp(vec4<f32>(cp,0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0))"
+		? compactVjp(
+			"vec4<f32>(cp,0.0)",
+			"vec4<f32>(0.0)",
+			"vec4<f32>(0.0)",
+			"vec4<f32>(0.0)",
+			"vec4<f32>(0.0)",
+		)
 		: `ProjectionVjp(
 			vec4<f32>(cp,0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
 			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
 			vec4<f32>(0.0),vec4<f32>(0.0))`;
 	const validVjp = split
-		? `CompactProjectionVjp(
-			vec4<f32>(cp,1.0),vec4<f32>(j0.x,j0.z,j1.y,j1.z),
-			vec4<f32>(basis[0],variances.x),vec4<f32>(basis[1],variances.y),
-			vec4<f32>(basis[2],variances.z))`
+		? compactVjp(
+			"vec4<f32>(cp,1.0)",
+			"vec4<f32>(j0.x,j0.z,j1.y,j1.z)",
+			`vec4<f32>(basis[0],${storedVariances}.x)`,
+			`vec4<f32>(basis[1],${storedVariances}.y)`,
+			`vec4<f32>(basis[2],${storedVariances}.z)`,
+		)
 		: `ProjectionVjp(vec4<f32>(cp,1.0),vec4<f32>(j0,0.0),vec4<f32>(j1,0.0),
 			vec4<f32>(basis[0],0.0),vec4<f32>(basis[1],0.0),vec4<f32>(basis[2],0.0),
 			vec4<f32>(cameraRotation[0],0.0),vec4<f32>(cameraRotation[1],0.0),
@@ -724,8 +835,8 @@ function projectWgsl(projectionLayout) {
 	const projectionBindings = split ? `
 	@group(0) @binding(5) var<storage,read_write> rasterProjections:array<RasterProjection>;
 	@group(0) @binding(6) var<storage,read_write> counters:array<atomic<u32>>;
-	@group(0) @binding(7) var<storage,read_write> projectionVjps:array<CompactProjectionVjp>;
-	fn write_projection(index:u32,raster:RasterProjection,vjp:CompactProjectionVjp){
+	@group(0) @binding(7) var<storage,read_write> projectionVjps:array<${vjpType}>;
+	fn write_projection(index:u32,raster:RasterProjection,vjp:${vjpType}){
 		rasterProjections[index]=raster;projectionVjps[index]=vjp;
 	}` : `
 	@group(0) @binding(5) var<storage,read_write> projections:array<Projection>;
@@ -804,6 +915,7 @@ function projectWgsl(projectionLayout) {
 		let conic=vec3<f32>(covariance.z,-covariance.y,covariance.x)/determinant;
 		raster=RasterProjection(
 			vec4<f32>(center,conic.xy),vec4<f32>(conic.z,cp.z,opacity,timeWeight));
+		${packedVjpPreflight}
 		vjp=${validVjp};
 		write_projection(i,raster,vjp);
 		let qLimit=min(9.0,2.0*log(peak/cfg.alphaThreshold));
@@ -853,9 +965,11 @@ function clearWgsl(gradientFloats) {
 			atomicStore(&counters[2],0u);atomicStore(&counters[3],0u);
 			atomicStore(&counters[6],0u);
 			atomicStore(&counters[7],cfg.activeSplatCount);
+			atomicStore(&counters[8],0u);
 			indirectArgs[0]=0u;indirectArgs[1]=1u;indirectArgs[2]=1u;
 			metrics[0]=vec4<f32>(0.0);metrics[1]=vec4<f32>(0.0);
 			metrics[2]=vec4<f32>(0.0);metrics[3]=vec4<f32>(0.0);
+			metrics[4]=vec4<f32>(0.0);
 		}
 	}`;
 }
@@ -1452,6 +1566,8 @@ function metricsWgsl() {
 			metrics[3]=vec4<f32>(
 				f32(atomicLoad(&counters[4])),f32(atomicLoad(&counters[5])),
 				f32(cfg.step),f32(cfg.activeSplatCount));
+			metrics[4]=vec4<f32>(
+				f32(atomicLoad(&counters[8])),f32(atomicLoad(&counters[9])),0.0,0.0);
 			cycleMetrics[cfg.step%arrayLength(&cycleMetrics)]=vec4<f32>(
 				metrics[0].xyz,f32(cfg.step+1u));
 		}
@@ -1615,9 +1731,35 @@ function backwardWgsl(
 }
 
 function projectedGradientVjpWgsl(projectionType = "Projection") {
-	const compact = projectionType === "CompactProjectionVjp";
+	const packed = projectionType === "PackedCompactProjectionVjp";
+	const compact = packed || projectionType === "CompactProjectionVjp";
 	const cameraArgument = compact ? ",camera:Camera" : "";
-	const projectionUnpack = compact ? `
+	const packedProjectionUnpack = `
+			let sparse01=unpack2x16float(proj.packed0.x);
+			let sparse23=unpack2x16float(proj.packed0.y);
+			let basisVariance0=vec4<f32>(
+				unpack2x16float(proj.packed0.z),
+				unpack2x16float(proj.packed0.w));
+			let basisVariance1=vec4<f32>(
+				unpack2x16float(proj.packed1.x),
+				unpack2x16float(proj.packed1.y));
+			let basisVariance2=vec4<f32>(
+				unpack2x16float(proj.packed1.z),
+				unpack2x16float(proj.packed1.w));
+			let sparse=vec4<f32>(sparse01,sparse23);
+			let j0=vec3<f32>(sparse.x,0.0,sparse.y);
+			let j1=vec3<f32>(0.0,sparse.z,sparse.w);
+			let basis=mat3x3<f32>(
+				basisVariance0.xyz,
+				basisVariance1.xyz,
+				basisVariance2.xyz);
+			let normalizedVariances=vec3<f32>(
+				basisVariance0.w,
+				basisVariance1.w,
+				basisVariance2.w);
+			let variances=normalizedVariances
+				*max(cfg.geometryScale*cfg.geometryScale,1e-12);`;
+	const compactProjectionUnpack = `
 			let sparse=proj.jacobianSparse;
 			let j0=vec3<f32>(sparse.x,0.0,sparse.y);
 			let j1=vec3<f32>(0.0,sparse.z,sparse.w);
@@ -1628,14 +1770,18 @@ function projectedGradientVjpWgsl(projectionType = "Projection") {
 			let variances=vec3<f32>(
 				proj.basisVariance0.w,
 				proj.basisVariance1.w,
-				proj.basisVariance2.w);
+				proj.basisVariance2.w);`;
+	const sharedCameraUnpack = `
 			// Camera rows are shared by every splat in the step. Rebuild the
 			// column-major world-to-camera rotation here instead of storing the
 			// same 48 bytes in every cold VJP packet.
 			let cameraRotation=mat3x3<f32>(
 				vec3<f32>(camera.row0.x,camera.row1.x,camera.row2.x),
 				vec3<f32>(camera.row0.y,camera.row1.y,camera.row2.y),
-				vec3<f32>(camera.row0.z,camera.row1.z,camera.row2.z));`
+				vec3<f32>(camera.row0.z,camera.row1.z,camera.row2.z));`;
+	const projectionUnpack = compact ? `
+			${packed ? packedProjectionUnpack : compactProjectionUnpack}
+			${sharedCameraUnpack}`
 		: `
 			let j0=proj.jacobian0.xyz;let j1=proj.jacobian1.xyz;
 			let basis=mat3x3<f32>(proj.basis0.xyz,proj.basis1.xyz,proj.basis2.xyz);
@@ -2036,11 +2182,14 @@ function checkpointBlockBackwardWgsl(
 function updateWgsl(
 	backwardMode = TILED_BACKWARD_MODES.DIRECT_3D,
 	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+	projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
 ) {
 	const staged = backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D;
 	const compactProjection = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
-	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
-		? "CompactProjectionVjp" : "Projection";
+	const projectionType = compactProjection
+		? projectionVjpPrecision === TILED_PROJECTION_VJP_PRECISIONS.PACKED_F16
+			? "PackedCompactProjectionVjp" : "CompactProjectionVjp"
+		: "Projection";
 	const gradientLoader = staged ? `
 	fn load_projected_gradient(id:u32)->ProjectedGradient{
 		let base=id*${PROJECTED_GRADIENT_FLOATS}u;
@@ -2235,9 +2384,13 @@ function densityWgsl(gradientFloats) {
 
 function stagedGradientDebugWgsl(
 	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+	projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
 ) {
 	const compactProjection = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
-	const projectionType = compactProjection ? "CompactProjectionVjp" : "Projection";
+	const projectionType = compactProjection
+		? projectionVjpPrecision === TILED_PROJECTION_VJP_PRECISIONS.PACKED_F16
+			? "PackedCompactProjectionVjp" : "CompactProjectionVjp"
+		: "Projection";
 	return `${CONFIG_WGSL}
 	${projectedGradientVjpWgsl(projectionType)}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
@@ -2290,6 +2443,9 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.gradientFloats = DIRECT_GRADIENT_FLOATS;
 		this.tiledConfigBytes = new ArrayBuffer(TILED_CONFIG_BYTES);
 		this.activeSplatCount = this.initialSplatCount;
+		this.projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32;
+		this.compactTargetFrames = false;
+		this.targetDecodePending = false;
 	}
 
 	targetBufferByteLength(dataset) {
@@ -2305,10 +2461,17 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		if (this.targetPageKey !== pageKey) {
 			const sourceElementOffset = sourcePixelOffset * 4;
 			const source = staticWarmup ? this.dataset.backgrounds : this.dataset.frames;
-			this.device.queue.writeBuffer(target, 0, source.subarray(
-				sourceElementOffset,
-				sourceElementOffset + pixelCount * 4,
-			));
+			const page = source.subarray(sourceElementOffset, sourceElementOffset + pixelCount * 4);
+			if (!staticWarmup && this.compactTargetFrames) {
+				if (!this.buffers?.targetPacked) {
+					throw new Error("Compact target upload requires the packed target-page buffer.");
+				}
+				this.device.queue.writeBuffer(this.buffers.targetPacked, 0, page);
+				this.targetDecodePending = true;
+			} else {
+				this.device.queue.writeBuffer(target, 0, page);
+				this.targetDecodePending = false;
+			}
 			this.targetPageKey = pageKey;
 		}
 		return sourcePixelOffset;
@@ -2316,6 +2479,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 
 	initializeTargetBuffer(target) {
 		this.targetPageKey = null;
+		if (this.compactTargetFrames) return;
 		this.uploadTargetPage(target, this.trainViewIndices[0], 0);
 	}
 
@@ -2332,6 +2496,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		sharePairPacket = false,
 		tileSize = DEFAULT_TILE_SIZE,
 		projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+		projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
 		ssimLayout = TILED_SSIM_LAYOUTS.NAIVE_2D,
 		profileGpu = false,
 	} = {}) {
@@ -2345,6 +2510,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.backwardGranularity = resolveTiledBackwardGranularity(backwardGranularity);
 		this.tileSize = resolveTiledTileSize(tileSize);
 		this.projectionLayout = resolveTiledProjectionLayout(projectionLayout);
+		const requestedProjectionVjpPrecision =
+			resolveTiledProjectionVjpPrecision(projectionVjpPrecision);
+		this.projectionVjpPrecision = this.projectionLayout
+			=== TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+			? requestedProjectionVjpPrecision : TILED_PROJECTION_VJP_PRECISIONS.F32;
 		this.ssimLayout = resolveTiledSsimLayout(ssimLayout);
 		if (this.backwardGranularity === TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK
 			&& this.backwardMode !== TILED_BACKWARD_MODES.STAGED_PROJECT_3D) {
@@ -2360,6 +2530,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			&& this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D
 			&& this.backwardGranularity === TILED_BACKWARD_GRANULARITIES.PAIR;
 		this.requestTimestampQueries = Boolean(profileGpu);
+		this.compactTargetFrames = resolveFrameBank(dataset).format === FRAME_BANK_FORMAT_RGBA8;
 		const capacity = resolveTiledCapacity(splatCount, growthCapacity);
 		await super.init(dataset, { splatCount: capacity, requiredWorkgroupStorageSize: 24576 });
 		const bindGroupError = await this.tiledBindGroupValidation;
@@ -2401,8 +2572,9 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				);
 		const separableSsim = this.ssimLayout === TILED_SSIM_LAYOUTS.SEPARABLE;
 		const moduleSources = {
+			targetDecode: targetDecodeWgsl(),
 			clear: clearWgsl(this.gradientFloats),
-			project: projectWgsl(this.projectionLayout),
+			project: projectWgsl(this.projectionLayout, this.projectionVjpPrecision),
 			sort: sortWgsl(this.tileCapacity, this.backwardGranularity, this.projectionLayout),
 			finalize: finalizeWgsl(this.backwardGranularity),
 			forward: forwardWgsl(
@@ -2413,7 +2585,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			),
 			metrics: metricsWgsl(),
 			backward: backwardSource,
-			update: updateWgsl(this.backwardMode, this.projectionLayout),
+			update: updateWgsl(
+				this.backwardMode,
+				this.projectionLayout,
+				this.projectionVjpPrecision,
+			),
 			density: densityWgsl(this.gradientFloats),
 			...(separableSsim ? {
 				ssimHorizontal: separableSsimHorizontalWgsl(),
@@ -2433,13 +2609,17 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		));
 		const debugModule = this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D
 			? await checkedModule(this.device, "tiled-staged-gradient-debug",
-				stagedGradientDebugWgsl(this.projectionLayout))
+				stagedGradientDebugWgsl(
+					this.projectionLayout,
+					this.projectionVjpPrecision,
+				))
 			: null;
 		const pipeline = (module, entryPoint) => this.device.createComputePipeline({
 			label: `tiled-${entryPoint}`, layout: "auto", compute: { module, entryPoint },
 		});
 		this.device.pushErrorScope("validation");
 		this.tiledPipelines = {
+			targetDecode: pipeline(modules.targetDecode, "decode_target_page"),
 			clear: pipeline(modules.clear, "clear_step"),
 			project: pipeline(modules.project, "project_and_bin"),
 			sort: pipeline(modules.sort, "sort_tiles"),
@@ -2516,23 +2696,28 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		const rasterProjectionBytes = this.splatCount * (splitProjection
 			? RASTER_PROJECTION_BYTES : MONOLITHIC_PROJECTION_BYTES);
 		const projectionVjpBytes = splitProjection
-			? this.splatCount * PROJECTION_VJP_BYTES : 0;
+			? this.splatCount * (
+				this.projectionVjpPrecision === TILED_PROJECTION_VJP_PRECISIONS.PACKED_F16
+					? PACKED_PROJECTION_VJP_BYTES : PROJECTION_VJP_BYTES
+			) : 0;
+		const packedTargetPageBytes = this.compactTargetFrames ? this.pixelCount * 4 : 4;
 		Object.assign(this.buffers, {
 			tiledConfig: makeBuffer(TILED_CONFIG_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST),
 			projections: makeBuffer(rasterProjectionBytes),
 			tileCounts: makeBuffer(this.tileCount * 4),
 			pairData: makeBuffer(tiledBufferBytes.pairData),
-			counters: makeBuffer(32),
+			counters: makeBuffer(TILED_COUNTER_BYTES),
 			indirectArgs: makeBuffer(12, GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT
 				| GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC),
 			renderedTrain: makeBuffer(this.pixelCount * 16),
+			targetPacked: makeBuffer(packedTargetPageBytes),
 			checkpoints: makeBuffer(tiledBufferBytes.checkpoints),
 			stopRanks: makeBuffer(this.pixelCount * 4),
 			ssimStats: makeBuffer(this.pixelCount * SSIM_STATS_BYTES),
 			pixelLoss: makeBuffer(this.pixelCount * 16),
 			pixelGrad: makeBuffer(this.pixelCount * 16),
 			gradientAtoms: makeBuffer(tiledBufferBytes.gradientAccumulator),
-			tiledMetrics: makeBuffer(64),
+			tiledMetrics: makeBuffer(TILED_METRICS_BYTES),
 		});
 		if (splitProjection) {
 			this.buffers.projectionVjp = makeBuffer(projectionVjpBytes);
@@ -2560,7 +2745,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.cycleMetricCount = this.trainViewIndices.length * this.dataset.frameCount;
 		this.cycleMetricBytes = this.cycleMetricCount * 16;
 		this.buffers.metricsReadback.destroy();
-		this.buffers.metricsReadback = makeBuffer(64 + this.cycleMetricBytes,
+		this.buffers.metricsReadback = makeBuffer(TILED_METRICS_BYTES + this.cycleMetricBytes,
 			GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
 		this.buffers.cycleMetrics = makeBuffer(this.cycleMetricBytes);
 		const size = (value) => Number(value?.size ?? 0);
@@ -2576,6 +2761,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			sampleIndices: size(this.buffers.sampleIndices),
 			sampledWorkspace: size(this.buffers.sampleGradients) + size(this.buffers.sampleLosses),
 			targetPage: size(this.buffers.target),
+			packedTargetPage: size(this.buffers.targetPacked),
 			cameraData: size(this.buffers.cameras) + size(this.buffers.trainViews)
 				+ size(this.buffers.cameraSampleIndices) + size(this.buffers.cameraSampleRanges),
 			rasterPairs: size(this.buffers.pairData) + size(this.buffers.tileCounts),
@@ -2596,6 +2782,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		const allocatedBytes = Object.values(bufferBytes).reduce((sum, value) => sum + value, 0);
 		this.memoryPlan = Object.freeze({
 			targetPageBytes: this.targetBufferByteLength(this.dataset),
+			packedTargetPageBytes,
+			targetFrameBankFormat: resolveFrameBank(this.dataset).format,
 			tileCapacity: this.tileCapacity,
 			tileSize: this.tileSize,
 			pairCapacity: this.pairCapacity,
@@ -2608,6 +2796,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			gradientAccumulatorBytes: tiledBufferBytes.gradientAccumulator,
 			rasterProjectionBytes,
 			projectionVjpBytes,
+			projectionVjpPrecision: this.projectionVjpPrecision,
 			projectionLayout: this.projectionLayout,
 			ssimLayout: this.ssimLayout,
 			ssimScratchBytes: size(this.buffers.ssimScratch),
@@ -2715,6 +2904,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			]),
 		};
 		this.tiledBindGroups = {
+			targetDecode: group(this.tiledPipelines.targetDecode, [
+				buffer(0, this.buffers.tiledConfig),
+				buffer(1, this.buffers.targetPacked),
+				buffer(2, this.buffers.target),
+			]),
 			clear: group(this.tiledPipelines.clear, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.tileCounts),
 				buffer(2, this.buffers.counters), buffer(3, this.buffers.indirectArgs),
@@ -2845,9 +3039,22 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			randomBackground,
 			checkpointStride: this.checkpointStride,
 			activeSplatCount: this.activeSplatCount,
+			targetPacked: this.targetDecodePending,
 		});
 		this.device.queue.writeBuffer(this.buffers.tiledConfig, 0, this.tiledConfigBytes);
 		const encoder = this.device.createCommandEncoder();
+		if (this.targetDecodePending || this.activeTimestampProfile) {
+			this.encodePass(
+				encoder,
+				this.tiledPipelines.targetDecode,
+				this.tiledBindGroups.targetDecode,
+				this.targetDecodePending ? ceilDiv(this.pixelCount, 256) : 1,
+				1,
+				1,
+				"targetDecode",
+			);
+		}
+		this.targetDecodePending = false;
 		this.encodePass(encoder, this.tiledPipelines.clear, this.tiledBindGroups.clear,
 			activeDispatch.clearWorkgroups,
 			1, 1, "clear");
@@ -3022,23 +3229,33 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		if (submissionError) throw new Error(`Tiled full-frame submission failed: ${submissionError.message}`);
 		this.device.pushErrorScope("validation");
 		const encoder = this.device.createCommandEncoder();
-		encoder.copyBufferToBuffer(this.buffers.tiledMetrics, 0, this.buffers.metricsReadback, 0, 64);
+		encoder.copyBufferToBuffer(
+			this.buffers.tiledMetrics,
+			0,
+			this.buffers.metricsReadback,
+			0,
+			TILED_METRICS_BYTES,
+		);
 		encoder.copyBufferToBuffer(
 			this.buffers.cycleMetrics,
 			0,
 			this.buffers.metricsReadback,
-			64,
+			TILED_METRICS_BYTES,
 			this.cycleMetricBytes,
 		);
 		this.device.queue.submit([encoder.finish()]);
 		const readbackError = await this.device.popErrorScope();
 		if (readbackError) throw new Error(`Tiled metric readback failed: ${readbackError.message}`);
-		const readbackBytes = 64 + this.cycleMetricBytes;
+		const readbackBytes = TILED_METRICS_BYTES + this.cycleMetricBytes;
 		await this.buffers.metricsReadback.mapAsync(GPUMapMode.READ, 0, readbackBytes);
 		const bytes = this.buffers.metricsReadback.getMappedRange(0, readbackBytes).slice(0);
 		this.buffers.metricsReadback.unmap();
-		const values = new Float32Array(bytes, 0, 16);
-		const cycleRecords = new Float32Array(bytes, 64, this.cycleMetricCount * 4);
+		const values = new Float32Array(bytes, 0, TILED_METRICS_BYTES / 4);
+		const cycleRecords = new Float32Array(
+			bytes,
+			TILED_METRICS_BYTES,
+			this.cycleMetricCount * 4,
+		);
 		const objectiveStep = Math.round(values[14]);
 		const phaseStartStep = objectiveStep < this.staticWarmupSteps ? 0 : this.staticWarmupSteps;
 		const cycle = summarizeCycleMetrics(
@@ -3062,6 +3279,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			objectiveStep,
 			activeUpdateSplats: values[15],
 			dormantUpdateSplats: values[9] - values[15],
+			projectionVjpHalfSaturations: values[16],
+			projectionVjpHalfSaturationsTotal: values[17],
 			cycleMeanLoss: cycle?.loss ?? values[0],
 			cycleMeanL1: cycle?.l1 ?? values[1],
 			cycleMeanDssim: cycle?.dssim ?? values[2],
@@ -3073,8 +3292,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 
 	async readTiledStepDebugStateUnlocked() {
 		const renderedBytes = this.pixelCount * 16;
+		const targetBytes = this.pixelCount * 16;
 		const gradientBytes = this.splatCount * SPLAT_BYTES;
-		const metricsOffset = renderedBytes + gradientBytes;
+		const targetOffset = renderedBytes;
+		const gradientOffset = targetOffset + targetBytes;
+		const metricsOffset = gradientOffset + gradientBytes;
 		const staged = this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D;
 		const materializedGradients = staged ? this.device.createBuffer({
 			label: "tiled-staged-full-gradients",
@@ -3083,7 +3305,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		}) : null;
 		const readback = this.device.createBuffer({
 			label: "tiled-step-debug-readback",
-			size: metricsOffset + 64,
+			size: metricsOffset + TILED_METRICS_BYTES,
 			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 		});
 		try {
@@ -3114,13 +3336,26 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			}
 			encoder.copyBufferToBuffer(this.buffers.renderedTrain, 0, readback, 0, renderedBytes);
 			encoder.copyBufferToBuffer(
+				this.buffers.target,
+				0,
+				readback,
+				targetOffset,
+				targetBytes,
+			);
+			encoder.copyBufferToBuffer(
 				materializedGradients ?? this.buffers.gradientAtoms,
 				0,
 				readback,
-				renderedBytes,
+				gradientOffset,
 				gradientBytes,
 			);
-			encoder.copyBufferToBuffer(this.buffers.tiledMetrics, 0, readback, metricsOffset, 64);
+			encoder.copyBufferToBuffer(
+				this.buffers.tiledMetrics,
+				0,
+				readback,
+				metricsOffset,
+				TILED_METRICS_BYTES,
+			);
 			this.device.queue.submit([encoder.finish()]);
 			await readback.mapAsync(GPUMapMode.READ);
 			const bytes = readback.getMappedRange().slice(0);
@@ -3129,8 +3364,21 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				viewIndex: this.lastCameraBatch?.[0] ?? null,
 				frameIndex: this.lastFrameIndex ?? null,
 				renderedRgba: new Float32Array(bytes, 0, this.pixelCount * 4).slice(),
-				gradients: new Float32Array(bytes, renderedBytes, this.splatCount * SPLAT_FLOATS).slice(),
-				metrics: new Float32Array(bytes, metricsOffset, 16).slice(),
+				targetRgba: new Float32Array(
+					bytes,
+					targetOffset,
+					this.pixelCount * 4,
+				).slice(),
+				gradients: new Float32Array(
+					bytes,
+					gradientOffset,
+					this.splatCount * SPLAT_FLOATS,
+				).slice(),
+				metrics: new Float32Array(
+					bytes,
+					metricsOffset,
+					TILED_METRICS_BYTES / 4,
+				).slice(),
 			};
 		} finally {
 			if (readback.mapState === "mapped") readback.unmap();

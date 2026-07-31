@@ -2,6 +2,177 @@ const DEFAULT_VIDEO_URL =
 	"/data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/previews/neural3d_coffee_martini_cam00_to_cam10.mp4";
 const CALIBRATED_MULTICAM_URL = "./coffee_martini_train17_holdout1.json";
 
+export const FRAME_BANK_FORMAT_RGBA8 = "rgba8unorm-rgb+weight-u8x127/v1";
+export const FRAME_BANK_FORMAT_RGBA32_FLOAT = "rgba32float/v1";
+export const BACKGROUND_BANK_FORMAT_RGBA32_FLOAT = "rgba32float/v1";
+export const FRAME_WEIGHT_BYTE_SCALE = 127;
+
+function inferFrameBankFormat(data) {
+	if (data instanceof Uint8Array) return FRAME_BANK_FORMAT_RGBA8;
+	if (data instanceof Float32Array) return FRAME_BANK_FORMAT_RGBA32_FLOAT;
+	throw new TypeError("Frame-bank data must be a Uint8Array or Float32Array.");
+}
+
+export function resolveFrameBank(source) {
+	const data = source?.frameBank?.data ?? source?.frames ?? source?.data ?? source;
+	const format = source?.frameBank?.format ?? source?.format ?? inferFrameBankFormat(data);
+	if (!(data instanceof Uint8Array) && !(data instanceof Float32Array)) {
+		throw new TypeError("Frame-bank data must be a Uint8Array or Float32Array.");
+	}
+	if (format === FRAME_BANK_FORMAT_RGBA8 && !(data instanceof Uint8Array)) {
+		throw new TypeError(`${FRAME_BANK_FORMAT_RGBA8} requires Uint8Array data.`);
+	}
+	if (format === FRAME_BANK_FORMAT_RGBA32_FLOAT && !(data instanceof Float32Array)) {
+		throw new TypeError(`${FRAME_BANK_FORMAT_RGBA32_FLOAT} requires Float32Array data.`);
+	}
+	if (format !== FRAME_BANK_FORMAT_RGBA8 && format !== FRAME_BANK_FORMAT_RGBA32_FLOAT) {
+		throw new RangeError(`Unsupported frame-bank format: ${format}`);
+	}
+	return { format, data };
+}
+
+export function readFrameBankValue(source, index) {
+	const bank = resolveFrameBank(source);
+	if (!Number.isSafeInteger(index) || index < 0 || index >= bank.data.length) {
+		throw new RangeError("Frame-bank index is out of range.");
+	}
+	return bank.format === FRAME_BANK_FORMAT_RGBA8
+		? Math.fround(bank.data[index] / 255)
+		: bank.data[index];
+}
+
+export function readFrameLossWeight(source, pixelBase) {
+	const bank = resolveFrameBank(source);
+	const index = pixelBase + 3;
+	if (!Number.isSafeInteger(pixelBase) || pixelBase < 0 || index >= bank.data.length) {
+		throw new RangeError("Frame-bank pixel offset is out of range.");
+	}
+	return bank.format === FRAME_BANK_FORMAT_RGBA8
+		? bank.data[index] / FRAME_WEIGHT_BYTE_SCALE
+		: bank.data[index];
+}
+
+function writeFrameLossWeight(bank, pixelBase, weight) {
+	if (bank.format === FRAME_BANK_FORMAT_RGBA8) {
+		const clamped = Math.min(2, Math.max(0, Number(weight)));
+		bank.data[pixelBase + 3] = Math.round(clamped * FRAME_WEIGHT_BYTE_SCALE);
+	} else {
+		bank.data[pixelBase + 3] = Number(weight);
+	}
+}
+
+export function writeNormalizedFrameLossWeights(source, frameBase, weights) {
+	const bank = resolveFrameBank(source);
+	if (!Number.isSafeInteger(frameBase) || frameBase < 0 || frameBase % 4 !== 0
+		|| frameBase + weights.length * 4 > bank.data.length) {
+		throw new RangeError("Normalized frame weights require a complete in-range RGBA frame.");
+	}
+	for (let pixel = 0; pixel < weights.length; pixel += 1) {
+		if (!Number.isFinite(Number(weights[pixel]))) {
+			throw new TypeError("Normalized frame weights must be finite.");
+		}
+	}
+	if (bank.format !== FRAME_BANK_FORMAT_RGBA8) {
+		for (let pixel = 0; pixel < weights.length; pixel += 1) {
+			writeFrameLossWeight(bank, frameBase + pixel * 4, weights[pixel]);
+		}
+		return;
+	}
+
+	// The tiled objective divides by pixel count because normalized motion
+	// weights have mean one. Independent rounding breaks that invariant. Start
+	// from nearest bytes, then make the minimum-error one-byte corrections that
+	// restore an exact per-frame sum of 127 * pixels.
+	const scaled = new Float64Array(weights.length);
+	let encodedSum = 0;
+	for (let pixel = 0; pixel < weights.length; pixel += 1) {
+		const value = Math.min(2, Math.max(0, Number(weights[pixel])))
+			* FRAME_WEIGHT_BYTE_SCALE;
+		scaled[pixel] = value;
+		const encoded = Math.round(value);
+		bank.data[frameBase + pixel * 4 + 3] = encoded;
+		encodedSum += encoded;
+	}
+	const targetSum = FRAME_WEIGHT_BYTE_SCALE * weights.length;
+	const delta = targetSum - encodedSum;
+	if (delta === 0) return;
+	const direction = Math.sign(delta);
+	const candidates = [];
+	for (let pixel = 0; pixel < weights.length; pixel += 1) {
+		const index = frameBase + pixel * 4 + 3;
+		const encoded = bank.data[index];
+		if ((direction > 0 && encoded === FRAME_WEIGHT_BYTE_SCALE * 2)
+			|| (direction < 0 && encoded === 0)) continue;
+		const currentError = Math.abs(encoded - scaled[pixel]);
+		const adjustedError = Math.abs(encoded + direction - scaled[pixel]);
+		candidates.push({ pixel, cost: adjustedError - currentError });
+	}
+	candidates.sort((left, right) => left.cost - right.cost || left.pixel - right.pixel);
+	if (Math.abs(delta) > candidates.length) {
+		throw new RangeError("Compact normalized motion weights cannot preserve their mean.");
+	}
+	for (let index = 0; index < Math.abs(delta); index += 1) {
+		const pixel = candidates[index].pixel;
+		bank.data[frameBase + pixel * 4 + 3] += direction;
+	}
+}
+
+export function decodeFrameRgb(dataset, viewIndex, frameIndex, target = null) {
+	const pixels = Number(dataset.width) * Number(dataset.height);
+	const viewCount = Number(dataset.viewCount ?? 1);
+	if (!Number.isSafeInteger(viewIndex) || viewIndex < 0 || viewIndex >= viewCount
+		|| !Number.isSafeInteger(frameIndex) || frameIndex < 0 || frameIndex >= dataset.frameCount) {
+		throw new RangeError("Requested view/frame is outside the dataset.");
+	}
+	const bank = resolveFrameBank(dataset);
+	const sourceOffset = (viewIndex * dataset.frameCount + frameIndex) * pixels * 4;
+	if (sourceOffset + pixels * 4 > bank.data.length) {
+		throw new RangeError("Frame bank does not contain the requested view/frame.");
+	}
+	const result = target ?? new Float32Array(pixels * 3);
+	if (!(result instanceof Float32Array) || result.length !== pixels * 3) {
+		throw new RangeError("Decoded RGB target must be a Float32Array sized to one frame.");
+	}
+	for (let pixel = 0; pixel < pixels; pixel += 1) {
+		const sourceBase = sourceOffset + pixel * 4;
+		const targetBase = pixel * 3;
+		if (bank.format === FRAME_BANK_FORMAT_RGBA8) {
+			result[targetBase] = bank.data[sourceBase] / 255;
+			result[targetBase + 1] = bank.data[sourceBase + 1] / 255;
+			result[targetBase + 2] = bank.data[sourceBase + 2] / 255;
+		} else {
+			result[targetBase] = bank.data[sourceBase];
+			result[targetBase + 1] = bank.data[sourceBase + 1];
+			result[targetBase + 2] = bank.data[sourceBase + 2];
+		}
+	}
+	return result;
+}
+
+function attachPixelBanks(dataset, frameData, backgrounds, frameFormat = inferFrameBankFormat(frameData)) {
+	dataset.frameBank = { format: frameFormat, data: frameData };
+	dataset.backgroundBank = { format: BACKGROUND_BANK_FORMAT_RGBA32_FLOAT, data: backgrounds };
+	// These aliases keep existing consumers working while new code can inspect
+	// the format explicitly instead of guessing from the array constructor.
+	dataset.frames = dataset.frameBank.data;
+	dataset.backgrounds = dataset.backgroundBank.data;
+	dataset.background = backgrounds.subarray(0, dataset.width * dataset.height * 4);
+	return dataset;
+}
+
+function allocateFrameBank(length, format, scope = globalThis) {
+	const Constructor = format === FRAME_BANK_FORMAT_RGBA8 ? Uint8Array : Float32Array;
+	if (format !== FRAME_BANK_FORMAT_RGBA8 && format !== FRAME_BANK_FORMAT_RGBA32_FLOAT) {
+		throw new RangeError(`Unsupported frame-bank format: ${format}`);
+	}
+	const bytes = length * Constructor.BYTES_PER_ELEMENT;
+	const BufferConstructor = scope?.crossOriginIsolated === true
+		&& typeof scope?.SharedArrayBuffer === "function"
+		? scope.SharedArrayBuffer
+		: ArrayBuffer;
+	return new Constructor(new BufferConstructor(bytes));
+}
+
 function hash01(seed) {
 	let value = seed >>> 0;
 	value ^= value << 13;
@@ -41,15 +212,24 @@ function clampFrames(frames) {
 	}
 }
 
-function computeMeanBackground(frames, width, height, frameCount) {
+function computeMeanBackground(frames, width, height, frameCount, sourceOffset = 0) {
+	const bank = resolveFrameBank(frames);
 	const background = new Float32Array(width * height * 4);
 	const invFrames = 1 / Math.max(1, frameCount);
 	for (let f = 0; f < frameCount; f += 1) {
-		const frameOffset = f * width * height * 4;
+		const frameOffset = sourceOffset + f * width * height * 4;
 		for (let i = 0; i < width * height; i += 1) {
-			background[i * 4] += frames[frameOffset + i * 4] * invFrames;
-			background[i * 4 + 1] += frames[frameOffset + i * 4 + 1] * invFrames;
-			background[i * 4 + 2] += frames[frameOffset + i * 4 + 2] * invFrames;
+			const base = frameOffset + i * 4;
+			const target = i * 4;
+			if (bank.format === FRAME_BANK_FORMAT_RGBA8) {
+				background[target] += Math.fround(bank.data[base] / 255) * invFrames;
+				background[target + 1] += Math.fround(bank.data[base + 1] / 255) * invFrames;
+				background[target + 2] += Math.fround(bank.data[base + 2] / 255) * invFrames;
+			} else {
+				background[target] += bank.data[base] * invFrames;
+				background[target + 1] += bank.data[base + 1] * invFrames;
+				background[target + 2] += bank.data[base + 2] * invFrames;
+			}
 		}
 	}
 	for (let i = 0; i < width * height; i += 1) {
@@ -165,17 +345,15 @@ export function createProceduralDnerfMini({
 
 	clampFrames(frames);
 	const background = computeMeanBackground(frames, width, height, frameCount);
-	return {
+	return attachPixelBanks({
 		name: "Synthetic D-NeRF mini",
 		source: "procedural_blender_style",
 		width,
 		height,
 		frameCount,
-		frames,
-		background,
 		motionSamples: computeMotionSamples(frames, background, width, height, frameCount),
 		staticSamples: computeStaticSamples(frames, background, width, height, frameCount),
-	};
+	}, frames, background);
 }
 
 async function canFetch(url) {
@@ -295,18 +473,16 @@ export async function loadVideoFrameDataset({
 	}
 
 	const background = computeMeanBackground(frames, width, height, frameCount);
-	return {
+	return attachPixelBanks({
 		name: crop.label ? `${name} (${crop.label})` : name,
 		source: url,
 		cropMode,
 		width,
 		height,
 		frameCount,
-		frames,
-		background,
 		motionSamples: computeMotionSamples(frames, background, width, height, frameCount),
 		staticSamples: computeStaticSamples(frames, background, width, height, frameCount),
-	};
+	}, frames, background);
 }
 
 function makePreviewView(dataset, label) {
@@ -316,14 +492,46 @@ function makePreviewView(dataset, label) {
 		height: dataset.height,
 		frameCount: dataset.frameCount,
 		frames: dataset.frames,
+		frameBank: dataset.frameBank,
 		background: dataset.background,
+		backgroundBank: dataset.backgroundBank,
 	};
 }
 
-async function decodeVideoFrames({ url, width, height, frameTimesSeconds }) {
+function writeDecodedImage(targetBank, targetOffset, image) {
+	if (targetBank.format === FRAME_BANK_FORMAT_RGBA8) {
+		for (let pixel = 0; pixel < image.length / 4; pixel += 1) {
+			const sourceBase = pixel * 4;
+			const targetBase = targetOffset + sourceBase;
+			targetBank.data[targetBase] = image[sourceBase];
+			targetBank.data[targetBase + 1] = image[sourceBase + 1];
+			targetBank.data[targetBase + 2] = image[sourceBase + 2];
+			targetBank.data[targetBase + 3] = FRAME_WEIGHT_BYTE_SCALE;
+		}
+		return;
+	}
+	for (let pixel = 0; pixel < image.length / 4; pixel += 1) {
+		const sourceBase = pixel * 4;
+		const targetBase = targetOffset + sourceBase;
+		targetBank.data[targetBase] = image[sourceBase] / 255;
+		targetBank.data[targetBase + 1] = image[sourceBase + 1] / 255;
+		targetBank.data[targetBase + 2] = image[sourceBase + 2] / 255;
+		targetBank.data[targetBase + 3] = 1;
+	}
+}
+
+async function decodeVideoFramesInto({
+	url,
+	width,
+	height,
+	frameTimesSeconds,
+	target,
+	targetOffset = 0,
+}) {
 	if (!(await canFetch(url))) {
 		throw new Error(`Dataset video unavailable: ${url}`);
 	}
+	const targetBank = resolveFrameBank(target);
 	const video = document.createElement("video");
 	video.muted = true;
 	video.preload = "auto";
@@ -338,27 +546,27 @@ async function decodeVideoFrames({ url, width, height, frameTimesSeconds }) {
 		throw new Error("2D canvas unavailable for multicamera preload.");
 	}
 	const frameCount = frameTimesSeconds.length;
-	const frames = new Float32Array(width * height * frameCount * 4);
 	const availableDuration = Number.isFinite(video.duration) ? video.duration : frameTimesSeconds.at(-1);
 	for (let frame = 0; frame < frameCount; frame += 1) {
 		const time = Math.min(availableDuration * 0.999, frameTimesSeconds[frame]);
 		await seekVideo(video, time);
 		ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, width, height);
 		const image = ctx.getImageData(0, 0, width, height).data;
-		const offset = frame * width * height * 4;
-		for (let pixel = 0; pixel < width * height; pixel += 1) {
-			frames[offset + pixel * 4] = image[pixel * 4] / 255;
-			frames[offset + pixel * 4 + 1] = image[pixel * 4 + 1] / 255;
-			frames[offset + pixel * 4 + 2] = image[pixel * 4 + 2] / 255;
-			frames[offset + pixel * 4 + 3] = 1;
-		}
+		writeDecodedImage(targetBank, targetOffset + frame * width * height * 4, image);
 	}
 	video.removeAttribute("src");
 	video.load();
-	return frames;
 }
 
-async function decodeFrameAtlas({ url, width, height, frameCount }) {
+async function decodeFrameAtlasInto({
+	url,
+	width,
+	height,
+	frameCount,
+	target,
+	targetOffset = 0,
+}) {
+	const targetBank = resolveFrameBank(target);
 	const response = await fetch(url);
 	if (!response.ok) {
 		throw new Error(`Frame atlas unavailable: ${url}`);
@@ -375,18 +583,13 @@ async function decodeFrameAtlas({ url, width, height, frameCount }) {
 		bitmap.close();
 		throw new Error("2D canvas unavailable for frame-atlas decode.");
 	}
-	const frames = new Float32Array(width * height * frameCount * 4);
 	for (let frame = 0; frame < frameCount; frame += 1) {
 		ctx.clearRect(0, 0, width, height);
 		ctx.drawImage(bitmap, frame * width, 0, width, height, 0, 0, width, height);
 		const image = ctx.getImageData(0, 0, width, height).data;
-		const offset = frame * width * height * 4;
-		for (let pixel = 0; pixel < width * height * 4; pixel += 1) {
-			frames[offset + pixel] = image[pixel] / 255;
-		}
+		writeDecodedImage(targetBank, targetOffset + frame * width * height * 4, image);
 	}
 	bitmap.close();
-	return frames;
 }
 
 export const MOTION_LOSS_WEIGHT_MAX = 2;
@@ -409,47 +612,120 @@ export function normalizedMotionLossWeights(energies, maximumWeight = MOTION_LOS
 	return weights;
 }
 
+function motionCandidateIsWorse(left, right) {
+	return left.energy < right.energy || (left.energy === right.energy && left.packed > right.packed);
+}
+
+function siftMotionCandidateUp(heap, index) {
+	while (index > 0) {
+		const parent = Math.floor((index - 1) / 2);
+		if (!motionCandidateIsWorse(heap[index], heap[parent])) break;
+		[heap[index], heap[parent]] = [heap[parent], heap[index]];
+		index = parent;
+	}
+}
+
+function siftMotionCandidateDown(heap, index) {
+	for (;;) {
+		const left = index * 2 + 1;
+		if (left >= heap.length) return;
+		const right = left + 1;
+		let worse = left;
+		if (right < heap.length && motionCandidateIsWorse(heap[right], heap[left])) worse = right;
+		if (!motionCandidateIsWorse(heap[worse], heap[index])) return;
+		[heap[index], heap[worse]] = [heap[worse], heap[index]];
+		index = worse;
+	}
+}
+
+function keepTopMotionCandidate(heap, packed, energy, limit) {
+	if (heap.length < limit) {
+		heap.push({ packed, energy });
+		siftMotionCandidateUp(heap, heap.length - 1);
+		return;
+	}
+	const worst = heap[0];
+	if (worst.energy > energy || (worst.energy === energy && worst.packed < packed)) return;
+	heap[0] = { packed, energy };
+	siftMotionCandidateDown(heap, 0);
+}
+
+function frameRgbEnergy(frameBank, backgrounds, frameBase, backgroundBase) {
+	let dr;
+	let dg;
+	let db;
+	if (frameBank.format === FRAME_BANK_FORMAT_RGBA8) {
+		dr = Math.fround(frameBank.data[frameBase] / 255) - backgrounds[backgroundBase];
+		dg = Math.fround(frameBank.data[frameBase + 1] / 255) - backgrounds[backgroundBase + 1];
+		db = Math.fround(frameBank.data[frameBase + 2] / 255) - backgrounds[backgroundBase + 2];
+	} else {
+		dr = frameBank.data[frameBase] - backgrounds[backgroundBase];
+		dg = frameBank.data[frameBase + 1] - backgrounds[backgroundBase + 1];
+		db = frameBank.data[frameBase + 2] - backgrounds[backgroundBase + 2];
+	}
+	return (dr * dr + dg * dg + db * db) / 3;
+}
+
 export function computeMultiviewSamples(frames, backgrounds, width, height, frameCount, trainViewCount) {
+	const frameBank = resolveFrameBank(frames);
+	if (!(backgrounds instanceof Float32Array)) {
+		throw new TypeError("backgrounds must be a Float32Array.");
+	}
 	const pixels = width * height;
+	const maxSamples = 16384;
 	const motion = [];
-	const staticSamples = [];
+	let staticCount = 0;
 	for (let view = 0; view < trainViewCount; view += 1) {
 		for (let frame = 0; frame < frameCount; frame += 1) {
 			const energies = new Float32Array(pixels);
 			for (let pixel = 0; pixel < pixels; pixel += 1) {
 				const base = ((view * frameCount + frame) * pixels + pixel) * 4;
 				const bgBase = (view * pixels + pixel) * 4;
-				const dr = frames[base] - backgrounds[bgBase];
-				const dg = frames[base + 1] - backgrounds[bgBase + 1];
-				const db = frames[base + 2] - backgrounds[bgBase + 2];
-				const energy = (dr * dr + dg * dg + db * db) / 3;
+				const energy = frameRgbEnergy(frameBank, backgrounds, base, bgBase);
 				energies[pixel] = energy;
 				const packed = (view * frameCount + frame) * pixels + pixel;
 				if (energy > 0.0006) {
-					motion.push({ packed, energy });
+					keepTopMotionCandidate(motion, packed, energy, maxSamples);
 				} else if (energy < 0.00035) {
-					staticSamples.push(packed);
+					staticCount += 1;
 				}
 			}
 			const weights = normalizedMotionLossWeights(energies);
-			for (let pixel = 0; pixel < pixels; pixel += 1) {
+			const frameBase = (view * frameCount + frame) * pixels * 4;
+			writeNormalizedFrameLossWeights(frameBank, frameBase, weights);
+		}
+	}
+	motion.sort((left, right) => right.energy - left.energy || left.packed - right.packed);
+	const staticKept = new Uint32Array(Math.min(maxSamples, staticCount));
+	let staticOrdinal = 0;
+	let keptIndex = 0;
+	for (let view = 0; view < trainViewCount && keptIndex < staticKept.length; view += 1) {
+		for (let frame = 0; frame < frameCount && keptIndex < staticKept.length; frame += 1) {
+			for (let pixel = 0; pixel < pixels && keptIndex < staticKept.length; pixel += 1) {
 				const base = ((view * frameCount + frame) * pixels + pixel) * 4;
-				frames[base + 3] = weights[pixel];
+				const bgBase = (view * pixels + pixel) * 4;
+				if (frameRgbEnergy(frameBank, backgrounds, base, bgBase) >= 0.00035) continue;
+				const desiredOrdinal = staticCount <= maxSamples
+					? keptIndex
+					: Math.floor((keptIndex + 0.5) * staticCount / maxSamples);
+				if (staticOrdinal === desiredOrdinal) {
+					staticKept[keptIndex] = (view * frameCount + frame) * pixels + pixel;
+					keptIndex += 1;
+				}
+				staticOrdinal += 1;
 			}
 		}
 	}
-	motion.sort((a, b) => b.energy - a.energy);
-	const maxSamples = 16384;
-	const staticKept = staticSamples.length <= maxSamples
-		? staticSamples
-		: Array.from({ length: maxSamples }, (_, i) => staticSamples[Math.floor((i + 0.5) * staticSamples.length / maxSamples)]);
 	return {
-		motionSamples: new Uint32Array(motion.slice(0, maxSamples).map((item) => item.packed)),
-		staticSamples: new Uint32Array(staticKept),
+		motionSamples: new Uint32Array(motion.map((item) => item.packed)),
+		staticSamples: staticKept,
 	};
 }
 
-export async function loadCalibratedMulticamDataset({ computeSamples = true } = {}) {
+export async function loadCalibratedMulticamDataset({
+	computeSamples = true,
+	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
+} = {}) {
 	const response = await fetch(CALIBRATED_MULTICAM_URL);
 	if (!response.ok) {
 		throw new Error(`Calibrated browser bundle unavailable: ${response.status}`);
@@ -460,15 +736,33 @@ export async function loadCalibratedMulticamDataset({ computeSamples = true } = 
 	}
 	const [width, height] = bundle.decode_size;
 	const frameCount = bundle.frame_count;
-	const viewFrames = await Promise.all(bundle.cameras.map((camera) => camera.frame_atlas_url
-		? decodeFrameAtlas({ url: camera.frame_atlas_url, width, height, frameCount })
-		: decodeVideoFrames({ url: camera.video_url, width, height, frameTimesSeconds: bundle.frame_times_seconds })));
 	const valuesPerView = width * height * frameCount * 4;
-	const frames = new Float32Array(valuesPerView * viewFrames.length);
-	const backgrounds = new Float32Array(width * height * 4 * viewFrames.length);
-	for (let view = 0; view < viewFrames.length; view += 1) {
-		frames.set(viewFrames[view], view * valuesPerView);
-		backgrounds.set(computeMeanBackground(viewFrames[view], width, height, frameCount), view * width * height * 4);
+	const frames = allocateFrameBank(valuesPerView * bundle.cameras.length, frameBankFormat);
+	const backgrounds = new Float32Array(width * height * 4 * bundle.cameras.length);
+	// Decode one atlas at a time into its final bank slice. In compact mode this
+	// avoids both per-camera FP32 banks and a second concatenated FP32 bank.
+	for (let view = 0; view < bundle.cameras.length; view += 1) {
+		const camera = bundle.cameras[view];
+		const decode = camera.frame_atlas_url ? decodeFrameAtlasInto : decodeVideoFramesInto;
+		await decode({
+			url: camera.frame_atlas_url ?? camera.video_url,
+			width,
+			height,
+			frameCount,
+			frameTimesSeconds: bundle.frame_times_seconds,
+			target: { format: frameBankFormat, data: frames },
+			targetOffset: view * valuesPerView,
+		});
+		backgrounds.set(
+			computeMeanBackground(
+				{ format: frameBankFormat, data: frames },
+				width,
+				height,
+				frameCount,
+				view * valuesPerView,
+			),
+			view * width * height * 4,
+		);
 	}
 	const trainViewIndices = bundle.cameras
 		.map((camera, index) => camera.role === "train" ? index : -1)
@@ -496,7 +790,7 @@ export async function loadCalibratedMulticamDataset({ computeSamples = true } = 
 		intrinsics: new Float32Array(camera.intrinsics),
 		worldToCamera: new Float32Array(camera.world_to_camera.flat()),
 	}));
-	const dataset = {
+	const dataset = attachPixelBanks({
 		name: bundle.name,
 		source: CALIBRATED_MULTICAM_URL,
 		width,
@@ -506,9 +800,6 @@ export async function loadCalibratedMulticamDataset({ computeSamples = true } = 
 		trainViewCount,
 		trainViewIndices,
 		heldoutViewIndex,
-		frames,
-		backgrounds,
-		background: backgrounds.subarray(0, width * height * 4),
 		cameras,
 		seedPoints: new Float32Array(bundle.seed_points_xyzrgb.flat()),
 		seedPointCount: bundle.seed_points_xyzrgb.length,
@@ -523,14 +814,25 @@ export async function loadCalibratedMulticamDataset({ computeSamples = true } = 
 		datasetContract: bundle.dataset_contract,
 		frameIndices: bundle.frame_indices,
 		...samples,
-	};
+	}, frames, backgrounds, frameBankFormat);
 	dataset.viewDatasets = cameras.map((camera, view) => ({
 		label: `${camera.name} ${camera.role}`,
 		width,
 		height,
 		frameCount,
 		frames: frames.subarray(view * valuesPerView, (view + 1) * valuesPerView),
+		frameBank: {
+			format: frameBankFormat,
+			data: frames.subarray(view * valuesPerView, (view + 1) * valuesPerView),
+		},
 		background: backgrounds.subarray(view * width * height * 4, (view + 1) * width * height * 4),
+		backgroundBank: {
+			format: BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+			data: backgrounds.subarray(
+				view * width * height * 4,
+				(view + 1) * width * height * 4,
+			),
+		},
 		viewIndex: view,
 	}));
 	const anchorName = bundle.dataset_contract?.anchor_camera;
@@ -545,9 +847,12 @@ export async function loadCalibratedMulticamDataset({ computeSamples = true } = 
 export async function loadPresetDataset({
 	allowLegacyFallback = false,
 	computeSamples = true,
+	// Both GPU trainers decode compact targets at their binding boundary. Keep
+	// the much larger all-camera frame bank byte-packed on the host.
+	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
 } = {}) {
 	try {
-		return await loadCalibratedMulticamDataset({ computeSamples });
+		return await loadCalibratedMulticamDataset({ computeSamples, frameBankFormat });
 	} catch (error) {
 		if (!allowLegacyFallback) {
 			throw error;
@@ -586,10 +891,21 @@ export function drawTargetFrame(canvas, dataset, time01, { view = "rgb" } = {}) 
 	}
 	const image = ctx.createImageData(dataset.width, dataset.height);
 	const offset = frame * dataset.width * dataset.height * 4;
+	const frameBank = resolveFrameBank(dataset);
 	for (let i = 0; i < dataset.width * dataset.height; i += 1) {
-		let r = dataset.frames[offset + i * 4];
-		let g = dataset.frames[offset + i * 4 + 1];
-		let b = dataset.frames[offset + i * 4 + 2];
+		const base = offset + i * 4;
+		let r;
+		let g;
+		let b;
+		if (frameBank.format === FRAME_BANK_FORMAT_RGBA8) {
+			r = frameBank.data[base] / 255;
+			g = frameBank.data[base + 1] / 255;
+			b = frameBank.data[base + 2] / 255;
+		} else {
+			r = frameBank.data[base];
+			g = frameBank.data[base + 1];
+			b = frameBank.data[base + 2];
+		}
 		if (view === "motion_residual") {
 			const dr = Math.abs(r - dataset.background[i * 4]);
 			const dg = Math.abs(g - dataset.background[i * 4 + 1]);

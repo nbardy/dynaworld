@@ -4,7 +4,12 @@ import {
 	BROWSER_ADAM_EPSILON,
 	DENSITY_STAT_DECAY,
 	browserLearningRates,
-} from "./trainingSchedule.js";
+} from "./trainingSchedule.js?v=20260731-compactfp16-5";
+import {
+	FRAME_BANK_FORMAT_RGBA8,
+	readFrameBankValue,
+	resolveFrameBank,
+} from "./dataset.js?v=20260731-compactfp16-5";
 
 export const SPLAT_FLOATS = 24;
 export const MAX_BROWSER_RENDER_SPLATS = 32768;
@@ -646,7 +651,15 @@ const ORDER_WGSL = `
 	}
 `;
 
-const TRAIN_WGSL = `
+function trainWgsl(frameBankFormat) {
+	const compactTargets = frameBankFormat === FRAME_BANK_FORMAT_RGBA8;
+	const targetDeclaration = compactTargets
+		? "@group(0) @binding(2) var<storage, read> targetFrames: array<u32>;"
+		: "@group(0) @binding(2) var<storage, read> targetFrames: array<vec4<f32>>;";
+	const targetRgb = compactTargets
+		? "unpack4x8unorm(targetFrames[targetIndex]).xyz"
+		: "targetFrames[targetIndex].xyz";
+	return `
 	struct Splat {
 		centerStatic: vec4<f32>,
 		velocityTime: vec4<f32>,
@@ -679,7 +692,7 @@ const TRAIN_WGSL = `
 
 	@group(0) @binding(0) var<uniform> cfg: TrainConfig;
 	@group(0) @binding(1) var<storage, read> paramsIn: array<Splat>;
-	@group(0) @binding(2) var<storage, read> targetFrames: array<vec4<f32>>;
+	${targetDeclaration}
 	@group(0) @binding(3) var<storage, read> sampleIndices: array<u32>;
 	@group(0) @binding(4) var<storage, read> cameras: array<Camera>;
 	@group(0) @binding(5) var<storage, read_write> sampleGradients: array<Splat>;
@@ -817,7 +830,7 @@ const TRAIN_WGSL = `
 				let point = vec2<f32>((f32(x) + 0.5) / f32(cfg.width), (f32(y) + 0.5) / f32(cfg.height));
 				let t = frame_time(frame); let targetIndex = (view * cfg.frameCount + frame) * pixels + pixel;
 				samplePointTimeView = vec4<f32>(point, t, f32(view));
-				sampleTargetCoverage = vec4<f32>(targetFrames[targetIndex].xyz, 0.0);
+				sampleTargetCoverage = vec4<f32>(${targetRgb}, 0.0);
 				samplePredMotion = vec4<f32>(0.0, 0.0, 0.0, select(0.0, 1.0, usedMotion));
 		}
 		workgroupBarrier();
@@ -992,6 +1005,7 @@ const TRAIN_WGSL = `
 			}
 	}
 `;
+}
 
 const UPDATE_WGSL = `
 	struct Splat { centerStatic: vec4<f32>, velocityTime: vec4<f32>, harmonicPad: vec4<f32>,
@@ -1363,8 +1377,9 @@ function computeViewMetrics(dataset, params, splatCount, views, modelMode, tempo
 				const result = evalModelCpu(dataset, projections,
 					(x + 0.5) / dataset.width, (y + 0.5) / dataset.height);
 				const base = ((view * dataset.frameCount + frame) * pixels + y * dataset.width + x) * 4;
-				const targetR = dataset.frames[base]; const targetG = dataset.frames[base + 1];
-				const targetB = dataset.frames[base + 2];
+				const targetR = readFrameBankValue(dataset, base);
+				const targetG = readFrameBankValue(dataset, base + 1);
+				const targetB = readFrameBankValue(dataset, base + 2);
 				const errorR = result.colorR - targetR; const errorG = result.colorG - targetG;
 				const errorB = result.colorB - targetB;
 				mse += (errorR * errorR + errorG * errorG + errorB * errorB) / 3;
@@ -1488,7 +1503,9 @@ export class DynamicSplatWebGpu3dTrainer {
 
 	async createPipelines() {
 		const order = this.device.createShaderModule({ code: ORDER_WGSL });
-		const gradients = this.device.createShaderModule({ code: TRAIN_WGSL });
+		const gradients = this.device.createShaderModule({
+			code: trainWgsl(resolveFrameBank(this.dataset).format),
+		});
 		const update = this.device.createShaderModule({ code: UPDATE_WGSL });
 		const maintenance = this.device.createShaderModule({ code: MAINTENANCE_WGSL });
 		const renderSort = this.device.createShaderModule({ code: RENDER_SORT_WGSL });
@@ -1739,9 +1756,9 @@ export class DynamicSplatWebGpu3dTrainer {
 			const result = evalModelCpu(this.dataset, params, this.splatCount, view, frame,
 				(x + 0.5) / this.dataset.width, (y + 0.5) / this.dataset.height, modelMode, temporalSigma);
 			const base = ((view * this.dataset.frameCount + frame) * pixels + pixel) * 4;
-			const e = Math.sqrt(((result.colorR - this.dataset.frames[base]) ** 2
-				+ (result.colorG - this.dataset.frames[base + 1]) ** 2
-				+ (result.colorB - this.dataset.frames[base + 2]) ** 2) / 3);
+			const e = Math.sqrt(((result.colorR - readFrameBankValue(this.dataset, base)) ** 2
+				+ (result.colorG - readFrameBankValue(this.dataset, base + 1)) ** 2
+				+ (result.colorB - readFrameBankValue(this.dataset, base + 2)) ** 2) / 3);
 			meanAbs += e; const heat = Math.min(1, e * 3); const out = pixel * 4;
 			data[out] = 255 * heat; data[out + 1] = 255 * Math.max(0, heat * 1.6 - 0.3);
 			data[out + 2] = 255 * Math.max(0.05, 0.4 - heat * 0.3); data[out + 3] = 255;

@@ -73,6 +73,7 @@
 				<select id="kernelExperiment">
 					<option value="backward">Direct vs staged backward</option>
 					<option value="projection">Monolithic vs compact projection</option>
+					<option value="precision">FP32 vs packed-FP16 projection VJP</option>
 					<option value="ssim">Naive vs separable SSIM</option>
 				</select>
 			</label>
@@ -97,6 +98,12 @@
 			</label>
 			<label>Raster scale
 				<input id="kernelRasterScale" type="number" min="1" max="4" value="1">
+			</label>
+			<label>Host frame bank
+				<select id="kernelFrameBank">
+					<option value="f32">RGBA32F reference</option>
+					<option value="rgba8">Shared compact RGBA8</option>
+				</select>
 			</label>
 			<label>Warmup steps
 				<input id="kernelWarmup" type="number" min="1" max="4096" value="32">
@@ -130,6 +137,12 @@
 				<select id="kernelProjectionLayout">
 					<option value="split-compact">Split 32 B raster packet</option>
 					<option value="monolithic">Monolithic 192 B reference</option>
+				</select>
+			</label>
+			<label>Projection VJP storage
+				<select id="kernelProjectionVjpPrecision">
+					<option value="f32">FP32 80 B reference</option>
+					<option value="packed-f16">Packed FP16 48 B</option>
 				</select>
 			</label>
 			<label>SSIM kernel
@@ -204,6 +217,6 @@
 			<textarea id="kernelBenchmarkJson" readonly spellcheck="false"></textarea>
 		</section>
 	</main>
-	<script type="module" src="./benchmarkTiledKernels.js?v=20260731-contention1"></script>
+	<script type="module" src="./benchmarkTiledKernels.js?v=20260731-compactfp16-5"></script>
 </body>
 </html>

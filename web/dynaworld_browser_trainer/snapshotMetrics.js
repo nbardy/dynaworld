@@ -3,6 +3,7 @@ import {
 	projectAnisotropicGaussianCpu,
 	resolveTrainViewIndices,
 } from "./trainerWebGpu3d.js";
+import { decodeFrameRgb } from "./dataset.js";
 
 const DEFAULT_TILE_SIZE = 16;
 const DEFAULT_ALPHA_THRESHOLD = 1 / 255;
@@ -582,18 +583,7 @@ export function resolveSnapshotSelections(dataset, {
 }
 
 function targetRgb(dataset, viewIndex, frameIndex) {
-	const pixels = dataset.width * dataset.height;
-	const sourceOffset = (viewIndex * dataset.frameCount + frameIndex) * pixels * 4;
-	if (!dataset.frames || sourceOffset + pixels * 4 > dataset.frames.length) {
-		throw new RangeError("dataset.frames does not contain the requested view/frame.");
-	}
-	const result = new Float32Array(pixels * 3);
-	for (let pixel = 0; pixel < pixels; pixel += 1) {
-		result[pixel * 3] = dataset.frames[sourceOffset + pixel * 4];
-		result[pixel * 3 + 1] = dataset.frames[sourceOffset + pixel * 4 + 1];
-		result[pixel * 3 + 2] = dataset.frames[sourceOffset + pixel * 4 + 2];
-	}
-	return result;
+	return decodeFrameRgb(dataset, viewIndex, frameIndex);
 }
 
 export function computeSnapshotMetrics(dataset, params, {
