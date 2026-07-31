@@ -103,18 +103,18 @@ test("SPA exposes packed-FP16 checkpoints and sends the selected precision to th
 	assert.match(appSource, /sampledBackendSelected\(\)\s*\?\s*2048\s*:\s*4096/);
 });
 
-test("SPA defaults to the complete seed bank and unweighted training with opt-in ablations", async () => {
+test("SPA defaults to the complete seed bank, stable 8K reserve, and opt-in loss ablations", async () => {
 	const [htmlSource, appSource] = await Promise.all([
 		readFile(new URL("../index.html", import.meta.url), "utf8"),
 		readFile(new URL("../app.js", import.meta.url), "utf8"),
 	]);
 	assert.match(htmlSource, /id="splatSlider"[^>]+value="4096"/);
 	assert.match(htmlSource, /id="growthCapacitySelect"/);
-	assert.match(htmlSource, /option value="30000" selected/);
+	assert.match(htmlSource, /option value="8192" selected/);
 	assert.doesNotMatch(htmlSource, /option value="32768"/);
 	assert.match(appSource, /growthCapacity:\s*sampledBackendSelected\(\)\s*\?\s*null/);
 	assert.match(appSource, /const RENDER_FPS = 15/);
-	assert.match(appSource, /const VALIDATION_STEP_INTERVAL = 16384/);
+	assert.match(appSource, /const VALIDATION_STEP_INTERVAL = 8192/);
 	assert.doesNotMatch(htmlSource.match(/<input id="staticWarmupToggle"[^>]+>/)?.[0] ?? "", /checked/);
 	assert.doesNotMatch(htmlSource.match(/<input id="motionWeightingToggle"[^>]+>/)?.[0] ?? "", /checked/);
 	assert.match(htmlSource, /id="phaseValue"/);

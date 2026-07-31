@@ -1,6 +1,7 @@
 const DEFAULT_VIDEO_URL =
 	"/data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/previews/neural3d_coffee_martini_cam00_to_cam10.mp4";
 const CALIBRATED_MULTICAM_URL = "./coffee_martini_train17_holdout1.json";
+export const CALIBRATED_MULTICAM_POSE_SOURCE = "neural_3d_llff_opencv_relative_pinhole_v2";
 
 export const FRAME_BANK_FORMAT_RGBA8 = "rgba8unorm-rgb+weight-u8x127/v1";
 export const FRAME_BANK_FORMAT_RGBA32_FLOAT = "rgba32float/v1";
@@ -722,6 +723,67 @@ export function computeMultiviewSamples(frames, backgrounds, width, height, fram
 	};
 }
 
+export function validateCalibratedMulticamBundle(bundle) {
+	if (bundle?.version !== "dynaworld_browser_multicam_dataset/v1") {
+		throw new Error(`Unsupported calibrated browser bundle: ${bundle?.version ?? "missing version"}`);
+	}
+	const contract = bundle.dataset_contract;
+	if (contract?.pose_source !== CALIBRATED_MULTICAM_POSE_SOURCE) {
+		throw new Error(`Calibrated browser bundle pose source ${contract?.pose_source ?? "missing"}; `
+			+ `expected ${CALIBRATED_MULTICAM_POSE_SOURCE}. Refresh or rebuild the dataset bundle.`);
+	}
+	if (!contract.anchor_camera || bundle.seed_coordinate_frame !== `${contract.anchor_camera}_opencv`) {
+		throw new Error("Calibrated browser seeds and anchor-relative cameras must share the declared OpenCV frame.");
+	}
+	if (!Array.isArray(bundle.decode_size) || bundle.decode_size.length !== 2
+		|| !bundle.decode_size.every((value) => Number.isSafeInteger(value) && value > 0)) {
+		throw new Error("Calibrated browser decode_size must contain positive integer width and height.");
+	}
+	if (!Array.isArray(bundle.cameras) || bundle.cameras.length < 2) {
+		throw new Error("Calibrated browser bundle must contain train and heldout cameras.");
+	}
+	for (const camera of bundle.cameras) {
+		const matrix = camera.world_to_camera;
+		if (!Array.isArray(camera.intrinsics) || camera.intrinsics.length !== 4
+			|| !camera.intrinsics.every(Number.isFinite) || camera.intrinsics[0] <= 0
+			|| camera.intrinsics[1] <= 0) {
+			throw new Error(`Camera ${camera.name ?? "unnamed"} has invalid normalized pinhole intrinsics.`);
+		}
+		if (!Array.isArray(matrix) || matrix.length !== 4
+			|| matrix.some((row) => !Array.isArray(row) || row.length !== 4 || !row.every(Number.isFinite))) {
+			throw new Error(`Camera ${camera.name ?? "unnamed"} must provide a finite 4x4 world_to_camera matrix.`);
+		}
+		const homogeneousError = Math.max(
+			Math.abs(matrix[3][0]), Math.abs(matrix[3][1]), Math.abs(matrix[3][2]),
+			Math.abs(matrix[3][3] - 1),
+		);
+		let orthogonalityError = 0;
+		for (let row = 0; row < 3; row += 1) {
+			for (let other = 0; other < 3; other += 1) {
+				let dot = 0;
+				for (let column = 0; column < 3; column += 1) dot += matrix[row][column] * matrix[other][column];
+				orthogonalityError = Math.max(orthogonalityError, Math.abs(dot - Number(row === other)));
+			}
+		}
+		const determinant = matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+			- matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+			+ matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
+		if (homogeneousError > 1e-4 || orthogonalityError > 1e-3 || Math.abs(determinant - 1) > 1e-3) {
+			throw new Error(`Camera ${camera.name ?? "unnamed"} world_to_camera must be a rigid proper transform.`);
+		}
+	}
+	const anchor = bundle.cameras.find((camera) => camera.name === contract.anchor_camera);
+	if (!anchor || anchor.role !== "train") {
+		throw new Error("The calibrated anchor camera must exist in the training split.");
+	}
+	const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+	const anchorMatrix = anchor.world_to_camera.flat();
+	if (anchorMatrix.some((value, index) => Math.abs(value - identity[index]) > 1e-4)) {
+		throw new Error("The calibrated world frame must be relative to the declared anchor camera.");
+	}
+	return bundle;
+}
+
 export async function loadCalibratedMulticamDataset({
 	computeSamples = true,
 	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
@@ -730,10 +792,7 @@ export async function loadCalibratedMulticamDataset({
 	if (!response.ok) {
 		throw new Error(`Calibrated browser bundle unavailable: ${response.status}`);
 	}
-	const bundle = await response.json();
-	if (bundle.version !== "dynaworld_browser_multicam_dataset/v1") {
-		throw new Error(`Unsupported calibrated browser bundle: ${bundle.version ?? "missing version"}`);
-	}
+	const bundle = validateCalibratedMulticamBundle(await response.json());
 	const [width, height] = bundle.decode_size;
 	const frameCount = bundle.frame_count;
 	const valuesPerView = width * height * frameCount * 4;

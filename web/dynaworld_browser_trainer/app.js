@@ -68,7 +68,7 @@ const TEMPORAL_SUPPORT_HOLD_STEPS = 256;
 const TEMPORAL_SUPPORT_END_STEP = 2048;
 const RENDER_FPS = 15;
 const MAX_RENDER_WIDTH = 960;
-const VALIDATION_STEP_INTERVAL = 16384;
+const VALIDATION_STEP_INTERVAL = 8192;
 const STATIC_WARMUP_STEPS = 2048;
 const UI_STATE_KEY = "dynaworld-browser-trainer-ui-v2";
 const metricHistory = { sampleLoss: [], trainLoss: [], heldoutLoss: [],
@@ -683,9 +683,13 @@ async function boot() {
 	try {
 		dataset = await loadPresetDataset();
 		const trainCount = dataset.trainViewCount ?? 1;
+		const poseSource = dataset.datasetContract?.pose_source;
+		const calibrationLabel = poseSource?.endsWith("_v2") ? "LLFF/OpenCV v2" : poseSource;
 		$("datasetName").textContent = dataset.datasetContract
 			? `${dataset.name} · ${trainCount} train / ${dataset.viewCount - trainCount} heldout`
+				+ `${calibrationLabel ? ` · ${calibrationLabel}` : ""}`
 			: dataset.name;
+		$("datasetName").title = poseSource ?? "No calibrated pose source declared";
 		values.splatCount.textContent = controls.splats.value;
 		values.motionSamples.textContent = String(dataset.motionSamples?.length ?? 0);
 		values.staticSamples.textContent = String(dataset.staticSamples?.length ?? 0);

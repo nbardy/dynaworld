@@ -11,6 +11,7 @@ import {
 	normalizedMotionLossWeights,
 	readFrameLossWeight,
 	resolveFrameBank,
+	validateCalibratedMulticamBundle,
 	writeNormalizedFrameLossWeights,
 } from "../dataset.js";
 
@@ -209,16 +210,22 @@ function installAtlasMocks() {
 		cameras: [
 			{
 				name: "cam00", role: "train", frame_atlas_url: "cam00.png",
-				intrinsics: [1, 1, 0.5, 0.5], world_to_camera: [[1, 0, 0, 0]],
+				intrinsics: [1, 1, 0.5, 0.5],
+				world_to_camera: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
 			},
 			{
 				name: "cam01", role: "heldout", frame_atlas_url: "cam01.png",
-				intrinsics: [1, 1, 0.5, 0.5], world_to_camera: [[1, 0, 0, 1]],
+				intrinsics: [1, 1, 0.5, 0.5],
+				world_to_camera: [[1, 0, 0, 1], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
 			},
 		],
 		seed_points_xyzrgb: [[0, 0, 1, 1, 0, 0]],
 		seed_source: "fixture",
-		dataset_contract: { anchor_camera: "cam00" },
+		dataset_contract: {
+			anchor_camera: "cam00",
+			pose_source: "neural_3d_llff_opencv_relative_pinhole_v2",
+		},
+		seed_coordinate_frame: "cam00_opencv",
 		frame_indices: [0, 1],
 	};
 	const atlasBytes = new Map([
@@ -284,6 +291,23 @@ function installAtlasMocks() {
 		}
 	};
 }
+
+test("calibrated bundles reject the legacy LLFF camera-axis convention", () => {
+	const identity = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+	assert.throws(() => validateCalibratedMulticamBundle({
+		version: "dynaworld_browser_multicam_dataset/v1",
+		decode_size: [96, 72],
+		seed_coordinate_frame: "cam00_opencv",
+		dataset_contract: {
+			anchor_camera: "cam00",
+			pose_source: "neural_3d_llff_relative_pinhole",
+		},
+		cameras: [
+			{ name: "cam00", role: "train", intrinsics: [1, 1, 0.5, 0.5], world_to_camera: identity },
+			{ name: "cam01", role: "heldout", intrinsics: [1, 1, 0.5, 0.5], world_to_camera: identity },
+		],
+	}), /expected neural_3d_llff_opencv_relative_pinhole_v2/);
+});
 
 test("calibrated atlases decode sequentially into compact or explicit FP32 final banks", {
 	concurrency: false,

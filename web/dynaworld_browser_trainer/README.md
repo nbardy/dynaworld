@@ -135,6 +135,16 @@ The pose-source identifier is
 camera basis columns as `[down, right, backwards]`; the loader reorders them to
 OpenCV `[right, down, forwards]` before forming anchor-relative poses. The
 superseded sign-only conversion is intentionally a different artifact identity.
+The SPA rejects that legacy identity, non-finite or non-rigid camera matrices,
+and a non-identity anchor transform before creating the trainer.
+
+JSON numbers become `Float32Array` camera, seed, and optimizer buffers; target
+RGB remains checked-in RGBA8 and is decoded to `f32` for raster loss. Browser
+normalization multiplies seed XYZ and every camera translation by the same
+inverse-median-depth scale, so pixel projection is invariant. Those are native
+LLFF scene units, not documented meters. A running worker owns its loaded
+camera copy, so fully reload the page after replacing a bundle or pose
+convention; Reset only restarts optimization on the already-loaded dataset.
 
 The checked-in bundle predates the provenance report contract. Its external
 Ex4DGS cloud is filtered after loading to points visible from at least one
@@ -313,19 +323,19 @@ both modes is **trajectory-gated dynamic 3DGS**.
 
 ## Initialization And Topology
 
-The exporter transforms the external SfM point cloud into the declared anchor
-camera, keeps points visible from at least one training camera, and takes a
-deterministic farthest-point subset. Initial scale and rotation come from local
-point-cloud neighborhoods; opacity starts at 0.1.
+The exporter transforms the external, provenance-unverified Ex4DGS point cloud
+into the declared anchor camera, keeps points visible from at least one training
+camera, and takes a deterministic farthest-point subset. Initial scale and
+rotation come from local point-cloud neighborhoods; opacity starts at 0.1.
 
 The trainer uses fixed GPU capacity. The SPA initializes all 4,096 checked-in
 SfM seeds and reserves 8,192 slots by default, then fills the second half
 through splitting. This preserves the complete point scaffold while testing
 the 1.19-splats-per-training-pixel capacity requested for the 96x72 raster.
-Larger 16K, 24K, and 30K reserves are explicit scaling experiments; dormant
-slots skip projection but still consume parameter, optimizer, clear, update,
-readback, and preview-sort capacity. Lower slider values remain useful growth
-ablations:
+Larger 16K, 24K, and 30K reserves are explicit scaling experiments. Dormant
+slots consume allocated parameter and optimizer memory, but active-prefix
+dispatch now excludes them from training clear/update, preview draw/sort, and
+validation telemetry. Lower slider values remain useful growth ablations:
 
 - when requested splats are below capacity, hidden slots are filled by
   split/recycle events beginning at step 600;
@@ -333,6 +343,11 @@ ablations:
 - selecting 4,096 initial splats uses the complete seed bank and grows to 8,192
   by step 26,100; no proxy-driven replacements occur after reserved capacity is
   full.
+
+The 30K preset is not a quality default. At 16 children per 100 steps it does
+not fill until roughly step 162,400, after the default geometry schedule has
+already decayed by about 100x. It is retained to measure scaling and long-run
+topology behavior; use 8K for the calibrated convergence baseline.
 
 Growth is dynamic topology within a fixed allocation. It supports
 relocation, spatial scale shrinkage, opacity-mass preservation, temporal

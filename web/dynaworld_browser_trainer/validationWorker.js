@@ -107,6 +107,7 @@ self.onmessage = ({ data }) => {
 		const medianCamera = cameraPsnr[Math.floor((cameraPsnr.length - 1) / 2)];
 		const strongestCamera = cameraPsnr.at(-1);
 		const splatCount = options.splatCount ?? params.length / SPLAT_FLOATS;
+		const activeValues = splatCount * SPLAT_FLOATS;
 		const metrics = {
 			gridLoss: train.mse,
 			gridMae: train.mae,
@@ -140,8 +141,14 @@ self.onmessage = ({ data }) => {
 				frameCount: dataset.frameCount,
 				maxAspectRatio: data.options?.maxAspectRatio ?? 3,
 			}),
-			parameterDelta: meanAbsoluteDelta(initialParams, params),
-			parameterUpdateRatios: snapshotUpdateRatios(previousParams, params),
+			parameterDelta: meanAbsoluteDelta(
+				initialParams.subarray(0, activeValues),
+				params.subarray(0, activeValues),
+			),
+			parameterUpdateRatios: snapshotUpdateRatios(
+				previousParams.subarray(0, activeValues),
+				params.subarray(0, activeValues),
+			),
 			learningRateMultipliers: data.options?.learningRateMultipliers ?? null,
 			totalRecycled: data.options?.totalRecycled ?? 0,
 			validationDurationMs: performance.now() - startedAt,
