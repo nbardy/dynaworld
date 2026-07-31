@@ -4,21 +4,21 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import export_dynaworld_browser_bundle as browser_export
 import pytest
 import torch
-from PIL import Image
-
-import export_dynaworld_browser_bundle as browser_export
 from export_dynaworld_browser_bundle import (
     _browser_camera_filename_component,
     _browser_camera_rows,
+    _browser_sparse_frame_record,
     _farthest_point_subset,
+    _load_browser_multicam_sparse_frames,
     _resolve_seed_provenance,
     _seed_points_in_anchor_frame,
     _write_browser_frame_atlases,
 )
 from multicam_video_data import select_multicam_record, validate_multicam_camera_split
-
+from PIL import Image
 
 TRAIN17_MANIFEST = Path(
     "src/dataset_configs/neural3d_coffee_martini_train17_holdout1_full_300f_manifest.jsonl"
@@ -88,6 +88,181 @@ def test_browser_camera_filename_components_are_portable() -> None:
     assert _browser_camera_filename_component("rig/cam 04") == "rig_cam_04"
     with pytest.raises(ValueError, match="cannot be represented"):
         _browser_camera_filename_component("../")
+
+
+def test_browser_sparse_frame_record_preserves_contract_and_offsets_exact_time() -> None:
+    record = {
+        "frame_count": 300,
+        "fps": 30.0,
+        "source_start_seconds": 1.0,
+        "target_start_seconds": 1.5,
+        "train_cameras": ["cam04", "cam09"],
+        "heldout_cameras": ["cam06"],
+    }
+
+    sampled = _browser_sparse_frame_record(record, 159)
+
+    assert sampled["frame_count"] == 1
+    assert sampled["duration_seconds"] == pytest.approx(1.0 / 30.0)
+    assert sampled["source_start_seconds"] == pytest.approx(1.0 + 159.0 / 30.0)
+    assert sampled["target_start_seconds"] == pytest.approx(1.5 + 159.0 / 30.0)
+    assert sampled["train_cameras"] == record["train_cameras"]
+    assert record["frame_count"] == 300
+    with pytest.raises(ValueError, match="outside source frame_count"):
+        _browser_sparse_frame_record(record, 300)
+
+
+def test_browser_sparse_frame_decode_loads_only_requested_timestamps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = tmp_path / "manifest.jsonl"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "dataset": "neural_3d_video",
+                "sample_id": "sample",
+                "split": "train17_holdout1",
+                "frame_count": 300,
+                "fps": 30.0,
+                "duration_seconds": 10.0,
+                "source_start_seconds": 1.0,
+                "target_start_seconds": 1.5,
+                "train_cameras": ["cam04", "cam09"],
+                "heldout_cameras": ["cam06"],
+                "anchor_camera": "cam04",
+                "condition_camera": "cam04",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    sampled_records = []
+
+    def fake_load_multicam_video_bundle(**kwargs):
+        sampled_record = json.loads(
+            Path(kwargs["data_cfg"]["multicam_manifest"]).read_text(encoding="utf-8")
+        )
+        sampled_records.append(sampled_record)
+        marker = round((float(sampled_record["source_start_seconds"]) - 1.0) * 30.0)
+        train_w2c = torch.eye(4).repeat(2, 1, 1, 1)
+        heldout_w2c = torch.eye(4).repeat(1, 1, 1, 1)
+        return SimpleNamespace(
+            frame_count=1,
+            condition_sequence=None,
+            train_sequences=(),
+            train_frames=torch.full((2, 1, 3, 2, 3), float(marker)),
+            train_K=torch.eye(3).repeat(2, 1, 1),
+            train_w2c=train_w2c,
+            train_camera_names=["cam04", "cam09"],
+            train_lens_models=None,
+            train_distortions=None,
+            heldout_sequences=(),
+            heldout_frames=torch.full((1, 1, 3, 2, 3), float(marker)),
+            heldout_K=torch.eye(3).repeat(1, 1, 1),
+            heldout_w2c=heldout_w2c,
+            heldout_camera_names=["cam06"],
+            heldout_lens_models=None,
+            heldout_distortions=None,
+            pose_source="neural_3d_llff_relative_pinhole",
+            anchor_c2w=torch.eye(4),
+            metadata=sampled_record,
+        )
+
+    monkeypatch.setattr(
+        browser_export,
+        "load_multicam_video_bundle",
+        fake_load_multicam_video_bundle,
+    )
+
+    bundle = _load_browser_multicam_sparse_frames(
+        manifest_path=manifest_path,
+        sample_id="sample",
+        split="train17_holdout1",
+        target_size=(2, 3),
+        frame_indices=[0, 159, 299],
+    )
+
+    assert len(sampled_records) == 3
+    assert all(record["frame_count"] == 1 for record in sampled_records)
+    assert [record["source_start_seconds"] for record in sampled_records] == pytest.approx(
+        [1.0, 1.0 + 159.0 / 30.0, 1.0 + 299.0 / 30.0]
+    )
+    assert bundle.train_frames.shape == (2, 3, 3, 2, 3)
+    assert bundle.train_frames[0, :, 0, 0, 0].tolist() == [0.0, 159.0, 299.0]
+    assert bundle.heldout_frames is not None
+    assert bundle.heldout_frames[0, :, 0, 0, 0].tolist() == [0.0, 159.0, 299.0]
+    assert bundle.metadata["frame_count"] == 300
+
+
+def test_browser_sparse_frame_decode_rejects_camera_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = tmp_path / "manifest.jsonl"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "dataset": "neural_3d_video",
+                "sample_id": "sample",
+                "split": "train17_holdout1",
+                "frame_count": 2,
+                "fps": 30.0,
+                "duration_seconds": 2.0 / 30.0,
+                "source_start_seconds": 0.0,
+                "target_start_seconds": 0.0,
+                "train_cameras": ["cam04"],
+                "heldout_cameras": ["cam06"],
+                "anchor_camera": "cam04",
+                "condition_camera": "cam04",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    call_count = 0
+
+    def fake_load_multicam_video_bundle(**_kwargs):
+        nonlocal call_count
+        K = torch.eye(3).unsqueeze(0)
+        K[0, 0, 0] += call_count
+        call_count += 1
+        return SimpleNamespace(
+            frame_count=1,
+            condition_sequence=None,
+            train_sequences=(),
+            train_frames=torch.zeros((1, 1, 3, 2, 2)),
+            train_K=K,
+            train_w2c=torch.eye(4).repeat(1, 1, 1, 1),
+            train_camera_names=["cam04"],
+            train_lens_models=None,
+            train_distortions=None,
+            heldout_sequences=(),
+            heldout_frames=torch.zeros((1, 1, 3, 2, 2)),
+            heldout_K=torch.eye(3).unsqueeze(0),
+            heldout_w2c=torch.eye(4).repeat(1, 1, 1, 1),
+            heldout_camera_names=["cam06"],
+            heldout_lens_models=None,
+            heldout_distortions=None,
+            pose_source="neural_3d_llff_relative_pinhole",
+            anchor_c2w=torch.eye(4),
+            metadata={},
+        )
+
+    monkeypatch.setattr(
+        browser_export,
+        "load_multicam_video_bundle",
+        fake_load_multicam_video_bundle,
+    )
+
+    with pytest.raises(RuntimeError, match="train intrinsics changed"):
+        _load_browser_multicam_sparse_frames(
+            manifest_path=manifest_path,
+            sample_id="sample",
+            split="train17_holdout1",
+            target_size=(2, 2),
+            frame_indices=[0, 1],
+        )
 
 
 def test_browser_seed_subset_is_deterministic_and_spatially_spread() -> None:

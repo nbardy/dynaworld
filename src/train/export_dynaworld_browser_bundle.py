@@ -3,18 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import torch
-from PIL import Image
-
 from checkpoint_utils import load_torch_checkpoint
 from config_utils import load_config_file
 from fast_attn import fast_attn_context, pick_device
 from model_factories import build_model_from_config
-from multicam_video_data import load_multicam_video_bundle
+from multicam_video_data import load_multicam_video_bundle, select_multicam_record
+from PIL import Image
 from powerfoam_point_cloud import load_point_cloud_xyz_rgb
 from sequence_data import (
     load_camera_sequence,
@@ -26,9 +27,27 @@ from sequence_data import (
 from train_artifacts import write_json
 from trainer_registry import resolve_config_for_arch
 
-
 EXPORT_BUNDLE_VERSION = "dynaworld_token_head_bundle/v2"
 BROWSER_MULTICAM_BUNDLE_VERSION = "dynaworld_browser_multicam_dataset/v1"
+
+
+@dataclass(frozen=True)
+class _BrowserMulticamExportBundle:
+    train_frames: torch.Tensor
+    train_K: torch.Tensor
+    train_w2c: torch.Tensor
+    train_camera_names: list[str]
+    heldout_frames: torch.Tensor | None
+    heldout_K: torch.Tensor | None
+    heldout_w2c: torch.Tensor | None
+    heldout_camera_names: list[str] | None
+    pose_source: str | None
+    anchor_c2w: torch.Tensor | None
+    metadata: dict[str, Any]
+
+    @property
+    def train_view_count(self) -> int:
+        return int(self.train_frames.shape[0])
 
 
 def _resolve_seed_provenance(
@@ -138,6 +157,136 @@ def _browser_camera_filename_component(camera_name: str) -> str:
     return component
 
 
+def _browser_sparse_frame_record(record: dict[str, Any], frame_index: int) -> dict[str, Any]:
+    """Derive one exact synchronized timestamp without changing rig semantics."""
+    source_frame_count = int(record["frame_count"])
+    if frame_index < 0 or frame_index >= source_frame_count:
+        raise ValueError(
+            f"Browser frame index {frame_index} is outside source frame_count={source_frame_count}."
+        )
+    fps = float(record["fps"])
+    if fps <= 0.0:
+        raise ValueError("Browser sparse frame decode requires a positive manifest fps.")
+    if "source_start_seconds" not in record or "target_start_seconds" not in record:
+        raise ValueError(
+            "Browser sparse frame decode requires synchronized source_start_seconds "
+            "and target_start_seconds in the canonical manifest."
+        )
+
+    sampled = dict(record)
+    time_offset = float(frame_index) / fps
+    sampled["source_start_seconds"] = float(record["source_start_seconds"]) + time_offset
+    sampled["target_start_seconds"] = float(record["target_start_seconds"]) + time_offset
+    sampled["frame_count"] = 1
+    sampled["duration_seconds"] = 1.0 / fps
+    return sampled
+
+
+def _load_browser_multicam_sparse_frames(
+    *,
+    manifest_path: Path,
+    sample_id: str,
+    split: str,
+    target_size: tuple[int, int],
+    frame_indices: list[int],
+) -> _BrowserMulticamExportBundle:
+    """Load only requested frames while delegating every camera contract to the canonical loader."""
+    data_cfg = {
+        "multicam_manifest": str(manifest_path),
+        "multicam_split": split,
+        "multicam_sample_id": sample_id,
+    }
+    record = select_multicam_record(data_cfg)
+    if str(record.get("dataset")) != "neural_3d_video":
+        raise ValueError(
+            "Sparse browser frame decode is currently verified only for synchronized "
+            "Neural 3D Video manifests."
+        )
+    normalized_indices = [int(index) for index in frame_indices]
+    if not normalized_indices:
+        raise ValueError("Browser sparse frame decode requires at least one frame index.")
+    if normalized_indices != sorted(set(normalized_indices)):
+        raise ValueError("Browser sparse frame indices must be unique and strictly increasing.")
+
+    partial_bundles: list[Any] = []
+    with TemporaryDirectory(prefix="dynaworld_browser_sparse_frames_") as temporary_dir:
+        sparse_manifest_path = Path(temporary_dir) / "manifest.jsonl"
+        for frame_index in normalized_indices:
+            sparse_record = _browser_sparse_frame_record(record, frame_index)
+            sparse_manifest_path.write_text(
+                json.dumps(sparse_record, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            partial_bundles.append(
+                load_multicam_video_bundle(
+                    data_cfg={
+                        "multicam_manifest": str(sparse_manifest_path),
+                        "multicam_split": split,
+                        "multicam_sample_id": sample_id,
+                    },
+                    camera_cfg={"rig_init": "neural_3d_video"},
+                    target_size=target_size,
+                    device=torch.device("cpu"),
+                )
+            )
+
+    reference = partial_bundles[0]
+    for partial in partial_bundles:
+        if partial.frame_count != 1:
+            raise RuntimeError("Sparse browser frame decode returned more than one frame.")
+        if partial.train_camera_names != reference.train_camera_names:
+            raise RuntimeError("Canonical train-camera order changed across sparse frame loads.")
+        if partial.heldout_camera_names != reference.heldout_camera_names:
+            raise RuntimeError("Canonical heldout-camera order changed across sparse frame loads.")
+        if partial.pose_source != reference.pose_source:
+            raise RuntimeError("Canonical pose source changed across sparse frame loads.")
+        for name, actual, expected in (
+            ("train intrinsics", partial.train_K, reference.train_K),
+            ("train poses", partial.train_w2c, reference.train_w2c),
+            ("heldout intrinsics", partial.heldout_K, reference.heldout_K),
+            ("heldout poses", partial.heldout_w2c, reference.heldout_w2c),
+            ("anchor pose", partial.anchor_c2w, reference.anchor_c2w),
+        ):
+            if actual is None or expected is None:
+                if actual is not expected:
+                    raise RuntimeError(f"Canonical {name} availability changed across sparse frame loads.")
+                continue
+            if not torch.allclose(actual, expected, rtol=1.0e-5, atol=1.0e-6):
+                raise RuntimeError(f"Canonical {name} changed across sparse frame loads.")
+
+    heldout_frames = None
+    heldout_w2c = None
+    if reference.heldout_frames is not None:
+        heldout_frames = torch.cat(
+            [partial.heldout_frames for partial in partial_bundles],
+            dim=1,
+        ).contiguous()
+    if reference.heldout_w2c is not None:
+        heldout_w2c = torch.cat(
+            [partial.heldout_w2c for partial in partial_bundles],
+            dim=1,
+        ).contiguous()
+    return _BrowserMulticamExportBundle(
+        train_frames=torch.cat(
+            [partial.train_frames for partial in partial_bundles],
+            dim=1,
+        ).contiguous(),
+        train_K=reference.train_K,
+        train_w2c=torch.cat(
+            [partial.train_w2c for partial in partial_bundles],
+            dim=1,
+        ).contiguous(),
+        train_camera_names=reference.train_camera_names,
+        heldout_frames=heldout_frames,
+        heldout_K=reference.heldout_K,
+        heldout_w2c=heldout_w2c,
+        heldout_camera_names=reference.heldout_camera_names,
+        pose_source=reference.pose_source,
+        anchor_c2w=reference.anchor_c2w,
+        metadata={**(reference.metadata or {}), **record},
+    )
+
+
 def _farthest_point_subset(points: torch.Tensor, count: int) -> torch.Tensor:
     if int(points.shape[0]) <= count:
         return torch.arange(int(points.shape[0]))
@@ -226,6 +375,7 @@ def export_browser_multicam_dataset_bundle(
     seed_count: int,
     seed_provenance_report_path: Path | None = None,
     allow_unverified_seed_provenance: bool = False,
+    sparse_frame_decode: bool = False,
 ) -> Path:
     """Serialize a thin browser adapter over the canonical multicam contract."""
     height, width = target_size
@@ -235,17 +385,26 @@ def export_browser_multicam_dataset_bundle(
             f"Seed point cloud has only {int(points.shape[0])} points before visibility filtering; "
             f"the browser bundle requested {seed_count}."
         )
-    bundle = load_multicam_video_bundle(
-        data_cfg={
-            "multicam_manifest": str(manifest_path),
-            "multicam_split": split,
-            "multicam_sample_id": sample_id,
-            "frame_indices": frame_indices,
-        },
-        camera_cfg={"rig_init": "neural_3d_video"},
-        target_size=target_size,
-        device=torch.device("cpu"),
-    )
+    if sparse_frame_decode:
+        bundle = _load_browser_multicam_sparse_frames(
+            manifest_path=manifest_path,
+            sample_id=sample_id,
+            split=split,
+            target_size=target_size,
+            frame_indices=frame_indices,
+        )
+    else:
+        bundle = load_multicam_video_bundle(
+            data_cfg={
+                "multicam_manifest": str(manifest_path),
+                "multicam_split": split,
+                "multicam_sample_id": sample_id,
+                "frame_indices": frame_indices,
+            },
+            camera_cfg={"rig_init": "neural_3d_video"},
+            target_size=target_size,
+            device=torch.device("cpu"),
+        )
     seed_provenance = _resolve_seed_provenance(
         report_path=seed_provenance_report_path,
         seed_point_cloud_path=seed_point_cloud_path,
@@ -296,6 +455,7 @@ def export_browser_multicam_dataset_bundle(
             "heldout_usage": "validation_only",
             "pose_source": bundle.pose_source,
             "camera_motion": "static_rig",
+            "frame_decode": "sparse_exact" if sparse_frame_decode else "eager_then_select",
         },
         "dataset": str(metadata["dataset"]),
         "scene": str(metadata["scene"]),
@@ -726,6 +886,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-frame-count", type=int, default=8)
     parser.add_argument("--dataset-native-frame-count", type=int, default=300)
     parser.add_argument("--dataset-seed-count", type=int, default=768)
+    parser.add_argument(
+        "--dataset-sparse-frame-decode",
+        action="store_true",
+        help=(
+            "Decode each requested Neural 3D Video timestamp independently instead of "
+            "materializing every source frame up to the final requested index."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -758,6 +926,7 @@ def main() -> None:
             seed_count=args.dataset_seed_count,
             seed_provenance_report_path=args.seed_provenance_report,
             allow_unverified_seed_provenance=args.allow_unverified_seed_provenance,
+            sparse_frame_decode=args.dataset_sparse_frame_decode,
         )
         return
     if args.config is None or args.output_dir is None:

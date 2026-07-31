@@ -1,0 +1,42 @@
+{
+  "version": "dynaworld_browser_multicam_export_recipe/v1",
+  "dataset": {
+    // This is the canonical loader contract. The export script does not
+    // redefine camera calibration, camera roles, or synchronized time.
+    "manifest": "src/dataset_configs/neural3d_coffee_martini_train17_holdout1_full_300f_manifest.jsonl",
+    "expected_manifest_sha256": "ef47ae9d193a4c280743eade17066e1b572fcc690176137919952adf4449b6e2",
+    "sample_id": "neural3d_coffee_martini_train17_holdout_cam06_full_300f",
+    "split": "train17_holdout1",
+    "target_size": [288, 384],
+    "frame_indices": [
+      0, 20, 40, 60, 80, 100, 120, 140,
+      159, 179, 199, 219, 239, 259, 279, 299
+    ],
+    "expected_source_frame_count": 300,
+    "expected_train_camera_count": 17,
+    "expected_heldout_cameras": ["cam06"],
+    "expected_anchor_camera": "cam04",
+    "sparse_frame_decode": true
+  },
+  "seed": {
+    // Rebuild these ignored local artifacts with the existing known-pose
+    // pycolmap command documented in web/dynaworld_browser_trainer/README.md.
+    "point_cloud": "research_experiments/dynamic_foam/artifacts/browser_coffee_martini_train17_known_pose_frame0_1024px.ply",
+    "expected_point_cloud_sha256": "88bc568ac3648ef04b7f33f17a3999931c0179585d46d4606b5761c5fa5c275e",
+    "provenance_report": "research_experiments/dynamic_foam/artifacts/browser_coffee_martini_train17_known_pose_frame0_1024px.json",
+    "count": 768
+  },
+  "output": {
+    "directory": "outputs/browser_bundles/coffee_martini_train17_holdout1_384x288_verified_sparse",
+    "bundle_filename": "coffee_martini_train17_holdout1_384x288_verified_sparse.json",
+    "preflight_report": "outputs/browser_bundles/preflight/coffee_martini_train17_holdout1_384x288_verified_sparse.json"
+  },
+  "preflight": {
+    "minimum_available_memory_bytes": 4294967296,
+    "minimum_free_memory_fraction": 0.25,
+    "maximum_swap_used_fraction": 0.75,
+    "maximum_load_5m_per_logical_cpu": 0.75,
+    "minimum_free_disk_bytes": 2147483648,
+    "working_set_headroom_multiplier": 2.0
+  }
+}
