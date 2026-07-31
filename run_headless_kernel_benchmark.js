@@ -6,6 +6,7 @@ const path = require("path");
 const puppeteer = require("puppeteer");
 
 const ROOT_DIR = path.resolve(__dirname);
+const PRESET_BUNDLE_PATH = path.join(ROOT_DIR, "coffee_martini_train17_holdout1.json");
 const MIME = Object.freeze({
 	".css": "text/css; charset=utf-8",
 	".html": "text/html; charset=utf-8",
@@ -41,6 +42,8 @@ const OPTION_SPECS = Object.freeze({
 	"--max-competing-cpu-fraction": ["maxCompetingCpuFraction", Number, 0.35],
 	"--max-gpu-utilization-percent": ["maxPreflightGpuUtilizationPercent", Number, 35],
 	"--min-available-memory-fraction": ["minAvailableMemoryFraction", Number, 0.10],
+	"--max-swap-used-fraction": ["maxSwapUsedFraction", Number, 0.90],
+	"--max-swap-to-memory-fraction": ["maxSwapUsedToMemoryFraction", Number, 0.25],
 	"--out": ["out", String, null],
 	"--out-dir": ["outDir", String, null],
 	"--run-id": ["runId", String, null],
@@ -85,6 +88,10 @@ The browser is the WebGPU runtime; Bun owns orchestration and artifact output.
                               preflight Apple GPU threshold (default: 35)
   --min-available-memory-fraction N
                               memory-pressure availability floor (default: 0.10)
+  --max-swap-used-fraction N  swap occupancy ceiling (default: 0.90)
+  --max-swap-to-memory-fraction N
+                              used swap / physical memory ceiling (default: 0.25)
+  --preflight-only            print diagnostics without launching Chrome
   --out PATH                 write JSON artifact instead of stdout
   --out-dir PATH             auto-name artifact under PATH/YYYY-MM-DD/
   --run-id ID                sanitized artifact identity for --out-dir
@@ -97,9 +104,14 @@ function parseArgs(argv) {
 	const args = Object.fromEntries(Object.values(OPTION_SPECS).map(
 		([name, _convert, fallback]) => [name, fallback],
 	));
+	args.preflightOnly = false;
 	for (let index = 2; index < argv.length; index += 1) {
 		const flag = argv[index];
 		if (flag === "--help" || flag === "-h") return { help: true };
+		if (flag === "--preflight-only") {
+			args.preflightOnly = true;
+			continue;
+		}
 		const spec = OPTION_SPECS[flag];
 		if (!spec) throw new Error(`Unknown option: ${flag}\n\n${usage()}`);
 		const rawValue = argv[++index];
@@ -124,6 +136,8 @@ function parseArgs(argv) {
 		["--max-competing-cpu-fraction", args.maxCompetingCpuFraction, 0, 1],
 		["--max-gpu-utilization-percent", args.maxPreflightGpuUtilizationPercent, 0, 100],
 		["--min-available-memory-fraction", args.minAvailableMemoryFraction, 0, 1],
+		["--max-swap-used-fraction", args.maxSwapUsedFraction, 0, 1],
+		["--max-swap-to-memory-fraction", args.maxSwapUsedToMemoryFraction, 0, 1],
 	]) {
 		if (value < minimum || value > maximum) {
 			throw new Error(`${name} must be from ${minimum} through ${maximum}.`);
@@ -367,13 +381,41 @@ async function runBenchmark(args) {
 	}
 }
 
-function contentionThresholds(args) {
+function contentionThresholds(args, resourcePlan) {
 	return {
 		maxCpuBusyFraction: args.maxCpuBusyFraction,
 		maxLoadPerLogicalCpu: args.maxLoadPerLogicalCpu,
 		maxCompetingCpuFraction: args.maxCompetingCpuFraction,
 		maxPreflightGpuUtilizationPercent: args.maxPreflightGpuUtilizationPercent,
 		minAvailableMemoryFraction: args.minAvailableMemoryFraction,
+		minAvailableMemoryBytes: resourcePlan.minimumAvailableMemoryBytes,
+		maxSwapUsedFraction: args.maxSwapUsedFraction,
+		maxSwapUsedToMemoryFraction: args.maxSwapUsedToMemoryFraction,
+	};
+}
+
+function readPresetMetadata() {
+	const payload = JSON.parse(fs.readFileSync(PRESET_BUNDLE_PATH, "utf8"));
+	const [width, height] = payload.decode_size ?? [];
+	const cameras = Array.isArray(payload.cameras) ? payload.cameras : [];
+	const trainViewCount = cameras.filter((camera) => camera.role === "train").length;
+	for (const [label, value] of Object.entries({
+		width,
+		height,
+		viewCount: cameras.length,
+		trainViewCount,
+		frameCount: payload.frame_count,
+	})) {
+		if (!Number.isSafeInteger(value) || value < 1) {
+			throw new Error(`Preset bundle has invalid ${label}.`);
+		}
+	}
+	return {
+		width,
+		height,
+		viewCount: cameras.length,
+		trainViewCount,
+		frameCount: payload.frame_count,
 	};
 }
 
@@ -465,8 +507,21 @@ async function main() {
 		process.stdout.write(usage());
 		return;
 	}
-	const { captureHostSnapshot } = await import("./benchmarkHostDiagnostics.js");
-	const thresholds = contentionThresholds(args);
+	const [{ captureHostSnapshot }, { estimateTiledBenchmarkResources }] = await Promise.all([
+		import("./benchmarkHostDiagnostics.js"),
+		import("./benchmarkResourcePlan.js"),
+	]);
+	const resourcePlan = estimateTiledBenchmarkResources(readPresetMetadata(), {
+		...args,
+		tileSize: args.tile,
+		tileCapacity: args.tileCapacity,
+		checkpointPrecision: args.checkpoint,
+		checkpointStride: args.stride,
+	});
+	if (!resourcePlan.valid) {
+		throw new Error(`Requested benchmark resource plan is invalid: ${resourcePlan.reasons.join(" ")}`);
+	}
+	const thresholds = contentionThresholds(args, resourcePlan);
 	const preflight = await captureHostSnapshot({
 		sampleMs: args.contentionSampleMs,
 		thresholds,
@@ -476,6 +531,17 @@ async function main() {
 			`Benchmark host contention: ${preflight.assessment.warnings.join(" ")}\n`,
 		);
 	}
+	if (args.preflightOnly) {
+		process.stdout.write(`${JSON.stringify({
+			schema: "dynaworld-browser-tiled-preflight/v1",
+			recordedAt: new Date().toISOString(),
+			options: args,
+			requestedResourcePlan: resourcePlan,
+			host: preflight,
+			valid: preflight.assessment.quiet && resourcePlan.valid,
+		}, null, 2)}\n`);
+		return;
+	}
 	if (!preflight.assessment.quiet && args.contentionPolicy === "fail") {
 		throw new Error(
 			"Strict contention preflight failed. Close competing work or use "
@@ -483,6 +549,7 @@ async function main() {
 		);
 	}
 	const report = await runBenchmark(args);
+	report.requestedResourcePlan = resourcePlan;
 	await delay(args.postflightCooldownMs);
 	const postflight = await captureHostSnapshot({
 		sampleMs: args.contentionSampleMs,

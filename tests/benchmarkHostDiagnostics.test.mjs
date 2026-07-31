@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	DEFAULT_THRESHOLDS,
 	cpuBusyFraction,
 	evaluateHostSnapshot,
 	parseAppleGpuSnapshot,
@@ -99,10 +100,72 @@ test("host validity explains every exceeded contention threshold", () => {
 		maxCompetingCpuFraction: 0.35,
 		maxPreflightGpuUtilizationPercent: 35,
 		minAvailableMemoryFraction: 0.10,
+		minAvailableMemoryBytes: 0,
+		maxSwapUsedFraction: 0.90,
+		maxSwapUsedToMemoryFraction: 0.25,
 	});
 	assert.equal(assessment.quiet, false);
 	assert.equal(assessment.warnings.length, 5);
 	assert.match(assessment.warnings.join(" "), /Apple GPU utilization 94%/);
+});
+
+test("high swap occupancy invalidates an otherwise quiet benchmark host", () => {
+	const assessment = evaluateHostSnapshot({
+		platform: "darwin",
+		cpuBusyFraction: 0.1,
+		cpuBusySource: "top-second-sample",
+		loadPerLogicalCpu: 0.1,
+		availableMemoryFraction: 0.33,
+		swap: { usedFraction: 0.959 },
+		processPressure: { competingCpuFraction: 0.1 },
+		appleGpu: { available: true, deviceUtilizationPercent: 0 },
+		thermal: { thermalWarning: false, performanceWarning: false },
+	});
+	assert.equal(assessment.quiet, false);
+	assert.match(assessment.warnings.join(" "), /Swap used fraction 0.959 exceeds 0.9/);
+});
+
+test("swap growth cannot hide excessive used bytes", () => {
+	const assessment = evaluateHostSnapshot({
+		platform: "darwin",
+		totalMemoryBytes: 24 * 1024 ** 3,
+		cpuBusyFraction: 0.1,
+		cpuBusySource: "top-second-sample",
+		loadPerLogicalCpu: 0.1,
+		availableMemoryFraction: 0.33,
+		availableMemoryBytes: 8 * 1024 ** 3,
+		swap: {
+			totalBytes: 12 * 1024 ** 3,
+			usedBytes: 10 * 1024 ** 3,
+			usedFraction: 10 / 12,
+		},
+		processPressure: { competingCpuFraction: 0.1 },
+		appleGpu: { available: true, deviceUtilizationPercent: 0 },
+		thermal: { thermalWarning: false, performanceWarning: false },
+	});
+	assert.equal(assessment.quiet, false);
+	assert.doesNotMatch(assessment.warnings.join(" "), /Swap used fraction/);
+	assert.match(assessment.warnings.join(" "), /Swap uses 0.417 of physical memory/);
+});
+
+test("requested benchmark headroom is enforced in bytes", () => {
+	const assessment = evaluateHostSnapshot({
+		platform: "darwin",
+		cpuBusyFraction: 0.1,
+		cpuBusySource: "top-second-sample",
+		loadPerLogicalCpu: 0.1,
+		availableMemoryFraction: 0.2,
+		availableMemoryBytes: 1024,
+		swap: { usedFraction: 0.1 },
+		processPressure: { competingCpuFraction: 0.1 },
+		appleGpu: { available: true, deviceUtilizationPercent: 0 },
+		thermal: { thermalWarning: false, performanceWarning: false },
+	}, {
+		...DEFAULT_THRESHOLDS,
+		minAvailableMemoryBytes: 2048,
+	});
+	assert.equal(assessment.quiet, false);
+	assert.match(assessment.warnings.join(" "), /below the requested 2048-byte benchmark headroom/);
 });
 
 test("missing Apple GPU telemetry fails closed for promotion on macOS", () => {
