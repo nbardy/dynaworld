@@ -35,8 +35,8 @@ test("resource estimator tracks the saved 30K/96 allocations plus sparse-prefix 
 	assert.deepEqual(
 		report.variants.map(({ id, allocatedBytes }) => ({ id, allocatedBytes })),
 		[
-			{ id: "direct-3d", allocatedBytes: 43_589_956 },
-			{ id: "staged-project3d", allocatedBytes: 39_749_956 },
+			{ id: "direct-3d", allocatedBytes: 43_591_476 },
+			{ id: "staged-project3d", allocatedBytes: 39_751_476 },
 		],
 	);
 });

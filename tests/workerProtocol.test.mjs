@@ -68,6 +68,25 @@ test("live preview can be disabled without pausing optimization", async () => {
 	assert.match(appSource, /enabled:\s*controls\.live\.checked/);
 });
 
+test("SPA exposes a render-only orbit camera and real 4x-linear dataset preset", async () => {
+	const [htmlSource, appSource, workerSource, trainerSource] = await Promise.all([
+		readFile(new URL("../index.html", import.meta.url), "utf8"),
+		readFile(new URL("../app.js", import.meta.url), "utf8"),
+		readFile(new URL("../trainingWorker.js", import.meta.url), "utf8"),
+		readFile(new URL("../trainerWebGpu3d.js", import.meta.url), "utf8"),
+	]);
+	assert.match(htmlSource, /id="resolutionSelect"/);
+	assert.match(htmlSource, /option value="384x288"/);
+	assert.match(htmlSource, /id="resultCameraModeSelect"/);
+	assert.match(appSource, /viewIndices:\s*previewCamera\s*\?\s*null\s*:\s*dataset\?\.[\s\S]{0,120}previewCamera\s*}/);
+	assert.match(appSource, /renderCanvas\.addEventListener\("pointermove"/);
+	assert.match(appSource, /renderCanvas\.addEventListener\("wheel"/);
+	assert.match(workerSource, /renderOptions\.previewCamera/);
+	assert.match(trainerSource, /target, cameras, renderCameras, trainViews/);
+	assert.match(trainerSource, /binding:\s*2, resource:\s*\{ buffer:\s*this\.buffers\.renderCameras/);
+	assert.match(trainerSource, /binding:\s*4, resource:\s*\{ buffer:\s*this\.buffers\.cameras/);
+});
+
 test("regular metric telemetry reports topology growth without full validation", async () => {
 	const [workerSource, appSource] = await Promise.all([
 		readFile(new URL("../trainingWorker.js", import.meta.url), "utf8"),

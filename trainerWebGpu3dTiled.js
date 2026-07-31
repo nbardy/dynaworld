@@ -2762,7 +2762,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			sampledWorkspace: size(this.buffers.sampleGradients) + size(this.buffers.sampleLosses),
 			targetPage: size(this.buffers.target),
 			packedTargetPage: size(this.buffers.targetPacked),
-			cameraData: size(this.buffers.cameras) + size(this.buffers.trainViews)
+			cameraData: size(this.buffers.cameras) + size(this.buffers.renderCameras) + size(this.buffers.trainViews)
 				+ size(this.buffers.cameraSampleIndices) + size(this.buffers.cameraSampleRanges),
 			rasterPairs: size(this.buffers.pairData) + size(this.buffers.tileCounts),
 			transmittanceCheckpoints: size(this.buffers.checkpoints),
