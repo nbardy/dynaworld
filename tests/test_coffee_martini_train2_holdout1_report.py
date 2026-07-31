@@ -8,17 +8,19 @@ from research_experiments.paper_runner_suite.coffee_martini_train2_holdout1_repo
 )
 
 
-def test_current_coffee_martini_artifacts_prove_matched_seed17_pilot() -> None:
+def test_saved_coffee_martini_artifacts_fail_closed_on_legacy_camera_axes() -> None:
     report = build_report()
 
-    assert verify_report(report) == []
-    assert report["status"] == "ok"
+    assert verify_report(report) == ["status must be ok", "gate calibration_ok must be true"]
+    assert report["status"] == "failed"
     assert report["paper_rankable"] is False
     assert report["train_cameras"] == EXPECTED_TRAIN_CAMERAS
     assert report["heldout_cameras"] == EXPECTED_HELDOUT_CAMERAS
+    assert report["pose_source"] == "neural_3d_llff_relative_pinhole"
+    assert report["required_pose_source"] == "neural_3d_llff_opencv_relative_pinhole_v2"
     assert report["gates"] == {
         "split_ok": True,
-        "calibration_ok": True,
+        "calibration_ok": False,
         "separate_train_and_heldout_metrics_ok": True,
         "matched_for_ranking": True,
         "three_seed_repeat_ok": False,

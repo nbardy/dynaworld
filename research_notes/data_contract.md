@@ -34,6 +34,14 @@ poses, and marks heldout cameras `validation_only`. The browser may optimize on
 serialized train views only; changing that split requires changing the
 canonical manifest/loader contract first.
 
+Neural 3D Video `poses_bounds.npy` rows use raw LLFF storage axes
+`[down, right, backwards]`. The canonical loader converts them to OpenCV
+`[right, down, forwards]` by reordering columns `[1, 0, 2]` and negating the
+third column. Corrected bundles identify this contract as
+`neural_3d_llff_opencv_relative_pinhole_v2`; artifacts carrying the older
+`neural_3d_llff_relative_pinhole` identity must not be mixed into corrected
+camera comparisons or reused for known-pose triangulation.
+
 Browser initialization is part of this split contract. A verified seed report
 must name its construction method, every input camera, whether train-only use
 was verified, and the coordinate frame of the points. The exporter rejects any

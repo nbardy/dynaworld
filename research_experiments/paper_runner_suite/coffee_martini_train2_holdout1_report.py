@@ -26,6 +26,7 @@ DEFAULT_CAMERA_AUDIT = (
 DEFAULT_OUT_DIR = ROOT / "outputs" / "benchmarks" / "2026-07-11_coffee_martini_train2_holdout1_protocol"
 EXPECTED_TRAIN_CAMERAS = ["cam04", "cam09"]
 EXPECTED_HELDOUT_CAMERAS = ["cam06"]
+EXPECTED_POSE_SOURCE = "neural_3d_llff_opencv_relative_pinhole_v2"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -130,7 +131,7 @@ def build_report(
         and audit["heldout_cameras"] == EXPECTED_HELDOUT_CAMERAS
     )
     calibration_ok = (
-        comparison["meta"]["pose_source"] == "neural_3d_llff_relative_pinhole"
+        comparison["meta"]["pose_source"] == EXPECTED_POSE_SOURCE
         and all(camera["lens_model"] == "pinhole" for group in audit["rows"] for camera in group["cameras"])
     )
     metrics_ok = all(
@@ -144,7 +145,8 @@ def build_report(
         "scene": "coffee_martini",
         "train_cameras": EXPECTED_TRAIN_CAMERAS,
         "heldout_cameras": EXPECTED_HELDOUT_CAMERAS,
-        "pose_source": "neural_3d_llff_relative_pinhole",
+        "pose_source": comparison["meta"]["pose_source"],
+        "required_pose_source": EXPECTED_POSE_SOURCE,
         "rows": rows,
         "gates": {
             "split_ok": split_ok,

@@ -753,26 +753,21 @@ def make_aist_multiview_cameras(
 # loader convention used by Neural_3D_Video, K-Planes, MixVoxels, and 4DGS.
 #
 # poses_bounds.npy schema (per row of 17 float64):
-#     [ 0:15 ] flattened 3x5 "pose-hwf" matrix in column-major LLFF order:
-#                  R0  R1  R2  t   hwf
-#                  -- 3x4 ----  -- 3x1 --
-#         columns 0..2  : LLFF rotation columns (camera basis vectors in world space)
+#     [ 0:15 ] flattened 3x5 "pose-hwf" matrix in LLFF storage order:
+#                  down  right  back  t   hwf
+#                  ----- 3x4 ------  -- 3x1 --
+#         columns 0..2  : camera basis vectors in world space
 #         column   3    : world-space camera position (translation, c2w[:3, 3])
 #         column   4    : [H, W, focal] in *native* pixel units
 #     [15:17 ] [near, far] depth bounds for the scene (LLFF NDC bounds, unused here)
 #
-# LLFF axis convention (the historical NeRF/Mildenhall convention):
-#     x_cam = right     (matches OpenCV +X)
-#     y_cam = up        (opposite of OpenCV +Y, which points down)
-#     z_cam = back      (opposite of OpenCV +Z, which points forward into the scene)
-# i.e. LLFF cameras "look down -z" in their own frame, while OpenCV cameras
-# "look down +z".
-#
-# Convert LLFF rotation columns -> OpenCV rotation columns:
-#     R_opencv = R_llff @ diag([+1, -1, -1])
-# This negates the y and z basis vectors, equivalently swapping LLFF's up/back
-# pair to OpenCV's down/forward pair, while keeping the right axis. This is the
-# standard `nerf_synthetic`/`run_nerf_helpers.recenter_poses` flip in matrix form.
+# Raw poses_bounds rows use LLFF's documented [down, right, backwards] basis,
+# not the post-load NeRF [right, up, backwards] basis. Convert the stored
+# columns directly to OpenCV [right, down, forwards]:
+#     R_opencv = R_stored[:, [1, 0, 2]] @ diag([+1, +1, -1])
+# A sign-only NeRF-to-OpenCV flip is wrong at this ingestion boundary because
+# it omits the raw LLFF down/right column swap. Real Coffee Martini epipolar
+# matches are the regression signal for this distinction.
 #
 # Translation (c2w[:3, 3]) is already in world coordinates and does NOT need
 # the axis flip -- only the rotation columns do. World scene scale is in the
@@ -845,17 +840,16 @@ def neural_3d_camera_from_poses_bounds(
     row_index = camera_names.index(camera_name)
 
     pose_hwf = poses_bounds[row_index, :15].reshape(3, 5)
-    rotation_llff = pose_hwf[:, :3]                       # 3x3, LLFF basis columns.
+    rotation_llff_stored = pose_hwf[:, :3]                # 3x3, [down, right, back].
     translation = pose_hwf[:, 3]                          # 3,   world-space camera position.
     height_native = float(pose_hwf[0, 4])
     width_native = float(pose_hwf[1, 4])
     focal_native = float(pose_hwf[2, 4])
 
-    # LLFF -> OpenCV rotation: negate the y and z basis vectors (the second
-    # and third columns of the rotation matrix). Equivalent to right-multiplying
-    # by diag([+1, -1, -1]).
-    llff_to_opencv = np.diag([1.0, -1.0, -1.0]).astype(np.float32)
-    rotation_opencv = rotation_llff @ llff_to_opencv
+    # Raw LLFF storage -> OpenCV: [down, right, back] becomes
+    # [right, down, forward]. Translation is already world-space and unchanged.
+    rotation_opencv = rotation_llff_stored[:, [1, 0, 2]].copy()
+    rotation_opencv[:, 2] *= -1.0
 
     c2w = np.eye(4, dtype=np.float32)
     c2w[:3, :3] = rotation_opencv
@@ -940,7 +934,7 @@ def make_neural_3d_multiview_cameras(
         torch.stack(train_w2c, dim=0),
         torch.stack(heldout_K, dim=0),
         torch.stack(heldout_w2c, dim=0),
-        "neural_3d_llff_relative_pinhole",
+        "neural_3d_llff_opencv_relative_pinhole_v2",
     )
 
 

@@ -13,6 +13,7 @@ DEFAULT_OUT_DIR = DEFAULT_SWEEP_DIR / "report"
 EXPECTED_SEEDS = [17, 29, 43]
 EXPECTED_TRAIN_CAMERAS = ["cam04", "cam09"]
 EXPECTED_HELDOUT_CAMERAS = ["cam06"]
+EXPECTED_POSE_SOURCE = "neural_3d_llff_opencv_relative_pinhole_v2"
 REPRESENTATIONS = ("world_tubes", "dynamic_3dgs", "worldfoam")
 METRIC_KEYS = ("train_psnr", "train_ssim", "train_l1", "heldout_psnr", "heldout_ssim", "heldout_l1")
 
@@ -75,7 +76,13 @@ def _comparison_row(
     }
 
 
-def _worldfoam_row(seed: int, worldfoam_dir: Path, provenance: dict[str, Any]) -> dict[str, Any]:
+def _worldfoam_row(
+    seed: int,
+    worldfoam_dir: Path,
+    provenance: dict[str, Any],
+    *,
+    pose_source: str,
+) -> dict[str, Any]:
     resolved = _load_json(worldfoam_dir / "resolved_config.json")
     final = _last_jsonl(worldfoam_dir / "eval_metrics_history.jsonl")
     train_final = _last_jsonl(worldfoam_dir / "train_metrics_history.jsonl")
@@ -95,7 +102,7 @@ def _worldfoam_row(seed: int, worldfoam_dir: Path, provenance: dict[str, Any]) -
         "heldout_ssim": float(metrics["heldout_eval_ssim"]),
         "heldout_l1": float(metrics["heldout_eval_l1"]),
         "train_loop_elapsed_s": float(train_final["elapsed_s"]),
-        "pose_source": "neural_3d_llff_relative_pinhole",
+        "pose_source": pose_source,
         "policy": None,
         "wandb": provenance,
         "artifact": _relative(worldfoam_dir / "best_metrics.json"),
@@ -153,7 +160,12 @@ def build_report(sweep_dir: Path = DEFAULT_SWEEP_DIR) -> dict[str, Any]:
                     report=comparison,
                     provenance=run["wandb"]["dynamic_3dgs"],
                 ),
-                _worldfoam_row(seed, ROOT / run["worldfoam_dir"], run["wandb"]["worldfoam"]),
+                _worldfoam_row(
+                    seed,
+                    ROOT / run["worldfoam_dir"],
+                    run["wandb"]["worldfoam"],
+                    pose_source=comparison["meta"]["pose_source"],
+                ),
             ]
         )
     grouped = {representation: [row for row in rows if row["representation"] == representation] for representation in REPRESENTATIONS}
@@ -172,6 +184,7 @@ def build_report(sweep_dir: Path = DEFAULT_SWEEP_DIR) -> dict[str, Any]:
     gates = {
         "exact_three_seeds_ok": manifest["seeds"] == EXPECTED_SEEDS and all(len(grouped[key]) == 3 for key in REPRESENTATIONS),
         "camera_split_ok": manifest["train_cameras"] == EXPECTED_TRAIN_CAMERAS and manifest["heldout_cameras"] == EXPECTED_HELDOUT_CAMERAS,
+        "calibration_ok": all(row["pose_source"] == EXPECTED_POSE_SOURCE for row in rows),
         "matched_budget_ok": exact_contract,
         "separate_train_heldout_metrics_ok": all(all(isinstance(row[key], float) for key in METRIC_KEYS) for row in rows),
         "world_tubes_promotion_policy_ok": promotion_ok,
@@ -185,6 +198,7 @@ def build_report(sweep_dir: Path = DEFAULT_SWEEP_DIR) -> dict[str, Any]:
         "dataset": "Neural 3D Video/coffee_martini",
         "train_cameras": EXPECTED_TRAIN_CAMERAS,
         "heldout_cameras": EXPECTED_HELDOUT_CAMERAS,
+        "required_pose_source": EXPECTED_POSE_SOURCE,
         "seeds": EXPECTED_SEEDS,
         "rows": rows,
         "aggregate": aggregate,

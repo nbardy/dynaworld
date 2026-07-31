@@ -496,6 +496,7 @@ def test_coffee_martini_train17_browser_bundle_is_portable_and_validation_only()
     assert payload["dataset_contract"]["split"] == "train17_holdout1"
     assert payload["dataset_contract"]["heldout_usage"] == "validation_only"
     assert payload["dataset_contract"]["camera_motion"] == "static_rig"
+    assert payload["dataset_contract"]["pose_source"] == "neural_3d_llff_opencv_relative_pinhole_v2"
     assert payload["decode_size"] == [96, 72]
     assert payload["frame_count"] == 16
     assert payload["frame_indices"] == [
@@ -504,6 +505,15 @@ def test_coffee_martini_train17_browser_bundle_is_portable_and_validation_only()
     assert len(train_cameras) == 17
     assert [camera["name"] for camera in heldout_cameras] == ["cam06"]
     assert len(payload["seed_points_xyzrgb"]) == 4096
+    assert payload["seed_coordinate_frame"] == "cam04_opencv"
+    assert payload["seed_provenance"] == {
+        "method": "external_unverified",
+        "source_report": None,
+        "source_path": "data/external/ex4dgs_pretrained/extracted/coffee_martini/input.ply",
+        "input_cameras": [],
+        "train_only_verified": False,
+        "coordinate_frame": "world",
+    }
 
     for camera in payload["cameras"]:
         assert "video_url" not in camera

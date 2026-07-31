@@ -51,6 +51,51 @@ def test_camera_start_seconds_allows_synchronized_extra_camera_sources() -> None
     assert camera_start_seconds(record, "c09") == 2.0
 
 
+def test_neural_3d_raw_llff_axes_convert_to_opencv(tmp_path: Path) -> None:
+    import numpy as np
+
+    scene_dir = tmp_path / "neural_3d_scene"
+    scene_dir.mkdir()
+    (scene_dir / "cam04.mp4").touch()
+
+    # LLFF stores c2w basis columns as [down, right, backwards]. For an
+    # identity OpenCV camera [right, down, forwards], that raw block is
+    # [e_y, e_x, -e_z]. A sign-only conversion cannot recover identity.
+    pose_hwf = np.array(
+        [
+            [0.0, 1.0, 0.0, 1.0, 100.0],
+            [1.0, 0.0, 0.0, 2.0, 200.0],
+            [0.0, 0.0, -1.0, 3.0, 80.0],
+        ],
+        dtype=np.float32,
+    )
+    np.save(scene_dir / "poses_bounds.npy", np.concatenate([pose_hwf.reshape(-1), [0.1, 10.0]])[None])
+
+    K, c2w = multicam_video_data.neural_3d_camera_from_poses_bounds(
+        {"sample_id": "fixture", "dataset_scene_dir": str(scene_dir)},
+        "cam04",
+        H=50,
+        W=100,
+        device=torch.device("cpu"),
+    )
+
+    torch.testing.assert_close(
+        K,
+        torch.tensor([[40.0, 0.0, 50.0], [0.0, 40.0, 25.0], [0.0, 0.0, 1.0]]),
+    )
+    torch.testing.assert_close(
+        c2w,
+        torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 2.0],
+                [0.0, 0.0, 1.0, 3.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        ),
+    )
+
+
 def test_load_multicam_video_bundle_preserves_train_heldout_and_condition_contract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

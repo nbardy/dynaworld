@@ -41,6 +41,11 @@ and the routed strategic docs it names before proposing a new direction.
 
 ## Current Project State
 
+As of 2026-07-31, Neural3D calibration artifacts must use pose source
+`neural_3d_llff_opencv_relative_pinhole_v2`. The prior sign-only conversion
+misread raw LLFF `[down,right,back]` axes; old Neural3D metrics and known-pose
+point clouds are diagnostics only until rerun. See `research_notes/data_contract.md`.
+
 As of 2026-07-22, the submission evidence spine is also executable and
 fail-closed. Evidence schema v1 adds LPIPS, sampled peak device memory,
 serialized storage, synchronized phase timing, and trace/event/fallback
