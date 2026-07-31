@@ -58,11 +58,11 @@
 
 					<label id="growthCapacityField" class="field">
 						<span>Max Splats</span>
-						<select id="growthCapacitySelect" title="Reserve model state now; dormant slots skip projection until GPU splitting activates them">
-								<option value="8192">8,192</option>
-								<option value="16384">16,384</option>
-								<option value="24576">24,576</option>
-								<option value="30000">30,000 (stress)</option>
+						<select id="growthCapacitySelect" title="Start from all 4,096 verified SfM seeds; dormant reserve slots stay cheap until GPU splitting activates them">
+							<option value="8192">8,192</option>
+							<option value="16384">16,384</option>
+							<option value="24576">24,576</option>
+							<option value="30000" selected>30,000</option>
 						</select>
 					</label>
 

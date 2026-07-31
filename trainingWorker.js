@@ -34,9 +34,9 @@ let renderOptions = { enabled: true, time: 0.35, modelMode: 0, temporalSigma: 0.
 	viewIndex: 0, viewIndices: null };
 let burstSteps = 8;
 let maxQueuedSteps = 32;
-let metricEvery = 256;
+let metricEvery = 512;
 let validationEvery = 0;
-let renderFps = 20;
+let renderFps = 15;
 let metricsPending = false;
 let validationPending = false;
 let latestLoss = Number.NaN;
