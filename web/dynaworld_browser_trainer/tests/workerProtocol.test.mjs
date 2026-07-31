@@ -81,8 +81,8 @@ test("regular metric telemetry reports topology growth without full validation",
 });
 
 test("tiled telemetry uses a GPU cycle mean independent of UI readback cadence", async () => {
-	assert.equal(TILED_METRIC_INTERVAL, 256);
-	assert.equal(resolveTrainerBackend("tiled3d-fast").defaultSchedule.metricEvery, 256);
+	assert.equal(TILED_METRIC_INTERVAL, 512);
+	assert.equal(resolveTrainerBackend("tiled3d-fast").defaultSchedule.metricEvery, 512);
 	const [trainerSource, appSource] = await Promise.all([
 		readFile(new URL("../trainerWebGpu3dTiled.js", import.meta.url), "utf8"),
 		readFile(new URL("../app.js", import.meta.url), "utf8"),
@@ -110,9 +110,11 @@ test("SPA defaults to the complete seed bank and unweighted training with opt-in
 	]);
 	assert.match(htmlSource, /id="splatSlider"[^>]+value="4096"/);
 	assert.match(htmlSource, /id="growthCapacitySelect"/);
-	assert.match(htmlSource, /option value="30000"/);
+	assert.match(htmlSource, /option value="30000" selected/);
 	assert.doesNotMatch(htmlSource, /option value="32768"/);
 	assert.match(appSource, /growthCapacity:\s*sampledBackendSelected\(\)\s*\?\s*null/);
+	assert.match(appSource, /const RENDER_FPS = 15/);
+	assert.match(appSource, /const VALIDATION_STEP_INTERVAL = 16384/);
 	assert.doesNotMatch(htmlSource.match(/<input id="staticWarmupToggle"[^>]+>/)?.[0] ?? "", /checked/);
 	assert.doesNotMatch(htmlSource.match(/<input id="motionWeightingToggle"[^>]+>/)?.[0] ?? "", /checked/);
 	assert.match(htmlSource, /id="phaseValue"/);

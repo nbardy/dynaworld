@@ -2,7 +2,7 @@ export const DEFAULT_TRAINER_BACKEND = "tiled3d-fast";
 // This only controls asynchronous UI readback cadence. The tiled kernel keeps
 // a GPU-resident full camera/time-cycle mean, so burst quantization cannot
 // alias the chart back onto a small recurring set of training pairs.
-export const TILED_METRIC_INTERVAL = 256;
+export const TILED_METRIC_INTERVAL = 512;
 
 export const TRAINER_BACKENDS = Object.freeze({
 	"tiled3d-fast": Object.freeze({

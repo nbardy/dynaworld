@@ -19,7 +19,7 @@ test("the parity-validated fast tiled lane is the default browser trainer", () =
 		trainingUnit: "full image",
 		maxAspectRatio: 6,
 		sampledControls: false,
-		defaultSchedule: { burstSteps: 8, metricEvery: 256, maxQueuedSteps: 32 },
+		defaultSchedule: { burstSteps: 8, metricEvery: 512, maxQueuedSteps: 32 },
 	});
 });
 
