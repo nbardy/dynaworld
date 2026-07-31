@@ -12,6 +12,7 @@ import {
 	normalizeQuaternionCpu,
 	normalizeDatasetGeometry,
 	projectAnisotropicGaussianCpu,
+	resolveActiveSplatCount,
 	resolveAnchorCameraIndex,
 	screenSpaceFilterVariance,
 	sortProjectedSplatsBackToFront,
@@ -142,6 +143,14 @@ test("geometry normalization follows the declared seed-coordinate anchor", () =>
 	assertClose(normalized.geometryScale, 0.05);
 	assertClose(normalized.seedPoints[2], 0.5);
 	assertClose(normalized.cameras[0].worldToCamera[11], 4.5);
+});
+
+test("reserved growth capacity is excluded from active render and validation counts", () => {
+	assert.equal(resolveActiveSplatCount(30000), 30000);
+	assert.equal(resolveActiveSplatCount(30000, 4096), 4096);
+	assert.throws(() => resolveActiveSplatCount(30000, 30001), /no larger than capacity/);
+	assert.match(source, /const splatCount = resolveActiveSplatCount\(this\.splatCount, this\.activeSplatCount\)/);
+	assert.match(source, /pass\.draw\(4, splatCount\)/);
 });
 
 test("point-cloud initialization starts with bounded local anisotropy", () => {

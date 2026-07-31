@@ -117,6 +117,17 @@ export function resolveRenderViewIndices(dataset, requested = null) {
 	return Array.from({ length: Math.min(MAX_RENDER_VIEWS, dataset.cameras.length) }, (_, index) => index);
 }
 
+export function resolveActiveSplatCount(capacity, active = null) {
+	if (!Number.isSafeInteger(capacity) || capacity < 1) {
+		throw new RangeError("Splat capacity must be a positive safe integer.");
+	}
+	if (active == null) return capacity;
+	if (!Number.isSafeInteger(active) || active < 1 || active > capacity) {
+		throw new RangeError("Active splat count must be a positive safe integer no larger than capacity.");
+	}
+	return active;
+}
+
 function sigmoid(value) {
 	return 1 / (1 + Math.exp(-value));
 }
@@ -1739,21 +1750,24 @@ export class DynamicSplatWebGpu3dTrainer {
 
 	async readValidationMetrics({ modelMode = 0, temporalSigma = 0.30, gridSize = 16 } = {}) {
 		const params = await this.readParams();
+		const splatCount = resolveActiveSplatCount(this.splatCount, this.activeSplatCount);
 		const metrics = computeSnapshotValidationMetrics(this.dataset, params, {
-			splatCount: this.splatCount, modelMode, temporalSigma, gridSize,
+			splatCount, modelMode, temporalSigma, gridSize,
 		});
+		const activeValues = splatCount * SPLAT_FLOATS;
 		let delta = 0;
-		for (let i = 0; i < params.length; i += 1) delta += Math.abs(params[i] - this.initialParams[i]);
-		return { ...metrics, parameterDelta: delta / params.length, totalRecycled: this.totalRecycled };
+		for (let i = 0; i < activeValues; i += 1) delta += Math.abs(params[i] - this.initialParams[i]);
+		return { ...metrics, parameterDelta: delta / activeValues, totalRecycled: this.totalRecycled };
 	}
 
 	async readPreviewErrorImage({ time = 0.35, modelMode = 0, temporalSigma = 0.30, viewIndex = null } = {}) {
 		const params = await this.readParams(); const view = viewIndex ?? this.dataset.heldoutViewIndex;
+		const splatCount = resolveActiveSplatCount(this.splatCount, this.activeSplatCount);
 		const frame = Math.round(time * (this.dataset.frameCount - 1)); const pixels = this.dataset.width * this.dataset.height;
 		const data = new Uint8ClampedArray(pixels * 4); let meanAbs = 0;
 		for (let pixel = 0; pixel < pixels; pixel += 1) {
 			const x = pixel % this.dataset.width; const y = Math.floor(pixel / this.dataset.width);
-			const result = evalModelCpu(this.dataset, params, this.splatCount, view, frame,
+			const result = evalModelCpu(this.dataset, params, splatCount, view, frame,
 				(x + 0.5) / this.dataset.width, (y + 0.5) / this.dataset.height, modelMode, temporalSigma);
 			const base = ((view * this.dataset.frameCount + frame) * pixels + pixel) * 4;
 			const e = Math.sqrt(((result.colorR - readFrameBankValue(this.dataset, base)) ** 2
@@ -1786,12 +1800,13 @@ export class DynamicSplatWebGpu3dTrainer {
 		viewIndices = null) {
 		if (!this.buffers || !this.device || !this.context) return;
 		this.resizeCanvas();
+		const splatCount = resolveActiveSplatCount(this.splatCount, this.activeSplatCount);
 		const resolvedViewIndices = resolveRenderViewIndices(this.dataset, viewIndices);
 		const renderViews = resolvedViewIndices.length;
 		const panelWidth = this.canvas.width / renderViews;
 		for (let panel = 0; panel < renderViews; panel += 1) {
 			writeRenderConfig(this.renderConfigBytes[panel], { width: panelWidth, height: this.canvas.height,
-				time, splatCount: this.splatCount, modelMode, targetAspect: this.dataset.width / this.dataset.height,
+				time, splatCount, modelMode, targetAspect: this.dataset.width / this.dataset.height,
 				temporalSigma, targetWidth: this.dataset.width, targetHeight: this.dataset.height, renderMode,
 				viewIndex: renderViews > 1 ? resolvedViewIndices[panel] : (resolvedViewIndices[0] ?? viewIndex) });
 			this.device.queue.writeBuffer(this.buffers.renderConfig[panel], 0, this.renderConfigBytes[panel]);
@@ -1812,7 +1827,7 @@ export class DynamicSplatWebGpu3dTrainer {
 			pass.setViewport(left, 0, right - left, this.canvas.height, 0, 1);
 			pass.setScissorRect(left, 0, right - left, this.canvas.height);
 			pass.setBindGroup(0, this.bindGroups.render[this.currentIndex][panel]);
-			pass.draw(4, this.splatCount);
+			pass.draw(4, splatCount);
 		}
 		pass.end(); this.device.queue.submit([encoder.finish()]);
 	}

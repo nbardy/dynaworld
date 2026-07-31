@@ -1,4 +1,8 @@
-import { resolveCamerasPerStep, resolveRenderViewIndices } from "./trainerWebGpu3d.js?v=20260731-compactfp16-5";
+import {
+	resolveActiveSplatCount,
+	resolveCamerasPerStep,
+	resolveRenderViewIndices,
+} from "./trainerWebGpu3d.js?v=20260731-compactfp16-5";
 import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260731-compactfp16-5";
 import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
@@ -138,7 +142,8 @@ function requestValidation(options = {}) {
 	// The queue copy and map complete asynchronously. Command submission continues in pump().
 	trainer.readParams().then((params) => {
 		validationWorker.postMessage({ version: WORKER_PROTOCOL_VERSION, type: "validate", step,
-			options: { splatCount: trainer.splatCount, modelMode: trainOptions.modelMode,
+			options: { splatCount: resolveActiveSplatCount(trainer.splatCount, trainer.activeSplatCount),
+				modelMode: trainOptions.modelMode,
 				temporalSigma: trainOptions.temporalSigma,
 				totalRecycled: trainer.totalRecycled,
 				maxAspectRatio: backendDescriptor?.maxAspectRatio ?? 3,
