@@ -524,6 +524,27 @@ function packCameras(cameras) {
 	return packed;
 }
 
+export function packPreviewCamera(camera, geometryScale = 1) {
+	if (!camera?.worldToCamera || camera.worldToCamera.length !== 16
+		|| !Array.from(camera.worldToCamera).every(Number.isFinite)) {
+		throw new TypeError("Preview camera worldToCamera must contain 16 finite values.");
+	}
+	if (!camera?.intrinsics || camera.intrinsics.length !== 4
+		|| !Array.from(camera.intrinsics).every(Number.isFinite)) {
+		throw new TypeError("Preview camera intrinsics must contain four finite values.");
+	}
+	if (!Number.isFinite(geometryScale) || geometryScale <= 0) {
+		throw new RangeError("Preview camera geometry scale must be finite and positive.");
+	}
+	const packed = new Float32Array(20);
+	packed.set(camera.worldToCamera);
+	packed[3] *= geometryScale;
+	packed[7] *= geometryScale;
+	packed[11] *= geometryScale;
+	packed.set(camera.intrinsics, 16);
+	return packed;
+}
+
 export function packSamplesByCamera(dataset) {
 	const pixelsPerViewFrame = dataset.width * dataset.height * dataset.frameCount;
 	const motion = Array.from({ length: dataset.cameras.length }, () => []);
@@ -1569,6 +1590,14 @@ export class DynamicSplatWebGpu3dTrainer {
 		this.initializeTargetBuffer(target);
 		const cameraData = packCameras(this.dataset.cameras); const cameras = makeBuffer(cameraData.byteLength,
 			GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST); this.device.queue.writeBuffer(cameras, 0, cameraData);
+		// Rendering gets one private camera slot so interactive novel views can
+		// never mutate calibrated camera bytes used by training or validation.
+		const renderCameraData = new Float32Array(cameraData.length + 20);
+		renderCameraData.set(cameraData);
+		renderCameraData.set(cameraData.subarray(0, 20), cameraData.length);
+		const renderCameras = makeBuffer(renderCameraData.byteLength,
+			GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+		this.device.queue.writeBuffer(renderCameras, 0, renderCameraData);
 		const trainViewData = new Uint32Array(this.trainViewIndices);
 		const trainViews = makeBuffer(trainViewData.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
 		this.device.queue.writeBuffer(trainViews, 0, trainViewData);
@@ -1601,7 +1630,7 @@ export class DynamicSplatWebGpu3dTrainer {
 		const renderOrder = Array.from({ length: MAX_RENDER_VIEWS }, () => makeBuffer(renderSortCapacity * 4));
 		const renderDepths = Array.from({ length: MAX_RENDER_VIEWS }, () => makeBuffer(renderSortCapacity * 4));
 		this.buffers = { params: [paramA, paramB], firstMoment, secondMoment, stats, sampleGradients, sampleLosses,
-				target, cameras, trainViews, sampleIndices, cameraSampleIndices, cameraSampleRanges,
+			target, cameras, renderCameras, trainViews, sampleIndices, cameraSampleIndices, cameraSampleRanges,
 				quad, renderOrder, renderDepths, trainConfig: makeBuffer(144, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST),
 				renderConfig: Array.from({ length: MAX_RENDER_VIEWS },
 					() => makeBuffer(48, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST)),
@@ -1662,14 +1691,14 @@ export class DynamicSplatWebGpu3dTrainer {
 					layout: this.pipelines.renderSort.getBindGroupLayout(0), entries: [
 						{ binding: 0, resource: { buffer: renderConfig } },
 						{ binding: 1, resource: { buffer: this.buffers.params[paramIndex] } },
-						{ binding: 2, resource: { buffer: this.buffers.cameras } },
+						{ binding: 2, resource: { buffer: this.buffers.renderCameras } },
 						{ binding: 3, resource: { buffer: this.buffers.renderOrder[panel] } },
 						{ binding: 4, resource: { buffer: this.buffers.renderDepths[panel] } }] }));
 				this.bindGroups.render[paramIndex].push(this.device.createBindGroup({
 					layout: this.pipelines.render.getBindGroupLayout(0), entries: [
 						{ binding: 0, resource: { buffer: renderConfig } },
 						{ binding: 1, resource: { buffer: this.buffers.params[paramIndex] } },
-						{ binding: 2, resource: { buffer: this.buffers.cameras } },
+						{ binding: 2, resource: { buffer: this.buffers.renderCameras } },
 						{ binding: 3, resource: { buffer: this.buffers.renderOrder[panel] } }] }));
 			}
 		}
@@ -1796,12 +1825,22 @@ export class DynamicSplatWebGpu3dTrainer {
 		if (this.canvas.width !== width || this.canvas.height !== height) { this.canvas.width = width; this.canvas.height = height; }
 	}
 
+	writePreviewCamera(camera) {
+		const viewIndex = this.dataset.cameras.length;
+		const packed = packPreviewCamera(camera, this.dataset.geometryScale ?? 1);
+		this.device.queue.writeBuffer(this.buffers.renderCameras, viewIndex * 20 * Float32Array.BYTES_PER_ELEMENT,
+			packed);
+		return viewIndex;
+	}
+
 	render(time = 0.35, modelMode = 0, temporalSigma = 0.30, renderMode = 0, viewIndex = 0,
-		viewIndices = null) {
+		viewIndices = null, previewCamera = null) {
 		if (!this.buffers || !this.device || !this.context) return;
 		this.resizeCanvas();
 		const splatCount = resolveActiveSplatCount(this.splatCount, this.activeSplatCount);
-		const resolvedViewIndices = resolveRenderViewIndices(this.dataset, viewIndices);
+		const resolvedViewIndices = previewCamera
+			? [this.writePreviewCamera(previewCamera)]
+			: resolveRenderViewIndices(this.dataset, viewIndices);
 		const renderViews = resolvedViewIndices.length;
 		const panelWidth = this.canvas.width / renderViews;
 		for (let panel = 0; panel < renderViews; panel += 1) {

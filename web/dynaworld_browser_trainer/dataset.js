@@ -1,6 +1,9 @@
 const DEFAULT_VIDEO_URL =
 	"/data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/previews/neural3d_coffee_martini_cam00_to_cam10.mp4";
-const CALIBRATED_MULTICAM_URL = "./coffee_martini_train17_holdout1.json";
+export const CALIBRATED_MULTICAM_PRESETS = Object.freeze({
+	"96x72": "./coffee_martini_train17_holdout1.json",
+	"384x288": "./coffee_martini_train17_holdout1_384.json",
+});
 export const CALIBRATED_MULTICAM_POSE_SOURCE = "neural_3d_llff_opencv_relative_pinhole_v2";
 
 export const FRAME_BANK_FORMAT_RGBA8 = "rgba8unorm-rgb+weight-u8x127/v1";
@@ -787,8 +790,9 @@ export function validateCalibratedMulticamBundle(bundle) {
 export async function loadCalibratedMulticamDataset({
 	computeSamples = true,
 	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
+	bundleUrl = CALIBRATED_MULTICAM_PRESETS["96x72"],
 } = {}) {
-	const response = await fetch(CALIBRATED_MULTICAM_URL);
+	const response = await fetch(bundleUrl);
 	if (!response.ok) {
 		throw new Error(`Calibrated browser bundle unavailable: ${response.status}`);
 	}
@@ -851,7 +855,7 @@ export async function loadCalibratedMulticamDataset({
 	}));
 	const dataset = attachPixelBanks({
 		name: bundle.name,
-		source: CALIBRATED_MULTICAM_URL,
+		source: bundleUrl,
 		width,
 		height,
 		frameCount,
@@ -906,12 +910,15 @@ export async function loadCalibratedMulticamDataset({
 export async function loadPresetDataset({
 	allowLegacyFallback = false,
 	computeSamples = true,
+	preset = "96x72",
 	// Both GPU trainers decode compact targets at their binding boundary. Keep
 	// the much larger all-camera frame bank byte-packed on the host.
 	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
 } = {}) {
 	try {
-		return await loadCalibratedMulticamDataset({ computeSamples, frameBankFormat });
+		const bundleUrl = CALIBRATED_MULTICAM_PRESETS[preset];
+		if (!bundleUrl) throw new RangeError(`Unknown calibrated browser preset: ${preset}.`);
+		return await loadCalibratedMulticamDataset({ computeSamples, frameBankFormat, bundleUrl });
 	} catch (error) {
 		if (!allowLegacyFallback) {
 			throw error;

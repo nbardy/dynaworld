@@ -35,7 +35,7 @@ let running = false;
 let pumpToken = 0;
 let trainOptions = { ...DEFAULT_TRAIN_OPTIONS };
 let renderOptions = { enabled: true, time: 0.35, modelMode: 0, temporalSigma: 0.30, renderMode: 0,
-	viewIndex: 0, viewIndices: null };
+	viewIndex: 0, viewIndices: null, previewCamera: null };
 let burstSteps = 8;
 let maxQueuedSteps = 32;
 let metricEvery = 512;
@@ -156,11 +156,16 @@ function requestValidation(options = {}) {
 	return true;
 }
 
+function renderTrainer() {
+	trainer.render(renderOptions.time, renderOptions.modelMode, renderOptions.temporalSigma,
+		renderOptions.renderMode, renderOptions.viewIndex, renderOptions.viewIndices,
+		renderOptions.previewCamera);
+}
+
 function render(now) {
 	if (!renderOptions.enabled || !trainer?.context || renderFps <= 0
 		|| now - lastRenderAt < 1000 / renderFps) return;
-	trainer.render(renderOptions.time, renderOptions.modelMode, renderOptions.temporalSigma,
-		renderOptions.renderMode, renderOptions.viewIndex, renderOptions.viewIndices);
+	renderTrainer();
 	lastRenderAt = now;
 }
 
@@ -271,8 +276,7 @@ async function initialize(message) {
 		trainingDatasetSharing,
 		validationDatasetSharing,
 	);
-	trainer.render(renderOptions.time, renderOptions.modelMode, renderOptions.temporalSigma,
-		renderOptions.renderMode, renderOptions.viewIndex, renderOptions.viewIndices);
+	renderTrainer();
 	lastRenderAt = performance.now();
 	publish(TrainerState.READY, true);
 	self.postMessage(protocolMessage(WorkerEvent.READY, {
@@ -311,9 +315,7 @@ self.onmessage = ({ data }) => {
 		case WorkerCommand.STEP:
 			if (!running) {
 				for (let index = 0; index < Math.max(1, message.count ?? 1); index += 1) trainer.trainStep(trainOptions);
-				requestMetrics(); trainer.render(renderOptions.time, renderOptions.modelMode,
-					renderOptions.temporalSigma, renderOptions.renderMode, renderOptions.viewIndex,
-					renderOptions.viewIndices);
+				requestMetrics(); renderTrainer();
 				lastRenderAt = performance.now(); publish(TrainerState.PAUSED, true);
 			}
 			break;
@@ -333,8 +335,7 @@ self.onmessage = ({ data }) => {
 			if (trainer.canvas) {
 				trainer.canvas.width = Math.max(1, Math.floor(message.width));
 				trainer.canvas.height = Math.max(1, Math.floor(message.height));
-				trainer.render(renderOptions.time, renderOptions.modelMode, renderOptions.temporalSigma,
-					renderOptions.renderMode, renderOptions.viewIndex, renderOptions.viewIndices);
+				renderTrainer();
 				lastRenderAt = performance.now();
 			}
 			break;

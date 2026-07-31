@@ -133,10 +133,26 @@ button:disabled {
 }
 
 .field span,
+.field > label,
 .stats span {
 	color: var(--muted);
 	font-size: 0.82rem;
 	white-space: nowrap;
+}
+
+.result-camera-field {
+	grid-template-columns: 1fr 36px;
+}
+
+.result-camera-field select {
+	grid-column: 1 / -1;
+}
+
+.icon-button {
+	width: 36px;
+	min-height: 36px;
+	padding: 0;
+	font-size: 1.15rem;
 }
 
 .field strong,
@@ -424,12 +440,30 @@ button:disabled {
 	aspect-ratio: 4 / 1;
 }
 
+.result-strip[data-camera-mode="orbit"]:has(.result-angle-labels:not([hidden])) #renderCanvas {
+	aspect-ratio: 4 / 3;
+	cursor: grab;
+	touch-action: none;
+}
+
+.result-strip[data-camera-mode="orbit"]:has(.result-angle-labels:not([hidden])) #renderCanvas.dragging {
+	cursor: grabbing;
+}
+
 .result-angle-labels {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 1px;
 	height: 30px;
 	background: var(--line);
+}
+
+.result-angle-labels[data-view-count="1"] {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.result-angle-labels[data-view-count="1"] div:nth-child(n + 2) {
+	display: none;
 }
 
 .result-angle-labels div {

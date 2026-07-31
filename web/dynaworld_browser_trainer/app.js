@@ -1,5 +1,12 @@
 import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260731-compactfp16-5";
 import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260731-compactfp16-5";
+import {
+	createOrbitCameraState,
+	orbitPreviewCamera,
+	panOrbitCamera,
+	rotateOrbitCamera,
+	zoomOrbitCamera,
+} from "./orbitCamera.js?v=20260731-orbit384-1";
 import { learningRateMultipliers } from "./trainingSchedule.js?v=20260731-compactfp16-5";
 import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260731-compactfp16-5";
 import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260731-compactfp16-5";
@@ -7,17 +14,19 @@ import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260731-compactf
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
 const targetCanvas = $("targetCanvas");
+const resultStrip = $("resultStrip");
 const comparisonCanvases = [$("sourceViewCanvas"), $("targetViewCanvas"), $("heldoutViewCanvas")];
 const comparisonFrameLabels = [$("sourceViewFrameValue"), $("targetViewFrameValue"), $("heldoutViewFrameValue")];
 const resultViewLabels = [0, 1, 2].map((index) => $(`resultViewLabel${index}`));
 const resultViewRoles = [0, 1, 2].map((index) => $(`resultViewRole${index}`));
 const controls = {
 	run: $("runButton"), step: $("stepButton"), reset: $("resetButton"), backend: $("backendSelect"),
-	precision: $("checkpointPrecisionSelect"), mode: $("modeSelect"),
+	resolution: $("resolutionSelect"), precision: $("checkpointPrecisionSelect"), mode: $("modeSelect"),
 	splats: $("splatSlider"), growthCapacity: $("growthCapacitySelect"),
 	time: $("timeSlider"), loop: $("timeLoopToggle"), live: $("livePreviewToggle"),
 	fullMetrics: $("fullMetricsToggle"), speed: $("timeSpeedSlider"), targetView: $("targetViewSelect"),
-	renderCamera: $("renderCameraSelect"), resultView: $("resultViewSelect"),
+	renderCamera: $("renderCameraSelect"), resultCameraMode: $("resultCameraModeSelect"),
+	resetOrbit: $("resetOrbitButton"), resultView: $("resultViewSelect"),
 	temporalSchedule: $("temporalScheduleToggle"), temporal: $("temporalSlider"), lr: $("lrSlider"),
 	lrSchedule: $("lrScheduleToggle"), staticWarmup: $("staticWarmupToggle"),
 	motionWeighting: $("motionWeightingToggle"),
@@ -92,6 +101,8 @@ let localLossPending = false;
 let lastLocalLossStep = -1;
 let trainerCapacity = 0;
 let trainerStaticWarmupSteps = 0;
+let orbitCameraState = null;
+let orbitPointer = null;
 const frameDurations = [];
 
 function currentStep() {
@@ -123,6 +134,15 @@ function sampledBackendSelected() {
 	return controls.backend.value === "sampled3d";
 }
 
+function orbitCameraSelected() {
+	return controls.resultCameraMode.value === "orbit";
+}
+
+function resetOrbitCamera() {
+	if (!dataset?.cameras?.length) return;
+	orbitCameraState = createOrbitCameraState(dataset, Number(controls.renderCamera.value || 0));
+}
+
 function trainOptions() {
 	return {
 		learningRate: Number(controls.lr.value), learningRateDecay: controls.lrSchedule.checked,
@@ -137,11 +157,14 @@ function trainOptions() {
 }
 
 function renderOptions() {
+	const previewCamera = orbitCameraSelected() && orbitCameraState
+		? orbitPreviewCamera(orbitCameraState) : null;
 	return { time: Number(controls.time.value), modelMode: currentModelMode(),
 		temporalSigma: currentTemporalSigma(), renderMode: currentRenderMode(),
 		enabled: controls.live.checked,
 		viewIndex: Number(controls.renderCamera.value || 0),
-		viewIndices: dataset?.comparisonViewIndices ?? null };
+		viewIndices: previewCamera ? null : dataset?.comparisonViewIndices ?? null,
+		previewCamera };
 }
 
 function setStatus(message) {
@@ -159,6 +182,10 @@ function setRunning(next) {
 }
 
 function updateControlLabels() {
+	const highResolution = controls.resolution.value === "384x288";
+	const sampledOption = controls.backend.querySelector('option[value="sampled3d"]');
+	if (sampledOption) sampledOption.disabled = highResolution;
+	if (highResolution && sampledBackendSelected()) controls.backend.value = "tiled3d-fast";
 	const splatLimit = sampledBackendSelected() ? 2048 : 4096;
 	controls.splats.max = String(splatLimit);
 	if (Number(controls.splats.value) > splatLimit) controls.splats.value = String(splatLimit);
@@ -456,15 +483,33 @@ function configureCameraUi() {
 		option.textContent = `${camera.name} (${camera.role})`; return option;
 	}));
 	controls.renderCamera.value = String(dataset.comparisonViewIndices?.[0] ?? 0);
-	$("resultAngleLabels").hidden = (dataset.viewCount ?? 1) < 2;
+	resetOrbitCamera();
+	configureResultCameraUi();
+	const notice = $("renderContractNotice");
+	notice.hidden = true;
+}
+
+function configureResultCameraUi() {
+	const cameras = dataset?.cameras ?? [{ name: "Source", role: "train" }];
+	const labels = $("resultAngleLabels");
+	const orbit = orbitCameraSelected();
+	resultStrip.dataset.cameraMode = orbit ? "orbit" : "calibrated";
+	labels.hidden = !orbit && (dataset?.viewCount ?? 1) < 2;
+	labels.dataset.viewCount = orbit ? "1" : "3";
+	controls.resetOrbit.hidden = !orbit;
+	renderCanvas.setAttribute("aria-label", orbit
+		? "Interactive unscored WebGPU splat view" : "Calibrated WebGPU result views");
+	if (orbit) {
+		resultViewRoles[0].textContent = "Free camera";
+		resultViewLabels[0].textContent = "unscored";
+		return;
+	}
 	const renderedIndices = cameras.length > 1 ? dataset.comparisonViewIndices : [0];
 	for (let panel = 0; panel < 3; panel += 1) {
 		const camera = cameras[renderedIndices[panel]];
 		resultViewLabels[panel].textContent = camera?.name ?? "--";
 		resultViewRoles[panel].textContent = camera?.role === "heldout" ? "Heldout" : `Train ${String.fromCharCode(65 + panel)}`;
 	}
-	const notice = $("renderContractNotice");
-	notice.hidden = true;
 }
 
 function syncWorkerOptions(force = false) {
@@ -681,13 +726,13 @@ async function boot() {
 	restoreUiState(); updateControlLabels(); resetMetrics();
 	for (const control of [controls.run, controls.step, controls.reset]) control.disabled = true;
 	try {
-		dataset = await loadPresetDataset();
+		dataset = await loadPresetDataset({ preset: controls.resolution.value });
 		const trainCount = dataset.trainViewCount ?? 1;
 		const poseSource = dataset.datasetContract?.pose_source;
 		const calibrationLabel = poseSource?.endsWith("_v2") ? "LLFF/OpenCV v2" : poseSource;
 		$("datasetName").textContent = dataset.datasetContract
 			? `${dataset.name} · ${trainCount} train / ${dataset.viewCount - trainCount} heldout`
-				+ `${calibrationLabel ? ` · ${calibrationLabel}` : ""}`
+				+ `${calibrationLabel ? ` · ${calibrationLabel}` : ""} · ${dataset.width}x${dataset.height}`
 			: dataset.name;
 		$("datasetName").title = poseSource ?? "No calibrated pose source declared";
 		values.splatCount.textContent = controls.splats.value;
@@ -715,6 +760,7 @@ controls.reset.addEventListener("click", () => { void resetTrainer(); });
 controls.splats.addEventListener("change", () => { void resetTrainer(); });
 controls.growthCapacity.addEventListener("change", () => { void resetTrainer(); });
 controls.backend.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
+controls.resolution.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
 controls.precision.addEventListener("change", () => { void resetTrainer(); });
 controls.staticWarmup.addEventListener("change", () => { void resetTrainer(); });
 controls.mode.addEventListener("change", () => { syncWorkerOptions(true); updateControlLabels(); });
@@ -733,12 +779,64 @@ controls.fullMetrics.addEventListener("change", () => {
 	}
 });
 controls.targetView.addEventListener("change", updateTargetCanvas);
-controls.renderCamera.addEventListener("change", () => { updateTargetCanvas(); syncWorkerOptions(true); });
+controls.renderCamera.addEventListener("change", () => {
+	if (orbitCameraSelected()) resetOrbitCamera();
+	updateTargetCanvas(); syncWorkerOptions(true);
+});
+controls.resultCameraMode.addEventListener("change", () => {
+	if (orbitCameraSelected()) resetOrbitCamera();
+	configureResultCameraUi();
+	requestAnimationFrame(() => resizeWorkerCanvas());
+	syncWorkerOptions(true);
+});
+controls.resetOrbit.addEventListener("click", () => {
+	resetOrbitCamera(); syncWorkerOptions(true);
+});
 controls.resultView.addEventListener("change", () => syncWorkerOptions(true));
 chartElements.lossScale.addEventListener("click", () => {
 	lossLogScale = !lossLogScale;
 	chartElements.lossScale.setAttribute("aria-pressed", String(lossLogScale));
 	drawMetricCharts();
+});
+
+renderCanvas.addEventListener("pointerdown", (event) => {
+	if (!orbitCameraSelected() || !orbitCameraState || ![0, 1, 2].includes(event.button)) return;
+	orbitPointer = { id: event.pointerId, x: event.clientX, y: event.clientY,
+		pan: event.shiftKey || event.button !== 0 };
+	renderCanvas.setPointerCapture(event.pointerId);
+	renderCanvas.classList.add("dragging");
+	event.preventDefault();
+});
+renderCanvas.addEventListener("pointermove", (event) => {
+	if (!orbitPointer || orbitPointer.id !== event.pointerId || !orbitCameraState) return;
+	const deltaX = event.clientX - orbitPointer.x;
+	const deltaY = event.clientY - orbitPointer.y;
+	orbitPointer.x = event.clientX;
+	orbitPointer.y = event.clientY;
+	orbitCameraState = orbitPointer.pan || event.shiftKey
+		? panOrbitCamera(orbitCameraState, deltaX, deltaY)
+		: rotateOrbitCamera(orbitCameraState, deltaX, deltaY);
+	event.preventDefault();
+});
+function releaseOrbitPointer(event) {
+	if (!orbitPointer || orbitPointer.id !== event.pointerId) return;
+	if (renderCanvas.hasPointerCapture(event.pointerId)) renderCanvas.releasePointerCapture(event.pointerId);
+	orbitPointer = null;
+	renderCanvas.classList.remove("dragging");
+}
+renderCanvas.addEventListener("pointerup", releaseOrbitPointer);
+renderCanvas.addEventListener("pointercancel", releaseOrbitPointer);
+renderCanvas.addEventListener("wheel", (event) => {
+	if (!orbitCameraSelected() || !orbitCameraState) return;
+	orbitCameraState = zoomOrbitCamera(orbitCameraState, event.deltaY);
+	event.preventDefault();
+}, { passive: false });
+renderCanvas.addEventListener("dblclick", () => {
+	if (!orbitCameraSelected()) return;
+	resetOrbitCamera();
+});
+renderCanvas.addEventListener("contextmenu", (event) => {
+	if (orbitCameraSelected()) event.preventDefault();
 });
 
 new ResizeObserver(() => resizeWorkerCanvas()).observe(renderCanvas);

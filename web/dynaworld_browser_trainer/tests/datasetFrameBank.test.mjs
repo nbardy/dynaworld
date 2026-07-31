@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	CALIBRATED_MULTICAM_PRESETS,
 	computeMultiviewSamples,
 	decodeFrameRgb,
 	drawTargetFrame,
@@ -14,6 +15,11 @@ import {
 	validateCalibratedMulticamBundle,
 	writeNormalizedFrameLossWeights,
 } from "../dataset.js";
+
+test("calibrated browser presets select native 1x and 4x-linear target bundles", () => {
+	assert.equal(CALIBRATED_MULTICAM_PRESETS["96x72"], "./coffee_martini_train17_holdout1.json");
+	assert.equal(CALIBRATED_MULTICAM_PRESETS["384x288"], "./coffee_martini_train17_holdout1_384.json");
+});
 
 function referenceSamples(frames, backgrounds, width, height, frameCount, trainViewCount) {
 	const pixels = width * height;

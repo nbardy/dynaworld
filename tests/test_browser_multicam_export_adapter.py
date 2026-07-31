@@ -24,6 +24,9 @@ TRAIN17_MANIFEST = Path(
     "src/dataset_configs/neural3d_coffee_martini_train17_holdout1_full_300f_manifest.jsonl"
 )
 TRAIN17_BROWSER_BUNDLE = Path("web/dynaworld_browser_trainer/coffee_martini_train17_holdout1.json")
+TRAIN17_BROWSER_BUNDLE_384 = Path(
+    "web/dynaworld_browser_trainer/coffee_martini_train17_holdout1_384.json"
+)
 
 
 def test_browser_multicam_adapter_preserves_split_and_writes_exact_frame_atlases(tmp_path: Path) -> None:
@@ -488,8 +491,18 @@ def test_coffee_martini_train17_manifest_preserves_canonical_split() -> None:
     )
 
 
-def test_coffee_martini_train17_browser_bundle_is_portable_and_validation_only() -> None:
-    payload = json.loads(TRAIN17_BROWSER_BUNDLE.read_text(encoding="utf-8"))
+@pytest.mark.parametrize(
+    ("bundle_path", "decode_size"),
+    [
+        (TRAIN17_BROWSER_BUNDLE, (96, 72)),
+        (TRAIN17_BROWSER_BUNDLE_384, (384, 288)),
+    ],
+)
+def test_coffee_martini_train17_browser_bundle_is_portable_and_validation_only(
+    bundle_path: Path,
+    decode_size: tuple[int, int],
+) -> None:
+    payload = json.loads(bundle_path.read_text(encoding="utf-8"))
     train_cameras = [camera for camera in payload["cameras"] if camera["role"] == "train"]
     heldout_cameras = [camera for camera in payload["cameras"] if camera["role"] == "heldout"]
 
@@ -497,7 +510,7 @@ def test_coffee_martini_train17_browser_bundle_is_portable_and_validation_only()
     assert payload["dataset_contract"]["heldout_usage"] == "validation_only"
     assert payload["dataset_contract"]["camera_motion"] == "static_rig"
     assert payload["dataset_contract"]["pose_source"] == "neural_3d_llff_opencv_relative_pinhole_v2"
-    assert payload["decode_size"] == [96, 72]
+    assert payload["decode_size"] == list(decode_size)
     assert payload["frame_count"] == 16
     assert payload["frame_indices"] == [
         0, 20, 40, 60, 80, 100, 120, 140, 159, 179, 199, 219, 239, 259, 279, 299,
@@ -517,6 +530,6 @@ def test_coffee_martini_train17_browser_bundle_is_portable_and_validation_only()
 
     for camera in payload["cameras"]:
         assert "video_url" not in camera
-        atlas_path = TRAIN17_BROWSER_BUNDLE.parent / camera["frame_atlas_url"].removeprefix("./")
+        atlas_path = bundle_path.parent / camera["frame_atlas_url"].removeprefix("./")
         with Image.open(atlas_path) as atlas:
-            assert atlas.size == (96 * 16, 72)
+            assert atlas.size == (decode_size[0] * 16, decode_size[1])

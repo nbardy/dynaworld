@@ -34,6 +34,14 @@
 						</select>
 					</label>
 
+					<label class="field">
+						<span>Training Resolution</span>
+						<select id="resolutionSelect">
+							<option value="96x72" selected>96 x 72</option>
+							<option value="384x288">384 x 288</option>
+						</select>
+					</label>
+
 					<label id="checkpointPrecisionField" class="field">
 						<span>Checkpoint Precision</span>
 						<select id="checkpointPrecisionSelect">
@@ -106,6 +114,15 @@
 						<span>Render Camera</span>
 						<select id="renderCameraSelect"></select>
 					</label>
+
+					<div class="field result-camera-field">
+						<label for="resultCameraModeSelect">Result Camera</label>
+						<button id="resetOrbitButton" class="icon-button" type="button" title="Reset free camera" aria-label="Reset free camera" hidden>&#8635;</button>
+						<select id="resultCameraModeSelect">
+							<option value="calibrated" selected>Calibrated triptych</option>
+							<option value="orbit">Free orbit</option>
+						</select>
+					</div>
 
 					<label class="field">
 						<span>Result View</span>
@@ -392,7 +409,7 @@
 						<span>WebGPU Result</span>
 						<strong id="fpsValue">-- fps</strong>
 					</div>
-					<div class="result-strip">
+					<div id="resultStrip" class="result-strip" data-camera-mode="calibrated">
 						<div id="resultAngleLabels" class="result-angle-labels" aria-hidden="true">
 							<div><span id="resultViewRole0">Train A</span><strong id="resultViewLabel0">--</strong></div>
 							<div><span id="resultViewRole1">Train B</span><strong id="resultViewLabel1">--</strong></div>

@@ -111,19 +111,19 @@ npm test
 
 ## Current Data Contract
 
-The default checked-in bundle is
-`coffee_martini_train17_holdout1.json`:
+The checked-in presets share one calibration/split contract:
 
-| Field | Current value |
-| --- | --- |
-| Scene | Neural 3D Video Coffee Martini |
-| Raster | 96x72 |
-| Times | 16 synchronized frames sampled across the 300-frame source |
-| Training cameras | 17 |
-| Heldout cameras | `cam06` only |
-| Checked-in initialization | 4,096 train-visible external Ex4DGS XYZRGB points |
-| Anchor coordinates | `cam04` OpenCV camera frame |
-| Pose convention | LLFF raw `[down, right, back]` to OpenCV `[right, down, forward]` (`v2`) |
+| Field | 96x72 default | 384x288 native 4x-linear |
+| --- | --- | --- |
+| Bundle | `coffee_martini_train17_holdout1.json` | `coffee_martini_train17_holdout1_384.json` |
+| Scene | Neural 3D Video Coffee Martini | same |
+| Raster | 96x72 | 384x288 |
+| Times | 16 synchronized frames from the 300-frame source | same indices |
+| Training cameras | 17 | 17 |
+| Heldout cameras | `cam06` only | `cam06` only |
+| Checked-in initialization | 4,096 train-visible external Ex4DGS XYZRGB points | same points |
+| Anchor coordinates | `cam04` OpenCV camera frame | same frame |
+| Pose convention | LLFF raw `[down, right, back]` to OpenCV `[right, down, forward]` (`v2`) | same convention |
 
 The browser does not run COLMAP. The bundle exporter is a thin adapter over
 `src/train/multicam_video_data.py`; it preserves the canonical manifest,
@@ -143,8 +143,9 @@ RGB remains checked-in RGBA8 and is decoded to `f32` for raster loss. Browser
 normalization multiplies seed XYZ and every camera translation by the same
 inverse-median-depth scale, so pixel projection is invariant. Those are native
 LLFF scene units, not documented meters. A running worker owns its loaded
-camera copy, so fully reload the page after replacing a bundle or pose
-convention; Reset only restarts optimization on the already-loaded dataset.
+camera copy. Changing the resolution or pressing Reset reloads the SPA and
+constructs a fresh dataset and trainer, which is also required after replacing
+a bundle or pose convention on disk.
 
 The checked-in bundle predates the provenance report contract. Its external
 Ex4DGS cloud is filtered after loading to points visible from at least one
@@ -494,9 +495,52 @@ Training runs in a dedicated worker. It submits bounded eight-step bursts and
 keeps no more than 32 GPU steps queued. Queue completion probes publish actual
 completed throughput rather than command-submission speed.
 
-Live rendering is capped at 20 GPU frames per second and shows two training
-cameras plus the heldout camera at a looping time. It can be disabled without
-stopping optimization.
+Live rendering is capped at 15 GPU frames per second and normally shows two
+training cameras plus the heldout camera at a looping time. It can be disabled
+without stopping optimization.
+
+### Interactive result camera
+
+`Result Camera -> Free orbit` changes only the result view. It uses the same
+projection, depth sort, Gaussian raster, temporal model, display filtering, and
+WGSL render pipeline as the calibrated triptych; no external 3DGS viewer is
+loaded. Left drag orbits, Shift-left/middle/right drag pans, the wheel dollies,
+and double-click or the reset icon restores the selected calibrated camera.
+
+The orbit pivot starts on the selected camera's principal ray at the median
+positive seed depth. Each interaction constructs a rigid OpenCV look-at camera
+with +X right, +Y down, and +Z forward. The packer applies the trainer's global
+geometry scale to translation only, preserving projection exactly.
+
+Training and validation keep the immutable canonical camera buffer. Rendering
+binds a separate copy with one additional preview slot, and only that slot is
+rewritten during interaction. Thus dragging cannot change camera sampling,
+losses, gradients, or heldout metrics. The free view is explicitly labeled
+`unscored`; it is useful for inspecting geometry but is not a calibrated
+novel-view metric.
+
+### Native 4x-linear resolution mode
+
+`Training Resolution -> 384 x 288` reloads the SPA with 18 native 6,144x288
+PNG atlases, one per camera. It is four times wider and taller than the default,
+so every train step evaluates 110,592 pixels instead of 6,912. This is not an
+upsample of the 96x72 browser bank.
+
+At 4,096 initial splats, 8,192 capacity, packed-FP16 checkpoints, and the fast
+tiled backend, the live app reports 97.6 MiB of GPU buffers. The steady host
+target bank is 121.5 MiB of shared RGBA8, camera temporal backgrounds are 30.4
+MiB of FP32, and decoding needs one transient 6.75 MiB atlas. The largest GPU
+binding is the 54 MiB transmittance checkpoint buffer, below the Apple adapter's
+128 MiB binding limit.
+
+A matched 2026-07-31 Apple-browser smoke, with a 15 Hz free-camera preview and
+no tile overflow, measured about 309 completed steps/s at 96x72 and 130
+completed steps/s at 384x288. Sixteen times the pixels cost about 2.4x
+throughput in that live configuration because splat projection, sorting,
+optimizer work, and scheduling do not scale with image area. Resolution is
+therefore relatively cheap, but not free; occupancy and splat count can change
+that ratio. The sampled-ray control remains disabled at 384x288 because that
+legacy backend still binds the complete target tensor.
 
 The optimizer writes objective/L1/DSSIM into a 272-entry GPU ring every step.
 Asynchronous readback runs every 256 requested steps and reports the latest raw
@@ -605,10 +649,10 @@ remain FP32. FP16 either halves checkpoint memory or spends that saving on
 denser checkpoints and less backward replay, depending on raster size.
 
 The sampled-ray control still binds the complete target tensor and therefore
-still rejects 384x288. More importantly, GPU paging does not remove the host
-Float32 tensor: a future high-resolution SPA path should retain canonical RGBA8
-frames and share them across the main, training, and validation workers instead
-of cloning roughly 486 MiB per worker.
+still rejects 384x288. The tiled SPA now keeps canonical targets in shared
+RGBA8 storage and decodes only the active target page to FP32 at the GPU
+boundary. Camera temporal backgrounds remain FP32 because they are computed
+values rather than source PNG samples.
 
 Full measurements and repeats are in
 `benchmark_results/2026-07-28_tiled_scaling_apple_m4.json` and
@@ -839,8 +883,9 @@ The highest-value remaining evidence is:
 4. full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed;
 5. a complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
    World Tubes to a selectable browser backend;
-6. canonical byte targets plus shared host storage before presenting 384x288 as
-   a normal SPA dataset mode rather than an isolated GPU benchmark.
+6. rerun the quality and throughput matrix at both checked-in resolutions and
+   multiple splat capacities; the 384x288 mode is now functional, but one live
+   smoke is not a convergence baseline.
 
 The latest corrected diagnostic reached `16.2/15.5 dB` train/heldout and
 `0.514/0.261` SSIM at step 16,384, versus `15.3/14.6 dB` and
