@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+	activePrefixDispatchSizes,
+	activeSplatCountForStep,
 	DynamicSplatWebGpu3dTiledTrainer,
 	DEFAULT_BROWSER_GROWTH_CAPACITY,
 	DEFAULT_CHECKPOINT_PRECISION,
@@ -270,6 +272,14 @@ test("tiled telemetry retains four vec4 metrics and cumulative overflow high-wat
 	assert.match(source, /atomicMax\(&counters\[5\],count\)/);
 	assert.match(source, /tileOverflowTotal:\s*values\[12\]/);
 	assert.match(source, /maxTileOccupancyEver:\s*values\[13\]/);
+	assert.match(source, /f32\(cfg\.step\),f32\(cfg\.activeSplatCount\)/);
+	assert.match(source, /activeUpdateSplats:\s*values\[15\]/);
+	assert.match(source, /dormantUpdateSplats:\s*values\[9\]\s*-\s*values\[15\]/);
+	assert.match(source, /initialActiveUpdateSlots:\s*this\.activeSplatCount/);
+	assert.match(source, /updateSlotCapacity:\s*this\.splatCount/);
+	assert.match(source, /dormantSlotSparseUpdate:\s*true/);
+	assert.match(source, /activeUpdateSlots:\s*profiledActiveSplats/);
+	assert.match(source, /capacityUpdateSlots:\s*this\.splatCount/);
 	assert.match(benchmarkSource, /tileOverflowTotal\s*\?\?\s*currentOverflow/);
 });
 
@@ -382,6 +392,73 @@ test("density schedule fills only reserved slots and preserves active topology a
 	assert.equal(densityDispatchesForStep(4096, 8192, 600), 4);
 	assert.equal(densityDispatchesForStep(4096, 8192, 26100), 4);
 	assert.equal(densityDispatchesForStep(4096, 8192, 26200), 0);
+});
+
+test("active prefix advances only after completed density events and clips the final split", () => {
+	assert.equal(activeSplatCountForStep(4096, 8192, 0), 4096);
+	assert.equal(activeSplatCountForStep(4096, 8192, 599), 4096);
+	assert.equal(activeSplatCountForStep(4096, 8192, 600), 4112);
+	assert.equal(activeSplatCountForStep(4096, 8192, 699), 4112);
+	assert.equal(activeSplatCountForStep(4096, 8192, 700), 4128);
+	assert.equal(activeSplatCountForStep(4096, 8192, 26100), 8192);
+	assert.equal(activeSplatCountForStep(4096, 8192, 26200), 8192);
+	assert.equal(activeSplatCountForStep(9, 14, 599), 9);
+	assert.equal(activeSplatCountForStep(9, 14, 600), 14);
+	assert.equal(densityDispatchesForStep(9, 14, 600), 2);
+	assert.equal(densityDispatchesForStep(9, 14, 700), 0);
+	assert.throws(() => activeSplatCountForStep(10, 9, 600), /capacity/);
+	assert.throws(() => activeSplatCountForStep(9, 14, -1), /non-negative/);
+});
+
+test("clear and Adam dispatches scale with active prefix rather than reserved capacity", () => {
+	assert.deepEqual(activePrefixDispatchSizes(4096, 8192, 108, 12), {
+		activeUpdateSlots: 4096,
+		capacitySlots: 8192,
+		dormantUpdateSlots: 4096,
+		gradientClearSlots: 49152,
+		clearWorkgroups: 768,
+		updateWorkgroups: 64,
+	});
+	assert.deepEqual(activePrefixDispatchSizes(4112, 8192, 108, 12), {
+		activeUpdateSlots: 4112,
+		capacitySlots: 8192,
+		dormantUpdateSlots: 4080,
+		gradientClearSlots: 49344,
+		clearWorkgroups: 771,
+		updateWorkgroups: 65,
+	});
+	assert.deepEqual(activePrefixDispatchSizes(4096, 8192, 108, 24), {
+		activeUpdateSlots: 4096,
+		capacitySlots: 8192,
+		dormantUpdateSlots: 4096,
+		gradientClearSlots: 98304,
+		clearWorkgroups: 1536,
+		updateWorkgroups: 64,
+	});
+	assert.equal(activePrefixDispatchSizes(8192, 8192, 108, 12).updateWorkgroups, 128);
+	assert.throws(() => activePrefixDispatchSizes(8193, 8192, 108, 12), /capacity/);
+});
+
+test("tiled density activates contiguous tail slots with explicitly clean optimizer state", () => {
+	const trainStep = DynamicSplatWebGpu3dTiledTrainer.prototype.trainStep.toString();
+	assert.match(source, /activeSplatCount:u32/);
+	assert.match(source,
+		/gid\.x<cfg\.activeSplatCount\*\$\{gradientFloats\}u/);
+	assert.match(source, /if\(i>=cfg\.activeSplatCount\)\{return;\}/);
+	assert.match(source, /let adamStep=f32\(cfg\.step\+1u\)/);
+	assert.doesNotMatch(source, /lastUpdatedStep|visibilitySparse/);
+	assert.match(source, /let childIndex=activeCount\+slot/);
+	assert.match(source, /for\(var i=0u;i<activeCount;i\+\+\)/);
+	assert.match(source, /firstMoment\[childIndex\]=zero_splat\(\)/);
+	assert.match(source, /secondMoment\[childIndex\]=zero_splat\(\)/);
+	assert.match(source, /splatStats\[childIndex\]=vec4<f32>\(0\.0\)/);
+	assert.match(source, /atomicStore\(&gradientAtoms\[gradientBase\+component\],0u\)/);
+	assert.match(source, /atomicStore\(&counters\[7\],activeCount\+splitCount\)/);
+	assert.match(trainStep, /activePrefixDispatchSizes/);
+	assert.match(trainStep, /activeDispatch\.clearWorkgroups/);
+	assert.match(trainStep, /activeDispatch\.updateWorkgroups/);
+	assert.match(trainStep, /this\.tiledPipelines\.density/);
+	assert.doesNotMatch(trainStep, /this\.pipelines\.maintenance/);
 });
 
 test("full-frame schedule shuffles and visits every camera/time pair before cycling", () => {

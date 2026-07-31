@@ -28,7 +28,8 @@ const SSIM_STATS_BYTES = 5 * 16;
 const DENSITY_START_STEP = 600;
 const DENSITY_INTERVAL = 100;
 const DENSITY_DISPATCHES = 4;
-const TILED_CONFIG_BYTES = 160;
+const DENSITY_SPLITS_PER_DISPATCH = 4;
+const TILED_CONFIG_BYTES = 176;
 const DIRECT_GRADIENT_FLOATS = SPLAT_FLOATS;
 const PROJECTED_GRADIENT_FLOATS = 12;
 const TILED_GPU_PHASES = Object.freeze([
@@ -182,6 +183,56 @@ export function resolveTiledCapacity(initialSplats, requestedCapacity = null) {
 	return Math.min(MAX_BROWSER_RENDER_SPLATS, Math.max(initialSplats, Math.floor(capacity)));
 }
 
+function validateDensitySchedule(initialSplats, capacity, step) {
+	if (!Number.isSafeInteger(initialSplats) || initialSplats < 1
+		|| !Number.isSafeInteger(capacity) || capacity < initialSplats
+		|| !Number.isSafeInteger(step) || step < 0) {
+		throw new RangeError(
+			"Density schedule inputs require non-negative integer steps and capacity >= initialSplats >= 1.",
+		);
+	}
+}
+
+export function activeSplatCountForStep(initialSplats, capacity, completedSteps) {
+	validateDensitySchedule(initialSplats, capacity, completedSteps);
+	if (completedSteps < DENSITY_START_STEP || initialSplats === capacity) {
+		return initialSplats;
+	}
+	const completedEvents = Math.floor(
+		(completedSteps - DENSITY_START_STEP) / DENSITY_INTERVAL,
+	) + 1;
+	return Math.min(
+		capacity,
+		initialSplats
+			+ completedEvents * DENSITY_DISPATCHES * DENSITY_SPLITS_PER_DISPATCH,
+	);
+}
+
+export function activePrefixDispatchSizes(
+	activeSplats,
+	capacity,
+	tileCount,
+	gradientFloats,
+) {
+	if (!Number.isSafeInteger(activeSplats) || activeSplats < 1
+		|| !Number.isSafeInteger(capacity) || capacity < activeSplats
+		|| !Number.isSafeInteger(tileCount) || tileCount < 1
+		|| !Number.isSafeInteger(gradientFloats) || gradientFloats < 1) {
+		throw new RangeError(
+			"Active-prefix dispatch sizes require positive integers and capacity >= activeSplats.",
+		);
+	}
+	const gradientClearSlots = activeSplats * gradientFloats;
+	return {
+		activeUpdateSlots: activeSplats,
+		capacitySlots: capacity,
+		dormantUpdateSlots: capacity - activeSplats,
+		gradientClearSlots,
+		clearWorkgroups: ceilDiv(Math.max(tileCount, gradientClearSlots), 64),
+		updateWorkgroups: ceilDiv(activeSplats, 64),
+	};
+}
+
 export function telemetryAliasPeriod(pairCount, metricInterval) {
 	if (!Number.isSafeInteger(pairCount) || pairCount < 1
 		|| !Number.isSafeInteger(metricInterval) || metricInterval < 1) {
@@ -315,14 +366,12 @@ export function resolveCheckpointLayout(
 }
 
 export function densityDispatchesForStep(initialSplats, capacity, step) {
-	const hiddenSlots = Math.max(0, Math.floor(capacity) - Math.floor(initialSplats));
-	const fillEvents = Math.ceil(hiddenSlots / (DENSITY_DISPATCHES * 4));
-	const fillEvent = Math.floor((step - DENSITY_START_STEP) / DENSITY_INTERVAL);
+	validateDensitySchedule(initialSplats, capacity, step);
 	if (step >= DENSITY_START_STEP
-		&& (step - DENSITY_START_STEP) % DENSITY_INTERVAL === 0
-		&& fillEvent >= 0 && fillEvent < fillEvents) {
-		const remaining = hiddenSlots - fillEvent * DENSITY_DISPATCHES * 4;
-		return Math.min(DENSITY_DISPATCHES, Math.ceil(remaining / 4));
+		&& (step - DENSITY_START_STEP) % DENSITY_INTERVAL === 0) {
+		const before = activeSplatCountForStep(initialSplats, capacity, Math.max(0, step - 1));
+		const after = activeSplatCountForStep(initialSplats, capacity, step);
+		return ceilDiv(after - before, DENSITY_SPLITS_PER_DISPATCH);
 	}
 	// Once reserved capacity is full, keep the SfM scaffold stable. The former
 	// perpetual recycling repeatedly erased useful seeds without a residual-
@@ -565,6 +614,8 @@ function writeTiledConfig(buffer, values) {
 	u32(136, values.staticWarmup ? 1 : 0); u32(140, values.motionWeighting ? 1 : 0);
 	f32(144, 0.0001); f32(148, 0.0009);
 	f32(152, 0.03 * values.geometryScale); f32(156, values.geometryScale);
+	u32(160, values.activeSplatCount);
+	u32(164, 0); u32(168, 0); u32(172, 0);
 }
 
 const CONFIG_WGSL = `
@@ -579,6 +630,7 @@ const CONFIG_WGSL = `
 		beta1:f32, beta2:f32, adamEpsilon:f32, trainingBackgroundPacked:u32,
 		ssimRadius:u32, frameCount:u32, staticWarmup:u32, motionWeighting:u32,
 		c1:f32, c2:f32, minScale:f32, maxScale:f32,
+		activeSplatCount:u32, configPad0:u32, configPad1:u32, configPad2:u32,
 	};
 	struct Splat {
 		centerStatic:vec4<f32>, velocityTime:vec4<f32>, harmonicPad:vec4<f32>,
@@ -795,11 +847,12 @@ function clearWgsl(gradientFloats) {
 	fn clear_step(@builtin(global_invocation_id) gid:vec3<u32>){
 		let tileCount=cfg.tilesX*cfg.tilesY;
 		if(gid.x<tileCount){atomicStore(&tileCounts[gid.x],0u);}
-		if(gid.x<cfg.splatCount*${gradientFloats}u){atomicStore(&gradientAtoms[gid.x],0u);}
+		if(gid.x<cfg.activeSplatCount*${gradientFloats}u){atomicStore(&gradientAtoms[gid.x],0u);}
 		if(gid.x==0u){
 			atomicStore(&counters[0],0u);atomicStore(&counters[1],0u);
 			atomicStore(&counters[2],0u);atomicStore(&counters[3],0u);
 			atomicStore(&counters[6],0u);
+			atomicStore(&counters[7],cfg.activeSplatCount);
 			indirectArgs[0]=0u;indirectArgs[1]=1u;indirectArgs[2]=1u;
 			metrics[0]=vec4<f32>(0.0);metrics[1]=vec4<f32>(0.0);
 			metrics[2]=vec4<f32>(0.0);metrics[3]=vec4<f32>(0.0);
@@ -1398,7 +1451,7 @@ function metricsWgsl() {
 				f32(cfg.viewIndex),f32(cfg.frameIndex));
 			metrics[3]=vec4<f32>(
 				f32(atomicLoad(&counters[4])),f32(atomicLoad(&counters[5])),
-				f32(cfg.step),f32(arrayLength(&cycleMetrics)));
+				f32(cfg.step),f32(cfg.activeSplatCount));
 			cycleMetrics[cfg.step%arrayLength(&cycleMetrics)]=vec4<f32>(
 				metrics[0].xyz,f32(cfg.step+1u));
 		}
@@ -2050,7 +2103,7 @@ function updateWgsl(
 	${gradientLoader}
 	@compute @workgroup_size(64)
 	fn reduce_update(@builtin(global_invocation_id) gid:vec3<u32>){
-		let i=gid.x;if(i>=cfg.splatCount){return;}
+		let i=gid.x;if(i>=cfg.activeSplatCount){return;}
 		var gradient=${staged
 		? `projected_to_splat_gradient(
 			paramsIn[i],projections[i],load_projected_gradient(i)${compactProjection
@@ -2104,6 +2157,79 @@ function updateWgsl(
 		paramsOut[i]=p;let observed=vec4<f32>(screenGradient,meanAlpha,
 			abs(gradient.colorOpacity.w),length(gradient.velocityTime.xyz));
 		splatStats[i]=cfg.statDecay*splatStats[i]+(1.0-cfg.statDecay)*observed;
+	}`;
+}
+
+function densityWgsl(gradientFloats) {
+	return `${CONFIG_WGSL}
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read_write> params:array<Splat>;
+	@group(0) @binding(2) var<storage,read_write> firstMoment:array<Splat>;
+	@group(0) @binding(3) var<storage,read_write> secondMoment:array<Splat>;
+	@group(0) @binding(4) var<storage,read_write> splatStats:array<vec4<f32>>;
+	@group(0) @binding(5) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
+	@group(0) @binding(6) var<storage,read_write> counters:array<atomic<u32>>;
+	fn zero_splat()->Splat{
+		return Splat(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),
+			vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0));
+	}
+	@compute @workgroup_size(1)
+	fn activate_prefix_splits(){
+		let capacity=cfg.splatCount;
+		let activeCount=atomicLoad(&counters[7]);
+		if(activeCount>=capacity){return;}
+		let splitCount=min(${DENSITY_SPLITS_PER_DISPATCH}u,capacity-activeCount);
+		var parents:array<u32,${DENSITY_SPLITS_PER_DISPATCH}>;
+		for(var slot=0u;slot<splitCount;slot++){
+			var best=-1.0;var bestIndex=0xffffffffu;
+			for(var i=0u;i<activeCount;i++){
+				var used=false;
+				for(var prior=0u;prior<slot;prior++){used=used||parents[prior]==i;}
+				let score=splatStats[i].x+4.0*splatStats[i].y+splatStats[i].w;
+				if(!used&&score>best){best=score;bestIndex=i;}
+			}
+			parents[slot]=bestIndex;
+		}
+		for(var slot=0u;slot<splitCount;slot++){
+			let childIndex=activeCount+slot;
+			let parentIndex=parents[slot];
+			var parent=params[parentIndex];
+			var child=parent;
+			var axis=0u;
+			if(parent.logScalePad.y>parent.logScalePad.x){axis=1u;}
+			if(parent.logScalePad.z>parent.logScalePad[axis]){axis=2u;}
+			let rotation=quaternion_matrix(parent.rotation);
+			let offset=rotation[axis]*exp(parent.logScalePad[axis])*0.28;
+			parent.centerStatic=vec4<f32>(
+				parent.centerStatic.xyz-offset,max(0.0,parent.centerStatic.w-0.04));
+			child.centerStatic=vec4<f32>(
+				child.centerStatic.xyz+offset,max(0.0,child.centerStatic.w-0.04));
+			let shrink=vec3<f32>(log(0.80));
+			parent.logScalePad=vec4<f32>(parent.logScalePad.xyz+shrink,0.0);
+			child.logScalePad=vec4<f32>(child.logScalePad.xyz+shrink,0.0);
+			if(splatStats[parentIndex].w>splatStats[parentIndex].x){
+				parent.velocityTime.w=clamp(parent.velocityTime.w-0.035,0.0,1.0);
+				child.velocityTime.w=clamp(child.velocityTime.w+0.035,0.0,1.0);
+			}
+			let opacity=clamp(sigmoid(parent.colorOpacity.w),1e-4,0.999);
+			let halfOpacity=clamp(1.0-sqrt(1.0-opacity),1e-4,0.999);
+			let splitLogit=log(halfOpacity/(1.0-halfOpacity));
+			parent.colorOpacity.w=splitLogit;
+			child.colorOpacity.w=splitLogit;
+			params[parentIndex]=parent;
+			params[childIndex]=child;
+			firstMoment[parentIndex]=zero_splat();
+			secondMoment[parentIndex]=zero_splat();
+			firstMoment[childIndex]=zero_splat();
+			secondMoment[childIndex]=zero_splat();
+			splatStats[parentIndex]=splatStats[parentIndex]*0.5;
+			splatStats[childIndex]=vec4<f32>(0.0);
+			let gradientBase=childIndex*${gradientFloats}u;
+			for(var component=0u;component<${gradientFloats}u;component++){
+				atomicStore(&gradientAtoms[gradientBase+component],0u);
+			}
+		}
+		atomicStore(&counters[7],activeCount+splitCount);
 	}`;
 }
 
@@ -2163,6 +2289,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.backwardMode = TILED_BACKWARD_MODES.DIRECT_3D;
 		this.gradientFloats = DIRECT_GRADIENT_FLOATS;
 		this.tiledConfigBytes = new ArrayBuffer(TILED_CONFIG_BYTES);
+		this.activeSplatCount = this.initialSplatCount;
 	}
 
 	targetBufferByteLength(dataset) {
@@ -2287,6 +2414,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			metrics: metricsWgsl(),
 			backward: backwardSource,
 			update: updateWgsl(this.backwardMode, this.projectionLayout),
+			density: densityWgsl(this.gradientFloats),
 			...(separableSsim ? {
 				ssimHorizontal: separableSsimHorizontalWgsl(),
 				ssimVertical: separableSsimVerticalWgsl(),
@@ -2321,6 +2449,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			backward: pipeline(modules.backward,
 				checkpointBlocks ? "block_backward" : "pair_backward"),
 			update: pipeline(modules.update, "reduce_update"),
+			density: pipeline(modules.density, "activate_prefix_splits"),
 			gradientDebug: debugModule ? pipeline(debugModule, "materialize_gradient") : null,
 			...(separableSsim ? {
 				ssimHorizontal: pipeline(modules.ssimHorizontal, "ssim_horizontal"),
@@ -2349,6 +2478,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			size: Math.max(4, Math.ceil(size / 4) * 4), usage: bufferUsage,
 		});
 		const active = makeInitialSplats(this.dataset, this.initialSplatCount);
+		this.activeSplatCount = this.initialSplatCount;
 		const initial = new Float32Array(this.splatCount * SPLAT_FLOATS);
 		initial.set(active);
 		for (let i = this.initialSplatCount; i < this.splatCount; i += 1) {
@@ -2497,6 +2627,10 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			sharePairPacket: this.sharePairPacket,
 			staticWarmupSteps: this.staticWarmupSteps,
 			metricCycleSteps: this.cycleMetricCount,
+			dormantSlotSparseUpdate: true,
+			initialActiveUpdateSlots: this.activeSplatCount,
+			updateSlotCapacity: this.splatCount,
+			initialDormantUpdateSlots: this.splatCount - this.activeSplatCount,
 		});
 	}
 
@@ -2616,6 +2750,12 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				group(this.tiledPipelines.update,
 					updateEntries(this.buffers.params[1], this.buffers.params[0])),
 			],
+			density: this.buffers.params.map((params) => group(this.tiledPipelines.density, [
+				buffer(0, this.buffers.tiledConfig), buffer(1, params),
+				buffer(2, this.buffers.firstMoment), buffer(3, this.buffers.secondMoment),
+				buffer(4, this.buffers.stats), buffer(5, this.buffers.gradientAtoms),
+				buffer(6, this.buffers.counters),
+			])),
 		};
 		this.tiledBindGroupValidation = this.device.popErrorScope();
 	}
@@ -2659,6 +2799,26 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.lastCameraBatch = [selected.viewIndex]; this.lastCameraBatchStart = selected.viewSlot;
 		this.lastFrameIndex = selected.frameIndex;
 		this.lastTrainingPhase = selected.staticWarmup ? "static_warmup" : "dynamic_fit";
+		const expectedActiveSplats = activeSplatCountForStep(
+			this.initialSplatCount,
+			this.splatCount,
+			this.stepCount,
+		);
+		if (this.activeSplatCount !== expectedActiveSplats) {
+			throw new Error(
+				`Tiled active-prefix schedule drifted: tracked ${this.activeSplatCount}, `
+				+ `expected ${expectedActiveSplats} at step ${this.stepCount}.`,
+			);
+		}
+		const activeDispatch = activePrefixDispatchSizes(
+			this.activeSplatCount,
+			this.splatCount,
+			this.tileCount,
+			this.gradientFloats,
+		);
+		this.lastActiveUpdateSplats = activeDispatch.activeUpdateSlots;
+		this.lastUpdateWorkgroups = activeDispatch.updateWorkgroups;
+		this.lastClearWorkgroups = activeDispatch.clearWorkgroups;
 		this.lastTargetSourceOffset = this.uploadTargetPage(
 			this.buffers.target,
 			selected.viewIndex,
@@ -2684,11 +2844,12 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			motionWeighting,
 			randomBackground,
 			checkpointStride: this.checkpointStride,
+			activeSplatCount: this.activeSplatCount,
 		});
 		this.device.queue.writeBuffer(this.buffers.tiledConfig, 0, this.tiledConfigBytes);
 		const encoder = this.device.createCommandEncoder();
 		this.encodePass(encoder, this.tiledPipelines.clear, this.tiledBindGroups.clear,
-			ceilDiv(Math.max(this.tileCount, this.splatCount * this.gradientFloats), 64),
+			activeDispatch.clearWorkgroups,
 			1, 1, "clear");
 		this.encodePass(encoder, this.tiledPipelines.project, this.tiledBindGroups.project[this.currentIndex],
 			ceilDiv(this.splatCount, 64), 1, 1, "project");
@@ -2736,17 +2897,29 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		backward.setBindGroup(0, this.tiledBindGroups.backward[this.currentIndex]);
 		backward.dispatchWorkgroupsIndirect(this.buffers.indirectArgs, 0); backward.end();
 		this.encodePass(encoder, this.tiledPipelines.update, this.tiledBindGroups.update[this.currentIndex],
-			ceilDiv(this.splatCount, 64), 1, 1, "update");
+			activeDispatch.updateWorkgroups, 1, 1, "update");
 		const nextStep = this.stepCount + 1;
 		const densityDispatches = densityDispatchesForStep(
 			this.initialSplatCount, this.splatCount, nextStep);
 		if (densityDispatches > 0) {
-			const maintenance = encoder.beginComputePass();
-			maintenance.setPipeline(this.pipelines.maintenance);
-			maintenance.setBindGroup(0, this.bindGroups.maintenance[1 - this.currentIndex]);
-			for (let pass = 0; pass < densityDispatches; pass += 1) maintenance.dispatchWorkgroups(1);
-			maintenance.end(); this.totalRecycled += densityDispatches * 4;
+			// Pass boundaries make each four-way split observe the prefix grown
+			// by the preceding split, including its initialized child state.
+			for (let pass = 0; pass < densityDispatches; pass += 1) {
+				const maintenance = encoder.beginComputePass();
+				maintenance.setPipeline(this.tiledPipelines.density);
+				maintenance.setBindGroup(0, this.tiledBindGroups.density[1 - this.currentIndex]);
+				maintenance.dispatchWorkgroups(1);
+				maintenance.end();
+			}
 		}
+		const nextActiveSplats = activeSplatCountForStep(
+			this.initialSplatCount,
+			this.splatCount,
+			nextStep,
+		);
+		const activatedSplats = nextActiveSplats - this.activeSplatCount;
+		this.activeSplatCount = nextActiveSplats;
+		this.totalRecycled += activatedSplats;
 		if (this.activeTimestampProfile) {
 			encoder.resolveQuerySet(
 				this.tiledTimestampQuerySet,
@@ -2783,6 +2956,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		}
 		if (this.activeTimestampProfile) throw new Error("A tiled GPU profile is already active.");
 		const profiledStep = this.stepCount;
+		const profiledActiveSplats = activeSplatCountForStep(
+			this.initialSplatCount,
+			this.splatCount,
+			profiledStep,
+		);
 		const maintenanceDispatches = densityDispatchesForStep(
 			this.initialSplatCount,
 			this.splatCount,
@@ -2831,6 +3009,10 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			},
 			maintenanceDispatches,
 			maintenanceIncluded: false,
+			activeUpdateSlots: profiledActiveSplats,
+			capacityUpdateSlots: this.splatCount,
+			dormantUpdateSlots: this.splatCount - profiledActiveSplats,
+			updateWorkgroups: ceilDiv(profiledActiveSplats, 64),
 		};
 	}
 
@@ -2878,6 +3060,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			tileOverflowTotal: values[12],
 			maxTileOccupancyEver: values[13],
 			objectiveStep,
+			activeUpdateSplats: values[15],
+			dormantUpdateSplats: values[9] - values[15],
 			cycleMeanLoss: cycle?.loss ?? values[0],
 			cycleMeanL1: cycle?.l1 ?? values[1],
 			cycleMeanDssim: cycle?.dssim ?? values[2],
