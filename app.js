@@ -1,22 +1,21 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260731-compactfp16-5";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260731-compactfp16-5";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260802-comparison-grid-1";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260802-comparison-grid-1";
 import {
 	createOrbitCameraState,
 	orbitPreviewCamera,
 	panOrbitCamera,
 	rotateOrbitCamera,
 	zoomOrbitCamera,
-} from "./orbitCamera.js?v=20260731-orbit384-1";
-import { learningRateMultipliers } from "./trainingSchedule.js?v=20260731-compactfp16-5";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260731-compactfp16-5";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260731-compactfp16-5";
+} from "./orbitCamera.js?v=20260802-comparison-grid-1";
+import { learningRateMultipliers } from "./trainingSchedule.js?v=20260802-comparison-grid-1";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260802-comparison-grid-1";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260802-comparison-grid-1";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
-const targetCanvas = $("targetCanvas");
-const resultStrip = $("resultStrip");
 const comparisonCanvases = [$("sourceViewCanvas"), $("targetViewCanvas"), $("heldoutViewCanvas")];
 const comparisonFrameLabels = [$("sourceViewFrameValue"), $("targetViewFrameValue"), $("heldoutViewFrameValue")];
+const cameraInteractionCells = Array.from(document.querySelectorAll(".camera-interaction-cell"));
 const resultViewLabels = [0, 1, 2].map((index) => $(`resultViewLabel${index}`));
 const resultViewRoles = [0, 1, 2].map((index) => $(`resultViewRole${index}`));
 const controls = {
@@ -25,7 +24,6 @@ const controls = {
 	splats: $("splatSlider"), growthCapacity: $("growthCapacitySelect"),
 	time: $("timeSlider"), loop: $("timeLoopToggle"), live: $("livePreviewToggle"),
 	fullMetrics: $("fullMetricsToggle"), speed: $("timeSpeedSlider"), targetView: $("targetViewSelect"),
-	renderCamera: $("renderCameraSelect"), resultCameraMode: $("resultCameraModeSelect"),
 	resetOrbit: $("resetOrbitButton"), resultView: $("resultViewSelect"),
 	temporalSchedule: $("temporalScheduleToggle"), temporal: $("temporalSlider"), lr: $("lrSlider"),
 	lrSchedule: $("lrScheduleToggle"), staticWarmup: $("staticWarmupToggle"),
@@ -101,7 +99,8 @@ let localLossPending = false;
 let lastLocalLossStep = -1;
 let trainerCapacity = 0;
 let trainerStaticWarmupSteps = 0;
-let orbitCameraState = null;
+let orbitCameraStates = [];
+let orbitCameraDirty = [false, false, false];
 let orbitPointer = null;
 const frameDurations = [];
 
@@ -134,13 +133,28 @@ function sampledBackendSelected() {
 	return controls.backend.value === "sampled3d";
 }
 
-function orbitCameraSelected() {
-	return controls.resultCameraMode.value === "orbit";
+function comparisonCameraIndices() {
+	const configured = dataset?.comparisonViewIndices ?? [0];
+	return Array.from({ length: 3 }, (_, panel) => configured[panel] ?? configured[0] ?? 0);
 }
 
-function resetOrbitCamera() {
+function updateResultCameraLabel(panel) {
+	const camera = dataset?.cameras?.[comparisonCameraIndices()[panel]];
+	resultViewLabels[panel].textContent = `${camera?.name ?? "--"}${orbitCameraDirty[panel] ? " · orbit" : ""}`;
+}
+
+function resetOrbitCamera(panel = null) {
 	if (!dataset?.cameras?.length) return;
-	orbitCameraState = createOrbitCameraState(dataset, Number(controls.renderCamera.value || 0));
+	const indices = comparisonCameraIndices();
+	if (panel === null) {
+		orbitCameraStates = indices.map((viewIndex) => createOrbitCameraState(dataset, viewIndex));
+		orbitCameraDirty = [false, false, false];
+		for (let index = 0; index < 3; index += 1) updateResultCameraLabel(index);
+		return;
+	}
+	orbitCameraStates[panel] = createOrbitCameraState(dataset, indices[panel]);
+	orbitCameraDirty[panel] = false;
+	updateResultCameraLabel(panel);
 }
 
 function trainOptions() {
@@ -157,14 +171,14 @@ function trainOptions() {
 }
 
 function renderOptions() {
-	const previewCamera = orbitCameraSelected() && orbitCameraState
-		? orbitPreviewCamera(orbitCameraState) : null;
+	const previewCameras = orbitCameraStates.length
+		? orbitCameraStates.map((state) => orbitPreviewCamera(state)) : null;
 	return { time: Number(controls.time.value), modelMode: currentModelMode(),
 		temporalSigma: currentTemporalSigma(), renderMode: currentRenderMode(),
 		enabled: controls.live.checked,
-		viewIndex: Number(controls.renderCamera.value || 0),
-		viewIndices: previewCamera ? null : dataset?.comparisonViewIndices ?? null,
-		previewCamera };
+		viewIndex: comparisonCameraIndices()[0],
+		viewIndices: previewCameras ? null : comparisonCameraIndices(),
+		previewCameras };
 }
 
 function setStatus(message) {
@@ -448,11 +462,6 @@ function consumeValidation({ step, metrics }) {
 	recordMetric("heldoutSsim", step, metrics.heldoutSsim);
 }
 
-function selectedViewDataset() {
-	const index = Number(controls.renderCamera.value || 0);
-	return dataset?.viewDatasets?.[index] ?? dataset?.previewViews?.[index] ?? dataset;
-}
-
 function updateTargetCanvas() {
 	if (!dataset) return;
 	let targetView = controls.targetView.value;
@@ -462,27 +471,25 @@ function updateTargetCanvas() {
 		setStatus("Validation error images are not in the nonblocking worker snapshot protocol; scalar validation remains live.");
 	}
 	const time = Number(controls.time.value);
-	const selected = selectedViewDataset();
-	const frame = drawTargetFrame(targetCanvas, selected, time, { view: targetView });
-	const camera = dataset.cameras?.[Number(controls.renderCamera.value || 0)];
-	$("targetFrameValue").textContent = `${camera ? `${camera.name} ${camera.role}` : "target"} f${frame}`;
-	const previews = dataset.previewViews ?? [];
-	$("angleStrip").hidden = !previews.length;
+	const indices = comparisonCameraIndices();
+	let displayedFrame = 0;
 	for (let index = 0; index < comparisonCanvases.length; index += 1) {
-		const preview = previews[index];
+		const viewIndex = indices[index];
+		const preview = dataset.viewDatasets?.[viewIndex] ?? dataset.previewViews?.[index] ?? dataset;
 		comparisonCanvases[index].hidden = !preview;
-		comparisonFrameLabels[index].textContent = preview
-			? `${preview.label} f${drawTargetFrame(comparisonCanvases[index], preview, time)}` : "--";
+		if (!preview) {
+			comparisonFrameLabels[index].textContent = "--";
+			continue;
+		}
+		const frame = drawTargetFrame(comparisonCanvases[index], preview, time, { view: targetView });
+		if (index === 0) displayedFrame = frame;
+		const camera = dataset.cameras?.[viewIndex];
+		comparisonFrameLabels[index].textContent = `${camera?.name ?? preview.label ?? "view"} · f${frame}`;
 	}
+	$("targetFrameValue").textContent = `frame ${displayedFrame}`;
 }
 
 function configureCameraUi() {
-	const cameras = dataset.cameras ?? [{ name: "Source", role: "train" }];
-	controls.renderCamera.replaceChildren(...cameras.map((camera, index) => {
-		const option = document.createElement("option"); option.value = String(index);
-		option.textContent = `${camera.name} (${camera.role})`; return option;
-	}));
-	controls.renderCamera.value = String(dataset.comparisonViewIndices?.[0] ?? 0);
 	resetOrbitCamera();
 	configureResultCameraUi();
 	const notice = $("renderContractNotice");
@@ -491,24 +498,12 @@ function configureCameraUi() {
 
 function configureResultCameraUi() {
 	const cameras = dataset?.cameras ?? [{ name: "Source", role: "train" }];
-	const labels = $("resultAngleLabels");
-	const orbit = orbitCameraSelected();
-	resultStrip.dataset.cameraMode = orbit ? "orbit" : "calibrated";
-	labels.hidden = !orbit && (dataset?.viewCount ?? 1) < 2;
-	labels.dataset.viewCount = orbit ? "1" : "3";
-	controls.resetOrbit.hidden = !orbit;
-	renderCanvas.setAttribute("aria-label", orbit
-		? "Interactive unscored WebGPU splat view" : "Calibrated WebGPU result views");
-	if (orbit) {
-		resultViewRoles[0].textContent = "Free camera";
-		resultViewLabels[0].textContent = "unscored";
-		return;
-	}
-	const renderedIndices = cameras.length > 1 ? dataset.comparisonViewIndices : [0];
+	const renderedIndices = comparisonCameraIndices();
 	for (let panel = 0; panel < 3; panel += 1) {
 		const camera = cameras[renderedIndices[panel]];
-		resultViewLabels[panel].textContent = camera?.name ?? "--";
-		resultViewRoles[panel].textContent = camera?.role === "heldout" ? "Heldout" : `Train ${String.fromCharCode(65 + panel)}`;
+		updateResultCameraLabel(panel);
+		resultViewRoles[panel].textContent = camera?.role === "heldout"
+			? "Result · Heldout" : `Result · Train ${String.fromCharCode(65 + panel)}`;
 	}
 }
 
@@ -779,16 +774,6 @@ controls.fullMetrics.addEventListener("change", () => {
 	}
 });
 controls.targetView.addEventListener("change", updateTargetCanvas);
-controls.renderCamera.addEventListener("change", () => {
-	if (orbitCameraSelected()) resetOrbitCamera();
-	updateTargetCanvas(); syncWorkerOptions(true);
-});
-controls.resultCameraMode.addEventListener("change", () => {
-	if (orbitCameraSelected()) resetOrbitCamera();
-	configureResultCameraUi();
-	requestAnimationFrame(() => resizeWorkerCanvas());
-	syncWorkerOptions(true);
-});
 controls.resetOrbit.addEventListener("click", () => {
 	resetOrbitCamera(); syncWorkerOptions(true);
 });
@@ -799,45 +784,90 @@ chartElements.lossScale.addEventListener("click", () => {
 	drawMetricCharts();
 });
 
-renderCanvas.addEventListener("pointerdown", (event) => {
-	if (!orbitCameraSelected() || !orbitCameraState || ![0, 1, 2].includes(event.button)) return;
-	orbitPointer = { id: event.pointerId, x: event.clientX, y: event.clientY,
+function panelForCell(cell) {
+	return Number(cell.dataset.cameraPanel);
+}
+
+function updateOrbitCamera(panel, update) {
+	const state = orbitCameraStates[panel];
+	if (!state) return;
+	orbitCameraStates[panel] = update(state);
+	if (!orbitCameraDirty[panel]) {
+		orbitCameraDirty[panel] = true;
+		updateResultCameraLabel(panel);
+	}
+}
+
+function beginOrbitPointer(event) {
+	if (![0, 1, 2].includes(event.button)) return;
+	const element = event.currentTarget;
+	const panel = panelForCell(element);
+	if (!orbitCameraStates[panel]) return;
+	orbitPointer = { id: event.pointerId, panel, element, x: event.clientX, y: event.clientY,
 		pan: event.shiftKey || event.button !== 0 };
-	renderCanvas.setPointerCapture(event.pointerId);
-	renderCanvas.classList.add("dragging");
+	element.setPointerCapture(event.pointerId);
+	element.classList.add("dragging");
 	event.preventDefault();
-});
-renderCanvas.addEventListener("pointermove", (event) => {
-	if (!orbitPointer || orbitPointer.id !== event.pointerId || !orbitCameraState) return;
+}
+
+function moveOrbitPointer(event) {
+	if (!orbitPointer || orbitPointer.id !== event.pointerId) return;
 	const deltaX = event.clientX - orbitPointer.x;
 	const deltaY = event.clientY - orbitPointer.y;
 	orbitPointer.x = event.clientX;
 	orbitPointer.y = event.clientY;
-	orbitCameraState = orbitPointer.pan || event.shiftKey
-		? panOrbitCamera(orbitCameraState, deltaX, deltaY)
-		: rotateOrbitCamera(orbitCameraState, deltaX, deltaY);
+	updateOrbitCamera(orbitPointer.panel, (state) => orbitPointer.pan || event.shiftKey
+		? panOrbitCamera(state, deltaX, deltaY)
+		: rotateOrbitCamera(state, deltaX, deltaY));
 	event.preventDefault();
-});
+}
+
 function releaseOrbitPointer(event) {
 	if (!orbitPointer || orbitPointer.id !== event.pointerId) return;
-	if (renderCanvas.hasPointerCapture(event.pointerId)) renderCanvas.releasePointerCapture(event.pointerId);
+	const { element } = orbitPointer;
+	if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId);
+	element.classList.remove("dragging");
 	orbitPointer = null;
-	renderCanvas.classList.remove("dragging");
 }
-renderCanvas.addEventListener("pointerup", releaseOrbitPointer);
-renderCanvas.addEventListener("pointercancel", releaseOrbitPointer);
-renderCanvas.addEventListener("wheel", (event) => {
-	if (!orbitCameraSelected() || !orbitCameraState) return;
-	orbitCameraState = zoomOrbitCamera(orbitCameraState, event.deltaY);
+
+function handleOrbitKey(event) {
+	const panel = panelForCell(event.currentTarget);
+	const deltaX = event.key === "ArrowLeft" ? -12 : event.key === "ArrowRight" ? 12 : 0;
+	const deltaY = event.key === "ArrowUp" ? -12 : event.key === "ArrowDown" ? 12 : 0;
+	if (deltaX || deltaY) {
+		updateOrbitCamera(panel, (state) => event.shiftKey
+			? panOrbitCamera(state, deltaX, deltaY)
+			: rotateOrbitCamera(state, deltaX, deltaY));
+	} else if (event.key === "+" || event.key === "=") {
+		updateOrbitCamera(panel, (state) => zoomOrbitCamera(state, -80));
+	} else if (event.key === "-" || event.key === "_") {
+		updateOrbitCamera(panel, (state) => zoomOrbitCamera(state, 80));
+	} else if (event.key.toLowerCase() === "r" || event.key === "0") {
+		resetOrbitCamera(panel);
+	} else {
+		return;
+	}
+	syncWorkerOptions(true);
 	event.preventDefault();
-}, { passive: false });
-renderCanvas.addEventListener("dblclick", () => {
-	if (!orbitCameraSelected()) return;
-	resetOrbitCamera();
-});
-renderCanvas.addEventListener("contextmenu", (event) => {
-	if (orbitCameraSelected()) event.preventDefault();
-});
+}
+
+for (const cell of cameraInteractionCells) {
+	cell.addEventListener("pointerdown", beginOrbitPointer);
+	cell.addEventListener("pointermove", moveOrbitPointer);
+	cell.addEventListener("pointerup", releaseOrbitPointer);
+	cell.addEventListener("pointercancel", releaseOrbitPointer);
+	cell.addEventListener("wheel", (event) => {
+		updateOrbitCamera(panelForCell(cell), (state) => zoomOrbitCamera(state, event.deltaY));
+		syncWorkerOptions();
+		event.preventDefault();
+	}, { passive: false });
+	cell.addEventListener("dblclick", () => {
+		resetOrbitCamera(panelForCell(cell));
+		syncWorkerOptions(true);
+	});
+	cell.addEventListener("contextmenu", (event) => event.preventDefault());
+	cell.addEventListener("keydown", handleOrbitKey);
+}
 
 new ResizeObserver(() => resizeWorkerCanvas()).observe(renderCanvas);
 const chartObserver = new ResizeObserver(drawMetricCharts);

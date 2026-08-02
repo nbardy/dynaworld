@@ -501,11 +501,17 @@ without stopping optimization.
 
 ### Interactive result camera
 
-`Result Camera -> Free orbit` changes only the result view. It uses the same
-projection, depth sort, Gaussian raster, temporal model, display filtering, and
-WGSL render pipeline as the calibrated triptych; no external 3DGS viewer is
-loaded. Left drag orbits, Shift-left/middle/right drag pans, the wheel dollies,
-and double-click or the reset icon restores the selected calibrated camera.
+The first screen is a three-column comparison matrix: calibrated ground truth
+on the first row and the matching WebGPU result on the second. Every GT and
+result cell controls the render-only camera in its column. The GT image stays
+fixed as the calibrated reference while the result label gains `orbit` after
+the camera moves. Left drag orbits, Shift-left/middle/right drag pans, the wheel
+dollies, and double-click restores that column; the toolbar reset restores all
+three calibrated cameras.
+
+The interactive views use the same projection, depth sort, Gaussian raster,
+temporal model, display filtering, and WGSL render pipeline as the calibrated
+results. No external 3DGS viewer is loaded.
 
 The orbit pivot starts on the selected camera's principal ray at the median
 positive seed depth. Each interaction constructs a rigid OpenCV look-at camera
@@ -513,11 +519,11 @@ with +X right, +Y down, and +Z forward. The packer applies the trainer's global
 geometry scale to translation only, preserving projection exactly.
 
 Training and validation keep the immutable canonical camera buffer. Rendering
-binds a separate copy with one additional preview slot, and only that slot is
-rewritten during interaction. Thus dragging cannot change camera sampling,
-losses, gradients, or heldout metrics. The free view is explicitly labeled
-`unscored`; it is useful for inspecting geometry but is not a calibrated
-novel-view metric.
+binds a separate copy with three additional preview slots, and only those slots
+are rewritten during interaction. Thus dragging cannot change camera sampling,
+losses, gradients, or heldout metrics. A moved result is useful for inspecting
+geometry but is not a calibrated novel-view metric; double-click before making
+pixel-aligned comparisons with its GT cell.
 
 ### Native 4x-linear resolution mode
 

@@ -68,7 +68,7 @@ test("live preview can be disabled without pausing optimization", async () => {
 	assert.match(appSource, /enabled:\s*controls\.live\.checked/);
 });
 
-test("SPA exposes a render-only orbit camera and real 4x-linear dataset preset", async () => {
+test("SPA exposes three independent render-only cameras in the GT/result matrix", async () => {
 	const [htmlSource, appSource, workerSource, trainerSource] = await Promise.all([
 		readFile(new URL("../index.html", import.meta.url), "utf8"),
 		readFile(new URL("../app.js", import.meta.url), "utf8"),
@@ -77,11 +77,14 @@ test("SPA exposes a render-only orbit camera and real 4x-linear dataset preset",
 	]);
 	assert.match(htmlSource, /id="resolutionSelect"/);
 	assert.match(htmlSource, /option value="384x288"/);
-	assert.match(htmlSource, /id="resultCameraModeSelect"/);
-	assert.match(appSource, /viewIndices:\s*previewCamera\s*\?\s*null\s*:\s*dataset\?\.[\s\S]{0,120}previewCamera\s*}/);
-	assert.match(appSource, /renderCanvas\.addEventListener\("pointermove"/);
-	assert.match(appSource, /renderCanvas\.addEventListener\("wheel"/);
-	assert.match(workerSource, /renderOptions\.previewCamera/);
+	assert.match(htmlSource, /id="comparisonGrid"/);
+	assert.equal(Array.from(htmlSource.matchAll(/data-camera-panel="[0-2]"/g)).length, 6);
+	assert.doesNotMatch(htmlSource, /id="resultCameraModeSelect"/);
+	assert.match(appSource, /viewIndices:\s*previewCameras\s*\?\s*null\s*:\s*comparisonCameraIndices\(\)/);
+	assert.match(appSource, /cell\.addEventListener\("pointermove"/);
+	assert.match(appSource, /cell\.addEventListener\("wheel"/);
+	assert.match(workerSource, /renderOptions\.previewCameras/);
+	assert.match(trainerSource, /writePreviewCameras\(cameras\)/);
 	assert.match(trainerSource, /target, cameras, renderCameras, trainViews/);
 	assert.match(trainerSource, /binding:\s*2, resource:\s*\{ buffer:\s*this\.buffers\.renderCameras/);
 	assert.match(trainerSource, /binding:\s*4, resource:\s*\{ buffer:\s*this\.buffers\.cameras/);

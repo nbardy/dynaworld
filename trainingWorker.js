@@ -35,7 +35,7 @@ let running = false;
 let pumpToken = 0;
 let trainOptions = { ...DEFAULT_TRAIN_OPTIONS };
 let renderOptions = { enabled: true, time: 0.35, modelMode: 0, temporalSigma: 0.30, renderMode: 0,
-	viewIndex: 0, viewIndices: null, previewCamera: null };
+	viewIndex: 0, viewIndices: null, previewCameras: null };
 let burstSteps = 8;
 let maxQueuedSteps = 32;
 let metricEvery = 512;
@@ -159,7 +159,7 @@ function requestValidation(options = {}) {
 function renderTrainer() {
 	trainer.render(renderOptions.time, renderOptions.modelMode, renderOptions.temporalSigma,
 		renderOptions.renderMode, renderOptions.viewIndex, renderOptions.viewIndices,
-		renderOptions.previewCamera);
+		renderOptions.previewCameras);
 }
 
 function render(now) {
