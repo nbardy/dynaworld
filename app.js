@@ -1,21 +1,26 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260802-progressive-resolution-1";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260802-progressive-resolution-1";
+import {
+	drawTargetFrame,
+	loadPresetDataset,
+	loadTemporalPageDataset,
+} from "./dataset.js?v=20260803-fullfps-pixelgs-1";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260803-fullfps-pixelgs-1";
 import {
 	createOrbitCameraState,
 	orbitPreviewCamera,
 	panOrbitCamera,
 	rotateOrbitCamera,
 	zoomOrbitCamera,
-} from "./orbitCamera.js?v=20260802-progressive-resolution-1";
-import { learningRateMultipliers } from "./trainingSchedule.js?v=20260802-progressive-resolution-1";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260802-progressive-resolution-1";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260802-progressive-resolution-1";
+} from "./orbitCamera.js?v=20260803-fullfps-pixelgs-1";
+import { learningRateMultipliers } from "./trainingSchedule.js?v=20260803-fullfps-pixelgs-1";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260803-fullfps-pixelgs-1";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260803-fullfps-pixelgs-1";
 import {
 	RESOLUTION_MODE_PROGRESSIVE,
 	assertResolutionContinuationCompatible,
 	initialResolutionPreset,
 	resolutionStageForStep,
-} from "./resolutionSchedule.js?v=20260802-progressive-resolution-1";
+} from "./resolutionSchedule.js?v=20260803-fullfps-pixelgs-1";
+import { planTemporalPaging } from "./temporalPagingPlanner.js?v=20260803-fullfps-pixelgs-1";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
@@ -35,6 +40,7 @@ const controls = {
 	lrSchedule: $("lrScheduleToggle"), staticWarmup: $("staticWarmupToggle"),
 	motionWeighting: $("motionWeightingToggle"),
 	randomBackground: $("randomBackgroundToggle"),
+	pixelDepthScaling: $("pixelDepthScalingToggle"),
 	samples: $("samplesSlider"), motionMix: $("motionMixSlider"), staticMix: $("staticMixSlider"),
 	supportGuard: $("supportGuardSlider"),
 };
@@ -115,6 +121,13 @@ let progressiveDatasetPromise = null;
 let progressiveDataset = null;
 let resolutionTransitionPending = false;
 let resolutionTransitionComplete = false;
+let temporalPagingPlan = null;
+let temporalPageCursor = -1;
+let temporalPageLastSwitchStep = 0;
+let temporalPageLoadPromise = null;
+let temporalPageReady = null;
+let temporalPageSwitchPending = false;
+let temporalPagingGeneration = 0;
 const frameDurations = [];
 
 function currentStep() {
@@ -203,9 +216,13 @@ function updateDatasetIdentity() {
 	const trainCount = dataset.trainViewCount ?? 1;
 	const poseSource = dataset.datasetContract?.pose_source;
 	const calibrationLabel = poseSource?.endsWith("_v2") ? "LLFF/OpenCV v2" : poseSource;
+	const timeline = dataset.nativeFrameCount > dataset.frameCount
+		? ` · ${dataset.nativeFrameCount}f @ ${dataset.nativeFps} fps / ${dataset.durationSeconds.toFixed(1)} s`
+			+ ` · ${dataset.frameCount} resident`
+		: "";
 	$("datasetName").textContent = dataset.datasetContract
 		? `${dataset.name} · ${trainCount} train / ${dataset.viewCount - trainCount} heldout`
-			+ `${calibrationLabel ? ` · ${calibrationLabel}` : ""} · ${dataset.width}x${dataset.height}`
+			+ `${calibrationLabel ? ` · ${calibrationLabel}` : ""} · ${dataset.width}x${dataset.height}${timeline}`
 		: dataset.name;
 	$("datasetName").title = poseSource ?? "No calibrated pose source declared";
 }
@@ -245,7 +262,8 @@ function updateControlLabels() {
 	const formatLearningRate = (value) => value >= 0.1 ? value.toFixed(2) : value.toPrecision(2);
 	values.splats.textContent = controls.splats.value;
 	values.time.textContent = Number(controls.time.value).toFixed(3);
-	values.speed.textContent = `${Number(controls.speed.value).toFixed(2)}x`;
+	const realtimeRate = Number(controls.speed.value) * Number(dataset?.durationSeconds ?? 1);
+	values.speed.textContent = `${realtimeRate.toFixed(2)}x real time`;
 	values.temporal.textContent = sigma.toFixed(3);
 	values.lr.textContent = `${baseLearningRate.toFixed(2)}x`;
 	values.lrSchedule.textContent = controls.lrSchedule.checked
@@ -274,6 +292,8 @@ function updateControlLabels() {
 	$("motionWeightingField").toggleAttribute("data-disabled", sampledBackendSelected());
 	controls.randomBackground.disabled = sampledBackendSelected();
 	$("randomBackgroundField").toggleAttribute("data-disabled", sampledBackendSelected());
+	controls.pixelDepthScaling.disabled = sampledBackendSelected();
+	$("pixelDepthScalingField").toggleAttribute("data-disabled", sampledBackendSelected());
 	values.temporalLabel.textContent = controls.temporalSchedule.checked ? "Temporal Support Now" : "Temporal Support";
 	if (!controls.temporalSchedule.checked) {
 		values.temporalSchedule.textContent = "manual · fixed";
@@ -530,9 +550,11 @@ function updateTargetCanvas() {
 		const frame = drawTargetFrame(comparisonCanvases[index], preview, time, { view: targetView });
 		if (index === 0) displayedFrame = frame;
 		const camera = dataset.cameras?.[viewIndex];
-		comparisonFrameLabels[index].textContent = `${camera?.name ?? preview.label ?? "view"} · f${frame}`;
+		const nativeFrame = preview.frameIndices?.[frame] ?? frame;
+		comparisonFrameLabels[index].textContent = `${camera?.name ?? preview.label ?? "view"} · f${nativeFrame}`;
 	}
-	$("targetFrameValue").textContent = `frame ${displayedFrame}`;
+	const nativeFrame = dataset.frameIndices?.[displayedFrame] ?? displayedFrame;
+	$("targetFrameValue").textContent = `frame ${nativeFrame}/${Math.max(0, (dataset.nativeFrameCount ?? dataset.frameCount) - 1)}`;
 }
 
 function configureCameraUi() {
@@ -589,6 +611,93 @@ function bindWorkerEvents(client) {
 	});
 }
 
+function stopTemporalPagePreload() {
+	temporalPagingGeneration += 1;
+	temporalPageLoadPromise = null;
+	temporalPageReady = null;
+}
+
+function queueNextTemporalPage() {
+	if (!temporalPagingPlan || temporalPageLoadPromise || temporalPageReady) return;
+	const nextPageIndex = (temporalPageCursor + 1) % temporalPagingPlan.pageCount;
+	const page = temporalPagingPlan.pages[nextPageIndex];
+	const sourceDataset = dataset;
+	const generation = temporalPagingGeneration;
+	temporalPageLoadPromise = loadTemporalPageDataset(sourceDataset, page, { computeSamples: false })
+		.then((pageDataset) => {
+			if (generation === temporalPagingGeneration) {
+				temporalPageReady = { page, dataset: pageDataset };
+			}
+			return pageDataset;
+		})
+		.catch((error) => {
+			if (generation === temporalPagingGeneration) {
+				setStatus(`Full-rate page ${nextPageIndex + 1} could not be decoded; `
+					+ `continuing the current resident page. ${error?.message ?? String(error)}`);
+			}
+			return null;
+		})
+		.finally(() => {
+			if (generation === temporalPagingGeneration) temporalPageLoadPromise = null;
+		});
+}
+
+function configureTemporalPaging({ currentPageIndex = -1 } = {}) {
+	stopTemporalPagePreload();
+	temporalPagingPlan = null;
+	temporalPageCursor = currentPageIndex;
+	temporalPageLastSwitchStep = currentStep();
+	temporalPageSwitchPending = false;
+	const stream = dataset?.temporalStream;
+	if (stream?.version !== "dynaworld_browser_temporal_stream/v1") return;
+	const nativeFrameCount = Number(stream.native_frame_count);
+	const pageSize = Math.min(Number(stream.page_size_frames), dataset.frameCount);
+	temporalPagingPlan = planTemporalPaging({
+		nativeFrameIndices: Array.from({ length: nativeFrameCount }, (_, index) => index),
+		pageSize,
+		fps: Number(stream.fps),
+		durationSeconds: Number(stream.duration_seconds),
+		width: dataset.width,
+		height: dataset.height,
+		cameraCount: dataset.viewCount,
+	});
+	queueNextTemporalPage();
+}
+
+async function maybeAdvanceTemporalPage(step) {
+	if (!workerClient || !temporalPagingPlan || !temporalPageReady
+		|| temporalPageSwitchPending || resolutionTransitionPending) return;
+	const pairCycle = dataset.trainViewCount * dataset.frameCount;
+	if (step - temporalPageLastSwitchStep < pairCycle) return;
+	temporalPageSwitchPending = true;
+	const readyPage = temporalPageReady;
+	temporalPageReady = null;
+	try {
+		const ready = await workerClient.switchTemporalPage(readyPage.dataset, {
+			kind: "full-rate-temporal-page",
+			pageIndex: readyPage.page.pageIndex,
+			pageCount: temporalPagingPlan.pageCount,
+		});
+		dataset = readyPage.dataset;
+		temporalPageCursor = readyPage.page.pageIndex;
+		temporalPageLastSwitchStep = ready.step;
+		updateDatasetIdentity();
+		updateTargetCanvas();
+		lastRenderOptionsKey = "";
+		lastTrainOptionsKey = "";
+		syncWorkerOptions(true);
+		setStatus(`Full-rate page ${temporalPageCursor + 1}/${temporalPagingPlan.pageCount} resident: `
+			+ `${dataset.frameCount} frames spanning f${dataset.frameIndices[0]}–f${dataset.frameIndices.at(-1)}; `
+			+ "optimization continued without a GPU queue drain.");
+	} catch (error) {
+		setStatus(`Temporal page switch failed: ${error?.message ?? String(error)}`);
+		console.error(error);
+	} finally {
+		temporalPageSwitchPending = false;
+		queueNextTemporalPage();
+	}
+}
+
 function preloadProgressiveDataset() {
 	if (resolutionMode !== RESOLUTION_MODE_PROGRESSIVE) return null;
 	if (!progressiveDatasetPromise) {
@@ -607,9 +716,17 @@ async function beginProgressiveResolutionTransition() {
 	if (!workerClient || resolutionMode !== RESOLUTION_MODE_PROGRESSIVE
 		|| resolutionTransitionPending || resolutionTransitionComplete) return;
 	resolutionTransitionPending = true;
+	const sourcePageIndex = temporalPageCursor;
+	stopTemporalPagePreload();
 	try {
 		setStatus(`Preparing native 384x288 targets; training continues at ${dataset.width}x${dataset.height}.`);
-		const fineDataset = progressiveDataset ?? await preloadProgressiveDataset();
+		const fineBaseDataset = progressiveDataset ?? await preloadProgressiveDataset();
+		const fineDataset = sourcePageIndex >= 0
+			? await loadTemporalPageDataset(fineBaseDataset, {
+				pageIndex: sourcePageIndex,
+				nativeFrameIndices: [...dataset.frameIndices],
+			}, { computeSamples: false })
+			: fineBaseDataset;
 		assertResolutionContinuationCompatible(dataset, fineDataset);
 		const ready = await workerClient.switchDataset(fineDataset, {
 			kind: "progressive-resolution",
@@ -632,6 +749,7 @@ async function beginProgressiveResolutionTransition() {
 		syncWorkerOptions(true);
 		workerClient.requestValidation();
 		lastValidationRequestStep = ready.step;
+		configureTemporalPaging({ currentPageIndex: sourcePageIndex });
 		updateControlLabels();
 		drawMetricCharts();
 		setStatus(`Progressive stage ready: 384x288 from step ${ready.step}; `
@@ -639,6 +757,7 @@ async function beginProgressiveResolutionTransition() {
 	} catch (error) {
 		setStatus(`Progressive resolution switch failed: ${error?.message ?? String(error)}`);
 		console.error(error);
+		configureTemporalPaging({ currentPageIndex: sourcePageIndex });
 	} finally {
 		resolutionTransitionPending = false;
 	}
@@ -652,6 +771,7 @@ async function initWorkerTrainer() {
 		trainerOptions: { backend: controls.backend.value, splatCount: Number(controls.splats.value),
 			growthCapacity: sampledBackendSelected() ? null : Number(controls.growthCapacity.value),
 			checkpointPrecision: controls.precision.value,
+			pixelDepthScaling: controls.pixelDepthScaling.checked && !sampledBackendSelected(),
 			staticWarmupSteps: controls.staticWarmup.checked && !sampledBackendSelected()
 				? STATIC_WARMUP_STEPS : 0 },
 		trainOptions: trainOptions(), renderOptions: renderOptions(),
@@ -699,6 +819,7 @@ async function initWorkerTrainer() {
 		+ `${cameraBatch?.camerasPerStep ?? 1} of ${cameraBatch?.trainViewCount ?? 17} train cameras per step; `
 		+ `${heldoutDescription}; init ${dataset.seedProvenance?.train_only_verified
 			? "train-only verified" : "external/unverified"}.`);
+	configureTemporalPaging();
 	void preloadProgressiveDataset()?.catch((error) => {
 		setStatus(`Native 384x288 preload failed: ${error?.message ?? String(error)}`);
 	});
@@ -783,6 +904,16 @@ function updateFrameDiagnostics(now, delta) {
 		completedStepsPerSecond: workerClient?.getStatus()?.stepsPerSecond ?? 0, step: currentStep(),
 		resolution: dataset ? `${dataset.width}x${dataset.height}` : null,
 		resolutionMode, resolutionTransitionPending, resolutionTransitionComplete,
+		temporalPaging: temporalPagingPlan ? {
+			page: temporalPageCursor,
+			pageCount: temporalPagingPlan.pageCount,
+			residentFrames: dataset.frameCount,
+			nativeFrames: dataset.nativeFrameCount,
+			prefetchPending: Boolean(temporalPageLoadPromise),
+			pageReady: Boolean(temporalPageReady),
+			switchPending: temporalPageSwitchPending,
+			residentBytes: temporalPagingPlan.memory.totalResidentBytes,
+		} : null,
 		metricCounts: Object.fromEntries(Object.entries(metricHistory)
 			.map(([name, points]) => [name, points.length])) };
 }
@@ -807,6 +938,7 @@ function frameLoop(now) {
 			&& !resolutionTransitionPending && !resolutionTransitionComplete) {
 			void beginProgressiveResolutionTransition();
 		}
+		void maybeAdvanceTemporalPage(status?.step ?? 0);
 		const validationStep = status?.step ?? 0;
 		if (controls.fullMetrics.checked
 			&& !resolutionTransitionPending
@@ -867,6 +999,7 @@ controls.backend.addEventListener("change", () => { updateControlLabels(); void 
 controls.resolution.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
 controls.precision.addEventListener("change", () => { void resetTrainer(); });
 controls.staticWarmup.addEventListener("change", () => { void resetTrainer(); });
+controls.pixelDepthScaling.addEventListener("change", () => { void resetTrainer(); });
 controls.mode.addEventListener("change", () => { syncWorkerOptions(true); updateControlLabels(); });
 for (const control of [controls.time, controls.speed, controls.temporal, controls.lr, controls.samples,
 	controls.motionMix, controls.staticMix, controls.supportGuard]) {

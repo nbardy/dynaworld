@@ -8,7 +8,9 @@ import {
 	FRAME_BANK_FORMAT_RGBA8,
 	FRAME_BANK_FORMAT_RGBA32_FLOAT,
 	FRAME_WEIGHT_BYTE_SCALE,
+	frameTime01,
 	loadCalibratedMulticamDataset,
+	nearestFrameIndex,
 	normalizedMotionLossWeights,
 	readFrameLossWeight,
 	resolveFrameBank,
@@ -19,6 +21,18 @@ import {
 test("calibrated browser presets select native 1x and 4x-linear target bundles", () => {
 	assert.equal(CALIBRATED_MULTICAM_PRESETS["96x72"], "./coffee_martini_train17_holdout1.json");
 	assert.equal(CALIBRATED_MULTICAM_PRESETS["384x288"], "./coffee_martini_train17_holdout1_384.json");
+});
+
+test("resident temporal pages retain native source times", () => {
+	const dataset = {
+		frameCount: 4,
+		frameTimesNormalized: Float32Array.of(0, 0.1, 0.55, 1),
+	};
+	assert.equal(frameTime01(dataset, 2), Math.fround(0.55));
+	assert.equal(nearestFrameIndex(dataset, 0.06), 1);
+	assert.equal(nearestFrameIndex(dataset, 0.49), 2);
+	assert.throws(() => frameTime01(dataset, 4), /outside the resident dataset page/);
+	assert.equal(frameTime01({ frameCount: 5 }, 3), 0.75);
 });
 
 function referenceSamples(frames, backgrounds, width, height, frameCount, trainViewCount) {

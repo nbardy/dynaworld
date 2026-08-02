@@ -9,7 +9,7 @@ function canTransferCanvas(canvas) {
 }
 
 export class NonblockingTrainerClient extends EventTarget {
-	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260802-progressive-resolution-1", import.meta.url) } = {}) {
+	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260803-fullfps-pixelgs-1", import.meta.url) } = {}) {
 		super();
 		this.worker = new Worker(workerUrl, { type: "module", name: "dynaworld-webgpu-trainer" });
 		this.statusBuffer = createSharedStatusBuffer();
@@ -21,12 +21,15 @@ export class NonblockingTrainerClient extends EventTarget {
 			this.rejectReady = reject;
 		});
 		this.pendingStage = null;
+		this.pendingTemporalPage = null;
 		this.worker.onmessage = ({ data }) => this.handleMessage(data);
 		this.worker.onerror = (event) => {
 			const error = new Error(event.message || "Training worker failed.");
 			this.rejectReady?.(error);
 			this.pendingStage?.reject(error);
 			this.pendingStage = null;
+			this.pendingTemporalPage?.reject(error);
+			this.pendingTemporalPage = null;
 			this.emit(WorkerEvent.ERROR, { message: error.message, error });
 		};
 	}
@@ -78,9 +81,17 @@ export class NonblockingTrainerClient extends EventTarget {
 			this.pendingStage.resolve(message);
 			this.pendingStage = null;
 		}
+		if (message?.type === WorkerEvent.TEMPORAL_PAGE_READY && this.pendingTemporalPage) {
+			this.pendingTemporalPage.resolve(message);
+			this.pendingTemporalPage = null;
+		}
 		if (message?.type === WorkerEvent.ERROR && this.pendingStage) {
 			this.pendingStage.reject(new Error(message.message));
 			this.pendingStage = null;
+		}
+		if (message?.type === WorkerEvent.ERROR && this.pendingTemporalPage) {
+			this.pendingTemporalPage.reject(new Error(message.message));
+			this.pendingTemporalPage = null;
 		}
 		this.emit(message?.type ?? "message", message);
 	}
@@ -123,6 +134,25 @@ export class NonblockingTrainerClient extends EventTarget {
 		} catch (error) {
 			this.pendingStage.reject(error);
 			this.pendingStage = null;
+		}
+		return transition;
+	}
+	switchTemporalPage(dataset, details = {}) {
+		if (this.pendingTemporalPage) throw new Error("A temporal-page transition is already pending.");
+		const sharedDataset = prepareDatasetForWorkerSharing(dataset);
+		this.capabilities.datasetSharing = sharedDataset.telemetry;
+		const transition = new Promise((resolve, reject) => {
+			this.pendingTemporalPage = { resolve, reject };
+		});
+		try {
+			this.command(WorkerCommand.SWITCH_TEMPORAL_PAGE, {
+				dataset: sharedDataset.dataset,
+				datasetSharing: sharedDataset.telemetry,
+				details,
+			});
+		} catch (error) {
+			this.pendingTemporalPage.reject(error);
+			this.pendingTemporalPage = null;
 		}
 		return transition;
 	}

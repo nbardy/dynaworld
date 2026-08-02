@@ -48,10 +48,12 @@ test("protocol rejects mismatched versions", () => {
 	assert.throws(() => assertProtocolMessage({ version: 999, type: WorkerCommand.START }), /unsupported/);
 });
 
-test("protocol exposes a bounded progressive-resolution handoff", async () => {
-	assert.equal(WORKER_PROTOCOL_VERSION, 2);
+test("protocol exposes bounded resolution and temporal-page handoffs", async () => {
+	assert.equal(WORKER_PROTOCOL_VERSION, 3);
 	assert.equal(WorkerCommand.SWITCH_DATASET, "switch-dataset");
+	assert.equal(WorkerCommand.SWITCH_TEMPORAL_PAGE, "switch-temporal-page");
 	assert.equal(WorkerEvent.STAGE_READY, "stage-ready");
+	assert.equal(WorkerEvent.TEMPORAL_PAGE_READY, "temporal-page-ready");
 	const [workerSource, appSource] = await Promise.all([
 		readFile(new URL("../trainingWorker.js", import.meta.url), "utf8"),
 		readFile(new URL("../app.js", import.meta.url), "utf8"),
@@ -63,6 +65,9 @@ test("protocol exposes a bounded progressive-resolution handoff", async () => {
 	assert.match(workerSource, /if \(wasRunning\)[\s\S]+schedulePump\(pumpToken\)/);
 	assert.match(appSource, /loadPresetDataset\(\{ preset: "384x288", computeSamples: false \}\)/);
 	assert.match(appSource, /resolutionStageMarkers\.push\(ready\.step\)/);
+	assert.match(workerSource, /trainer\.replaceTemporalPage\(incoming\.dataset\)/);
+	assert.doesNotMatch(workerSource.match(/function switchTemporalPage[\s\S]*?\n\}/)?.[0] ?? "",
+		/onSubmittedWorkDone/);
 });
 
 test("optimizer pump never awaits train steps, metrics, or validation", async () => {

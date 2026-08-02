@@ -11,6 +11,33 @@ export const FRAME_BANK_FORMAT_RGBA32_FLOAT = "rgba32float/v1";
 export const BACKGROUND_BANK_FORMAT_RGBA32_FLOAT = "rgba32float/v1";
 export const FRAME_WEIGHT_BYTE_SCALE = 127;
 
+export function frameTime01(dataset, frameIndex) {
+	if (!Number.isSafeInteger(frameIndex) || frameIndex < 0 || frameIndex >= dataset.frameCount) {
+		throw new RangeError("Frame time index is outside the resident dataset page.");
+	}
+	const explicit = dataset.frameTimesNormalized?.[frameIndex];
+	if (Number.isFinite(explicit)) return Math.min(1, Math.max(0, Number(explicit)));
+	return dataset.frameCount <= 1 ? 0 : frameIndex / (dataset.frameCount - 1);
+}
+
+export function nearestFrameIndex(dataset, time01) {
+	const target = Math.min(1, Math.max(0, Number(time01)));
+	if (!dataset.frameTimesNormalized?.length) {
+		return Math.min(dataset.frameCount - 1,
+			Math.max(0, Math.round(target * (dataset.frameCount - 1))));
+	}
+	let bestIndex = 0;
+	let bestDistance = Number.POSITIVE_INFINITY;
+	for (let index = 0; index < dataset.frameCount; index += 1) {
+		const distance = Math.abs(frameTime01(dataset, index) - target);
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			bestIndex = index;
+		}
+	}
+	return bestIndex;
+}
+
 function inferFrameBankFormat(data) {
 	if (data instanceof Uint8Array) return FRAME_BANK_FORMAT_RGBA8;
 	if (data instanceof Float32Array) return FRAME_BANK_FORMAT_RGBA32_FLOAT;
@@ -562,6 +589,100 @@ async function decodeVideoFramesInto({
 	video.load();
 }
 
+function pageViewDatasets(dataset, frameData, backgrounds, frameBankFormat) {
+	const valuesPerView = dataset.width * dataset.height * dataset.frameCount * 4;
+	const backgroundValuesPerView = dataset.width * dataset.height * 4;
+	dataset.viewDatasets = dataset.cameras.map((camera, view) => ({
+		label: `${camera.name} ${camera.role}`,
+		width: dataset.width,
+		height: dataset.height,
+		frameCount: dataset.frameCount,
+		frameIndices: dataset.frameIndices,
+		frameTimesSeconds: dataset.frameTimesSeconds,
+		frameTimesNormalized: dataset.frameTimesNormalized,
+		frames: frameData.subarray(view * valuesPerView, (view + 1) * valuesPerView),
+		frameBank: {
+			format: frameBankFormat,
+			data: frameData.subarray(view * valuesPerView, (view + 1) * valuesPerView),
+		},
+		background: backgrounds.subarray(
+			view * backgroundValuesPerView,
+			(view + 1) * backgroundValuesPerView,
+		),
+		backgroundBank: {
+			format: BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
+			data: backgrounds.subarray(
+				view * backgroundValuesPerView,
+				(view + 1) * backgroundValuesPerView,
+			),
+		},
+		viewIndex: view,
+	}));
+	dataset.previewViews = dataset.comparisonViewIndices
+		.map((view) => dataset.viewDatasets[view]);
+	return dataset;
+}
+
+export async function loadTemporalPageDataset(baseDataset, page, {
+	computeSamples = false,
+	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
+} = {}) {
+	const stream = baseDataset?.temporalStream;
+	if (stream?.version !== "dynaworld_browser_temporal_stream/v1") {
+		throw new Error("Dataset does not declare a supported native temporal stream.");
+	}
+	if (!Array.isArray(page?.nativeFrameIndices) || page.nativeFrameIndices.length < 1) {
+		throw new TypeError("Temporal page must contain native frame indices.");
+	}
+	const frameIndices = [...page.nativeFrameIndices];
+	const frameCount = frameIndices.length;
+	const valuesPerView = baseDataset.width * baseDataset.height * frameCount * 4;
+	const frames = allocateFrameBank(valuesPerView * baseDataset.viewCount, frameBankFormat);
+	for (let view = 0; view < baseDataset.cameras.length; view += 1) {
+		const camera = baseDataset.cameras[view];
+		if (!camera.video_url) {
+			throw new Error(`Temporal stream is missing the encoded video for ${camera.name}.`);
+		}
+		const start = Number(camera.video_start_seconds ?? 0);
+		await decodeVideoFramesInto({
+			url: camera.video_url,
+			width: baseDataset.width,
+			height: baseDataset.height,
+			frameTimesSeconds: frameIndices.map((index) => start + index / baseDataset.nativeFps),
+			target: { format: frameBankFormat, data: frames },
+			targetOffset: view * valuesPerView,
+		});
+	}
+	const backgrounds = baseDataset.backgrounds;
+	const samples = computeSamples
+		? computeMultiviewSamples(
+			frames,
+			backgrounds,
+			baseDataset.width,
+			baseDataset.height,
+			frameCount,
+			baseDataset.trainViewCount,
+		)
+		: { motionSamples: new Uint32Array(0), staticSamples: new Uint32Array(0) };
+	const frameTimesSeconds = Float32Array.from(frameIndices,
+		(index) => index / baseDataset.nativeFps);
+	const frameTimesNormalized = Float32Array.from(frameIndices,
+		(index) => baseDataset.nativeFrameCount <= 1
+			? 0 : index / (baseDataset.nativeFrameCount - 1));
+	const dataset = attachPixelBanks({
+		...baseDataset,
+		frameCount,
+		frameIndices,
+		frameTimesSeconds,
+		frameTimesNormalized,
+		temporalPageIndex: page.pageIndex,
+		...samples,
+		viewDatasets: undefined,
+		previewViews: undefined,
+	}, frames, backgrounds, frameBankFormat);
+	return pageViewDatasets(dataset, frames, backgrounds, frameBankFormat);
+}
+
 async function decodeFrameAtlasInto({
 	url,
 	width,
@@ -799,6 +920,15 @@ export async function loadCalibratedMulticamDataset({
 	const bundle = validateCalibratedMulticamBundle(await response.json());
 	const [width, height] = bundle.decode_size;
 	const frameCount = bundle.frame_count;
+	const nativeFrameCount = Number(bundle.temporal_stream?.frame_count
+		?? bundle.native_frame_count
+		?? (Math.max(...bundle.frame_indices) + 1));
+	const nativeFps = Number(bundle.temporal_stream?.fps ?? bundle.native_fps ?? 30);
+	const durationSeconds = Number(bundle.temporal_stream?.duration_seconds
+		?? bundle.duration_seconds
+		?? (nativeFrameCount / nativeFps));
+	const frameTimesNormalized = Float32Array.from(bundle.frame_indices, (index) =>
+		nativeFrameCount <= 1 ? 0 : index / (nativeFrameCount - 1));
 	const valuesPerView = width * height * frameCount * 4;
 	const frames = allocateFrameBank(valuesPerView * bundle.cameras.length, frameBankFormat);
 	const backgrounds = new Float32Array(width * height * 4 * bundle.cameras.length);
@@ -859,6 +989,12 @@ export async function loadCalibratedMulticamDataset({
 		width,
 		height,
 		frameCount,
+		nativeFrameCount,
+		nativeFps,
+		durationSeconds,
+		frameTimesSeconds: Float32Array.from(bundle.frame_times_seconds),
+		frameTimesNormalized,
+		temporalStream: bundle.temporal_stream ?? null,
 		viewCount: cameras.length,
 		trainViewCount,
 		trainViewIndices,
@@ -878,33 +1014,12 @@ export async function loadCalibratedMulticamDataset({
 		frameIndices: bundle.frame_indices,
 		...samples,
 	}, frames, backgrounds, frameBankFormat);
-	dataset.viewDatasets = cameras.map((camera, view) => ({
-		label: `${camera.name} ${camera.role}`,
-		width,
-		height,
-		frameCount,
-		frames: frames.subarray(view * valuesPerView, (view + 1) * valuesPerView),
-		frameBank: {
-			format: frameBankFormat,
-			data: frames.subarray(view * valuesPerView, (view + 1) * valuesPerView),
-		},
-		background: backgrounds.subarray(view * width * height * 4, (view + 1) * width * height * 4),
-		backgroundBank: {
-			format: BACKGROUND_BANK_FORMAT_RGBA32_FLOAT,
-			data: backgrounds.subarray(
-				view * width * height * 4,
-				(view + 1) * width * height * 4,
-			),
-		},
-		viewIndex: view,
-	}));
 	const anchorName = bundle.dataset_contract?.anchor_camera;
 	const trainA = Math.max(0, cameras.findIndex((camera) => camera.name === anchorName));
 	const preferredTrainB = cameras.findIndex((camera) => camera.name === "cam09" && camera.role === "train");
 	const trainB = preferredTrainB >= 0 ? preferredTrainB : trainViewIndices.find((view) => view !== trainA) ?? trainA;
 	dataset.comparisonViewIndices = [trainA, trainB, heldoutViewIndex];
-	dataset.previewViews = dataset.comparisonViewIndices.map((view) => dataset.viewDatasets[view]);
-	return dataset;
+	return pageViewDatasets(dataset, frames, backgrounds, frameBankFormat);
 }
 
 export async function loadPresetDataset({
@@ -947,10 +1062,7 @@ export async function loadPresetDataset({
 }
 
 export function drawTargetFrame(canvas, dataset, time01, { view = "rgb" } = {}) {
-	const frame = Math.min(
-		dataset.frameCount - 1,
-		Math.max(0, Math.round(time01 * (dataset.frameCount - 1))),
-	);
+	const frame = nearestFrameIndex(dataset, time01);
 	const ctx = canvas.getContext("2d");
 	if (!ctx) {
 		return frame;

@@ -419,6 +419,12 @@ button:disabled {
 	background: #e67c73;
 }
 
+.loss-chart-legend .stage-line {
+	height: 8px;
+	border-left: 1px dashed #7dd3fc;
+	background: transparent;
+}
+
 .status {
 	order: 6;
 	margin-bottom: 16px;

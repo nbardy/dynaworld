@@ -2,8 +2,8 @@ import {
 	resolveActiveSplatCount,
 	resolveCamerasPerStep,
 	resolveRenderViewIndices,
-} from "./trainerWebGpu3d.js?v=20260802-progressive-resolution-1";
-import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260802-progressive-resolution-1";
+} from "./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1";
+import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260803-fullfps-pixelgs-1";
 import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
 	WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
@@ -176,7 +176,7 @@ function render(now) {
 }
 
 function initializeValidationWorker(dataset, initialParams) {
-	validationWorker = new Worker(new URL("./validationWorker.js?v=20260802-progressive-resolution-1", import.meta.url),
+	validationWorker = new Worker(new URL("./validationWorker.js?v=20260803-fullfps-pixelgs-1", import.meta.url),
 		{ type: "module" });
 	return new Promise((resolve, reject) => {
 		let ready = false;
@@ -390,6 +390,31 @@ async function switchDataset(message) {
 	}
 }
 
+function switchTemporalPage(message) {
+	if (stageTransitionPending) {
+		throw new Error("Temporal paging cannot overlap a resolution-stage transition.");
+	}
+	const incoming = hydrateDatasetSharedViews(message.dataset);
+	const nextDataset = trainer.replaceTemporalPage(incoming.dataset);
+	canonicalDataset = incoming.dataset;
+	renderOptions.viewIndices = resolveRenderViewIndices(nextDataset, renderOptions.viewIndices);
+	validationWorker?.postMessage({
+		version: WORKER_PROTOCOL_VERSION,
+		type: "switch-dataset",
+		dataset: nextDataset,
+	});
+	lastMetricRequestStep = trainer.stepCount;
+	lastValidationRequestStep = trainer.stepCount;
+	self.postMessage(protocolMessage(WorkerEvent.TEMPORAL_PAGE_READY, {
+		step: trainer.stepCount,
+		pageIndex: nextDataset.temporalPageIndex,
+		frameCount: nextDataset.frameCount,
+		frameIndices: nextDataset.frameIndices,
+		details: message.details ?? {},
+	}));
+	publish(undefined, true);
+}
+
 self.onmessage = ({ data }) => {
 	let message;
 	try { message = assertProtocolMessage(data); } catch (error) { reportError(error); return; }
@@ -399,6 +424,10 @@ self.onmessage = ({ data }) => {
 	}
 	if (message.type === WorkerCommand.SWITCH_DATASET) {
 		switchDataset(message).catch(reportError);
+		return;
+	}
+	if (message.type === WorkerCommand.SWITCH_TEMPORAL_PAGE) {
+		try { switchTemporalPage(message); } catch (error) { reportError(error); }
 		return;
 	}
 	if (!trainer) return;

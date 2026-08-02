@@ -56,14 +56,14 @@ export function resolveTrainerBackend(id = DEFAULT_TRAINER_BACKEND) {
 export async function loadTrainerBackend(id = DEFAULT_TRAINER_BACKEND) {
 	const descriptor = resolveTrainerBackend(id);
 	if (descriptor.id === "tiled3d-fast") {
-		const module = await import("./trainerWebGpu3dTiledFast.js?v=20260802-progressive-resolution-1");
+		const module = await import("./trainerWebGpu3dTiledFast.js?v=20260803-fullfps-pixelgs-1");
 		return { descriptor, Trainer: module.DynamicSplatWebGpu3dTiledFastTrainer };
 	}
 	if (descriptor.id === "tiled3d") {
-		const module = await import("./trainerWebGpu3dTiled.js?v=20260802-progressive-resolution-1");
+		const module = await import("./trainerWebGpu3dTiled.js?v=20260803-fullfps-pixelgs-1");
 		return { descriptor, Trainer: module.DynamicSplatWebGpu3dTiledTrainer };
 	}
-	const module = await import("./trainerWebGpu3d.js?v=20260802-progressive-resolution-1");
+	const module = await import("./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1");
 	return {
 		descriptor,
 		Trainer: module.DynamicSplatWebGpu3dTrainer,

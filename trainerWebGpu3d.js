@@ -4,12 +4,12 @@ import {
 	BROWSER_ADAM_EPSILON,
 	DENSITY_STAT_DECAY,
 	browserLearningRates,
-} from "./trainingSchedule.js?v=20260802-progressive-resolution-1";
+} from "./trainingSchedule.js?v=20260803-fullfps-pixelgs-1";
 import {
 	FRAME_BANK_FORMAT_RGBA8,
 	readFrameBankValue,
 	resolveFrameBank,
-} from "./dataset.js?v=20260802-progressive-resolution-1";
+} from "./dataset.js?v=20260803-fullfps-pixelgs-1";
 
 export const SPLAT_FLOATS = 24;
 export const CONTINUATION_STATE_SCHEMA = "dynaworld-browser-trainer-continuation/v1";

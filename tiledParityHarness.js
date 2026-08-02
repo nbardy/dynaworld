@@ -105,7 +105,10 @@ export function makeTiledParityFixtureParameters(initialParams) {
 		for (let axis = 0; axis < 3; axis += 1) {
 			result[base + 8 + axis] = harmonicAxis[axis] * referenceScale * 0.35;
 		}
-		result[base + 3] = 0.35 + 0.1 * (splatIndex % 3);
+		// Include the production 0.92 static-heavy initialization regime. The
+		// staged temporal VJP once passed the moderate-mix fixture while being
+		// badly wrong here.
+		result[base + 3] = [0.92, 0.55, 0.35][splatIndex % 3];
 		result[base + 7] = 0.25 + 0.1 * (splatIndex % 4);
 	}
 	return result;
