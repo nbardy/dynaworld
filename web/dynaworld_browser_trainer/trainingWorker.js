@@ -2,8 +2,8 @@ import {
 	resolveActiveSplatCount,
 	resolveCamerasPerStep,
 	resolveRenderViewIndices,
-} from "./trainerWebGpu3d.js?v=20260731-compactfp16-5";
-import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260731-compactfp16-5";
+} from "./trainerWebGpu3d.js?v=20260802-progressive-resolution-1";
+import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260802-progressive-resolution-1";
 import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
 	WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
@@ -13,6 +13,7 @@ import {
 	hydrateDatasetSharedViews,
 	summarizeDatasetSharing,
 } from "./datasetSharing.js";
+import { assertResolutionContinuationCompatible } from "./resolutionSchedule.js";
 
 const DEFAULT_TRAIN_OPTIONS = Object.freeze({
 	learningRate: 1.25,
@@ -29,6 +30,10 @@ const DEFAULT_TRAIN_OPTIONS = Object.freeze({
 });
 let trainer = null;
 let backendDescriptor = null;
+let loadedBackend = null;
+let trainerCanvas = null;
+let trainerOptions = {};
+let canonicalDataset = null;
 let validationWorker = null;
 let statusSlots = null;
 let running = false;
@@ -58,6 +63,7 @@ let completedAt = performance.now();
 let completionProbePending = false;
 let stepsPerSecond = 0;
 let flags = StatusFlag.VALIDATION_WORKER;
+let stageTransitionPending = false;
 
 function status(state = running ? TrainerState.RUNNING : TrainerState.PAUSED) {
 	return { state, step: trainer?.stepCount ?? 0, stepsPerSecond, loss: latestLoss, psnr: latestPsnr,
@@ -170,7 +176,7 @@ function render(now) {
 }
 
 function initializeValidationWorker(dataset, initialParams) {
-	validationWorker = new Worker(new URL("./validationWorker.js?v=20260731-compactfp16-5", import.meta.url),
+	validationWorker = new Worker(new URL("./validationWorker.js?v=20260802-progressive-resolution-1", import.meta.url),
 		{ type: "module" });
 	return new Promise((resolve, reject) => {
 		let ready = false;
@@ -249,8 +255,10 @@ async function initialize(message) {
 	if (message.canvas) flags |= StatusFlag.OFFSCREEN_RENDER;
 	trainOptions = { ...DEFAULT_TRAIN_OPTIONS, ...message.trainOptions };
 	renderOptions = { ...renderOptions, ...message.renderOptions };
-	const loadedBackend = await loadTrainerBackend(message.trainerOptions?.backend);
+	loadedBackend = await loadTrainerBackend(message.trainerOptions?.backend);
 	backendDescriptor = loadedBackend.descriptor;
+	trainerCanvas = message.canvas ?? null;
+	trainerOptions = { ...message.trainerOptions };
 	burstSteps = Math.max(1, Math.min(64,
 		message.schedule?.burstSteps ?? backendDescriptor.defaultSchedule.burstSteps));
 	maxQueuedSteps = Math.max(1, Math.min(64,
@@ -259,9 +267,10 @@ async function initialize(message) {
 		message.schedule?.metricEvery ?? backendDescriptor.defaultSchedule.metricEvery);
 	validationEvery = Math.max(0, message.schedule?.validationEvery ?? validationEvery);
 	renderFps = Math.max(0, Math.min(60, message.schedule?.renderFps ?? renderFps));
-	trainer = new loadedBackend.Trainer(message.canvas ?? null);
+	trainer = new loadedBackend.Trainer(trainerCanvas);
 	const incomingDataset = hydrateDatasetSharedViews(message.dataset);
-	await trainer.init(incomingDataset.dataset, message.trainerOptions);
+	canonicalDataset = incomingDataset.dataset;
+	await trainer.init(canonicalDataset, trainerOptions);
 	if (backendDescriptor.sampledControls) {
 		trainOptions.camerasPerStep = resolveCamerasPerStep(trainer.trainViewIndices.length,
 			trainOptions.camerasPerStep);
@@ -295,11 +304,101 @@ async function initialize(message) {
 	}));
 }
 
+async function switchDataset(message) {
+	if (stageTransitionPending) throw new Error("A resolution-stage transition is already in progress.");
+	stageTransitionPending = true;
+	const wasRunning = running;
+	const sourceTrainer = trainer;
+	const sourceDataset = canonicalDataset;
+	try {
+		running = false;
+		pumpToken += 1;
+		publish(TrainerState.PAUSED, true);
+		self.postMessage(protocolMessage(WorkerEvent.STAGE_STARTED, {
+			step: sourceTrainer.stepCount,
+			from: { width: sourceDataset.width, height: sourceDataset.height },
+			to: { width: message.dataset.width, height: message.dataset.height },
+			details: message.details ?? {},
+		}));
+
+		const incomingDataset = hydrateDatasetSharedViews(message.dataset);
+		assertResolutionContinuationCompatible(sourceDataset, incomingDataset.dataset);
+		validationWorker?.terminate();
+		validationWorker = null;
+		validationPending = false;
+
+		// This is the only intentional training pause: drain already-submitted work,
+		// then carry optimizer and topology state across resolution-dependent buffers.
+		await sourceTrainer.device.queue.onSubmittedWorkDone();
+		const continuation = await sourceTrainer.exportContinuationState();
+		sourceTrainer.dispose();
+
+		const nextTrainer = new loadedBackend.Trainer(trainerCanvas);
+		await nextTrainer.init(incomingDataset.dataset, trainerOptions);
+		await nextTrainer.restoreContinuationState(continuation);
+		trainer = nextTrainer;
+		canonicalDataset = incomingDataset.dataset;
+		renderOptions.viewIndices = resolveRenderViewIndices(trainer.dataset, renderOptions.viewIndices);
+
+		const trainingDatasetSharing = summarizeDatasetSharing(trainer.dataset);
+		const validationDatasetSharing = await initializeValidationWorker(trainer.dataset, trainer.initialParams);
+		const datasetSharing = combineDatasetSharingTelemetry(
+			message.datasetSharing ?? incomingDataset.telemetry,
+			trainingDatasetSharing,
+			validationDatasetSharing,
+		);
+		completedStep = trainer.stepCount;
+		completedAt = performance.now();
+		stepsPerSecond = 0;
+		lastMetricRequestStep = trainer.stepCount;
+		lastValidationRequestStep = trainer.stepCount;
+		renderTrainer();
+		lastRenderAt = performance.now();
+		self.postMessage(protocolMessage(WorkerEvent.STAGE_READY, {
+			step: trainer.stepCount,
+			width: trainer.dataset.width,
+			height: trainer.dataset.height,
+			backend: {
+				id: backendDescriptor.id,
+				label: backendDescriptor.label,
+				initialSplats: trainer.initialSplatCount ?? trainer.splatCount,
+				capacity: trainer.splatCount,
+				memoryPlan: trainer.memoryPlan ?? null,
+				trainingPixelsPerStep: backendDescriptor.sampledControls
+					? trainOptions.samplesPerStep : trainer.dataset.width * trainer.dataset.height,
+			},
+			capabilities: { sharedStatus: Boolean(statusSlots), offscreenRender: Boolean(trainer.context),
+				validationWorker: true, datasetSharing },
+			details: message.details ?? {},
+		}));
+		if (wasRunning) {
+			running = true;
+			pumpToken += 1;
+			schedulePump(pumpToken);
+			publish(TrainerState.RUNNING, true);
+		} else {
+			publish(TrainerState.PAUSED, true);
+		}
+	} catch (error) {
+		if (trainer === sourceTrainer) {
+			trainer = sourceTrainer;
+			canonicalDataset = sourceDataset;
+		}
+		throw error;
+	} finally {
+		stageTransitionPending = false;
+	}
+}
+
 self.onmessage = ({ data }) => {
 	let message;
 	try { message = assertProtocolMessage(data); } catch (error) { reportError(error); return; }
 	if (message.type === WorkerCommand.INIT) {
 		initialize(message).catch(reportError);
+		return;
+	}
+	if (message.type === WorkerCommand.SWITCH_DATASET) {
+		switchDataset(message).catch(reportError);
 		return;
 	}
 	if (!trainer) return;

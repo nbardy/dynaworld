@@ -96,17 +96,19 @@ select {
 .controls,
 .stats,
 .status {
-	width: min(1440px, calc(100% - 32px));
-	margin: 16px auto 0;
+	width: 100%;
+	margin: 1px 0 0;
 	border: 1px solid var(--line);
-	border-radius: 8px;
+	border-right: 0;
+	border-left: 0;
+	border-radius: 0;
 	background: var(--surface);
 }
 
 .key-metrics,
 .loss-chart {
 	border: 1px solid var(--line);
-	border-radius: 8px;
+	border-radius: 0;
 	background: var(--surface);
 }
 
@@ -234,9 +236,9 @@ button:disabled {
 	order: 3;
 	display: grid;
 	grid-template-columns: minmax(220px, 0.72fr) minmax(0, 2.28fr);
-	gap: 10px;
-	width: min(1440px, calc(100% - 32px), max(600px, calc((100vh - 380px) * 2)));
-	margin: 10px auto 0;
+	gap: 0;
+	width: 100%;
+	margin: 1px 0 0;
 }
 
 .key-metrics {
@@ -426,16 +428,16 @@ button:disabled {
 .workbench {
 	order: 2;
 	min-width: 0;
-	padding: 12px 16px 0;
+	padding: 0;
 	background: var(--bg);
 }
 
 .comparison-stage {
-	width: min(1440px, 100%, max(600px, calc((100vh - 380px) * 2)));
-	margin: 0 auto;
+	width: 100%;
+	margin: 0;
 	overflow: hidden;
-	border: 1px solid var(--line);
-	border-radius: 8px;
+	border: 0;
+	border-radius: 0;
 	background: #0f1216;
 }
 
@@ -620,11 +622,7 @@ button:disabled {
 	}
 
 	.workbench {
-		padding: 8px 4px 0;
-	}
-
-	.comparison-stage {
-		border-radius: 6px;
+		padding: 0;
 	}
 
 	.comparison-toolbar {
@@ -656,15 +654,15 @@ button:disabled {
 	.controls,
 	.stats,
 	.status {
-		width: calc(100% - 8px);
-		margin-top: 8px;
+		width: 100%;
+		margin-top: 1px;
 	}
 
 	.metrics-deck {
 		grid-template-columns: 1fr;
-		gap: 8px;
-		width: calc(100% - 8px);
-		margin-top: 8px;
+		gap: 0;
+		width: 100%;
+		margin-top: 1px;
 	}
 
 	.quality-metric-grid {

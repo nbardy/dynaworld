@@ -499,11 +499,11 @@ Live rendering is capped at 15 GPU frames per second and normally shows two
 training cameras plus the heldout camera at a looping time. It can be disabled
 without stopping optimization.
 
-The primary page order is comparison, key quality, then configuration. A
-height-aware comparison width keeps the calibrated 4:3 camera panels intact
-while leaving room in the first viewport for the four train/heldout quality
-readouts and compact Loss, PSNR, and SSIM histories. Reset-sensitive controls
-and the full operational diagnostic grid follow below that monitoring surface.
+The primary page order is comparison, key quality, then configuration. The
+calibrated 3x2 camera matrix and metric bands run edge to edge without outer
+card gutters or rounded framing. Compact viewports retain the four
+train/heldout quality readouts and Loss, PSNR, and SSIM histories before the
+reset-sensitive controls and full operational diagnostic grid.
 
 ### Interactive result camera
 
@@ -531,7 +531,24 @@ losses, gradients, or heldout metrics. A moved result is useful for inspecting
 geometry but is not a calibrated novel-view metric; double-click before making
 pixel-aligned comparisons with its GT cell.
 
-### Native 4x-linear resolution mode
+### Progressive and native 4x-linear resolution modes
+
+`Training Resolution -> Progressive 96 -> 384` is the default. It trains the
+coarse native bundle through step 8,192, preloads the native 384x288 bundle in
+parallel, and then performs one bounded worker-owned transition. The worker
+drains already-submitted GPU work, snapshots parameters, both Adam moments,
+density statistics, active topology, cumulative tile diagnostics, the original
+initialization, and the global step, rebuilds only resolution-dependent trainer
+resources, restores that state, reattaches validation, and resumes if the run
+was active. This is an intentional one-time pause rather than a periodic train
+loop synchronization point.
+
+The transition rejects changes in camera calibration, train/heldout split,
+frame indices, seed geometry, primitive schema, capacity, or topology schedule
+before it writes restored GPU state. Loss, PSNR, and SSIM retain their complete
+history; a cyan vertical marker identifies the objective-resolution boundary.
+The manual `96 x 72` and `384 x 288` choices still initialize directly at one
+resolution and therefore remain useful controls.
 
 `Training Resolution -> 384 x 288` reloads the SPA with 18 native 6,144x288
 PNG atlases, one per camera. It is four times wider and taller than the default,
@@ -553,6 +570,13 @@ optimizer work, and scheduling do not scale with image area. Resolution is
 therefore relatively cheap, but not free; occupancy and splat count can change
 that ratio. The sampled-ray control remains disabled at 384x288 because that
 legacy backend still binds the complete target tensor.
+
+A 2026-08-02 live progressive smoke crossed at step 8,200, preserved a finite
+trained result and global step, reported 97.3 MiB of high-resolution GPU
+buffers, and continued past step 10,472. It reported roughly 80 steps/s while
+the machine was simultaneously running tests, browser automation, and other
+development work. That contention-heavy observation validates continuity, not
+a replacement throughput baseline.
 
 The optimizer writes objective/L1/DSSIM into a 272-entry GPU ring every step.
 Asynchronous readback runs every 256 requested steps and reports the latest raw
@@ -882,6 +906,53 @@ solid research baseline. Completed correctness gates now include:
 2. canonical 11x11 Gaussian SSIM value and image-gradient finite differences;
 3. deterministic full-image train/heldout MSE, MAE, PSNR, and SSIM;
 4. fail-closed initialization provenance and coordinate-frame handling.
+
+### Novel-view floaters: diagnosis and paper-backed next step
+
+The corrected LLFF/OpenCV camera contract reduced median epipolar error from
+about 60 pixels to 0.48 pixels, and a fresh calibrated `cam06` run reached
+27.0 dB / 0.909 SSIM. That makes a current gross camera-axis or world-scale bug
+unlikely. The free orbit is a separate, unscored extrapolation surface and can
+travel far outside the calibrated camera hull, so orbit artifacts must not be
+reported as heldout-camera regression without a matched camera.
+
+The strongest remaining code-level cause is topology allocation. Current
+splits use screen gradient, alpha, and velocity gradient, place a child beside
+its parent, and stop once capacity is full. They do not use pixel residual,
+depth, per-view contribution, or cross-view support, and there is no fixed-count
+relocation pass for low-value opaque splats. The current trajectory 3DGS also
+keeps covariance, color, and opacity constant over time and has no local-motion
+rigidity term.
+
+The relevant paper interventions are deliberately ranked rather than mixed:
+
+1. [SpacetimeGS](https://openaccess.thecvf.com/content/CVPR2024/html/Li_Spacetime_Gaussian_Feature_Splatting_for_Real-Time_Dynamic_View_Synthesis_CVPR_2024_paper.html)
+   uses training error plus coarse depth to guide births and gives primitives
+   temporal opacity and parametric motion/rotation. Error-guided births are the
+   closest match to the observed allocation failure.
+2. [3DGS-MCMC](https://arxiv.org/abs/2404.09591) and
+   [Revising Densification](https://arxiv.org/abs/2404.06109) motivate
+   fixed-budget relocation and pixel-error-driven density control. These fit
+   the browser's bounded-capacity contract better than unbounded spawning.
+3. [Dynamic 3D Gaussians](https://arxiv.org/abs/2308.09713) supplies a local
+   rigidity prior, but it should be enabled only after diagnostics show that a
+   floater moves incorrectly over time rather than merely appearing from a new
+   camera.
+4. [StopThePop](https://doi.org/10.1145/3658187) addresses view-dependent
+   sorting pops, not stationary unsupported geometry. It is appropriate only
+   if a fixed-model orbit trace shows camera-motion popping.
+5. Sparse-view methods such as
+   [DropoutGS](https://openaccess.thecvf.com/content/CVPR2025/html/Xu_DropoutGS_Dropping_Out_Gaussians_for_Better_Sparse-view_Rendering_CVPR_2025_paper.html),
+   [CoMapGS](https://openaccess.thecvf.com/content/CVPR2025/html/Jang_CoMapGS_Covisibility_Map-based_Gaussian_Splatting_for_Sparse_Novel_View_Synthesis_CVPR_2025_paper.html),
+   and [DepthSplat](https://openaccess.thecvf.com/content/CVPR2025/html/Xu_DepthSplat_Connecting_Gaussian_Splatting_and_Depth_CVPR_2025_paper.html)
+   are useful evidence for uncertainty, covisibility, and depth priors, but
+   Gaussian dropout is not a justified default for this 17-camera dynamic run.
+
+The next implementation should first record deterministic orbit alpha/depth
+traces and residual-weighted per-splat contribution across the camera cycle.
+Then it can relocate low-contribution capacity toward high-error pixels that
+have multi-view support. This is narrower and more falsifiable than adding
+several regularizers at once.
 
 The highest-value remaining evidence is:
 

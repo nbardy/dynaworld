@@ -9,7 +9,7 @@ function canTransferCanvas(canvas) {
 }
 
 export class NonblockingTrainerClient extends EventTarget {
-	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260731-compactfp16-5", import.meta.url) } = {}) {
+	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260802-progressive-resolution-1", import.meta.url) } = {}) {
 		super();
 		this.worker = new Worker(workerUrl, { type: "module", name: "dynaworld-webgpu-trainer" });
 		this.statusBuffer = createSharedStatusBuffer();
@@ -20,10 +20,13 @@ export class NonblockingTrainerClient extends EventTarget {
 			this.resolveReady = resolve;
 			this.rejectReady = reject;
 		});
+		this.pendingStage = null;
 		this.worker.onmessage = ({ data }) => this.handleMessage(data);
 		this.worker.onerror = (event) => {
 			const error = new Error(event.message || "Training worker failed.");
 			this.rejectReady?.(error);
+			this.pendingStage?.reject(error);
+			this.pendingStage = null;
 			this.emit(WorkerEvent.ERROR, { message: error.message, error });
 		};
 	}
@@ -71,6 +74,14 @@ export class NonblockingTrainerClient extends EventTarget {
 			this.resolveReady = null;
 			this.rejectReady = null;
 		}
+		if (message?.type === WorkerEvent.STAGE_READY && this.pendingStage) {
+			this.pendingStage.resolve(message);
+			this.pendingStage = null;
+		}
+		if (message?.type === WorkerEvent.ERROR && this.pendingStage) {
+			this.pendingStage.reject(new Error(message.message));
+			this.pendingStage = null;
+		}
 		this.emit(message?.type ?? "message", message);
 	}
 
@@ -96,6 +107,25 @@ export class NonblockingTrainerClient extends EventTarget {
 	resize(width, height) { this.command(WorkerCommand.RESIZE, { width, height }); }
 	requestMetrics() { this.command(WorkerCommand.REQUEST_METRICS); }
 	requestValidation(options = {}) { this.command(WorkerCommand.REQUEST_VALIDATION, { options }); }
+	switchDataset(dataset, details = {}) {
+		if (this.pendingStage) throw new Error("A resolution-stage transition is already pending.");
+		const sharedDataset = prepareDatasetForWorkerSharing(dataset);
+		this.capabilities.datasetSharing = sharedDataset.telemetry;
+		const transition = new Promise((resolve, reject) => {
+			this.pendingStage = { resolve, reject };
+		});
+		try {
+			this.command(WorkerCommand.SWITCH_DATASET, {
+				dataset: sharedDataset.dataset,
+				datasetSharing: sharedDataset.telemetry,
+				details,
+			});
+		} catch (error) {
+			this.pendingStage.reject(error);
+			this.pendingStage = null;
+		}
+		return transition;
+	}
 	dispose() { this.command(WorkerCommand.DISPOSE); }
 }
 

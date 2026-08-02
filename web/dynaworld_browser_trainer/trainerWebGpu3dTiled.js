@@ -7,18 +7,18 @@ import {
 	SPLAT_FLOATS,
 	makeInitialSplats,
 	rgbaFloatFrameBytes,
-} from "./trainerWebGpu3d.js?v=20260731-compactfp16-5";
+} from "./trainerWebGpu3d.js?v=20260802-progressive-resolution-1";
 import {
 	FRAME_BANK_FORMAT_RGBA8,
 	resolveFrameBank,
-} from "./dataset.js?v=20260731-compactfp16-5";
+} from "./dataset.js?v=20260802-progressive-resolution-1";
 import {
 	BROWSER_ADAM_BETA1,
 	BROWSER_ADAM_BETA2,
 	BROWSER_ADAM_EPSILON,
 	DENSITY_STAT_DECAY,
 	browserLearningRates,
-} from "./trainingSchedule.js?v=20260731-compactfp16-5";
+} from "./trainingSchedule.js?v=20260802-progressive-resolution-1";
 
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 export const DEFAULT_TILE_SIZE = 16;
@@ -227,6 +227,49 @@ export function activeSplatCountForStep(initialSplats, capacity, completedSteps)
 		initialSplats
 			+ completedEvents * DENSITY_DISPATCHES * DENSITY_SPLITS_PER_DISPATCH,
 	);
+}
+
+function requireContinuationU32(value, label) {
+	if (!Number.isSafeInteger(value) || value < 0 || value > 0xffffffff) {
+		throw new RangeError(`${label} must be an unsigned 32-bit integer.`);
+	}
+}
+
+export function assertTiledContinuationStateCompatible(state, expected) {
+	if (!state || typeof state !== "object") throw new TypeError("Continuation state must be an object.");
+	if (!Number.isSafeInteger(state.initialSplatCount) || state.initialSplatCount < 8
+		|| state.initialSplatCount > expected.splatCount) {
+		throw new RangeError("Continuation initialSplatCount must be at least 8 and fit within the trainer capacity.");
+	}
+	if (!Number.isSafeInteger(state.activeSplatCount) || state.activeSplatCount < state.initialSplatCount
+		|| state.activeSplatCount > expected.splatCount) {
+		throw new RangeError("Continuation activeSplatCount must fit within the initialized splat prefix.");
+	}
+	const scheduledActiveCount = activeSplatCountForStep(
+		state.initialSplatCount,
+		expected.splatCount,
+		state.stepCount,
+	);
+	if (state.activeSplatCount !== scheduledActiveCount) {
+		throw new Error(`Continuation active splat prefix ${state.activeSplatCount} does not match `
+			+ `the ${scheduledActiveCount}-splat density schedule at step ${state.stepCount}.`);
+	}
+	if (state.cumulativeTileDiagnostics != null) {
+		if (typeof state.cumulativeTileDiagnostics !== "object") {
+			throw new TypeError("Continuation cumulativeTileDiagnostics must be an object when present.");
+		}
+		for (const key of [
+			"tileOverflowTotal",
+			"maxTileOccupancyEver",
+			"projectionVjpHalfSaturationsTotal",
+		]) {
+			requireContinuationU32(
+				state.cumulativeTileDiagnostics[key],
+				`Continuation cumulativeTileDiagnostics.${key}`,
+			);
+		}
+	}
+	return state;
 }
 
 export function activePrefixDispatchSizes(
@@ -2821,6 +2864,72 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			updateSlotCapacity: this.splatCount,
 			initialDormantUpdateSlots: this.splatCount - this.activeSplatCount,
 		});
+	}
+
+	continuationBufferSpecs() {
+		return [
+			...super.continuationBufferSpecs(),
+			{
+				name: "tiledCounters",
+				buffer: this.buffers.counters,
+				Type: Uint32Array,
+				elementCount: TILED_COUNTER_BYTES / Uint32Array.BYTES_PER_ELEMENT,
+			},
+		];
+	}
+
+	continuationMetadata() {
+		return {
+			...super.continuationMetadata(),
+			initialSplatCount: this.initialSplatCount,
+			activeSplatCount: this.activeSplatCount,
+		};
+	}
+
+	continuationStateFromSnapshots(snapshots, metadata) {
+		return {
+			...super.continuationStateFromSnapshots(snapshots, metadata),
+			cumulativeTileDiagnostics: {
+				tileOverflowTotal: snapshots.tiledCounters[4],
+				maxTileOccupancyEver: snapshots.tiledCounters[5],
+				projectionVjpHalfSaturationsTotal: snapshots.tiledCounters[9],
+			},
+		};
+	}
+
+	assertContinuationStateCompatible(state) {
+		super.assertContinuationStateCompatible(state);
+		return assertTiledContinuationStateCompatible(state, { splatCount: this.splatCount });
+	}
+
+	continuationRestoreWrites(state) {
+		const counters = new Uint32Array(TILED_COUNTER_BYTES / Uint32Array.BYTES_PER_ELEMENT);
+		const diagnostics = state.cumulativeTileDiagnostics;
+		if (diagnostics) {
+			counters[4] = diagnostics.tileOverflowTotal;
+			counters[5] = diagnostics.maxTileOccupancyEver;
+			counters[9] = diagnostics.projectionVjpHalfSaturationsTotal;
+		}
+		counters[7] = state.activeSplatCount;
+		return [...super.continuationRestoreWrites(state), {
+			buffer: this.buffers.counters,
+			data: counters,
+		}];
+	}
+
+	applyContinuationMetadata(state) {
+		super.applyContinuationMetadata(state);
+		this.initialSplatCount = state.initialSplatCount;
+		this.activeSplatCount = state.activeSplatCount;
+		this.lastProjectionParamIndex = this.currentIndex;
+		this.targetPageKey = null;
+		this.lastLossBreakdown = {
+			...(this.lastLossBreakdown ?? {}),
+			tileOverflowTotal: state.cumulativeTileDiagnostics?.tileOverflowTotal ?? 0,
+			maxTileOccupancyEver: state.cumulativeTileDiagnostics?.maxTileOccupancyEver ?? 0,
+			projectionVjpHalfSaturationsTotal:
+				state.cumulativeTileDiagnostics?.projectionVjpHalfSaturationsTotal ?? 0,
+		};
 	}
 
 	createBindGroups() {
