@@ -42,6 +42,10 @@ put evaluation, readback, or UI work into the steady-state optimizer pump.
 - Added a same-origin service worker that injects COOP/COEP on static hosts. A
   first hosted visit reloads once; later visits can use SharedArrayBuffer rather
   than clone the high-resolution target bank into both workers.
+- The repository Actions job could not start because the GitHub account was
+  locked by a billing issue. A static subtree commit was pushed to `gh-pages`
+  instead, and the legacy Pages build completed successfully at
+  `https://nbardy.github.io/dynaworld/`.
 
 ## Measurements
 
@@ -97,6 +101,9 @@ is not a justified default for a 17-train-camera dynamic sequence.
   browser warnings/errors.
 - Desktop and compact viewport checks showed no horizontal overflow or element
   overlap. Canvas content remained nonblank after the transition.
+- The public build completed its first-visit service-worker reload, reported
+  `atomic SAB`, initialized the Apple WebGPU tiled backend, and rendered all
+  three result views.
 
 ## Scope discipline
 

@@ -19,6 +19,22 @@ Open:
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/
 ```
 
+### Hosted build
+
+The current static build is published at:
+
+```text
+https://nbardy.github.io/dynaworld/
+```
+
+GitHub Pages cannot configure COOP/COEP response headers directly. The hosted
+page therefore registers a same-origin isolation service worker and reloads
+once on its first visit. Subsequent loads use SharedArrayBuffer for the target
+bank and report `atomic SAB` in the runtime diagnostics. The `gh-pages` branch
+contains only this directory's static subtree; the checked-in deployment
+workflow can replace the legacy branch build when repository Actions are
+available.
+
 Useful diagnostics:
 
 ```text
