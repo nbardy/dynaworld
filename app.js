@@ -1,15 +1,21 @@
-import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260802-comparison-grid-1";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260802-comparison-grid-1";
+import { drawTargetFrame, loadPresetDataset } from "./dataset.js?v=20260802-progressive-resolution-1";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260802-progressive-resolution-1";
 import {
 	createOrbitCameraState,
 	orbitPreviewCamera,
 	panOrbitCamera,
 	rotateOrbitCamera,
 	zoomOrbitCamera,
-} from "./orbitCamera.js?v=20260802-comparison-grid-1";
-import { learningRateMultipliers } from "./trainingSchedule.js?v=20260802-comparison-grid-1";
-import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260802-comparison-grid-1";
-import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260802-comparison-grid-1";
+} from "./orbitCamera.js?v=20260802-progressive-resolution-1";
+import { learningRateMultipliers } from "./trainingSchedule.js?v=20260802-progressive-resolution-1";
+import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260802-progressive-resolution-1";
+import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260802-progressive-resolution-1";
+import {
+	RESOLUTION_MODE_PROGRESSIVE,
+	assertResolutionContinuationCompatible,
+	initialResolutionPreset,
+	resolutionStageForStep,
+} from "./resolutionSchedule.js?v=20260802-progressive-resolution-1";
 
 const $ = (id) => document.getElementById(id);
 const renderCanvas = $("renderCanvas");
@@ -80,6 +86,7 @@ const STATIC_WARMUP_STEPS = 2048;
 const UI_STATE_KEY = "dynaworld-browser-trainer-ui-v2";
 const metricHistory = { sampleLoss: [], trainLoss: [], heldoutLoss: [],
 	trainPsnr: [], heldoutPsnr: [], trainSsim: [], heldoutSsim: [] };
+const resolutionStageMarkers = [];
 
 let dataset = null;
 let workerClient = null;
@@ -102,6 +109,12 @@ let trainerStaticWarmupSteps = 0;
 let orbitCameraStates = [];
 let orbitCameraDirty = [false, false, false];
 let orbitPointer = null;
+let resolutionMode = "96x72";
+let resolutionPreset = "96x72";
+let progressiveDatasetPromise = null;
+let progressiveDataset = null;
+let resolutionTransitionPending = false;
+let resolutionTransitionComplete = false;
 const frameDurations = [];
 
 function currentStep() {
@@ -185,6 +198,27 @@ function setStatus(message) {
 	$("statusText").textContent = message;
 }
 
+function updateDatasetIdentity() {
+	if (!dataset) return;
+	const trainCount = dataset.trainViewCount ?? 1;
+	const poseSource = dataset.datasetContract?.pose_source;
+	const calibrationLabel = poseSource?.endsWith("_v2") ? "LLFF/OpenCV v2" : poseSource;
+	$("datasetName").textContent = dataset.datasetContract
+		? `${dataset.name} · ${trainCount} train / ${dataset.viewCount - trainCount} heldout`
+			+ `${calibrationLabel ? ` · ${calibrationLabel}` : ""} · ${dataset.width}x${dataset.height}`
+		: dataset.name;
+	$("datasetName").title = poseSource ?? "No calibrated pose source declared";
+}
+
+function updateBackendMemory(memoryPlan) {
+	const allocatedBytes = memoryPlan?.allocatedBytes;
+	if (!Number.isFinite(allocatedBytes)) return;
+	values.gpuMemory.textContent = `${(allocatedBytes / (1024 * 1024)).toFixed(1)} MiB`;
+	values.gpuMemory.title = Object.entries(memoryPlan.bufferBytes ?? {})
+		.map(([name, bytes]) => `${name}: ${(bytes / (1024 * 1024)).toFixed(2)} MiB`)
+		.join("\n");
+}
+
 function setRunning(next) {
 	running = Boolean(next);
 	controls.run.textContent = running ? "Pause" : "Start";
@@ -196,7 +230,8 @@ function setRunning(next) {
 }
 
 function updateControlLabels() {
-	const highResolution = controls.resolution.value === "384x288";
+	const highResolution = controls.resolution.value === "384x288"
+		|| controls.resolution.value === RESOLUTION_MODE_PROGRESSIVE;
 	const sampledOption = controls.backend.querySelector('option[value="sampled3d"]');
 	if (sampledOption) sampledOption.disabled = highResolution;
 	if (highResolution && sampledBackendSelected()) controls.backend.value = "tiled3d-fast";
@@ -291,6 +326,16 @@ function drawMetricChart(canvas, range, definitions, { log = false, format = (va
 		});
 		ctx.stroke();
 	}
+	ctx.save();
+	ctx.strokeStyle = "#7dd3fc";
+	ctx.lineWidth = dpr;
+	ctx.setLineDash([4 * dpr, 4 * dpr]);
+	for (const step of resolutionStageMarkers) {
+		if (step < minStep || step > maxStep) continue;
+		const x = inset + ((step - minStep) / (maxStep - minStep)) * (width - inset * 2);
+		ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+	}
+	ctx.restore();
 	const latest = points.reduce((current, point) => point.step >= current.step ? point : current, points[0]);
 	range.textContent = `${format(latest.value)} @ ${latest.step} · full ${minStep}–${historyMaxStep}`;
 }
@@ -318,6 +363,7 @@ function recordMetric(kind, step, value) {
 
 function resetMetrics() {
 	for (const series of Object.values(metricHistory)) series.length = 0;
+	resolutionStageMarkers.length = 0;
 	for (const value of [values.sampleLoss, values.gridLoss, values.trainMae, values.trainPsnr,
 		values.trainSsim, values.heldoutLoss, values.heldoutMae, values.heldoutPsnr,
 		values.heldoutSsim, values.heldoutCoverage, values.motionLoss, values.motionCoverage,
@@ -529,6 +575,10 @@ function resizeWorkerCanvas() {
 function bindWorkerEvents(client) {
 	client.addEventListener(WorkerEvent.METRICS, ({ detail }) => consumeSampleMetric(detail));
 	client.addEventListener(WorkerEvent.VALIDATION, ({ detail }) => consumeValidation(detail));
+	client.addEventListener(WorkerEvent.STAGE_STARTED, ({ detail }) => {
+		setStatus(`Switching ${detail.from.width}x${detail.from.height} → `
+			+ `${detail.to.width}x${detail.to.height} at step ${detail.step}; preserving optimizer state.`);
+	});
 	client.addEventListener(WorkerEvent.ERROR, ({ detail }) => {
 		setRunning(false);
 		setStatus([detail.message || "Training worker failed.", detail.stack].filter(Boolean).join("\n"));
@@ -537,6 +587,61 @@ function bindWorkerEvents(client) {
 	client.addEventListener(WorkerEvent.CAPABILITY, ({ detail }) => {
 		setStatus(`${detail.capability}: ${detail.available ? "available" : detail.reason}`);
 	});
+}
+
+function preloadProgressiveDataset() {
+	if (resolutionMode !== RESOLUTION_MODE_PROGRESSIVE) return null;
+	if (!progressiveDatasetPromise) {
+		const coarseDataset = dataset;
+		progressiveDatasetPromise = loadPresetDataset({ preset: "384x288", computeSamples: false })
+			.then((fineDataset) => {
+				assertResolutionContinuationCompatible(coarseDataset, fineDataset);
+				progressiveDataset = fineDataset;
+				return fineDataset;
+			});
+	}
+	return progressiveDatasetPromise;
+}
+
+async function beginProgressiveResolutionTransition() {
+	if (!workerClient || resolutionMode !== RESOLUTION_MODE_PROGRESSIVE
+		|| resolutionTransitionPending || resolutionTransitionComplete) return;
+	resolutionTransitionPending = true;
+	try {
+		setStatus(`Preparing native 384x288 targets; training continues at ${dataset.width}x${dataset.height}.`);
+		const fineDataset = progressiveDataset ?? await preloadProgressiveDataset();
+		assertResolutionContinuationCompatible(dataset, fineDataset);
+		const ready = await workerClient.switchDataset(fineDataset, {
+			kind: "progressive-resolution",
+			fromPreset: resolutionPreset,
+			toPreset: "384x288",
+		});
+		dataset = fineDataset;
+		resolutionPreset = "384x288";
+		resolutionTransitionComplete = true;
+		if (!resolutionStageMarkers.includes(ready.step)) resolutionStageMarkers.push(ready.step);
+		trainerCapacity = ready.backend?.capacity ?? trainerCapacity;
+		trainerStaticWarmupSteps = ready.backend?.memoryPlan?.staticWarmupSteps ?? trainerStaticWarmupSteps;
+		updateDatasetIdentity();
+		configureResultCameraUi();
+		updateTargetCanvas();
+		updateBackendMemory(ready.backend?.memoryPlan);
+		resizeWorkerCanvas();
+		lastRenderOptionsKey = "";
+		lastTrainOptionsKey = "";
+		syncWorkerOptions(true);
+		workerClient.requestValidation();
+		lastValidationRequestStep = ready.step;
+		updateControlLabels();
+		drawMetricCharts();
+		setStatus(`Progressive stage ready: 384x288 from step ${ready.step}; `
+			+ `parameters, Adam moments, topology, and global step preserved.`);
+	} catch (error) {
+		setStatus(`Progressive resolution switch failed: ${error?.message ?? String(error)}`);
+		console.error(error);
+	} finally {
+		resolutionTransitionPending = false;
+	}
 }
 
 async function initWorkerTrainer() {
@@ -578,13 +683,7 @@ async function initWorkerTrainer() {
 	values.splatCount.textContent = trainerCapacity === Number(controls.splats.value)
 		? String(trainerCapacity) : `${controls.splats.value} → ${trainerCapacity}`;
 	const checkpointPrecision = ready.backend?.memoryPlan?.checkpointPrecision;
-	const allocatedBytes = ready.backend?.memoryPlan?.allocatedBytes;
-	if (Number.isFinite(allocatedBytes)) {
-		values.gpuMemory.textContent = `${(allocatedBytes / (1024 * 1024)).toFixed(1)} MiB`;
-		values.gpuMemory.title = Object.entries(ready.backend.memoryPlan.bufferBytes ?? {})
-			.map(([name, bytes]) => `${name}: ${(bytes / (1024 * 1024)).toFixed(2)} MiB`)
-			.join("\n");
-	}
+	updateBackendMemory(ready.backend?.memoryPlan);
 	const objective = controls.motionWeighting.checked && !sampledBackendSelected()
 		? `motion-weighted ${ready.backend?.objective ?? "training"}`
 		: ready.backend?.objective ?? "training";
@@ -600,6 +699,9 @@ async function initWorkerTrainer() {
 		+ `${cameraBatch?.camerasPerStep ?? 1} of ${cameraBatch?.trainViewCount ?? 17} train cameras per step; `
 		+ `${heldoutDescription}; init ${dataset.seedProvenance?.train_only_verified
 			? "train-only verified" : "external/unverified"}.`);
+	void preloadProgressiveDataset()?.catch((error) => {
+		setStatus(`Native 384x288 preload failed: ${error?.message ?? String(error)}`);
+	});
 }
 
 async function initLocalTrainer() {
@@ -679,6 +781,8 @@ function updateFrameDiagnostics(now, delta) {
 		? `${RENDER_FPS} GPU · ${Math.round(uiFps)} UI` : controls.live.checked ? `${Math.round(uiFps)} fps` : "off";
 	globalThis.__dynaworldDiagnostics = { at: now, uiFps, uiP95Ms: p95,
 		completedStepsPerSecond: workerClient?.getStatus()?.stepsPerSecond ?? 0, step: currentStep(),
+		resolution: dataset ? `${dataset.width}x${dataset.height}` : null,
+		resolutionMode, resolutionTransitionPending, resolutionTransitionComplete,
 		metricCounts: Object.fromEntries(Object.entries(metricHistory)
 			.map(([name, points]) => [name, points.length])) };
 }
@@ -698,8 +802,14 @@ function frameLoop(now) {
 				lastStatusMetricStep = status.lastMetricStep;
 			}
 		}
+		const resolutionStage = resolutionStageForStep(resolutionMode, status?.step ?? 0);
+		if (resolutionStage.progressive && resolutionStage.preset !== resolutionPreset
+			&& !resolutionTransitionPending && !resolutionTransitionComplete) {
+			void beginProgressiveResolutionTransition();
+		}
 		const validationStep = status?.step ?? 0;
 		if (controls.fullMetrics.checked
+			&& !resolutionTransitionPending
 			&& validationStep - lastValidationRequestStep >= VALIDATION_STEP_INTERVAL
 			&& !(status?.flags & StatusFlag.VALIDATION_PENDING)) {
 			workerClient.requestValidation();
@@ -721,15 +831,14 @@ async function boot() {
 	restoreUiState(); updateControlLabels(); resetMetrics();
 	for (const control of [controls.run, controls.step, controls.reset]) control.disabled = true;
 	try {
-		dataset = await loadPresetDataset({ preset: controls.resolution.value });
-		const trainCount = dataset.trainViewCount ?? 1;
-		const poseSource = dataset.datasetContract?.pose_source;
-		const calibrationLabel = poseSource?.endsWith("_v2") ? "LLFF/OpenCV v2" : poseSource;
-		$("datasetName").textContent = dataset.datasetContract
-			? `${dataset.name} · ${trainCount} train / ${dataset.viewCount - trainCount} heldout`
-				+ `${calibrationLabel ? ` · ${calibrationLabel}` : ""} · ${dataset.width}x${dataset.height}`
-			: dataset.name;
-		$("datasetName").title = poseSource ?? "No calibrated pose source declared";
+		resolutionMode = controls.resolution.value;
+		resolutionPreset = initialResolutionPreset(resolutionMode);
+		resolutionTransitionPending = false;
+		resolutionTransitionComplete = resolutionMode !== RESOLUTION_MODE_PROGRESSIVE;
+		progressiveDataset = null;
+		progressiveDatasetPromise = null;
+		dataset = await loadPresetDataset({ preset: resolutionPreset });
+		updateDatasetIdentity();
 		values.splatCount.textContent = controls.splats.value;
 		values.motionSamples.textContent = String(dataset.motionSamples?.length ?? 0);
 		values.staticSamples.textContent = String(dataset.staticSamples?.length ?? 0);

@@ -4,14 +4,16 @@ import {
 	BROWSER_ADAM_EPSILON,
 	DENSITY_STAT_DECAY,
 	browserLearningRates,
-} from "./trainingSchedule.js?v=20260731-compactfp16-5";
+} from "./trainingSchedule.js?v=20260802-progressive-resolution-1";
 import {
 	FRAME_BANK_FORMAT_RGBA8,
 	readFrameBankValue,
 	resolveFrameBank,
-} from "./dataset.js?v=20260731-compactfp16-5";
+} from "./dataset.js?v=20260802-progressive-resolution-1";
 
 export const SPLAT_FLOATS = 24;
+export const CONTINUATION_STATE_SCHEMA = "dynaworld-browser-trainer-continuation/v1";
+export const CONTINUATION_PARAMETER_SCHEMA = "dynamic-splat-24f/v1";
 export const MAX_BROWSER_RENDER_SPLATS = 32768;
 export const INITIAL_SPLAT_OPACITY = 0.1;
 // Targets are bounded RGB. Matching that support prevents opacity from trading
@@ -32,6 +34,64 @@ const DENSITY_STOP_STEP = 16384;
 const DENSITY_SPLITS_PER_PASS = 4;
 const QUATERNION_EPSILON = 1e-8;
 const CONIC_DETERMINANT_EPSILON = 1e-16;
+
+function requireContinuationInteger(value, label, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
+	if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+		throw new RangeError(`${label} must be an integer from ${minimum} through ${maximum}.`);
+	}
+}
+
+function requireContinuationFloat32Array(value, length, label) {
+	if (!(value instanceof Float32Array) || value.length !== length) {
+		throw new TypeError(`${label} must be a Float32Array with ${length} values.`);
+	}
+	for (const entry of value) {
+		if (!Number.isFinite(entry)) throw new RangeError(`${label} must contain only finite values.`);
+	}
+}
+
+function continuationNumbersMatch(left, right) {
+	return Number.isFinite(left) && Number.isFinite(right)
+		&& Math.abs(left - right) <= 1e-7 * Math.max(1, Math.abs(left), Math.abs(right));
+}
+
+export function assertContinuationStateCompatible(state, expected) {
+	if (!state || typeof state !== "object") throw new TypeError("Continuation state must be an object.");
+	if (state.schema !== CONTINUATION_STATE_SCHEMA) {
+		throw new Error(`Unsupported continuation-state schema: ${state.schema ?? "missing"}.`);
+	}
+	const contract = state.contract;
+	if (!contract || typeof contract !== "object") throw new TypeError("Continuation state is missing its contract.");
+	if (contract.parameterSchema !== CONTINUATION_PARAMETER_SCHEMA || contract.splatFloats !== SPLAT_FLOATS) {
+		throw new Error("Continuation parameter schema does not match this trainer.");
+	}
+	requireContinuationInteger(contract.splatCount, "Continuation splatCount", { minimum: 1 });
+	if (contract.splatCount !== expected.splatCount) {
+		throw new Error(`Continuation splat capacity ${contract.splatCount} does not match trainer capacity ${expected.splatCount}.`);
+	}
+	if (!continuationNumbersMatch(contract.geometryScale, expected.geometryScale)) {
+		throw new Error("Continuation geometry scale does not match the target dataset.");
+	}
+	for (const key of ["frameCount", "cameraCount"]) {
+		requireContinuationInteger(contract[key], `Continuation ${key}`, { minimum: 1 });
+		if (contract[key] !== expected[key]) throw new Error(`Continuation ${key} does not match the target dataset.`);
+	}
+	if (!Array.isArray(contract.trainViewIndices)
+		|| contract.trainViewIndices.length !== expected.trainViewIndices.length
+		|| contract.trainViewIndices.some((value, index) => value !== expected.trainViewIndices[index])) {
+		throw new Error("Continuation training-camera split does not match the target dataset.");
+	}
+	requireContinuationInteger(state.stepCount, "Continuation stepCount");
+	requireContinuationInteger(state.currentIndex, "Continuation currentIndex", { maximum: 1 });
+	requireContinuationInteger(state.totalRecycled, "Continuation totalRecycled");
+	const parameterValues = expected.splatCount * SPLAT_FLOATS;
+	requireContinuationFloat32Array(state.params, parameterValues, "Continuation params");
+	requireContinuationFloat32Array(state.firstMoment, parameterValues, "Continuation firstMoment");
+	requireContinuationFloat32Array(state.secondMoment, parameterValues, "Continuation secondMoment");
+	requireContinuationFloat32Array(state.densityStats, expected.splatCount * 4, "Continuation densityStats");
+	requireContinuationFloat32Array(state.initialParams, parameterValues, "Continuation initialParams");
+	return state;
+}
 
 export function sampleGradientBufferBytes(splatCount) {
 	if (!Number.isSafeInteger(splatCount) || splatCount < 1) {
@@ -1778,6 +1838,136 @@ export class DynamicSplatWebGpu3dTrainer {
 	readParams() {
 		const read = this.readbackChain.then(() => this.readParamsUnlocked());
 		this.readbackChain = read.then(() => undefined, () => undefined); return read;
+	}
+
+	continuationContract() {
+		return {
+			parameterSchema: CONTINUATION_PARAMETER_SCHEMA,
+			splatFloats: SPLAT_FLOATS,
+			splatCount: this.splatCount,
+			geometryScale: this.dataset.geometryScale,
+			frameCount: this.dataset.frameCount,
+			cameraCount: this.dataset.cameras.length,
+			trainViewIndices: Array.from(this.trainViewIndices),
+		};
+	}
+
+	continuationBufferSpecs() {
+		return [
+			{ name: "params", buffer: this.buffers.params[this.currentIndex], Type: Float32Array,
+				elementCount: this.splatCount * SPLAT_FLOATS },
+			{ name: "firstMoment", buffer: this.buffers.firstMoment, Type: Float32Array,
+				elementCount: this.splatCount * SPLAT_FLOATS },
+			{ name: "secondMoment", buffer: this.buffers.secondMoment, Type: Float32Array,
+				elementCount: this.splatCount * SPLAT_FLOATS },
+			{ name: "densityStats", buffer: this.buffers.stats, Type: Float32Array,
+				elementCount: this.splatCount * 4 },
+		];
+	}
+
+	continuationMetadata() {
+		return {
+			contract: this.continuationContract(),
+			initialParams: this.initialParams.slice(),
+			stepCount: this.stepCount,
+			currentIndex: this.currentIndex,
+			totalRecycled: this.totalRecycled,
+		};
+	}
+
+	continuationStateFromSnapshots(snapshots, metadata) {
+		return { schema: CONTINUATION_STATE_SCHEMA, ...metadata,
+			params: snapshots.params, firstMoment: snapshots.firstMoment,
+			secondMoment: snapshots.secondMoment, densityStats: snapshots.densityStats };
+	}
+
+	async exportContinuationStateUnlocked() {
+		if (!this.device || !this.buffers) throw new Error("Trainer must be initialized before exporting continuation state.");
+		const specs = this.continuationBufferSpecs();
+		const metadata = this.continuationMetadata();
+		let byteLength = 0;
+		for (const spec of specs) {
+			spec.byteOffset = byteLength;
+			spec.byteLength = spec.elementCount * spec.Type.BYTES_PER_ELEMENT;
+			byteLength += spec.byteLength;
+		}
+		const readback = this.device.createBuffer({
+			size: Math.max(4, byteLength),
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
+		let mapped = false;
+		try {
+			const encoder = this.device.createCommandEncoder();
+			for (const spec of specs) {
+				encoder.copyBufferToBuffer(spec.buffer, 0, readback, spec.byteOffset, spec.byteLength);
+			}
+			this.device.queue.submit([encoder.finish()]);
+			await readback.mapAsync(GPUMapMode.READ, 0, byteLength);
+			mapped = true;
+			const bytes = readback.getMappedRange(0, byteLength);
+			const snapshots = {};
+			for (const spec of specs) {
+				const copy = bytes.slice(spec.byteOffset, spec.byteOffset + spec.byteLength);
+				snapshots[spec.name] = new spec.Type(copy);
+			}
+			return this.continuationStateFromSnapshots(snapshots, metadata);
+		} finally {
+			if (mapped) readback.unmap();
+			readback.destroy();
+		}
+	}
+
+	exportContinuationState() {
+		const exportState = this.readbackChain.then(() => this.exportContinuationStateUnlocked());
+		this.readbackChain = exportState.then(() => undefined, () => undefined);
+		return exportState;
+	}
+
+	assertContinuationStateCompatible(state) {
+		return assertContinuationStateCompatible(state, this.continuationContract());
+	}
+
+	continuationRestoreWrites(state) {
+		return [
+			{ buffer: this.buffers.params[0], data: state.params },
+			{ buffer: this.buffers.params[1], data: state.params },
+			{ buffer: this.buffers.firstMoment, data: state.firstMoment },
+			{ buffer: this.buffers.secondMoment, data: state.secondMoment },
+			{ buffer: this.buffers.stats, data: state.densityStats },
+		];
+	}
+
+	applyContinuationMetadata(state) {
+		this.initialParams = state.initialParams.slice();
+		this.stepCount = state.stepCount;
+		this.currentIndex = state.currentIndex;
+		this.totalRecycled = state.totalRecycled;
+	}
+
+	async restoreContinuationStateUnlocked(state) {
+		if (!this.device || !this.buffers) throw new Error("Trainer must be initialized before restoring continuation state.");
+		this.assertContinuationStateCompatible(state);
+		const hasErrorScope = typeof this.device.pushErrorScope === "function"
+			&& typeof this.device.popErrorScope === "function";
+		if (hasErrorScope) this.device.pushErrorScope("validation");
+		let restoreError = null;
+		try {
+			for (const { buffer, data } of this.continuationRestoreWrites(state)) {
+				this.device.queue.writeBuffer(buffer, 0, data);
+			}
+			await this.device.queue.onSubmittedWorkDone();
+		} finally {
+			if (hasErrorScope) restoreError = await this.device.popErrorScope();
+		}
+		if (restoreError) throw new Error(`Continuation-state restore failed: ${restoreError.message}`);
+		this.applyContinuationMetadata(state);
+		return this;
+	}
+
+	restoreContinuationState(state) {
+		const restore = this.readbackChain.then(() => this.restoreContinuationStateUnlocked(state));
+		this.readbackChain = restore.then(() => undefined, () => undefined);
+		return restore;
 	}
 
 	async readValidationMetrics({ modelMode = 0, temporalSigma = 0.30, gridSize = 16 } = {}) {

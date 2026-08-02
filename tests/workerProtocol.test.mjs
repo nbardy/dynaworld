@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
 	assertProtocolMessage, createSharedStatusBuffer, protocolMessage, publishSharedStatus, readSharedStatus,
-	StatusFlag, TrainerState, WorkerCommand, WORKER_PROTOCOL_VERSION,
+	StatusFlag, TrainerState, WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
 } from "../workerProtocol.js";
 import {
 	TILED_METRIC_INTERVAL,
@@ -48,6 +48,23 @@ test("protocol rejects mismatched versions", () => {
 	assert.throws(() => assertProtocolMessage({ version: 999, type: WorkerCommand.START }), /unsupported/);
 });
 
+test("protocol exposes a bounded progressive-resolution handoff", async () => {
+	assert.equal(WORKER_PROTOCOL_VERSION, 2);
+	assert.equal(WorkerCommand.SWITCH_DATASET, "switch-dataset");
+	assert.equal(WorkerEvent.STAGE_READY, "stage-ready");
+	const [workerSource, appSource] = await Promise.all([
+		readFile(new URL("../trainingWorker.js", import.meta.url), "utf8"),
+		readFile(new URL("../app.js", import.meta.url), "utf8"),
+	]);
+	const exportAt = workerSource.indexOf("exportContinuationState()");
+	const restoreAt = workerSource.indexOf("restoreContinuationState(continuation)");
+	assert.ok(exportAt >= 0 && restoreAt > exportAt);
+	assert.match(workerSource, /await sourceTrainer\.device\.queue\.onSubmittedWorkDone\(\)/);
+	assert.match(workerSource, /if \(wasRunning\)[\s\S]+schedulePump\(pumpToken\)/);
+	assert.match(appSource, /loadPresetDataset\(\{ preset: "384x288", computeSamples: false \}\)/);
+	assert.match(appSource, /resolutionStageMarkers\.push\(ready\.step\)/);
+});
+
 test("optimizer pump never awaits train steps, metrics, or validation", async () => {
 	const source = await readFile(new URL("../trainingWorker.js", import.meta.url), "utf8");
 	assert.doesNotMatch(source, /await\s+trainer\.(?:trainStep|readLoss|readParams)/);
@@ -76,6 +93,7 @@ test("SPA exposes three independent render-only cameras in the GT/result matrix"
 		readFile(new URL("../trainerWebGpu3d.js", import.meta.url), "utf8"),
 	]);
 	assert.match(htmlSource, /id="resolutionSelect"/);
+	assert.match(htmlSource, /option value="progressive-96-384" selected/);
 	assert.match(htmlSource, /option value="384x288"/);
 	assert.match(htmlSource, /id="comparisonGrid"/);
 	assert.equal(Array.from(htmlSource.matchAll(/data-camera-panel="[0-2]"/g)).length, 6);
@@ -102,7 +120,8 @@ test("SPA orders the comparison, compact quality deck, then reset-sensitive cont
 	assert.match(stylesSource, /\.workbench\s*\{[\s\S]{0,100}order:\s*2/);
 	assert.match(stylesSource, /\.metrics-deck\s*\{[\s\S]{0,100}order:\s*3/);
 	assert.match(stylesSource, /\.controls\s*\{[\s\S]{0,100}order:\s*4/);
-	assert.match(stylesSource, /\.comparison-stage\s*\{[\s\S]{0,160}100vh/);
+	assert.match(stylesSource, /\.comparison-stage\s*\{[\s\S]{0,100}width:\s*100%/);
+	assert.match(stylesSource, /\.comparison-stage\s*\{[\s\S]{0,160}border-radius:\s*0/);
 });
 
 test("regular metric telemetry reports topology growth without full validation", async () => {
