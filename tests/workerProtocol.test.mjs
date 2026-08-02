@@ -90,6 +90,21 @@ test("SPA exposes three independent render-only cameras in the GT/result matrix"
 	assert.match(trainerSource, /binding:\s*4, resource:\s*\{ buffer:\s*this\.buffers\.cameras/);
 });
 
+test("SPA orders the comparison, compact quality deck, then reset-sensitive controls", async () => {
+	const [htmlSource, stylesSource] = await Promise.all([
+		readFile(new URL("../index.html", import.meta.url), "utf8"),
+		readFile(new URL("../styles.css", import.meta.url), "utf8"),
+	]);
+	assert.match(htmlSource, /class="metrics-deck"/);
+	assert.match(htmlSource, /class="key-metrics"/);
+	assert.equal(Array.from(htmlSource.matchAll(/class="metric-chart"/g)).length, 3);
+	assert.ok(htmlSource.indexOf('class="metrics-deck"') < htmlSource.indexOf('class="controls"'));
+	assert.match(stylesSource, /\.workbench\s*\{[\s\S]{0,100}order:\s*2/);
+	assert.match(stylesSource, /\.metrics-deck\s*\{[\s\S]{0,100}order:\s*3/);
+	assert.match(stylesSource, /\.controls\s*\{[\s\S]{0,100}order:\s*4/);
+	assert.match(stylesSource, /\.comparison-stage\s*\{[\s\S]{0,160}100vh/);
+});
+
 test("regular metric telemetry reports topology growth without full validation", async () => {
 	const [workerSource, appSource] = await Promise.all([
 		readFile(new URL("../trainingWorker.js", import.meta.url), "utf8"),
