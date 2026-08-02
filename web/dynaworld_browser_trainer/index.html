@@ -4,27 +4,28 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Dynaworld Browser Trainer</title>
-		<link rel="stylesheet" href="./styles.css?v=20260731-compactfp16-5" />
+		<link rel="stylesheet" href="./styles.css?v=20260802-comparison-grid-1" />
 	</head>
 	<body>
 		<div class="app-shell">
 			<aside class="rail">
 				<header class="brand">
-					<h1>Dynaworld Browser Trainer</h1>
-					<p id="datasetName">preloading dataset</p>
+					<div class="brand-copy">
+						<h1>Dynaworld Browser Trainer</h1>
+						<p id="datasetName">preloading dataset</p>
+					</div>
 					<nav class="diagnostic-nav" aria-label="Developer diagnostics">
 						<a href="./benchmarkTiledKernels.html">Kernel Lab</a>
 						<a href="./tiledParityHarness.html?backwardMode=staged-project3d&amp;backwardGranularity=checkpoint-block&amp;checkpointOrder=pixel-major&amp;projectionLayout=split-compact&amp;ssimLayout=separable&amp;tileSize=8">Parity Gate</a>
 					</nav>
-				</header>
-
-				<section class="controls" aria-label="Training controls">
-					<div class="button-row">
+					<div class="button-row primary-actions">
 						<button id="runButton" type="button">Start</button>
 						<button id="stepButton" type="button">Step</button>
 						<button id="resetButton" type="button">Reset</button>
 					</div>
+				</header>
 
+				<section class="controls" aria-label="Training controls">
 					<label class="field">
 						<span>Training Backend</span>
 						<select id="backendSelect">
@@ -109,20 +110,6 @@
 							<option value="validation_error">Validation error</option>
 						</select>
 					</label>
-
-					<label class="field">
-						<span>Render Camera</span>
-						<select id="renderCameraSelect"></select>
-					</label>
-
-					<div class="field result-camera-field">
-						<label for="resultCameraModeSelect">Result Camera</label>
-						<button id="resetOrbitButton" class="icon-button" type="button" title="Reset free camera" aria-label="Reset free camera" hidden>&#8635;</button>
-						<select id="resultCameraModeSelect">
-							<option value="calibrated" selected>Calibrated triptych</option>
-							<option value="orbit">Free orbit</option>
-						</select>
-					</div>
 
 					<label class="field">
 						<span>Result View</span>
@@ -374,53 +361,50 @@
 			</aside>
 
 			<main class="workbench">
-				<section class="viewport target-pane" aria-label="Target frame">
-					<div class="viewport-title">
-						<span>Target</span>
-						<strong id="targetFrameValue">frame 0</strong>
-					</div>
-					<canvas id="targetCanvas" width="192" height="192"></canvas>
-					<div id="angleStrip" class="angle-strip" aria-label="Camera angle previews">
-						<div class="angle-tile">
-							<div>
-								<span>Train A</span>
-								<strong id="sourceViewFrameValue">--</strong>
+				<section class="comparison-stage" aria-label="Ground truth and WebGPU camera comparison">
+					<header class="comparison-toolbar">
+						<div>
+							<span>Camera Comparison</span>
+							<strong id="targetFrameValue">frame 0</strong>
+						</div>
+						<div class="comparison-runtime">
+							<strong id="fpsValue">-- fps</strong>
+							<button id="resetOrbitButton" class="icon-button" type="button" title="Reset all result cameras" aria-label="Reset all result cameras">&#8635;</button>
+						</div>
+					</header>
+					<div id="comparisonGrid" class="comparison-grid">
+						<article class="comparison-cell gt-cell camera-interaction-cell" data-camera-panel="0" tabindex="0" aria-label="Train A ground truth camera" title="Drag to orbit; Shift-drag to pan; scroll to dolly; double-click to reset">
+							<header><span>GT · Train A</span><strong id="sourceViewFrameValue">--</strong></header>
+							<canvas id="sourceViewCanvas" width="128" height="96"></canvas>
+						</article>
+						<article class="comparison-cell gt-cell camera-interaction-cell" data-camera-panel="1" tabindex="0" aria-label="Train B ground truth camera" title="Drag to orbit; Shift-drag to pan; scroll to dolly; double-click to reset">
+							<header><span>GT · Train B</span><strong id="targetViewFrameValue">--</strong></header>
+							<canvas id="targetViewCanvas" width="128" height="96"></canvas>
+						</article>
+						<article class="comparison-cell gt-cell camera-interaction-cell" data-camera-panel="2" tabindex="0" aria-label="Heldout ground truth camera" title="Drag to orbit; Shift-drag to pan; scroll to dolly; double-click to reset">
+							<header><span>GT · Heldout</span><strong id="heldoutViewFrameValue">--</strong></header>
+							<canvas id="heldoutViewCanvas" width="128" height="96"></canvas>
+						</article>
+						<section id="resultStrip" class="result-strip" aria-label="Interactive WebGPU results">
+							<div id="resultAngleLabels" class="result-angle-labels" aria-hidden="true">
+								<div><span id="resultViewRole0">Result · Train A</span><strong id="resultViewLabel0">--</strong></div>
+								<div><span id="resultViewRole1">Result · Train B</span><strong id="resultViewLabel1">--</strong></div>
+								<div><span id="resultViewRole2">Result · Heldout</span><strong id="resultViewLabel2">--</strong></div>
 							</div>
-							<canvas id="sourceViewCanvas" width="128" height="128"></canvas>
-						</div>
-						<div class="angle-tile">
-							<div>
-								<span>Train B</span>
-								<strong id="targetViewFrameValue">--</strong>
+							<div class="result-canvas-shell">
+								<canvas id="renderCanvas" aria-label="Three interactive WebGPU result views"></canvas>
+								<div class="result-interaction-grid">
+									<div class="camera-interaction-cell" data-camera-panel="0" tabindex="0" aria-label="Train A WebGPU result camera" title="Drag to orbit; Shift-drag to pan; scroll to dolly; double-click to reset"></div>
+									<div class="camera-interaction-cell" data-camera-panel="1" tabindex="0" aria-label="Train B WebGPU result camera" title="Drag to orbit; Shift-drag to pan; scroll to dolly; double-click to reset"></div>
+									<div class="camera-interaction-cell" data-camera-panel="2" tabindex="0" aria-label="Heldout WebGPU result camera" title="Drag to orbit; Shift-drag to pan; scroll to dolly; double-click to reset"></div>
+								</div>
 							</div>
-							<canvas id="targetViewCanvas" width="128" height="128"></canvas>
-						</div>
-						<div class="angle-tile">
-							<div>
-								<span>Heldout</span>
-								<strong id="heldoutViewFrameValue">--</strong>
-							</div>
-							<canvas id="heldoutViewCanvas" width="128" height="128"></canvas>
-						</div>
-					</div>
-				</section>
-				<section class="viewport render-pane" aria-label="Current WebGPU render">
-					<div class="viewport-title">
-						<span>WebGPU Result</span>
-						<strong id="fpsValue">-- fps</strong>
-					</div>
-					<div id="resultStrip" class="result-strip" data-camera-mode="calibrated">
-						<div id="resultAngleLabels" class="result-angle-labels" aria-hidden="true">
-							<div><span id="resultViewRole0">Train A</span><strong id="resultViewLabel0">--</strong></div>
-							<div><span id="resultViewRole1">Train B</span><strong id="resultViewLabel1">--</strong></div>
-							<div><span id="resultViewRole2">Heldout</span><strong id="resultViewLabel2">--</strong></div>
-						</div>
-						<canvas id="renderCanvas"></canvas>
+						</section>
 					</div>
 					<p id="renderContractNotice" class="render-contract-notice" hidden></p>
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260731-compactfp16-5"></script>
+		<script type="module" src="./app.js?v=20260802-comparison-grid-1"></script>
 	</body>
 </html>

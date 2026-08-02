@@ -181,7 +181,7 @@ export function estimateTiledTrainerBuffers({
 		sampledWorkspace: SPLAT_BYTES + MAX_SAMPLES_PER_STEP * 4,
 		targetPage: pixelCount * 4 * Float32Array.BYTES_PER_ELEMENT,
 		packedTargetPage: compactTargetFrames ? pixelCount * 4 : 4,
-		cameraData: (viewCount * 2 + 1) * 20 * 4 + trainViewCount * 4 + 4 + viewCount * 4 * 4,
+		cameraData: (viewCount * 2 + MAX_RENDER_VIEWS) * 20 * 4 + trainViewCount * 4 + 4 + viewCount * 4 * 4,
 		rasterPairs: pairCapacity * 8 + tileCount * 4,
 		transmittanceCheckpoints: checkpoint.byteLength,
 		fullImageWorkspace: pixelCount * (

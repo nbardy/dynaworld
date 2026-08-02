@@ -1590,11 +1590,14 @@ export class DynamicSplatWebGpu3dTrainer {
 		this.initializeTargetBuffer(target);
 		const cameraData = packCameras(this.dataset.cameras); const cameras = makeBuffer(cameraData.byteLength,
 			GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST); this.device.queue.writeBuffer(cameras, 0, cameraData);
-		// Rendering gets one private camera slot so interactive novel views can
+		// Rendering gets private camera slots so interactive novel views can
 		// never mutate calibrated camera bytes used by training or validation.
-		const renderCameraData = new Float32Array(cameraData.length + 20);
+		const renderCameraData = new Float32Array(cameraData.length + MAX_RENDER_VIEWS * 20);
 		renderCameraData.set(cameraData);
-		renderCameraData.set(cameraData.subarray(0, 20), cameraData.length);
+		for (let panel = 0; panel < MAX_RENDER_VIEWS; panel += 1) {
+			const sourceOffset = Math.min(panel, this.dataset.cameras.length - 1) * 20;
+			renderCameraData.set(cameraData.subarray(sourceOffset, sourceOffset + 20), cameraData.length + panel * 20);
+		}
 		const renderCameras = makeBuffer(renderCameraData.byteLength,
 			GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
 		this.device.queue.writeBuffer(renderCameras, 0, renderCameraData);
@@ -1825,21 +1828,25 @@ export class DynamicSplatWebGpu3dTrainer {
 		if (this.canvas.width !== width || this.canvas.height !== height) { this.canvas.width = width; this.canvas.height = height; }
 	}
 
-	writePreviewCamera(camera) {
-		const viewIndex = this.dataset.cameras.length;
-		const packed = packPreviewCamera(camera, this.dataset.geometryScale ?? 1);
-		this.device.queue.writeBuffer(this.buffers.renderCameras, viewIndex * 20 * Float32Array.BYTES_PER_ELEMENT,
-			packed);
-		return viewIndex;
+	writePreviewCameras(cameras) {
+		const previewCameras = cameras.slice(0, MAX_RENDER_VIEWS);
+		const firstViewIndex = this.dataset.cameras.length;
+		const packed = new Float32Array(previewCameras.length * 20);
+		for (let panel = 0; panel < previewCameras.length; panel += 1) {
+			packed.set(packPreviewCamera(previewCameras[panel], this.dataset.geometryScale ?? 1), panel * 20);
+		}
+		this.device.queue.writeBuffer(this.buffers.renderCameras,
+			firstViewIndex * 20 * Float32Array.BYTES_PER_ELEMENT, packed);
+		return previewCameras.map((_, panel) => firstViewIndex + panel);
 	}
 
 	render(time = 0.35, modelMode = 0, temporalSigma = 0.30, renderMode = 0, viewIndex = 0,
-		viewIndices = null, previewCamera = null) {
+		viewIndices = null, previewCameras = null) {
 		if (!this.buffers || !this.device || !this.context) return;
 		this.resizeCanvas();
 		const splatCount = resolveActiveSplatCount(this.splatCount, this.activeSplatCount);
-		const resolvedViewIndices = previewCamera
-			? [this.writePreviewCamera(previewCamera)]
+		const resolvedViewIndices = Array.isArray(previewCameras) && previewCameras.length > 0
+			? this.writePreviewCameras(previewCameras)
 			: resolveRenderViewIndices(this.dataset, viewIndices);
 		const renderViews = resolvedViewIndices.length;
 		const panelWidth = this.canvas.width / renderViews;
