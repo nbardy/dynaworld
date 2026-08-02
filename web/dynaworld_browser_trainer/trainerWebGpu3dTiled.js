@@ -6,19 +6,22 @@ import {
 	MAX_SPLAT_COLOR,
 	SPLAT_FLOATS,
 	makeInitialSplats,
+	normalizeDatasetGeometry,
 	rgbaFloatFrameBytes,
-} from "./trainerWebGpu3d.js?v=20260802-progressive-resolution-1";
+	resolveTrainViewIndices,
+} from "./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1";
 import {
 	FRAME_BANK_FORMAT_RGBA8,
+	frameTime01,
 	resolveFrameBank,
-} from "./dataset.js?v=20260802-progressive-resolution-1";
+} from "./dataset.js?v=20260803-fullfps-pixelgs-1";
 import {
 	BROWSER_ADAM_BETA1,
 	BROWSER_ADAM_BETA2,
 	BROWSER_ADAM_EPSILON,
 	DENSITY_STAT_DECAY,
 	browserLearningRates,
-} from "./trainingSchedule.js?v=20260802-progressive-resolution-1";
+} from "./trainingSchedule.js?v=20260803-fullfps-pixelgs-1";
 
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 export const DEFAULT_TILE_SIZE = 16;
@@ -36,7 +39,7 @@ const DENSITY_START_STEP = 600;
 const DENSITY_INTERVAL = 100;
 const DENSITY_DISPATCHES = 4;
 const DENSITY_SPLITS_PER_DISPATCH = 4;
-const TILED_CONFIG_BYTES = 176;
+const TILED_CONFIG_BYTES = 192;
 const DIRECT_GRADIENT_FLOATS = SPLAT_FLOATS;
 const PROJECTED_GRADIENT_FLOATS = 12;
 const TILED_GPU_PHASES = Object.freeze([
@@ -72,15 +75,54 @@ export const DEFAULT_BROWSER_GROWTH_CAPACITY = 8192;
 export const DEFAULT_CHECKPOINT_PRECISION = "packed-f16";
 export const DEFAULT_STATIC_WARMUP_STEPS = 2048;
 export const MAX_WORKGROUPS_PER_DIMENSION = 65535;
-export const SCALE_LR_FROM_COLOR = 0.30;
+// Match the former 0.30 * color LR at step zero, then follow geometry's
+// stronger decay so late optimization cannot keep trading sharpness for blur.
+export const SCALE_LR_FROM_POSITION = 9 / 7;
 export const ROTATION_LR_FROM_MOTION = 1.25;
 // This is an optimizer/performance trust region, not a roundness prior. A 6:1
 // standard-deviation ratio still allows 36:1 covariance conditioning; larger
 // needles increase tile pairs and were worse on heldout in the matched 12:1 run.
 export const MAX_SCALE_ASPECT_RATIO = 6;
+// Pixel-GS scales only the density-control signal near cameras. Keeping this
+// out of the optimizer gradient preserves the renderer/VJP parity contract.
+export const PIXEL_GS_DEPTH_GAMMA = 0.37;
 export const TILED_SPLAT_ID_BITS = Math.ceil(Math.log2(MAX_BROWSER_RENDER_SPLATS));
 export const TILED_SPLAT_ID_MASK = (2 ** TILED_SPLAT_ID_BITS) - 1;
 export const TILED_DEPTH_KEY_MASK = (~TILED_SPLAT_ID_MASK) >>> 0;
+
+export function resolvePixelDepthGamma(value = PIXEL_GS_DEPTH_GAMMA) {
+	const gamma = Number(value);
+	if (!Number.isFinite(gamma) || gamma <= 0) {
+		throw new RangeError("pixelDepthGamma must be a positive finite number.");
+	}
+	return gamma;
+}
+
+export function cameraSceneRadius(cameras) {
+	if (!Array.isArray(cameras) || cameras.length === 0) {
+		throw new TypeError("cameraSceneRadius needs at least one calibrated camera.");
+	}
+	const centers = cameras.map((camera) => {
+		const matrix = camera?.worldToCamera;
+		if (!matrix || matrix.length !== 16 || !Array.from(matrix).every(Number.isFinite)) {
+			throw new TypeError("Every camera needs a finite 4x4 worldToCamera matrix.");
+		}
+		const translation = [matrix[3], matrix[7], matrix[11]];
+		return [
+			-(matrix[0] * translation[0] + matrix[4] * translation[1] + matrix[8] * translation[2]),
+			-(matrix[1] * translation[0] + matrix[5] * translation[1] + matrix[9] * translation[2]),
+			-(matrix[2] * translation[0] + matrix[6] * translation[1] + matrix[10] * translation[2]),
+		];
+	});
+	const mean = [0, 1, 2].map((axis) =>
+		centers.reduce((sum, center) => sum + center[axis], 0) / centers.length);
+	const radius = 1.1 * Math.max(...centers.map((center) => Math.hypot(
+		center[0] - mean[0], center[1] - mean[1], center[2] - mean[2],
+	)));
+	// Pixel-GS's camera-radius definition collapses for a single camera. A
+	// unit fallback keeps the optional guard finite for compatibility fixtures.
+	return radius > 1e-6 ? radius : 1;
+}
 
 export function resolveTiledBackwardMode(value = TILED_BACKWARD_MODES.DIRECT_3D) {
 	if (!Object.values(TILED_BACKWARD_MODES).includes(value)) {
@@ -682,7 +724,9 @@ function writeTiledConfig(buffer, values) {
 	f32(144, 0.0001); f32(148, 0.0009);
 	f32(152, 0.03 * values.geometryScale); f32(156, values.geometryScale);
 	u32(160, values.activeSplatCount);
-	u32(164, values.targetPacked ? 1 : 0); u32(168, 0); u32(172, 0);
+	u32(164, values.targetPacked ? 1 : 0); f32(168, values.frameTime); u32(172, values.cycleMetricCount);
+	f32(176, values.densitySceneRadius); f32(180, values.pixelDepthGamma);
+	f32(184, values.pixelDepthScaling ? 1 : 0); f32(188, 0);
 }
 
 const CONFIG_WGSL = `
@@ -697,7 +741,8 @@ const CONFIG_WGSL = `
 		beta1:f32, beta2:f32, adamEpsilon:f32, trainingBackgroundPacked:u32,
 		ssimRadius:u32, frameCount:u32, staticWarmup:u32, motionWeighting:u32,
 		c1:f32, c2:f32, minScale:f32, maxScale:f32,
-		activeSplatCount:u32, configPad0:u32, configPad1:u32, configPad2:u32,
+		activeSplatCount:u32, configPad0:u32, frameTime:f32, cycleMetricCount:u32,
+		densityControl:vec4<f32>,
 	};
 	struct Splat {
 		centerStatic:vec4<f32>, velocityTime:vec4<f32>, harmonicPad:vec4<f32>,
@@ -756,7 +801,13 @@ const CONFIG_WGSL = `
 	}
 	fn frame_time(cfg:TiledConfig)->f32 {
 		if(cfg.staticWarmup!=0u){return 0.5;}
-		return select(0.0,f32(cfg.frameIndex)/f32(max(1u,cfg.frameCount-1u)),cfg.frameCount>1u);
+		return clamp(cfg.frameTime,0.0,1.0);
+	}
+	fn density_gradient_scale(cameraDepth:f32,cfg:TiledConfig)->f32 {
+		if(cfg.densityControl.z<0.5){return 1.0;}
+		let normalized=max(cameraDepth,0.0)
+			/max(cfg.densityControl.x*cfg.densityControl.y,1e-6);
+		return clamp(normalized*normalized,0.0,1.0);
 	}
 	fn training_background(packed:u32)->vec3<f32> {
 		let rgb=vec3<f32>(
@@ -1611,7 +1662,7 @@ function metricsWgsl() {
 				f32(cfg.step),f32(cfg.activeSplatCount));
 			metrics[4]=vec4<f32>(
 				f32(atomicLoad(&counters[8])),f32(atomicLoad(&counters[9])),0.0,0.0);
-			cycleMetrics[cfg.step%arrayLength(&cycleMetrics)]=vec4<f32>(
+			cycleMetrics[cfg.step%min(cfg.cycleMetricCount,arrayLength(&cycleMetrics))]=vec4<f32>(
 				metrics[0].xyz,f32(cfg.step+1u));
 		}
 	}`;
@@ -1756,9 +1807,13 @@ function backwardWgsl(
 						let gradOpacity=clampGate*alphaGrad*gaussian*proj.conicDepthAlpha.w
 							*proj.conicDepthAlpha.z*(1.0-proj.conicDepthAlpha.z);
 						let gradColor=imageGrad*transmittance*alpha;
+						// The non-cancelling per-pixel magnitude is an AbsGS-style
+						// density statistic. Pixel-GS depth scaling suppresses only
+						// near-camera births; it must not alter the optimizer gradient.
+						let densitySignal=length(barMu)*density_gradient_scale(cp.z,cfg);
 						gradient=Splat(vec4<f32>(worldGrad,gradStaticMix),vec4<f32>(worldGrad*tc,gradTime),
 							vec4<f32>(select(vec3<f32>(0.0),worldGrad*wave,cfg.modelMode==0u),
-								alpha/f32(cfg.pixelCount)),vec4<f32>(gradLogScale,length(barMu)),gradRotation,
+								alpha/f32(cfg.pixelCount)),vec4<f32>(gradLogScale,densitySignal),gradRotation,
 							vec4<f32>(gradColor,gradOpacity));
 					}
 				}
@@ -1906,12 +1961,14 @@ function projectedGradientVjpWgsl(projectionType = "Projection") {
 		let staticMix=clamp(p.centerStatic.w,0.0,1.0);
 		let temporalFloor=clamp(sigma*0.30,0.035,0.12);
 		let timeDelta=t-clamp(p.velocityTime.w,0.0,1.0);
-		let dynamicGate=temporalFloor+(1.0-temporalFloor)
-			*exp(-0.5*timeDelta*timeDelta/(sigma*sigma));
+		let temporalKernel=exp(-0.5*timeDelta*timeDelta/(sigma*sigma));
+		let dynamicCore=(1.0-temporalFloor)*temporalKernel;
+		let dynamicGate=temporalFloor+dynamicCore;
 		let opacity=sigmoid(p.colorOpacity.w);
-		let timeWeight=select(dynamicGate,1.0,staticWarmup);
-		let dynamicCore=max(0.0,(timeWeight-staticMix
-			-temporalFloor*(1.0-staticMix))/max(1e-6,1.0-staticMix));
+		// Forward uses temporal_gate(), which blends the dynamic gate with
+		// staticMix. Reconstruct exactly that value here; using dynamicGate
+		// directly under-scaled opacity and time gradients for static-heavy init.
+		let timeWeight=select(mix(dynamicGate,1.0,staticMix),1.0,staticWarmup);
 		let gPeak=g.screen1.y;
 		let gradTime=select(gPeak*opacity*(1.0-staticMix)*dynamicCore
 			*(t-p.velocityTime.w)/(sigma*sigma),0.0,staticWarmup);
@@ -2050,10 +2107,12 @@ function stagedBackwardWgsl(
 						let barC00=-barQform*conicDelta.x*conicDelta.x;
 						let barC01=-barQform*conicDelta.x*conicDelta.y;
 						let barC11=-barQform*conicDelta.y*conicDelta.y;
+						let densitySignal=length(barMu)
+							*density_gradient_scale(proj.cameraPointValid.z,cfg);
 						gradient=ProjectedGradient(
 							vec4<f32>(barMu,barC00,barC01),
 							vec4<f32>(barC11,clampGate*alphaGrad*gaussian,
-								alpha/f32(cfg.pixelCount),length(barMu)),
+								alpha/f32(cfg.pixelCount),densitySignal),
 							vec4<f32>(imageGrad*transmittance*alpha,0.0));
 					}
 				}
@@ -2332,7 +2391,7 @@ function updateWgsl(
 			clamp(p.velocityTime.w-cfg.lrMotion*velocityUpdate.w,0.0,1.0));
 		p.harmonicPad=vec4<f32>(clamp(p.harmonicPad.xyz-cfg.lrMotion*harmonicUpdate.xyz,
 			vec3<f32>(-1.5*cfg.geometryScale),vec3<f32>(1.5*cfg.geometryScale)),p.harmonicPad.w);
-		var nextLogScale=clamp(p.logScalePad.xyz-${SCALE_LR_FROM_COLOR}*cfg.lrColor*scaleUpdate.xyz,
+		var nextLogScale=clamp(p.logScalePad.xyz-${SCALE_LR_FROM_POSITION}*cfg.lrPosition*scaleUpdate.xyz,
 			vec3<f32>(log(cfg.minScale)),vec3<f32>(log(cfg.maxScale)));
 		let meanLog=(nextLogScale.x+nextLogScale.y+nextLogScale.z)/3.0;
 		// Center the trust region in log scale so the ratio bound is symmetric
@@ -2541,6 +2600,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
 		projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
 		ssimLayout = TILED_SSIM_LAYOUTS.NAIVE_2D,
+		pixelDepthScaling = true,
+		pixelDepthGamma = PIXEL_GS_DEPTH_GAMMA,
 		profileGpu = false,
 	} = {}) {
 		this.initialSplatCount = splatCount;
@@ -2559,6 +2620,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			=== TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
 			? requestedProjectionVjpPrecision : TILED_PROJECTION_VJP_PRECISIONS.F32;
 		this.ssimLayout = resolveTiledSsimLayout(ssimLayout);
+		this.pixelDepthScaling = Boolean(pixelDepthScaling);
+		this.pixelDepthGamma = resolvePixelDepthGamma(pixelDepthGamma);
 		if (this.backwardGranularity === TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK
 			&& this.backwardMode !== TILED_BACKWARD_MODES.STAGED_PROJECT_3D) {
 			throw new RangeError("checkpoint-block backward requires staged-project3d gradients.");
@@ -2585,6 +2648,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			+ ` · ${this.checkpointOrder} tape`
 			+ ` · ${this.projectionLayout} projection`
 			+ ` · ${this.ssimLayout} SSIM`
+			+ (this.pixelDepthScaling ? " · Pixel-GS floater guard" : "")
 			+ (this.sharePairPacket ? " · shared pair packet" : "");
 	}
 
@@ -2696,6 +2760,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 
 	createBuffers() {
 		super.createBuffers();
+		this.densitySceneRadius = cameraSceneRadius(this.dataset.cameras);
 		const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 		const makeBuffer = (size, bufferUsage = usage) => this.device.createBuffer({
 			size: Math.max(4, Math.ceil(size / 4) * 4), usage: bufferUsage,
@@ -2787,6 +2852,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		}
 		this.cycleMetricCount = this.trainViewIndices.length * this.dataset.frameCount;
 		this.cycleMetricBytes = this.cycleMetricCount * 16;
+		this.cycleMetricCapacity = this.cycleMetricCount;
 		this.buffers.metricsReadback.destroy();
 		this.buffers.metricsReadback = makeBuffer(TILED_METRICS_BYTES + this.cycleMetricBytes,
 			GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
@@ -2858,6 +2924,9 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			timestampQueryEnabled: this.timestampQueryEnabled,
 			sharePairPacket: this.sharePairPacket,
 			staticWarmupSteps: this.staticWarmupSteps,
+			pixelDepthScaling: this.pixelDepthScaling,
+			pixelDepthGamma: this.pixelDepthGamma,
+			densitySceneRadius: this.densitySceneRadius,
 			metricCycleSteps: this.cycleMetricCount,
 			dormantSlotSparseUpdate: true,
 			initialActiveUpdateSlots: this.activeSplatCount,
@@ -2876,6 +2945,42 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				elementCount: TILED_COUNTER_BYTES / Uint32Array.BYTES_PER_ELEMENT,
 			},
 		];
+	}
+
+	replaceTemporalPage(dataset) {
+		const next = normalizeDatasetGeometry(dataset);
+		if (next.width !== this.dataset.width || next.height !== this.dataset.height
+			|| next.viewCount !== this.dataset.viewCount) {
+			throw new Error("Temporal pages must preserve raster dimensions and camera count.");
+		}
+		const nextTrainViews = resolveTrainViewIndices(next);
+		if (nextTrainViews.length !== this.trainViewIndices.length
+			|| nextTrainViews.some((view, index) => view !== this.trainViewIndices[index])) {
+			throw new Error("Temporal pages must preserve the canonical train/heldout split.");
+		}
+		if (next.cameras.some((camera, view) => camera.name !== this.dataset.cameras[view].name
+			|| camera.worldToCamera.some((value, index) =>
+				Math.abs(value - this.dataset.cameras[view].worldToCamera[index]) > 1e-5))) {
+			throw new Error("Temporal pages must preserve calibrated camera identities and poses.");
+		}
+		const nextCycleMetricCount = this.trainViewIndices.length * next.frameCount;
+		if (nextCycleMetricCount > this.cycleMetricCapacity) {
+			throw new Error(`Temporal page needs ${nextCycleMetricCount} metric slots; `
+				+ `the initialized cache reserves ${this.cycleMetricCapacity}.`);
+		}
+		this.dataset = next;
+		this.cycleMetricCount = nextCycleMetricCount;
+		this.cycleMetricBytes = nextCycleMetricCount * 16;
+		this.targetPageKey = null;
+		this.targetDecodePending = false;
+		// The queue orders this reset after old-page submissions and before new
+		// ones, so paging never needs an onSubmittedWorkDone barrier.
+		this.device.queue.writeBuffer(
+			this.buffers.cycleMetrics,
+			0,
+			new Uint8Array(this.cycleMetricCapacity * 16),
+		);
+		return next;
 	}
 
 	continuationMetadata() {
@@ -3143,6 +3248,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			geometryScale: this.dataset.geometryScale, l1Weight: 0.8, dssimWeight: 0.2,
 			statDecay: DENSITY_STAT_DECAY, ssimRadius: resolvedSsimRadius,
 			frameCount: this.dataset.frameCount,
+			frameTime: frameTime01(this.dataset, selected.frameIndex),
+			cycleMetricCount: this.cycleMetricCount,
+			densitySceneRadius: this.densitySceneRadius,
+			pixelDepthGamma: this.pixelDepthGamma,
+			pixelDepthScaling: this.pixelDepthScaling,
 			staticWarmup: selected.staticWarmup,
 			motionWeighting,
 			randomBackground,

@@ -1,13 +1,13 @@
 import {
 	SPLAT_FLOATS,
 	resolveTrainViewIndices,
-} from "./trainerWebGpu3d.js?v=20260802-progressive-resolution-1";
+} from "./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1";
 import {
 	computeSnapshotMetrics,
 	snapshotUpdateRatios,
 	summarizeSplatParameters,
-} from "./snapshotMetrics.js?v=20260802-progressive-resolution-1";
-import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260802-progressive-resolution-1";
+} from "./snapshotMetrics.js?v=20260803-fullfps-pixelgs-1";
+import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260803-fullfps-pixelgs-1";
 import { hydrateDatasetSharedViews } from "./datasetSharing.js";
 
 let dataset = null;
@@ -53,6 +53,24 @@ self.onmessage = ({ data }) => {
 				version: WORKER_PROTOCOL_VERSION,
 				type: "ready",
 				datasetSharing: hydrated.telemetry,
+			});
+		} catch (error) {
+			self.postMessage({
+				version: WORKER_PROTOCOL_VERSION,
+				type: "error",
+				message: error?.message ?? String(error),
+				stack: error?.stack,
+			});
+		}
+		return;
+	}
+	if (data.type === "switch-dataset") {
+		try {
+			dataset = hydrateDatasetSharedViews(data.dataset).dataset;
+			self.postMessage({
+				version: WORKER_PROTOCOL_VERSION,
+				type: "temporal-page-ready",
+				pageIndex: dataset.temporalPageIndex,
 			});
 		} catch (error) {
 			self.postMessage({

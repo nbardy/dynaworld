@@ -4,6 +4,7 @@ import test from "node:test";
 import {
 	activePrefixDispatchSizes,
 	activeSplatCountForStep,
+	cameraSceneRadius,
 	DynamicSplatWebGpu3dTiledTrainer,
 	DEFAULT_BROWSER_GROWTH_CAPACITY,
 	DEFAULT_CHECKPOINT_PRECISION,
@@ -17,11 +18,13 @@ import {
 	opacityAwarePixelBounds,
 	packDepthSplatKey,
 	packedTrainingBackgroundForStep,
+	PIXEL_GS_DEPTH_GAMMA,
 	ROTATION_LR_FROM_MOTION,
 	resolveCheckpointLayout,
 	resolveCheckpointPrecision,
 	resolveCheckpointStride,
 	resolvePairDispatch,
+	resolvePixelDepthGamma,
 	resolveSsimRadius,
 	resolveStaticWarmupSteps,
 	resolveTileCapacity,
@@ -32,7 +35,7 @@ import {
 	resolveTiledProjectionVjpPrecision,
 	resolveTiledSsimLayout,
 	resolveTiledTileSize,
-	SCALE_LR_FROM_COLOR,
+	SCALE_LR_FROM_POSITION,
 	summarizeCycleMetrics,
 	TILED_BACKWARD_GRANULARITIES,
 	TILED_CHECKPOINT_ORDERS,
@@ -190,6 +193,31 @@ test("kernel lab preserves matched direct and staged variants with timestamped p
 	);
 });
 
+test("staged temporal VJP differentiates the same static-mixed gate as forward", () => {
+	assert.match(source, /let timeWeight=select\(mix\(dynamicGate,1\.0,staticMix\),1\.0,staticWarmup\)/);
+	assert.match(source, /let dynamicCore=\(1\.0-temporalFloor\)\*temporalKernel/);
+	assert.doesNotMatch(source,
+		/let timeWeight=select\(dynamicGate,1\.0,staticWarmup\)/);
+});
+
+test("Pixel-GS floater guard scales only the non-cancelling density statistic", () => {
+	assert.equal(PIXEL_GS_DEPTH_GAMMA, 0.37);
+	assert.equal(resolvePixelDepthGamma(), 0.37);
+	assert.throws(() => resolvePixelDepthGamma(0), /positive finite/);
+	const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+	const left = identity.slice(); left[3] = 1;
+	const right = identity.slice(); right[3] = -1;
+	assertClose(cameraSceneRadius([
+		{ worldToCamera: left }, { worldToCamera: right },
+	]), 1.1);
+	assert.match(source, /fn density_gradient_scale\(cameraDepth:f32,cfg:TiledConfig\)/);
+	assert.match(source,
+		/let densitySignal=length\(barMu\)\*density_gradient_scale\(cp\.z,cfg\)/);
+	assert.match(source,
+		/vec4<f32>\(gradLogScale,densitySignal\),gradRotation/);
+	assert.doesNotMatch(source, /worldGrad\s*\*\s*density_gradient_scale/);
+});
+
 test("split projection layout keeps the raster hot record at 32 bytes", () => {
 	assert.match(source, /const RASTER_PROJECTION_BYTES = 2 \* 16/);
 	assert.match(source, /const PROJECTION_VJP_BYTES = 5 \* 16/);
@@ -277,7 +305,10 @@ test("GPU cycle telemetry averages each recent camera-time objective exactly onc
 	assert.equal(partial.complete, false);
 	assert.equal(partial.loss, 6.5);
 	assert.throws(() => summarizeCycleMetrics([], 7, 4), /Cycle metrics/);
-	assert.match(source, /cycleMetrics\[cfg\.step%arrayLength\(&cycleMetrics\)\]/);
+	assert.match(
+		source,
+		/cycleMetrics\[cfg\.step%min\(cfg\.cycleMetricCount,arrayLength\(&cycleMetrics\)\)\]/,
+	);
 	assert.match(source, /copyBufferToBuffer\(\s*this\.buffers\.cycleMetrics/);
 });
 
@@ -770,7 +801,7 @@ test("tiled trainer source preserves the full-frame shared-backward contract", (
 	assert.match(trainStep, /const targetOffset = 0/);
 	assert.ok(trainStep.indexOf("uploadTargetPage") < trainStep.indexOf("writeBuffer(this.buffers.tiledConfig"));
 	assert.ok(trainStep.indexOf("writeBuffer(this.buffers.tiledConfig") < trainStep.indexOf("queue.submit"));
-	assert.equal(SCALE_LR_FROM_COLOR, 0.30);
+	assert.equal(SCALE_LR_FROM_POSITION, 9 / 7);
 	assert.equal(ROTATION_LR_FROM_MOTION, 1.25);
 	assert.equal(MAX_SCALE_ASPECT_RATIO, 6);
 	assert.equal(FILTER_SIGMA_PIXELS, 0.3);
@@ -790,4 +821,14 @@ test("SPA defaults to train-only random backgrounds and exposes the control", ()
 		/randomBackground:\s*!sampledBackendSelected\(\)\s*&&\s*controls\.randomBackground\.checked/);
 	assert.match(worker, /randomBackground:\s*false/);
 	assert.match(html, /validation and preview remain black/);
+});
+
+test("SPA exposes Pixel-GS density scaling as a reset-time ablation", () => {
+	const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+	const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+	assert.match(html, /id="pixelDepthScalingToggle"[^>]*checked/);
+	assert.match(app,
+		/pixelDepthScaling:\s*controls\.pixelDepthScaling\.checked\s*&&\s*!sampledBackendSelected\(\)/);
+	assert.match(app,
+		/controls\.pixelDepthScaling\.addEventListener\("change",\s*\(\)\s*=>\s*\{\s*void resetTrainer\(\)/);
 });

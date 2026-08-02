@@ -3,7 +3,7 @@ import {
 	projectAnisotropicGaussianCpu,
 	resolveTrainViewIndices,
 } from "./trainerWebGpu3d.js";
-import { decodeFrameRgb } from "./dataset.js";
+import { decodeFrameRgb, frameTime01 } from "./dataset.js";
 
 const DEFAULT_TILE_SIZE = 16;
 const DEFAULT_ALPHA_THRESHOLD = 1 / 255;
@@ -74,10 +74,6 @@ function resolveSplatCount(params, requested) {
 	return count;
 }
 
-function frameTime(frameIndex, frameCount) {
-	return frameCount <= 1 ? 0 : frameIndex / (frameCount - 1);
-}
-
 function temporalGate(params, base, time, temporalSigma) {
 	const sigma = clamp(temporalSigma, 0.12, 0.36);
 	const floor = clamp(sigma * 0.30, 0.035, 0.12);
@@ -128,7 +124,8 @@ export function summarizeSplatParameters(params, {
 		let peakAlpha = 0;
 		for (let frame = 0; frame < frameCount; frame += 1) {
 			peakAlpha = Math.max(peakAlpha,
-				opacity * temporalGate(params, base, frameTime(frame, frameCount), temporalSigma));
+				opacity * temporalGate(params, base,
+					frameCount <= 1 ? 0 : frame / (frameCount - 1), temporalSigma));
 		}
 		opacitySum += opacity;
 		radiusSum += radius;
@@ -240,7 +237,7 @@ function projectFrame(dataset, params, {
 	modelMode,
 	temporalSigma,
 }) {
-	const time = frameTime(frameIndex, dataset.frameCount);
+	const time = frameTime01(dataset, frameIndex);
 	const camera = dataset.cameras[viewIndex];
 	const aspect = dataset.width / dataset.height;
 	return Array.from({ length: splatCount }, (_, index) => {

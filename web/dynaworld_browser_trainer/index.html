@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Dynaworld Browser Trainer</title>
-		<link rel="stylesheet" href="./styles.css?v=20260802-progressive-resolution-1" />
+		<link rel="stylesheet" href="./styles.css?v=20260803-fullfps-pixelgs-1" />
 		<script type="module">
 			import { ensureStaticHostIsolation } from "./crossOriginIsolation.js";
 			ensureStaticHostIsolation().catch((error) => console.warn("Shared-memory bootstrap unavailable.", error));
@@ -69,6 +69,7 @@
 								<span><i class="sample-line"></i>EMA</span>
 								<span><i class="train-line"></i>Train</span>
 								<span><i class="heldout-line"></i>Heldout</span>
+								<span><i class="stage-line"></i>Resolution change</span>
 							</div>
 						</div>
 						<div class="metric-chart">
@@ -162,8 +163,8 @@
 
 					<label class="field">
 						<span>Loop Speed</span>
-						<input id="timeSpeedSlider" type="range" min="0.04" max="0.80" step="0.02" value="0.18" />
-						<strong id="timeSpeedValue">0.18x</strong>
+						<input id="timeSpeedSlider" type="range" min="0.04" max="0.80" step="0.02" value="0.10" />
+						<strong id="timeSpeedValue">1.00x real time</strong>
 					</label>
 
 					<label class="field">
@@ -214,6 +215,11 @@
 					<label id="randomBackgroundField" class="field toggle-field">
 						<span>Random Train BG</span>
 						<input id="randomBackgroundToggle" title="Composite a deterministic random RGB underlay during optimization only; validation and preview remain black to expose true coverage" type="checkbox" checked />
+					</label>
+
+					<label id="pixelDepthScalingField" class="field toggle-field">
+						<span>Near-Camera Floater Guard</span>
+						<input id="pixelDepthScalingToggle" title="Pixel-GS depth-scales only the densification score near cameras; changing this restarts training for a matched ablation" type="checkbox" checked />
 					</label>
 
 					<label class="field schedule-field">
@@ -420,6 +426,6 @@
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260802-progressive-resolution-1"></script>
+		<script type="module" src="./app.js?v=20260803-fullfps-pixelgs-1"></script>
 	</body>
 </html>

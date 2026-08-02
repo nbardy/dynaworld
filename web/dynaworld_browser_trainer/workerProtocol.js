@@ -1,4 +1,4 @@
-export const WORKER_PROTOCOL_VERSION = 2;
+export const WORKER_PROTOCOL_VERSION = 3;
 
 export const WorkerCommand = Object.freeze({
 	INIT: "init",
@@ -11,6 +11,7 @@ export const WorkerCommand = Object.freeze({
 	REQUEST_METRICS: "request-metrics",
 	REQUEST_VALIDATION: "request-validation",
 	SWITCH_DATASET: "switch-dataset",
+	SWITCH_TEMPORAL_PAGE: "switch-temporal-page",
 	DISPOSE: "dispose",
 });
 
@@ -21,6 +22,7 @@ export const WorkerEvent = Object.freeze({
 	VALIDATION: "validation",
 	STAGE_STARTED: "stage-started",
 	STAGE_READY: "stage-ready",
+	TEMPORAL_PAGE_READY: "temporal-page-ready",
 	CAPABILITY: "capability",
 	ERROR: "error",
 	DISPOSED: "disposed",

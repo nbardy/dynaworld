@@ -3,7 +3,7 @@ const SPLAT_BYTES = 24 * Float32Array.BYTES_PER_ELEMENT;
 const MAX_RENDER_VIEWS = 3;
 const MAX_SAMPLES_PER_STEP = 192;
 const SSIM_STATS_BYTES = 5 * 16;
-const TILED_CONFIG_BYTES = 176;
+const TILED_CONFIG_BYTES = 192;
 const PORTABLE_STORAGE_BUFFER_LIMIT = 128 * MIB;
 
 function positiveInteger(value, label) {

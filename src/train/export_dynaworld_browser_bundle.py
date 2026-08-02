@@ -2,19 +2,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from urllib.parse import quote
 
 import torch
 from checkpoint_utils import load_torch_checkpoint
 from config_utils import load_config_file
 from fast_attn import fast_attn_context, pick_device
 from model_factories import build_model_from_config
-from multicam_video_data import load_multicam_video_bundle, select_multicam_record
+from multicam_video_data import (
+    camera_start_seconds,
+    load_multicam_video_bundle,
+    select_multicam_record,
+    video_path_for_camera,
+)
 from PIL import Image
 from powerfoam_point_cloud import load_point_cloud_xyz_rgb
 from sequence_data import (
@@ -29,6 +36,7 @@ from trainer_registry import resolve_config_for_arch
 
 EXPORT_BUNDLE_VERSION = "dynaworld_token_head_bundle/v2"
 BROWSER_MULTICAM_BUNDLE_VERSION = "dynaworld_browser_multicam_dataset/v1"
+BROWSER_TEMPORAL_STREAM_VERSION = "dynaworld_browser_temporal_stream/v1"
 
 
 @dataclass(frozen=True)
@@ -155,6 +163,92 @@ def _browser_camera_filename_component(camera_name: str) -> str:
     if not component:
         raise ValueError(f"Camera name {camera_name!r} cannot be represented as a browser atlas filename.")
     return component
+
+
+def _browser_temporal_stream_metadata(
+    record: dict[str, Any],
+    *,
+    page_size_frames: int,
+) -> dict[str, Any]:
+    """Describe canonical full-rate time without decoding its image bank."""
+    native_frame_count = int(record["frame_count"])
+    fps = float(record["fps"])
+    duration_seconds = float(record["duration_seconds"])
+    if native_frame_count < 1:
+        raise ValueError("Browser temporal streaming requires a positive manifest frame_count.")
+    if fps <= 0.0 or duration_seconds <= 0.0:
+        raise ValueError("Browser temporal streaming requires positive manifest fps and duration_seconds.")
+    if page_size_frames < 1 or page_size_frames > native_frame_count:
+        raise ValueError(
+            "Browser temporal page size must satisfy "
+            f"1 <= page_size_frames <= native_frame_count ({native_frame_count})."
+        )
+    page_count = (native_frame_count + page_size_frames - 1) // page_size_frames
+    return {
+        "version": BROWSER_TEMPORAL_STREAM_VERSION,
+        "native_frame_count": native_frame_count,
+        "fps": fps,
+        "duration_seconds": duration_seconds,
+        "page_size_frames": int(page_size_frames),
+        "page_count": page_count,
+        "last_page_frame_count": native_frame_count - (page_count - 1) * page_size_frames,
+    }
+
+
+def _browser_video_asset_url(
+    *,
+    camera_name: str,
+    source_path: Path,
+    output_path: Path,
+    url_prefix: str | None,
+) -> str:
+    if url_prefix is not None:
+        prefix = url_prefix.rstrip("/")
+        if not prefix:
+            raise ValueError("Browser video asset URL prefix must not be empty.")
+        filename = f"{_browser_camera_filename_component(camera_name)}{source_path.suffix.lower()}"
+        return f"{prefix}/{quote(filename)}"
+
+    relative = Path(
+        os.path.relpath(source_path.resolve(), start=output_path.parent.resolve())
+    ).as_posix()
+    if not relative.startswith("../"):
+        relative = f"./{relative}"
+    return quote(relative, safe="/:")
+
+
+def _browser_camera_video_assets(
+    record: dict[str, Any],
+    *,
+    camera_names: list[str],
+    output_path: Path,
+    url_prefix: str | None,
+) -> dict[str, dict[str, Any]]:
+    assets: dict[str, dict[str, Any]] = {}
+    used_urls: set[str] = set()
+    for camera_name in camera_names:
+        source_path = video_path_for_camera(record, camera_name)
+        if not source_path.is_file():
+            raise FileNotFoundError(f"Browser camera video asset not found: {source_path}")
+        if source_path.suffix.lower() not in {".m4v", ".mov", ".mp4", ".ogv", ".webm"}:
+            raise ValueError(
+                f"Browser temporal streaming requires an encoded video asset for {camera_name!r}; "
+                f"got {source_path}."
+            )
+        video_url = _browser_video_asset_url(
+            camera_name=camera_name,
+            source_path=source_path,
+            output_path=output_path,
+            url_prefix=url_prefix,
+        )
+        if video_url in used_urls:
+            raise ValueError(f"Camera video assets collide on browser URL {video_url!r}.")
+        used_urls.add(video_url)
+        assets[camera_name] = {
+            "video_url": video_url,
+            "video_start_seconds": float(camera_start_seconds(record, camera_name)),
+        }
+    return assets
 
 
 def _browser_sparse_frame_record(record: dict[str, Any], frame_index: int) -> dict[str, Any]:
@@ -328,6 +422,7 @@ def _browser_camera_rows(
     width: int,
     height: int,
     atlas_urls: dict[str, str],
+    video_assets: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows = []
     camera_groups = (
@@ -346,20 +441,23 @@ def _browser_camera_rows(
                     "dynaworld_browser_multicam_dataset/v1 supports static camera rigs only; "
                     f"camera {name!r} changes pose across sampled frames."
                 )
-            rows.append(
-                {
-                    "name": str(name),
-                    "role": role,
-                    "frame_atlas_url": atlas_urls[str(name)],
-                    "intrinsics": [
-                        float(K[0, 0]) / float(width),
-                        float(K[1, 1]) / float(height),
-                        float(K[0, 2]) / float(width),
-                        float(K[1, 2]) / float(height),
-                    ],
-                    "world_to_camera": world_to_camera[index, 0].detach().cpu().tolist(),
-                }
-            )
+            row = {
+                "name": str(name),
+                "role": role,
+                "frame_atlas_url": atlas_urls[str(name)],
+                "intrinsics": [
+                    float(K[0, 0]) / float(width),
+                    float(K[1, 1]) / float(height),
+                    float(K[0, 2]) / float(width),
+                    float(K[1, 2]) / float(height),
+                ],
+                "world_to_camera": world_to_camera[index, 0].detach().cpu().tolist(),
+            }
+            if video_assets is not None:
+                if str(name) not in video_assets:
+                    raise ValueError(f"Browser temporal stream is missing video asset {name!r}.")
+                row.update(video_assets[str(name)])
+            rows.append(row)
     return rows
 
 
@@ -376,16 +474,32 @@ def export_browser_multicam_dataset_bundle(
     seed_provenance_report_path: Path | None = None,
     allow_unverified_seed_provenance: bool = False,
     sparse_frame_decode: bool = False,
+    streaming_page_size: int | None = None,
+    video_asset_url_prefix: str | None = None,
 ) -> Path:
     """Serialize a thin browser adapter over the canonical multicam contract."""
     height, width = target_size
+    if streaming_page_size is None and video_asset_url_prefix is not None:
+        raise ValueError("video_asset_url_prefix requires the bounded temporal streaming opt-in.")
+    streaming_record = None
+    if streaming_page_size is not None:
+        streaming_record = select_multicam_record(
+            {
+                "multicam_manifest": str(manifest_path),
+                "multicam_split": split,
+                "multicam_sample_id": sample_id,
+            }
+        )
     points, colors = load_point_cloud_xyz_rgb(seed_point_cloud_path)
     if int(points.shape[0]) < seed_count:
         raise ValueError(
             f"Seed point cloud has only {int(points.shape[0])} points before visibility filtering; "
             f"the browser bundle requested {seed_count}."
         )
-    if sparse_frame_decode:
+    # A streamed timeline keeps only the requested bootstrap atlas frames decoded;
+    # native full-rate frames remain in bounded encoded-video pages for the SPA.
+    effective_sparse_frame_decode = sparse_frame_decode or streaming_record is not None
+    if effective_sparse_frame_decode:
         bundle = _load_browser_multicam_sparse_frames(
             manifest_path=manifest_path,
             sample_id=sample_id,
@@ -443,6 +557,25 @@ def export_browser_multicam_dataset_bundle(
     start_seconds = float(metadata.get("source_start_seconds", 0.0))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     atlas_urls = _write_browser_frame_atlases(bundle, output_path)
+    temporal_stream = None
+    video_assets = None
+    if streaming_record is not None:
+        record_train_cameras = [str(name) for name in streaming_record.get("train_cameras", [])]
+        record_heldout_cameras = [str(name) for name in streaming_record.get("heldout_cameras", [])]
+        if record_train_cameras != list(bundle.train_camera_names):
+            raise RuntimeError("Canonical train-camera order changed between record and browser bundle.")
+        if record_heldout_cameras != list(bundle.heldout_camera_names or []):
+            raise RuntimeError("Canonical heldout-camera order changed between record and browser bundle.")
+        temporal_stream = _browser_temporal_stream_metadata(
+            streaming_record,
+            page_size_frames=streaming_page_size,
+        )
+        video_assets = _browser_camera_video_assets(
+            streaming_record,
+            camera_names=record_train_cameras + record_heldout_cameras,
+            output_path=output_path,
+            url_prefix=video_asset_url_prefix,
+        )
     payload = {
         "version": BROWSER_MULTICAM_BUNDLE_VERSION,
         "dataset_contract": {
@@ -455,7 +588,7 @@ def export_browser_multicam_dataset_bundle(
             "heldout_usage": "validation_only",
             "pose_source": bundle.pose_source,
             "camera_motion": "static_rig",
-            "frame_decode": "sparse_exact" if sparse_frame_decode else "eager_then_select",
+            "frame_decode": "sparse_exact" if effective_sparse_frame_decode else "eager_then_select",
         },
         "dataset": str(metadata["dataset"]),
         "scene": str(metadata["scene"]),
@@ -464,12 +597,20 @@ def export_browser_multicam_dataset_bundle(
         "frame_count": len(frame_indices),
         "frame_indices": frame_indices,
         "frame_times_seconds": [start_seconds + float(index) / fps for index in frame_indices],
-        "cameras": _browser_camera_rows(bundle, width=width, height=height, atlas_urls=atlas_urls),
+        "cameras": _browser_camera_rows(
+            bundle,
+            width=width,
+            height=height,
+            atlas_urls=atlas_urls,
+            video_assets=video_assets,
+        ),
         "seed_source": str(seed_point_cloud_path),
         "seed_provenance": seed_provenance,
         "seed_coordinate_frame": f"{metadata['anchor_camera']}_opencv",
         "seed_points_xyzrgb": seeds.round(decimals=7).tolist(),
     }
+    if temporal_stream is not None:
+        payload["temporal_stream"] = temporal_stream
     output_path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
     print(f"Wrote browser multicam dataset bundle to {output_path}")
     return output_path
@@ -894,6 +1035,23 @@ def parse_args() -> argparse.Namespace:
             "materializing every source frame up to the final requested index."
         ),
     )
+    parser.add_argument(
+        "--dataset-streaming-page-size",
+        type=int,
+        default=None,
+        help=(
+            "Opt in to full-rate camera-video timeline metadata with this bounded page size. "
+            "This also forces sparse exact decode for the sampled fallback atlas."
+        ),
+    )
+    parser.add_argument(
+        "--dataset-video-url-prefix",
+        default=None,
+        help=(
+            "Optional URL prefix for canonical per-camera video assets in streaming mode. "
+            "Without it, URLs are relative paths to the manifest video files."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -927,6 +1085,8 @@ def main() -> None:
             seed_provenance_report_path=args.seed_provenance_report,
             allow_unverified_seed_provenance=args.allow_unverified_seed_provenance,
             sparse_frame_decode=args.dataset_sparse_frame_decode,
+            streaming_page_size=args.dataset_streaming_page_size,
+            video_asset_url_prefix=args.dataset_video_url_prefix,
         )
         return
     if args.config is None or args.output_dir is None:

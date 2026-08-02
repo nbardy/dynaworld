@@ -10,7 +10,9 @@ import torch
 from export_dynaworld_browser_bundle import (
     _browser_camera_filename_component,
     _browser_camera_rows,
+    _browser_camera_video_assets,
     _browser_sparse_frame_record,
+    _browser_temporal_stream_metadata,
     _farthest_point_subset,
     _load_browser_multicam_sparse_frames,
     _resolve_seed_provenance,
@@ -62,6 +64,185 @@ def test_browser_multicam_adapter_preserves_split_and_writes_exact_frame_atlases
     assert "video_url" not in rows[0]
     with Image.open(tmp_path / "bundle_cam04.png") as atlas:
         assert atlas.size == (18, 4)
+
+
+def test_browser_temporal_stream_metadata_is_bounded_and_uses_manifest_time() -> None:
+    record = {
+        "frame_count": 300,
+        "fps": 30.0,
+        "duration_seconds": 10.0,
+    }
+
+    assert _browser_temporal_stream_metadata(record, page_size_frames=64) == {
+        "version": "dynaworld_browser_temporal_stream/v1",
+        "native_frame_count": 300,
+        "fps": 30.0,
+        "duration_seconds": 10.0,
+        "page_size_frames": 64,
+        "page_count": 5,
+        "last_page_frame_count": 44,
+    }
+    for invalid_page_size in (0, 301):
+        with pytest.raises(ValueError, match="1 <= page_size_frames <= native_frame_count"):
+            _browser_temporal_stream_metadata(record, page_size_frames=invalid_page_size)
+
+
+def test_browser_camera_video_assets_use_canonical_paths_and_start_offsets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video_path = tmp_path / "source videos" / "cam04.mp4"
+    video_path.parent.mkdir()
+    video_path.write_bytes(b"encoded-video")
+    output_path = tmp_path / "web" / "bundle.json"
+    record = {
+        "dataset": "neural_3d_video",
+        "source_camera": "cam04",
+        "source_video_path": str(video_path),
+        "source_start_seconds": 1.25,
+    }
+    calls = []
+
+    def fake_video_path_for_camera(actual_record, camera_name):
+        calls.append((actual_record, camera_name))
+        return video_path
+
+    monkeypatch.setattr(browser_export, "video_path_for_camera", fake_video_path_for_camera)
+
+    assets = _browser_camera_video_assets(
+        record,
+        camera_names=["cam04"],
+        output_path=output_path,
+        url_prefix=None,
+    )
+
+    assert calls == [(record, "cam04")]
+    assert assets == {
+        "cam04": {
+            "video_url": "../source%20videos/cam04.mp4",
+            "video_start_seconds": 1.25,
+        }
+    }
+
+
+def test_browser_streaming_export_keeps_sampled_atlas_and_does_not_eager_decode_native_timeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = tmp_path / "manifest.jsonl"
+    seed_path = tmp_path / "seed.ply"
+    output_path = tmp_path / "bundle.json"
+    video_paths = {}
+    for camera_name in ("cam04", "cam06"):
+        video_path = tmp_path / "videos" / f"{camera_name}.mp4"
+        video_path.parent.mkdir(exist_ok=True)
+        video_path.write_bytes(b"encoded-video")
+        video_paths[camera_name] = video_path
+    record = {
+        "dataset": "neural_3d_video",
+        "scene": "coffee_martini",
+        "sample_id": "sample",
+        "split": "train1_holdout1",
+        "frame_count": 300,
+        "fps": 30.0,
+        "duration_seconds": 10.0,
+        "source_camera": "cam04",
+        "target_camera": "cam06",
+        "source_start_seconds": 1.25,
+        "target_start_seconds": 1.5,
+        "train_cameras": ["cam04"],
+        "heldout_cameras": ["cam06"],
+        "anchor_camera": "cam04",
+        "condition_camera": "cam04",
+    }
+    K = torch.tensor([[[1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]]])
+    bundle = SimpleNamespace(
+        train_camera_names=["cam04"],
+        heldout_camera_names=["cam06"],
+        anchor_c2w=torch.eye(4),
+        train_view_count=1,
+        train_K=K,
+        heldout_K=K,
+        train_w2c=torch.eye(4).repeat(1, 2, 1, 1),
+        heldout_w2c=torch.eye(4).repeat(1, 2, 1, 1),
+        metadata=record,
+        pose_source="neural_3d_llff_opencv_relative_pinhole_v2",
+    )
+    selected_configs = []
+    sparse_calls = []
+    monkeypatch.setattr(
+        browser_export,
+        "select_multicam_record",
+        lambda data_cfg: selected_configs.append(data_cfg) or record,
+    )
+    monkeypatch.setattr(
+        browser_export,
+        "_load_browser_multicam_sparse_frames",
+        lambda **kwargs: sparse_calls.append(kwargs) or bundle,
+    )
+    monkeypatch.setattr(
+        browser_export,
+        "load_multicam_video_bundle",
+        lambda **_kwargs: pytest.fail("streaming export must not eager-decode the native timeline"),
+    )
+    monkeypatch.setattr(
+        browser_export,
+        "load_point_cloud_xyz_rgb",
+        lambda _path: (torch.tensor([[0.0, 0.0, 1.0]]), torch.tensor([[0.25, 0.5, 0.75]])),
+    )
+    monkeypatch.setattr(
+        browser_export,
+        "_write_browser_frame_atlases",
+        lambda _bundle, _path: {"cam04": "./bundle_cam04.png", "cam06": "./bundle_cam06.png"},
+    )
+    monkeypatch.setattr(
+        browser_export,
+        "video_path_for_camera",
+        lambda _record, camera_name: video_paths[camera_name],
+    )
+
+    browser_export.export_browser_multicam_dataset_bundle(
+        manifest_path=manifest_path,
+        sample_id="sample",
+        split="train1_holdout1",
+        seed_point_cloud_path=seed_path,
+        output_path=output_path,
+        target_size=(2, 2),
+        frame_indices=[0, 299],
+        seed_count=1,
+        allow_unverified_seed_provenance=True,
+        streaming_page_size=64,
+        video_asset_url_prefix="./camera-video",
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert selected_configs == [
+        {
+            "multicam_manifest": str(manifest_path),
+            "multicam_split": "train1_holdout1",
+            "multicam_sample_id": "sample",
+        }
+    ]
+    assert len(sparse_calls) == 1
+    assert sparse_calls[0]["frame_indices"] == [0, 299]
+    assert payload["frame_count"] == 2
+    assert payload["frame_indices"] == [0, 299]
+    assert payload["dataset_contract"]["frame_decode"] == "sparse_exact"
+    assert payload["temporal_stream"] == {
+        "version": "dynaworld_browser_temporal_stream/v1",
+        "native_frame_count": 300,
+        "fps": 30.0,
+        "duration_seconds": 10.0,
+        "page_size_frames": 64,
+        "page_count": 5,
+        "last_page_frame_count": 44,
+    }
+    assert payload["cameras"][0]["video_url"] == "./camera-video/cam04.mp4"
+    assert payload["cameras"][0]["video_start_seconds"] == 1.25
+    assert payload["cameras"][1]["video_url"] == "./camera-video/cam06.mp4"
+    assert payload["cameras"][1]["video_start_seconds"] == 1.5
+    assert payload["cameras"][0]["frame_atlas_url"] == "./bundle_cam04.png"
+    assert payload["seed_points_xyzrgb"] == [[0.0, 0.0, 1.0, 0.25, 0.5, 0.75]]
 
 
 def test_browser_multicam_adapter_rejects_moving_camera_v1_payload() -> None:
@@ -512,6 +693,15 @@ def test_coffee_martini_train17_browser_bundle_is_portable_and_validation_only(
     assert payload["dataset_contract"]["pose_source"] == "neural_3d_llff_opencv_relative_pinhole_v2"
     assert payload["decode_size"] == list(decode_size)
     assert payload["frame_count"] == 16
+    assert payload["temporal_stream"] == {
+        "version": "dynaworld_browser_temporal_stream/v1",
+        "native_frame_count": 300,
+        "fps": 30.0,
+        "duration_seconds": 10.0,
+        "page_size_frames": 16,
+        "page_count": 19,
+        "last_page_frame_count": 12,
+    }
     assert payload["frame_indices"] == [
         0, 20, 40, 60, 80, 100, 120, 140, 159, 179, 199, 219, 239, 259, 279, 299,
     ]
@@ -529,7 +719,11 @@ def test_coffee_martini_train17_browser_bundle_is_portable_and_validation_only(
     }
 
     for camera in payload["cameras"]:
-        assert "video_url" not in camera
+        assert camera["video_url"] == f"./coffee_martini_stream_384/{camera['name']}.mp4"
+        assert camera["video_start_seconds"] == 0.0
+        video_path = bundle_path.parent / camera["video_url"].removeprefix("./")
+        assert video_path.is_file()
+        assert video_path.stat().st_size > 0
         atlas_path = bundle_path.parent / camera["frame_atlas_url"].removeprefix("./")
         with Image.open(atlas_path) as atlas:
             assert atlas.size == (decode_size[0] * 16, decode_size[1])

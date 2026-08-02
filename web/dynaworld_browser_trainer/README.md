@@ -134,12 +134,24 @@ The checked-in presets share one calibration/split contract:
 | Bundle | `coffee_martini_train17_holdout1.json` | `coffee_martini_train17_holdout1_384.json` |
 | Scene | Neural 3D Video Coffee Martini | same |
 | Raster | 96x72 | 384x288 |
-| Times | 16 synchronized frames from the 300-frame source | same indices |
+| Times | All 300 synchronized frames at 30 fps (10.0 s), 16 resident at once | same full-rate timeline |
 | Training cameras | 17 | 17 |
 | Heldout cameras | `cam06` only | `cam06` only |
 | Checked-in initialization | 4,096 train-visible external Ex4DGS XYZRGB points | same points |
 | Anchor coordinates | `cam04` OpenCV camera frame | same frame |
 | Pose convention | LLFF raw `[down, right, back]` to OpenCV `[right, down, forward]` (`v2`) | same convention |
+
+Coffee Martini really is a short capture: the source videos contain exactly
+300 frames at 30 fps, or 10.0 seconds. The old browser run used 16 samples
+spread across those 10 seconds; it did not train at full frame rate. Both
+presets now expose every source frame through 19 bounded temporal pages. A
+normal page contains 16 frames and the final page contains 12.
+
+Pages are interleaved across the complete clip rather than contiguous
+half-second chunks. Therefore every resident 17-camera training cycle sees
+the whole motion interval, while page rotation eventually visits every exact
+source timestamp. Model time is normalized over observed frame centers, so
+source frames 0 and 299 map to `t=0` and `t=1`.
 
 The browser does not run COLMAP. The bundle exporter is a thin adapter over
 `src/train/multicam_video_data.py`; it preserves the canonical manifest,
@@ -154,8 +166,11 @@ superseded sign-only conversion is intentionally a different artifact identity.
 The SPA rejects that legacy identity, non-finite or non-rigid camera matrices,
 and a non-identity anchor transform before creating the trainer.
 
-JSON numbers become `Float32Array` camera, seed, and optimizer buffers; target
-RGB remains checked-in RGBA8 and is decoded to `f32` for raster loss. Browser
+JSON numbers become `Float32Array` camera, seed, and optimizer buffers. Target
+video is stored as 18 checked-in 384x288 H.264 streams and decoded into bounded
+RGBA8 page banks; the original 16-frame RGBA8 atlases remain the no-video
+fallback. Only the selected frame is decoded to `f32` on the GPU for raster
+loss. Browser
 normalization multiplies seed XYZ and every camera translation by the same
 inverse-median-depth scale, so pixel projection is invariant. Those are native
 LLFF scene units, not documented meters. A running worker owns its loaded
@@ -169,6 +184,32 @@ training camera, but the repository cannot prove which source images originally
 created that cloud. In particular, it cannot prove that `cam06` was excluded.
 The SPA therefore labels this initialization `unverified`; "train-visible" is
 not the same claim as "constructed from train cameras only."
+
+### Full-rate temporal paging
+
+The 18 full-rate streams occupy 17,936,497 bytes (17.106 MiB) on disk. Eagerly
+decoding the complete 384x288 corpus would require 2,388,787,200 bytes (2.225
+GiB) of RGBA8 host memory before backgrounds or browser overhead. The paging
+plan instead keeps at most the current and prefetched 16-frame pages:
+
+| Raster | Two RGBA8 pages | FP32 camera means | Bounded total |
+| --- | ---: | ---: | ---: |
+| 96x72 | 15.188 MiB | 1.898 MiB | 17.086 MiB |
+| 384x288 | 243.000 MiB | 30.375 MiB | 273.375 MiB |
+
+Training still binds exactly one selected target image on the GPU. The next
+page is decoded asynchronously while the optimizer runs in its dedicated
+worker. A completed page is published through the existing shared dataset
+boundary, the training worker swaps its resident frame bank in queue order,
+and the validation worker receives the same page identity. The optimizer never
+awaits video decode, `queue.onSubmittedWorkDone`, validation, or UI readback.
+
+Decode currently uses asynchronous `HTMLVideoElement` plus canvas work on the
+UI thread. That keeps GPU training nonblocking, but decode can still compete
+for CPU time or cause a UI hitch on a loaded machine. A WebCodecs decode worker
+is a future optimization only if timeline/long-task profiling shows this is a
+material bottleneck; adding another thread without that evidence would make
+the prototype harder to reason about.
 
 ### Verified offline initialization
 
@@ -354,8 +395,8 @@ slots consume allocated parameter and optimizer memory, but active-prefix
 dispatch now excludes them from training clear/update, preview draw/sort, and
 validation telemetry. Lower slider values remain useful growth ablations:
 
-- when requested splats are below capacity, hidden slots are filled by
-  split/recycle events beginning at step 600;
+- when requested splats are below capacity, hidden slots are filled by split
+  events beginning at step 600;
 - after the reserved slots are filled, topology maintenance stops;
 - selecting 4,096 initial splats uses the complete seed bank and grows to 8,192
   by step 26,100; no proxy-driven replacements occur after reserved capacity is
@@ -366,14 +407,36 @@ not fill until roughly step 162,400, after the default geometry schedule has
 already decayed by about 100x. It is retained to measure scaling and long-run
 topology behavior; use 8K for the calibrated convergence baseline.
 
-Growth is dynamic topology within a fixed allocation. It supports
-relocation, spatial scale shrinkage, opacity-mass preservation, temporal
-separation, and moment reset only while filling initially hidden slots. It is
-not a dynamic buffer resize, residual/depth-guided densification, canonical
-3DGS densification, or native 4DGS spatial-temporal pruning schedule. Proxy
+Growth is dynamic topology within a fixed allocation. It supports parent/child
+spatial separation, scale shrinkage, opacity-mass preservation, temporal
+separation, and moment reset only while filling initially hidden slots. It does
+not yet relocate a low-value live splat, resize a GPU buffer, use residual or
+coarse-depth-guided births, reproduce canonical 3DGS pruning, or implement a
+native 4DGS spatial-temporal pruning schedule. Proxy
 recycling after fill was removed because it would replace 3,744 of 4,096 slots
 by step 120,000 in the default run, erasing the SfM scaffold and producing
 repeated split chains.
+
+The split score already avoids same-view gradient cancellation: each covered
+pixel contributes the magnitude of its projected-mean gradient before the tile
+reduction. This is an [AbsGS](https://arxiv.org/abs/2404.10484)-style
+non-cancelling statistic and inherently gives
+larger pixel footprints more evidence, but it is not a verbatim implementation
+of AbsGS's separate absolute x/y sums and threshold calibration.
+
+`Near-Camera Floater Guard` is default on and remains a reset-time A/B control.
+Following [Pixel-GS](https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/02926.pdf),
+it multiplies only that density statistic by
+
+```text
+clip((camera_depth / (0.37 * camera_scene_radius))^2, 0, 1)
+```
+
+where camera-scene radius is `1.1 * max distance from a training-camera center
+to their mean`. It does not scale the renderer, image loss, or Adam gradient.
+This suppresses extra births close to a camera without making the optimization
+VJP disagree with the forward pass. It is paper-backed but newly integrated;
+quality claims still require the matched on/off run described below.
 
 The global model and tile-local sort capacities are deliberately separate.
 The internal model/preview path accepts 32,768 IDs, while each 8x8 tile sorts
@@ -387,13 +450,14 @@ bits, so IDs 0 through 32,767 survive depth sorting.
 Adam uses `beta1=0.9`, `beta2=0.999`, and `epsilon=1e-8`. The default-on,
 toggleable schedule decays geometry learning rates by 100x and appearance
 learning rates by 10x over 120,000 steps. Density statistics use 0.999 decay so
-their memory spans the 272 camera/time-pair cycle.
+their memory spans a normal 272-pair resident cycle (17 cameras x 16 frames);
+the final 12-frame page uses 204 pairs.
 
 ### Background And Static Warmup
 
 The SPA now defaults `Random Train BG` on for the tiled full-frame backend.
 Each optimizer step hashes its step number once on the CPU, packs one
-deterministic RGB underlay into the existing 160-byte uniform, and trains the
+deterministic RGB underlay into the existing 192-byte uniform, and trains the
 source-over result
 
 ```text
@@ -562,21 +626,24 @@ loop synchronization point.
 The transition rejects changes in camera calibration, train/heldout split,
 frame indices, seed geometry, primitive schema, capacity, or topology schedule
 before it writes restored GPU state. Loss, PSNR, and SSIM retain their complete
-history; a cyan vertical marker identifies the objective-resolution boundary.
+history; the dashed cyan/blue vertical marker identifies the one resolution
+handoff. It is not an evaluation stall, topology event, optimizer reset, or
+page switch.
 The manual `96 x 72` and `384 x 288` choices still initialize directly at one
 resolution and therefore remain useful controls.
 
-`Training Resolution -> 384 x 288` reloads the SPA with 18 native 6,144x288
-PNG atlases, one per camera. It is four times wider and taller than the default,
-so every train step evaluates 110,592 pixels instead of 6,912. This is not an
-upsample of the 96x72 browser bank.
+`Training Resolution -> 384 x 288` reloads the SPA with native-resolution
+pages decoded from the 18 full-rate streams. It is four times wider and taller
+than the default, so every train step evaluates 110,592 pixels instead of
+6,912. This is not an upsample of the 96x72 browser bank.
 
 At 4,096 initial splats, 8,192 capacity, packed-FP16 checkpoints, and the fast
 tiled backend, the live app reports 97.6 MiB of GPU buffers. The steady host
-target bank is 121.5 MiB of shared RGBA8, camera temporal backgrounds are 30.4
-MiB of FP32, and decoding needs one transient 6.75 MiB atlas. The largest GPU
-binding is the 54 MiB transmittance checkpoint buffer, below the Apple adapter's
-128 MiB binding limit.
+timeline is bounded to 243.0 MiB for current/prefetched RGBA8 pages plus 30.375
+MiB of FP32 camera means. The complete eager target corpus would be 2.225 GiB
+and is never allocated. The largest GPU binding remains the 54 MiB
+transmittance checkpoint buffer, below the Apple adapter's 128 MiB binding
+limit.
 
 A matched 2026-07-31 Apple-browser smoke, with a 15 Hz free-camera preview and
 no tile overflow, measured about 309 completed steps/s at 96x72 and 130
@@ -587,19 +654,21 @@ therefore relatively cheap, but not free; occupancy and splat count can change
 that ratio. The sampled-ray control remains disabled at 384x288 because that
 legacy backend still binds the complete target tensor.
 
-A 2026-08-02 live progressive smoke crossed at step 8,200, preserved a finite
-trained result and global step, reported 97.3 MiB of high-resolution GPU
-buffers, and continued past step 10,472. It reported roughly 80 steps/s while
-the machine was simultaneously running tests, browser automation, and other
-development work. That contention-heavy observation validates continuity, not
-a replacement throughput baseline.
+A 2026-08-03 live full-rate progressive smoke selected source frame 202 and
+later frame 72, crossed to 384x288 at step 10,688 after asynchronous preload,
+preserved trained parameters, Adam state, topology, and global step, and
+continued past step 12,480 without a browser warning or tile overflow. The host
+preflight failed promotion because CPU load, competing processes, Apple-GPU
+load, and swap occupancy were all above the benchmark limits. The live rate is
+therefore only a continuity diagnostic, not a replacement throughput baseline.
 
-The optimizer writes objective/L1/DSSIM into a 272-entry GPU ring every step.
+The optimizer writes objective/L1/DSSIM into a resident-cycle GPU ring every
+step. A normal page has 272 entries and the final page has 204.
 Asynchronous readback runs every 256 requested steps and reports the latest raw
-camera/time pair plus the mean of the most recent full 17-camera x 16-time
-cycle. This avoids the old 256-versus-272 cadence alias, which sampled only 17
-recurring phases and created a false 4,352-step ripple. It adds no optimizer
-wait: the worker continues submitting work while the copy/map completes.
+camera/time pair plus the mean of the most recent complete resident cycle. This
+avoids the old 256-versus-272 cadence alias, which sampled only 17 recurring
+phases and created a false 4,352-step ripple. It adds no optimizer wait: the
+worker continues submitting work while the copy/map completes.
 
 Every 8,192 steps, full metrics request an asynchronous parameter snapshot and
 send it to a separate validation worker. The full-image raster and metric pass
@@ -923,6 +992,28 @@ solid research baseline. Completed correctness gates now include:
 3. deterministic full-image train/heldout MSE, MAE, PSNR, and SSIM;
 4. fail-closed initialization provenance and coordinate-frame handling.
 
+### 2026-08-03 temporal VJP correction
+
+The fast staged backward had one material correctness bug. Forward opacity
+uses
+
+```text
+dynamic_gate = temporal_floor + (1 - temporal_floor) * temporal_kernel
+time_weight = mix(dynamic_gate, 1, static_mix)
+```
+
+but the staged VJP reconstructed `time_weight` as `dynamic_gate`. With the
+default static-heavy initialization (`static_mix=0.92`), opacity and temporal
+gradients could be much smaller than the derivative of the image actually
+rendered. The backward now reconstructs the identical mixed gate. Scale LR
+also follows geometry's 100x decay while retaining its former step-zero value,
+so late training cannot keep exchanging detail for larger blurred footprints.
+
+The live Apple WebGPU parity gate now includes the production static-mix
+fixture and passes with maximum RGB error `1.1920929e-7`, objective absolute
+error `2.2585871e-7`, all 9 intended gradient families active, and zero tile
+overflow. These are numerical-correctness results, not quality metrics.
+
 ### Novel-view floaters: diagnosis and paper-backed next step
 
 The corrected LLFF/OpenCV camera contract reduced median epipolar error from
@@ -933,56 +1024,69 @@ travel far outside the calibrated camera hull, so orbit artifacts must not be
 reported as heldout-camera regression without a matched camera.
 
 The strongest remaining code-level cause is topology allocation. Current
-splits use screen gradient, alpha, and velocity gradient, place a child beside
-its parent, and stop once capacity is full. They do not use pixel residual,
-depth, per-view contribution, or cross-view support, and there is no fixed-count
-relocation pass for low-value opaque splats. The current trajectory 3DGS also
-keeps covariance, color, and opacity constant over time and has no local-motion
-rigidity term.
+splits use a non-cancelling per-pixel screen-gradient statistic, alpha, and
+velocity gradient, place a child beside its parent, and stop once capacity is
+full. Pixel-GS depth scaling now suppresses near-camera split evidence. The
+policy still does not birth from explicit image residual plus coarse depth,
+measure cross-view support, or relocate low-value live splats after capacity is
+full. The current trajectory 3DGS also keeps covariance, color, and opacity
+constant over time and has no local-motion rigidity term.
 
 The relevant paper interventions are deliberately ranked rather than mixed:
 
-1. [SpacetimeGS](https://openaccess.thecvf.com/content/CVPR2024/html/Li_Spacetime_Gaussian_Feature_Splatting_for_Real-Time_Dynamic_View_Synthesis_CVPR_2024_paper.html)
-   uses training error plus coarse depth to guide births and gives primitives
-   temporal opacity and parametric motion/rotation. Error-guided births are the
-   closest match to the observed allocation failure.
-2. [3DGS-MCMC](https://arxiv.org/abs/2404.09591) and
-   [Revising Densification](https://arxiv.org/abs/2404.06109) motivate
-   fixed-budget relocation and pixel-error-driven density control. These fit
-   the browser's bounded-capacity contract better than unbounded spawning.
-3. [Dynamic 3D Gaussians](https://arxiv.org/abs/2308.09713) supplies a local
+1. [AbsGS](https://arxiv.org/abs/2404.10484) motivates the active
+   non-cancelling pixel-gradient score. The browser's scalar sum-of-magnitudes
+   is close but not identical to separate absolute x/y accumulation, so a
+   matched exact-statistic ablation remains valid.
+2. [Pixel-GS](https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/02926.pdf)
+   motivates the newly integrated `gamma_depth=0.37` near-camera density
+   scaling. It is default on but not yet promoted by a matched quality run.
+3. [SpacetimeGS](https://openaccess.thecvf.com/content/CVPR2024/html/Li_Spacetime_Gaussian_Feature_Splatting_for_Real-Time_Dynamic_View_Synthesis_CVPR_2024_paper.html)
+   uses training error plus coarse depth to guide births, while
+   [3DGS-MCMC](https://arxiv.org/abs/2404.09591) supports fixed-budget
+   relocation. Together they are the closest match to the remaining allocation
+   failure without unbounded spawning.
+4. [Mip-Splatting](https://openaccess.thecvf.com/content/CVPR2024/html/Yu_Mip-Splatting_Alias-free_3D_Gaussian_Splatting_CVPR_2024_paper.html)
+   supplies the principled zoom/resolution experiment: 3D smoothing plus a
+   determinant-compensated 2D Mip filter. The current 0.3-pixel sigma floor is
+   display filtering, not complete Mip-Splatting.
+5. [Dynamic 3D Gaussians](https://arxiv.org/abs/2308.09713) supplies a local
    rigidity prior, but it should be enabled only after diagnostics show that a
    floater moves incorrectly over time rather than merely appearing from a new
    camera.
-4. [StopThePop](https://doi.org/10.1145/3658187) addresses view-dependent
+6. [StopThePop](https://doi.org/10.1145/3658187) addresses view-dependent
    sorting pops, not stationary unsupported geometry. It is appropriate only
    if a fixed-model orbit trace shows camera-motion popping.
-5. Sparse-view methods such as
+7. Sparse-view methods such as
    [DropoutGS](https://openaccess.thecvf.com/content/CVPR2025/html/Xu_DropoutGS_Dropping_Out_Gaussians_for_Better_Sparse-view_Rendering_CVPR_2025_paper.html),
    [CoMapGS](https://openaccess.thecvf.com/content/CVPR2025/html/Jang_CoMapGS_Covisibility_Map-based_Gaussian_Splatting_for_Sparse_Novel_View_Synthesis_CVPR_2025_paper.html),
    and [DepthSplat](https://openaccess.thecvf.com/content/CVPR2025/html/Xu_DepthSplat_Connecting_Gaussian_Splatting_and_Depth_CVPR_2025_paper.html)
    are useful evidence for uncertainty, covisibility, and depth priors, but
    Gaussian dropout is not a justified default for this 17-camera dynamic run.
 
-The next implementation should first record deterministic orbit alpha/depth
-traces and residual-weighted per-splat contribution across the camera cycle.
-Then it can relocate low-contribution capacity toward high-error pixels that
-have multi-view support. This is narrower and more falsifiable than adding
-several regularizers at once.
+The next implementation should record deterministic orbit alpha/depth traces
+and residual-weighted per-splat contribution across the camera cycle. It can
+then relocate low-contribution capacity toward high-error pixels with
+multi-view support. That experiment follows the now-toggleable Pixel-GS guard;
+it should not mix Mip filtering, dropout, and rigidity into the same run.
 
 The highest-value remaining evidence is:
 
-1. compare the verified 768-point train-only cloud plus growth against the
+1. run the corrected full-rate baseline with `Near-Camera Floater Guard` on
+   versus off under an identical pair order and step budget;
+2. compare the verified 768-point train-only cloud plus growth against the
    legacy unverified 4,096-point seed under matched settings, or produce a
    denser verified cloud with a stronger matcher;
-2. residual/depth-guided densification and pruning, compared against the new
+3. residual/depth-guided relocation and pruning, compared against the new
    fixed-topology default rather than the removed proxy recycler;
-3. matched initialization, normalized-scale-bound, LR-family, and splat-capacity
+4. complete Mip-Splatting filtering, measured on deterministic zoom paths as
+   well as calibrated cameras;
+5. matched initialization, normalized-scale-bound, LR-family, and splat-capacity
    ablations;
-4. full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed;
-5. a complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
+6. full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed;
+7. a complete calibrated dynamic-3DGS baseline before promoting native 4DGS or
    World Tubes to a selectable browser backend;
-6. rerun the quality and throughput matrix at both checked-in resolutions and
+8. rerun the quality and throughput matrix at both checked-in resolutions and
    multiple splat capacities; the 384x288 mode is now functional, but one live
    smoke is not a convergence baseline.
 
@@ -997,3 +1101,8 @@ comparison contract.
 
 See `research_notes/browser_trajectory_3dgs_plateau_audit_2026-07-29.md` for
 the measured plateau diagnosis and prioritized paper-space comparison.
+
+See
+`research_notes/browser_full_rate_paging_and_novel_view_roadmap_2026-08-03.md`
+for the paging derivation, temporal VJP backtrack, paper intervention matrix,
+and ordered A0-A5 floater ablation plan.
