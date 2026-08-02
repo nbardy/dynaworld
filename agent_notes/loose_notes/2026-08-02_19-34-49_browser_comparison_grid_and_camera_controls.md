@@ -38,6 +38,20 @@ move the corresponding result camera.
 - Preserved all three columns at narrow viewport widths, with ellipsis and
   smaller labels rather than stacking cameras vertically.
 
+## Follow-up: metrics-first fold
+
+The first layout pass still placed configuration immediately after the camera
+matrix. The follow-up moved the four train/heldout reconstruction readouts and
+Loss, PSNR, and SSIM histories into one compact deck directly below the matrix.
+Configuration now follows that deck, and the large operational diagnostic grid
+follows configuration.
+
+The comparison width is bounded by viewport height as well as width. This keeps
+each camera panel at its calibrated 4:3 aspect while making room for the key
+metric deck in the first viewport. The deck uses a 2x2 quality summary beside
+three horizontal charts on desktop. At phone widths the four summaries share
+one row above the same three compact charts.
+
 ## Renderer changes
 
 - `trainerWebGpu3d.js` now reserves `MAX_RENDER_VIEWS` appended render-camera
@@ -51,7 +65,8 @@ move the corresponding result camera.
 
 ## Verification
 
-- `npm test` in `web/dynaworld_browser_trainer`: 147/147 passed.
+- `npm test` in `web/dynaworld_browser_trainer`: 148/148 passed after the
+  metrics-first fold contract was added.
 - `node --check web/dynaworld_browser_trainer/app.js`: passed.
 - DOM contract check: 131 unique IDs and all 125 literal app ID references
   resolved.
@@ -74,4 +89,3 @@ move the corresponding result camera.
 - `web/dynaworld_browser_trainer/tests/benchmarkResourcePlan.test.mjs`
 - `web/dynaworld_browser_trainer/tests/workerProtocol.test.mjs`
 - `web/dynaworld_browser_trainer/README.md`
-

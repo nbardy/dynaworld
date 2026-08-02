@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Dynaworld Browser Trainer</title>
-		<link rel="stylesheet" href="./styles.css?v=20260802-comparison-grid-1" />
+		<link rel="stylesheet" href="./styles.css?v=20260802-metrics-fold-1" />
 	</head>
 	<body>
 		<div class="app-shell">
@@ -24,6 +24,65 @@
 						<button id="resetButton" type="button">Reset</button>
 					</div>
 				</header>
+
+				<div class="metrics-deck" aria-label="Key training metrics">
+					<section class="key-metrics" aria-label="Reconstruction metrics">
+						<div class="quality-metric-grid">
+							<div class="quality-metric">
+								<span>Loss</span>
+								<small>train</small><strong id="gridLossValue">--</strong>
+								<small>heldout</small><strong id="heldoutLossValue">--</strong>
+							</div>
+							<div class="quality-metric">
+								<span>MAE</span>
+								<small>train</small><strong id="valMaeValue">--</strong>
+								<small>heldout</small><strong id="heldoutMaeValue">--</strong>
+							</div>
+							<div class="quality-metric">
+								<span>PSNR</span>
+								<small>train</small><strong id="valPsnrValue">--</strong>
+								<small>heldout</small><strong id="heldoutPsnrValue">--</strong>
+							</div>
+							<div class="quality-metric">
+								<span>SSIM</span>
+								<small>train</small><strong id="valSsimValue">--</strong>
+								<small>heldout</small><strong id="heldoutSsimValue">--</strong>
+							</div>
+						</div>
+					</section>
+
+					<section class="loss-chart" aria-label="Training metric history">
+						<div class="metric-chart">
+							<div class="loss-chart-title">
+								<span>Loss</span>
+								<div class="chart-title-actions">
+									<strong id="lossChartRange">waiting</strong>
+									<button id="lossScaleToggle" class="chart-scale-toggle" type="button" aria-pressed="true" title="Toggle logarithmic loss-axis scaling">Log Y</button>
+								</div>
+							</div>
+							<canvas id="lossChartCanvas" width="300" height="88" aria-label="Loss history chart"></canvas>
+							<div class="loss-chart-legend" aria-hidden="true">
+								<span><i class="sample-line"></i>EMA</span>
+								<span><i class="train-line"></i>Train</span>
+								<span><i class="heldout-line"></i>Heldout</span>
+							</div>
+						</div>
+						<div class="metric-chart">
+							<div class="loss-chart-title">
+								<span>PSNR</span>
+								<strong id="psnrChartRange">waiting</strong>
+							</div>
+							<canvas id="psnrChartCanvas" width="300" height="88" aria-label="PSNR history chart"></canvas>
+						</div>
+						<div class="metric-chart">
+							<div class="loss-chart-title">
+								<span>SSIM</span>
+								<strong id="ssimChartRange">waiting</strong>
+							</div>
+							<canvas id="ssimChartCanvas" width="300" height="88" aria-label="SSIM history chart"></canvas>
+						</div>
+					</section>
+				</div>
 
 				<section class="controls" aria-label="Training controls">
 					<label class="field">
@@ -185,28 +244,6 @@
 				</section>
 
 				<section class="stats" aria-label="Training stats">
-					<div class="quality-metric-grid" aria-label="Reconstruction metrics">
-						<div class="quality-metric">
-							<span>Loss</span>
-							<small>train full</small><strong id="gridLossValue">--</strong>
-							<small>held full</small><strong id="heldoutLossValue">--</strong>
-						</div>
-						<div class="quality-metric">
-							<span>MAE</span>
-							<small>train full</small><strong id="valMaeValue">--</strong>
-							<small>held full</small><strong id="heldoutMaeValue">--</strong>
-						</div>
-						<div class="quality-metric">
-							<span>PSNR</span>
-							<small>train full</small><strong id="valPsnrValue">--</strong>
-							<small>held full</small><strong id="heldoutPsnrValue">--</strong>
-						</div>
-						<div class="quality-metric">
-							<span>SSIM</span>
-							<small>train full</small><strong id="valSsimValue">--</strong>
-							<small>held full</small><strong id="heldoutSsimValue">--</strong>
-						</div>
-					</div>
 					<div class="diagnostic-grid">
 						<div><span>Step</span><strong id="stepValue">0</strong></div>
 						<div><span>Phase</span><strong id="phaseValue">dynamic fit</strong></div>
@@ -328,33 +365,6 @@
 						<div><span>Initialization</span><strong id="seedProvenanceValue">pending</strong></div>
 					</div>
 				</section>
-
-					<section class="loss-chart" aria-label="Training metric history">
-					<div class="loss-chart-title">
-						<span>Loss History</span>
-						<div class="chart-title-actions">
-							<strong id="lossChartRange">waiting</strong>
-							<button id="lossScaleToggle" class="chart-scale-toggle" type="button" aria-pressed="true" title="Toggle logarithmic loss-axis scaling">Log Y</button>
-						</div>
-					</div>
-					<canvas id="lossChartCanvas" width="300" height="132" aria-label="Loss history chart"></canvas>
-						<div class="loss-chart-legend" aria-hidden="true">
-								<span><i class="sample-line"></i>Objective trend</span>
-							<span><i class="train-line"></i>Train full</span>
-							<span><i class="heldout-line"></i>Heldout full</span>
-						</div>
-						<div class="loss-chart-title metric-chart-title">
-							<span>PSNR</span>
-							<strong id="psnrChartRange">waiting</strong>
-						</div>
-						<canvas id="psnrChartCanvas" width="300" height="86" aria-label="PSNR history chart"></canvas>
-						<div class="loss-chart-title metric-chart-title">
-							<span>SSIM</span>
-							<strong id="ssimChartRange">waiting</strong>
-						</div>
-						<canvas id="ssimChartCanvas" width="300" height="86" aria-label="SSIM history chart"></canvas>
-					</section>
-
 				<section class="status" aria-label="Status">
 					<p id="statusText">Loading preset target.</p>
 				</section>
@@ -405,6 +415,6 @@
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260802-comparison-grid-1"></script>
+		<script type="module" src="./app.js?v=20260802-metrics-fold-1"></script>
 	</body>
 </html>

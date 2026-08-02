@@ -499,6 +499,12 @@ Live rendering is capped at 15 GPU frames per second and normally shows two
 training cameras plus the heldout camera at a looping time. It can be disabled
 without stopping optimization.
 
+The primary page order is comparison, key quality, then configuration. A
+height-aware comparison width keeps the calibrated 4:3 camera panels intact
+while leaving room in the first viewport for the four train/heldout quality
+readouts and compact Loss, PSNR, and SSIM histories. Reset-sensitive controls
+and the full operational diagnostic grid follow below that monitoring surface.
+
 ### Interactive result camera
 
 The first screen is a three-column comparison matrix: calibrated ground truth
