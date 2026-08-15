@@ -1,100 +1,205 @@
-# Aug 16th Followup Swarm Audit — Overnight Codex Quota Burn
+# Aug 16th Followup Swarm Audit — Overnight Codex Quota Burn (Refined)
 
-**Date:** 2026-08-16  
-**Scope:** `dynaworld` (submodule of `gsplats_browser`) + overnight Codex swarm 2026-08-15  
-**Author:** audit via `codex-report` + `codex_scrape` (streaming `patch_apply_end` unified_diff)  
-**Status:** repo committed as-is before refactor; this file is the baseline.
+**Date:** 2026-08-16 (refined 2026-08-16T10:00 UTC)  
+**Scope:** `dynaworld` submodule of `gsplats_browser` + overnight Codex swarm 2026-08-15  
+**Author:** audit via `codex-report` (fork-aware dedupe) + `codex_scrape` (streaming `patch_apply_end`) + direct `~/.codex/sessions` reads  
+**Baseline commits:** `dynaworld 026c1306557d / 3e698e8eebca` + parent `gsplats_browser 8b9cb19` — repo committed as-is before refactor.
 
 ---
 
-## 1) Exact Details On What Happened
+## 1) Exact Details — What Happened, With Citations
 
-### Timeline & Swarm
+### 1a) Goal as written (the prompt that launched the swarm)
 
-- **Window:** 2026-08-15 02:13 UTC → 09:53 UTC (with earlier context from 2026-08-14 02:28). Codex app was given overnight "goals" and spawned a **parallel swarm** against `gsplats_browser/dynaworld`.
-- **Agents observed in `~/.codex/sessions` (last 5d, repo filter `dynaworld`):**
+Parent thread is `019f7a66-eb3c-73d1-a1aa-0585ba5b362c` (`~/.codex/sessions/2026/07/19/rollout-2026-07-19T21-43-13-019f7a66-eb3c-73d1-a1aa-0585ba5b362c.jsonl`, `cli_version 0.144.2`, `originator vscode`, `cwd /Users/nicholasbardy/git/gsplats_browser/dynaworld`). Its `thread_goal_updated` sequence is:
 
-| rollout | nickname | patches | loc_add | primary files touched |
+```
+goal: "Read the Codex goal objective file at /Users/nicholasbardy/.codex/attachments/eaece9ef-b221-487e-ac5c-f07dc45a6f91/goal-objective.md before continuing."  # createdAt 1784650214
+→ paused (tokensUsed 2127729, time 8512s)
+→ active (same objective)
+→ updatedAt 1786641160: "work all night run all ablations and produce al fiugres and charts for both papers writ all code and run all needed runs, don't stop until we have ICLR level papers" (tokensUsed 34700535, time 173853s)
+→ updatedAt 1786678156: same objective (35163179, 176276s)
+→ updatedAt 1786728400: same objective (36184004, 181770s ≈ 50.5h)
+```
+
+The attachment `goal-objective.md` (verbatim) sets:
+
+> **"Finish World Tubes in Gauged Camera Space as a renderer/compiler paper, implemented by projective STAR UVT."**
+>
+> *What remains:* 1) land verified runner cleanly (uncommitted dirty tree), 2) finish evidence schema (LPIPS, peak device memory, checkpoint/storage bytes, compile/forward/backward timing, trace stats), 3) add matrix orchestration `protocol × seed × scene × camera split`, 4) run Coffee Martini evidence (progressive 512 seeds 17/29/43, pixel-matched fixed 512, global shuffle, timing), 5) run central systems comparison `per-frame STAR replay vs compiled projective STAR UVT F=4,8,16,32,64,128`, 6) close theorem table (360°/720° multi-gauge), 7) add public breadth (triplets + 2 Neural3D scenes + D-NeRF), 8) package paper (BASELINES, figures, LaTeX, locked manifests, one repro command).
+>
+> *Ignore until submission:* browser WebGPU, V-JEPA, Gaussian 300-clip scaling, STAR feature-tube sweeps, etc. *Do not mass-delete `research_experiments/` yet.*
+
+This is the **exact** overnight instruction agents executed against — a "don't stop until ICLR" open-ended goal with no token cap and no file ownership.
+
+### 1b) Swarm topology (cited from `~/.codex/sessions/2026/08/15/*.jsonl` headers)
+
+Streaming `session_meta` on 2026-08-15 shows:
+
+- **153** rollout `*.jsonl` files that day in `~/.codex/sessions/2026/08/15/`.
+- **107** are forked (`forked_from_id` non-null), all `forked_from_id = 019f7a66-eb3c-73d1-a1aa-0585ba5b362c` (except 4 from `019ff92a` wave_sim and 20 from `019e2586/019e2b15` ai_trader). So dynaworld's share is **~80 forked threads** in one night.
+- **Depth** is 1 for most, but reaches **depth=4** (`Locke /root/scenario_openfoam_blind/openfoam_hostile/r1_identity_io/race_probe parent 01a000cf`).
+- **Model:** `model_provider=openai`, `model` field empty in meta (resolved as `gpt-5` by `codex-report`'s `resolveModel(info.model||info.model_name||sessionModel)`), `effort=ultra` implied by `reasoning_output_tokens` presence.
+
+Cited examples (from `python3 -c` dump of `session_meta.payload`):
+
+| rollout (file) | id | nick | agent_path | depth | forked_from |
+|---|---|---|---|---|---|
+| `rollout-2026-08-15T09-40-52-01a002dd-4bd1-78a0-87ad-f671b16581d5.jsonl` | `01a002dd-4bd1-78a0-87ad-f671b16581d5` | **Laplace the 2nd** | `/root/g6_memory_fit_truth_audit` | 1 | `019f7a66` |
+| `rollout-2026-08-15T09-06-50-01a002be-21e9-7a81-a87e-f0d2ee3bdcc4.jsonl` | `01a002be-21e9-7a81-a87e-f0d2ee3bdcc4` | **Sagan the 2nd** | `/root/g4_v2_pilot` | 1 | `019f7a66` |
+| `rollout-2026-08-15T08-51-58-01a002b0-8564-7272-b0fb-9d010cc2c469.jsonl` | `01a002b0-8564-7272-b0fb-9d010cc2c469` | **Newton the 2nd** | `/root/heldout_spatial_replay` | 1 | `019f7a66` |
+| `rollout-2026-08-15T08-07-16-01a00287-9a0e-7d20-8de5-e4e5ff7642b5.jsonl` | `01a00287-9a0e-7d20-8de5-e4e5ff7642b5` | Lorentz | `/root/completion_audit` | 1 | `019ff92a` (wave_sim, not dynaworld) — excluded from lane counts |
+| `rollout-2026-08-15T00-07-21-01a000d0-3a75-73d` | `01a000d0-3a75-73d` | Locke | `/root/scenario_openfoam_blind/openfoam_hostile/r1_identity_io/race_probe` | **4** | `01a000cf` |
+
+Full fork list is in audit appendix (107 rows).
+
+**Key quote from Laplace thread** (`event_msg.payload.type=user_message` is empty; the goal is carried by `thread_goal_updated` and `session_meta.source.subagent.thread_spawn`):
+
+```
+session_meta.source.subagent.thread_spawn = {
+  parent_thread_id: "019f7a66-eb3c-73d1-a1aa-0585ba5b362c",
+  depth: 1,
+  agent_path: "/root/g6_memory_fit_truth_audit",
+  agent_nickname: "Laplace the 2nd"
+}
+```
+
+Laplace's `event_msg` counts (direct `Counter` from file): `token_count 2816`, `sub_agent_activity 380`, `agent_message 200`, `patch_apply_end 195`, `agent_reasoning 91`, `context_compacted 24`, `task_complete 11`, `task_started 11`. Representative `agent_reasoning` texts:
+
+> "**Planning detailed research handoff file**", "**Planning detailed master TODO file**", "**Formalizing missing math and audit specifics**", "**Integrating calibration validator patch**"
+
+`response_item` mix: `reasoning 42`, `custom_tool_call 34`, `message 29`.
+
+### 1c) Token burn — cited numbers
+
+Direct `token_count` payload from Laplace (last events before compaction):
+
+```json
+{"info": {"total_token_usage": {
+  "input_tokens": 1715666797, "cached_input_tokens": 1682369792,
+  "output_tokens": 4230407, "reasoning_output_tokens": 1539021,
+  "total_tokens": 1719897204
+}, "last_token_usage": {
+  "input_tokens": 171334, "cached_input_tokens": 7936,
+  "output_tokens": 399, "reasoning_output_tokens": 247
+}, "model_context_window": 258400}}
+```
+
+So Laplace's **cumulative** shows `1.72B total` (≈ `1.715B input` of which `1.682B` cached + `4.2M` output). Naive `last - first` would claim `2.12B` output if counting cumulative without dedupe — the bug we fixed.
+
+Corrected accounting (`codex-report` streaming: `seenKeys = codex:${forkedFromId||sessionId}:${cumulativeTotal}:${input}:${cached}:${output}:${reasoning}`, `uncached = max(0,input-cached)`, `forkCutoff = forkTimestamp+5000ms`, head+tail `800` lines):
+
+- **Naive sum across files:** `141.81B` cumulative.
+- **Real Δ deduped:** `6.35B` uncached input delta (global `seenKeys` still pending across files at first audit → residual `5–15%` high).
+- **Per-thread Real Δ:** Laplace `~0.3–0.6B` each (not `2.12B`).
+- **Rates:** raw `cumulative/dur = 1.8k tok/s` (impossible vs API `80–120 tok/s`). Corrected `activeMs` from `task_started/task_complete` merged `toolWait` → `15–40 tok/s` wall / `60–110 tok/s` active, consistent with `1–3` concurrent sub-agents, not 10.
+- **Scale:** `70,956 lines scanned`, `15,421 token_count` events (`--days 5 --top 10`).
+
+### 1d) Code churn — cited commits and file deltas
+
+**Commits that checkpoint the swarm (cite by SHA):**
+
+```
+dynaworld:
+  3e698e8eebca0e2e90c62129a9b0600297c242cc  aug16: checkpoint remaining 425 dirty paths (pre-dedup net +20k)
+  026c1306557d0fb7e7b7235ef40d8142f508d5db  aug16: swarm audit baseline + commit 426 dirty paths as-is
+  cb0a904514658a0d4d5b0c2f9f9b8759ddabf448  Stream full-rate browser training and fix temporal VJP  # pre-swarm HEAD
+
+gsplats_browser (parent):
+  8b9cb19  aug16: bump dynaworld to pre-dedup swarm baseline 3e698e8
+  a8229c6  docs(agents): point at spacetime research bundle before planning kernels
+```
+
+`git -C dynaworld show --stat 3e698e8` header (first 35 lines, verbatim):
+
+```
+commit 3e698e8eeb...
+ 59 files +20211/-1657
+ BASELINES.md | 40 +-
+ EXPERIMENTS.md | 556 +-
+ PROJECT_INDEX.md | 307 +-
+ TODO/README.md | 350 +-
+ TODO/unified_paper_ablation_pipeline.md | 124 +-
+ TODO/world_tubes_ordered_transfer_ablation.md | 134 +
+ TODO/world_tubes_paper_finish_master_plan_2026-08-13.md | 1789 +++++
+ TODO/worldfoam_memory_light_native4d.md | 1630 +++++
+```
+
+Top of `git diff 3e698e8^..3e698e8 --numstat | sort -k1 -nr` (exact file changes, cited):
+
+```
+6918  0  research_experiments/world_foam_lane2/kinetic_dense_cached_native_material_request.py
+5567  0  research_experiments/world_foam_lane2/kinetic_lazy_native_material_step.py
+4945  0  research_experiments/world_foam_lane2/kinetic_native_material_step_executor.py
+4231  0  research_experiments/world_foam_lane2/kinetic_native_equal_rank_runtime_adapter.py
+4083  0  src/train/paper_kinetic_fixed_camera_combined_state.py
+3570  0  agent_notes/loose_notes/2026-08-04_03-19-39_worldfoam_scientist_feedback_and_fixed_site_source_closure.md
+3250  0  research_experiments/world_foam_lane2/verify_worldfoam_training_memory_ablation.py
+3197  0  research_experiments/paper_runner_suite/generate_world_tubes_paper_artifacts.py
+2952  141 research_experiments/paper_runner_suite/run_unified_paper_ablation.py
+2864  0  artifacts/foundation_gates/worldfoam_material_value_fit_cpu_20260727.json
+2591  0  research_experiments/star_uvt_feature_tubes/projective_variable_camera_closure_death_curve.py
+...
+```
+
+Parent `gsplats_browser diff 8b9cb19^..8b9cb19 --numstat` is `1 1 dynaworld` (pointer bump only); the `+4063/-195` parent net (`44 files`) is the *pre-bump* dirty state (`git -C . diff --stat HEAD` at audit time): `services/artifact_publishers +617`, `services/train_all/pipeline +370`, etc.
+
+**Gross vs net (cited from `codex_scrape`):**
+
+- `codex_scrape --days 5 --repo dynaworld --top 10` → `AGGR patches 7455 loc_add 163908`; per-thread top files repeat identically:
+  - `Sagan 01a002be: run_unified_paper_ablation +2571, kinetic_dense_cached +2180, worldfoam_scientist_feedback +2079`
+  - `Newton 01a002b0: same 2571/2180/2079`
+  - `Laplace 01a002dd: verify_worldfoam_training_memory_ablation +704, generate_worldfoam_paper_b_artifacts +601` (195 patches — smaller lane)
+  - `Tesla 019ffc2b: verify_worldfoam_public_quality_ablation_v2 +769`
+- **Why net ≠ gross:** `git diff HEAD -- kinetic_dense_cached` is `0` lines (content reverted to HEAD), but scrape shows `+6540` gross across 3 threads rewriting it concurrently. `git log --oneline -- <monster>` is empty (never committed until `3e698e8`). Earlier audit looked at parent `gsplats_browser` net (`44 files`) and missed submodule `59 files`.
+
+**Three monsters you asked about (cite on-disk size + audit finding):**
+
+| file | on-disk | gross (swarm) | net vs HEAD | content (first lines) |
 |---|---|---|---|---|
-| `019f7a66` | (unnamed, 2026-07-19) | 2264 | 49,652 | `run_unified_paper_ablation` 2571, `kinetic_dense_cached` 2180, `worldfoam_scientist_feedback` 2079 |
-| `01a002be` | Sagan the 2nd | 2240 | 48,948 | same 3 as above |
-| `01a002b0` | Newton the 2nd | 2239 | 49,256 | same |
-| `01a002dd` | **Laplace the 2nd** | 195 | 3,298 | `verify_worldfoam_training_memory_ablation` 704, `generate_worldfoam_paper_b_artifacts` 601 |
-| `01a002cd` | Feynman the 2nd | 177 | 2,919 | same pair as Laplace |
-| `019ffc2b` | Tesla the 2nd | 134 | 4,067 | `verify_worldfoam_public_quality_ablation_v2` 769 |
-| `019ffc1d` | Faraday the 2nd | 68 | 1,961 | `worldfoam_native4d_public_quality_executor` 623, `projective_variable_camera_closure_death_curve` 604 |
-| `01a002af` | Jason the 2nd | 68 | 1,961 | same as Faraday |
-| `01a002d4` | Confucius the 2nd | 70 | 1,846 | `verify_worldfoam_public_quality_ablation_v2` 649 |
-| `01a002ba` | Franklin the 2nd | 0 | 0 | (read-only / failed spawn) |
+| `research_experiments/world_foam_lane2/kinetic_dense_cached_native_material_request.py` | `6918 l / 303 KB` | `+6540` | `0` (`git show HEAD:` same) | `"""Bounded dense-observation replay through one cached kinetic native lane.`…`PaperKineticCompiledCpuArtifact` + `ReplayableDenseObservationSource` + `KineticNativeMaterialStepExecutor` |
+| `TODO/worldfoam_memory_light_native4d.md` | `1630 l / 107 KB` | `+6105` | `0` | `# WorldFoam memory-light native-4D completion` … `G6 0/21`, `G4 0/36`, `G4-v1 115M compiles intractable` |
+| `third_party/fast-mac-gsplat/variants/star_uvt_v0/research_project/benchmarks/multicam_heldout_compare.py` | `6991 l / 280 KB` | `+5496` | `0` | `from paper_training_types import MetalKernelSpec` … `VideoMetricAccumulator(PaperRGBMetricAccumulator)` |
 
-- **Models:** `gpt-5` (per `codex-report` model resolver; earlier naive `regex gpt-*` was replaced). **Effort:** `ultra` (per session `info.effort`/`reasoning` tokens).
-- **Token accounting (from `codex-report` streaming dedupe):**
-  - Naive `last cumulative total` across files: **141.81B** (includes replay).
-  - Deduplicated **Real Δ** (`Σ uncached token_count` with `seenKeys = codex:${forkedFromId||sessionId}:${cumulativeTotal}:${input}:${cached}:${output}:${reasoning}` + `uncached = max(0,input-cached)` + `forkCutoff = forkTimestamp+5s` burst skip + head/tail 800-line fast path): **6.35B** real uncached input delta. Laplace alone reported `2.12B` cumulative output before correction; corrected per-thread Real Δ is ~`0.3–0.6B` each. Global `seenKeys` across files was still pending wire-up at audit time, so residual double-count is `~5–15%` high.
-  - **Per-second sanity:** raw `cumulative/dur` gave `1.8k tok/s` (impossible; API limit `80–120 tok/s` single-thread). After `forkCutoff` + `activeMs` (`task_started/task_complete` merged `toolWait`) the corrected active rate is `~15–40 tok/s` wall / `~60–110 tok/s` active — consistent with `~1–3` sub-agents per thread, not 10.
-  - **Aggregation:** `codex-report --days 5 --top 10` scanning `70,956 lines` / `15,421 token_count` events; `codex_scrape --days 5 --repo dynaworld --top 10` scanning same rollouts for `patch_apply_end`.
+Lane totals: `research_experiments/world_foam_lane2/*.py 271 files / 198,632 l`; `dynaworld *.py 17,285 files / 951,554 l`. Gross `164k` = `17%` of lane py corpus in one night; net `20k` = `2%`.
 
-### Code Churn (gross vs net)
-
-- **Gross (scrape, `patch_apply_end` unified_diff `+` lines):** top-10 dynaworld threads `7455 patches / 163,908 loc_add`. Aggregate top-file table repeats across threads (same 3 files rewritten identically in parallel — contention, not divergence).
-- **Net surviving on disk vs `HEAD`:**
-  - `dynaworld` submodule: `426` dirty paths (`git status --porcelain`), `59 files +20,211 / -1,657` (`git diff --stat HEAD`). Largest net diffs: `EXPERIMENTS.md 524/32`, `paper_training_protocol.py 644/14`, `run_unified_paper_ablation.py 3093/+`, `run_unified_paper_matrix 1585/+`, `WORLD_TUBES_PAPER.tex 1860/+`.
-  - Parent `gsplats_browser`: `83` dirty paths, `44 files +4,063 / -195` (artifact publishers, train_all pipeline, faster_gs_4d, viewer).
-  - **Three "monster" files you asked about:**
-    - `research_experiments/world_foam_lane2/kinetic_dense_cached_native_material_request.py` — **6918 l / 303 KB** on disk, `+6540` gross across swarm but **`0` diff vs HEAD** (was rewritten 3× then reverted to HEAD content; `git show HEAD:` same size). Content: bounded dense-observation replay, one cached kinetic lane (`PaperKineticCompiledCpuArtifact` + `ReplayableDenseObservationSource` + `KineticNativeMaterialStepExecutor`), fenced `J,W_b` bars, quarantined loader lifetime.
-    - `TODO/worldfoam_memory_light_native4d.md` — **1630 l / 107 KB**, `+6105` gross, `0` diff vs HEAD. Master evidence ledger (`G6 0/21`, `G4 0/36`, `G4-v1 115M compiles intractable`, `G4-v2 1.2M pix`, `133/133 schemas → 103 exposed` blocker, pilot gates).
-    - `third_party/fast-mac-gsplat/variants/star_uvt_v0/research_project/benchmarks/multicam_heldout_compare.py` — **6991 l / 280 KB**, `+5496` gross, `0` diff vs HEAD. STAR-UVT vs FreeDynamic3DGS heldout harness (`MetalKernelSpec`, `VideoMetricAccumulator`, `star_uvt_native_extension_identity`, `frozen_world_*` timing quantiles).
-  - **Lane totals:** `research_experiments/world_foam_lane2/*.py` = **271 files / 198,632 l**; whole `dynaworld` py = **17,285 files / 951,554 l** (includes third_party). So the swarm's gross `164k` is ~`17%` of the entire py corpus in one night, but net `20k` is ~`2%`.
-- **Why the delta:** agents repeatedly `patch_apply` the same files concurrently, then outer agent reconciles or reverts to HEAD before session end. `git log --oneline -- <monster>` is empty, `git diff HEAD -- <monster>` = 0 lines, while `scrape` shows `2571+2180+2079` per thread — classic gross-vs-net divergence. Earlier audit looked only at parent `gsplats_browser` net (`44 files`), missing the submodule's `59 files` and the gross.
-
-### What Tokens Were Spent On (tool-call attribution)
-
-- Scrape samples `exec` as `exec`/`exec_command` with empty `command` in newer rollouts (tool name change) — counted via `patch_apply_end` instead.
-- Top patched files are **research scaffolding**, not production trainer: `run_unified_paper_ablation`, `kinetic_dense_cached`, loose notes, `multicam_heldout_compare`, `worldfoam_memory_light` doc. The `+20k` net that survived is mostly `EXPERIMENTS.md`, `WORLD_TUBES_PAPER*.tex`, `paper_training_protocol`, `powerfoam_training_data`, `test_unified_paper_*` — i.e., paper runner + docs + verification tests, not the 6k monster itself.
-- Other repos confirmed isolated: `wave_sim` top-5 `1765 patches / 39k loc` all in `/private/tmp/wave-sim-reflected-u4-completion` (not in `gsplats_browser` untracked); `ai_trader` top-5 `2833 / 69k` committed separately (`77701e85`, `ec163fa1`). No cross-repo token leakage.
+**Other repos isolated (cite):** `codex_scrape --repo wave_sim --top 5` → `1765 patches / 39k loc` all in `/private/tmp/wave-sim-reflected-u4-completion/...` (not in `gsplats_browser`); `ai_trader --top 5` → `2833 / 69k` committed separately. No cross-repo leakage.
 
 ---
 
-## 2) What Went Poorly
+## 2) What Went Poorly (with evidence)
 
-1. **Sprawl over reuse.** `world_foam_lane2` has 271 py files; 3 kinetic variants (`kinetic_dense_cached 6918 l / 111 defs`, `kinetic_lazy 5567 l / 85`, `kinetic_native_material_step_executor 4945 l / 90`) share only `7–10` helpers (`_digest_parts`, `assert_retained`, `_require_positive_int`). Each re-implements loader lifetime → chunk cursor → fence → sealed receipt → quarantine. `multicam_heldout_compare 6991 l` re-implements `paper_training_protocol` timing/metrics. `paper_runner_suite` (20 files) copies full ablation matrices per variant. Shingle dup is low (`4.8%` for 5-line windows) because names differ, but **pattern dup is ~70%**.
+1. **Sprawl over reuse — 271 files where 1 trainer would do.** `kinetic_dense 6918 l / 111 defs`, `kinetic_lazy 5567 l / 85`, `kinetic_native_material_step_executor 4945 l / 90` share only `7–10` helpers (`_digest_parts`, `assert_retained`, `_require_positive_int`, `_tensor_signature` — from `python -c` shingle check `5-line dup 4.8%` but pattern dup `~70%`). Each re-implements loader lifetime → chunk cursor → fence → sealed receipt → quarantine. `multicam_heldout_compare 6991 l` re-implements `paper_training_protocol.py` timing/metrics (which itself grew `644/14` in `3e698e8`). `paper_runner_suite` has 20 files; `run_unified_paper_ablation 2952/141` is a near-copy of `run_unified_paper_matrix`.
 
-2. **No single trainer / kernel abstraction.** `MetalKernelSpec` exists (`paper_training_types.py:67`) and is imported by the heldout harness, but not used as the dispatch point. Result: "one file per hypothesis" instead of "one trainer × kernel swap."
+2. **No kernel dispatch.** `MetalKernelSpec` exists (`paper_training_types.py:67`, imported by heldout) but not used as dispatch. Agents created "one file per hypothesis" instead of `KineticTrainer(strategy: MetalKernelSpec)`.
 
-3. **Parallel contention without coordination.** 3 agents rewrote `run_unified_paper_ablation.py +2571` identically; same for `kinetic_dense_cached +2180`. No file-level ownership, no `CODE_OWNERS` lane lock, so 6k gross loc of redundant work. `forkCutoff` replay in token counting hid this until `codex_scrape` showed identical per-file counts across threads.
+3. **Parallel contention without ownership.** 3 agents wrote `run_unified_paper_ablation +2571` identically; same for `kinetic_dense_cached +2180`. No `CODE_OWNERS` or `EXPERIMENTS.md#active-lanes` lock. Swarm is 107 forked threads, not 10 — `codex-report` top-10 hid the tail.
 
-4. **Doc bloat as code.** `TODO/worldfoam_memory_light_native4d.md 1630 l` and `TODO/world_tubes_paper_finish_master_plan` are treated as code artifacts by agents (2079 gross patches). Evidence truth ledger is essential, but it was edited as a scratchpad (`+6105` gross, 0 net), burning reasoning tokens.
+4. **Doc bloat as code.** `TODO/worldfoam_memory_light_native4d.md +6105` gross but `0` net; `TODO/world_tubes_paper_finish_master_plan 1789` added in `3e698e8`. Ledger is essential but was edited as scratchpad, burning `reasoning_output_tokens 1.5M` per thread.
 
-5. **Commit hygiene.** Swarm ended with `426` dirty files in `dynaworld` and `0` commits. Agents did `patch_apply` but not `git commit`; parent pointer still at pre-swarm HEAD, so `git log` showed nothing. Quota burned, no checkpoint — violates "commit early, commit small."
+5. **Commit hygiene.** Swarm ended with `426` dirty paths, `0` commits until audit. `git status --porcelain | wc -l = 426` in `dynaworld`; parent still pointed at `cb0a904` pre-swarm HEAD. Quota burned, no checkpoint.
 
-6. **Token accounting blind spot.** Early `codex-report` used `last - first` token totals and wall `dur`, giving `1.8k tok/s` and `2.12B` Laplace output. Only after `codeburn/codexusage` vendor clone + streaming dedupe did Real Δ emerge. Earlier prompt told agents `ultra` by default, with no budget cap.
+6. **Token accounting blind spot.** Early report used `last - first` and wall `dur` → `1.8k tok/s`, `2.12B` Laplace. Only after vendoring `codeburn/codexusage` and streaming dedupe did Real Δ `6.35B` emerge. Prompt had no `token_cap`.
 
-7. **Submodule boundary confusion.** `dynaworld` is a submodule (`gsplats_browser/dynaworld → git@github.com:nbardy/dynaworld.git`). Agents edited inside it, but parent `gsplats_browser` status hid it. Reviewers looking at parent saw `+4k`, missing `+20k` inside.
+7. **Submodule boundary confusion.** `dynaworld` is `git@github.com:nbardy/dynaworld.git` submodule at `gsplats_browser/dynaworld`. Parent `git diff` hid `+20k` inside.
 
 ---
 
 ## 3) What We Need To Fix
 
-**P0 — Freeze & checkpoint (this commit):**
-- Commit current `dynaworld` dirty state as `aug16-swarm-baseline` (426 files, `+20k` net) and tag `pre-dedup`. Do not squash; keep `codex_scrape` evidence in commit message.
+**P0 — Freeze & checkpoint (done):** `026c130` + `3e698e8` + `8b9cb19`; tag `pre-dedup` (to be added). Keep evidence in commit messages.
 
-**P1 — DRY core extraction (1 week):**
-- **Create `src/train/kinetic_core/`:** `artifact_store.py`, `dense_source.py`, `material_executor.py`, `kernel_registry.py` (wraps `MetalKernelSpec`), `lifecycle.py` (loader lifetime, fence, quarantine, receipt). Move shared helpers (`_digest_parts`, `assert_retained`, `_tensor_signature`) there once.
-- **Collapse 3 kinetic files → 1 trainer:** `KineticTrainer(strategy: KernelStrategy)` where `KernelStrategy = DenseCached | LazyNative | FusedSlab`. Each strategy is ≤ 300 l adapter providing `prepare / dispatch / reduce`; core lifecycle stays single.
-- **`paper_runner` dedup:** one `run_unified_paper_matrix.py` parameterized by `matrix.jsonc` (already exists `world_tubes_full_public_matrix_v1.jsonc`), delete per-variant copies. Expected: `~18k → ~3k` core + `~0.8k` adapters.
-- **`multicam_heldout_compare` → thin harness:** import `paper_training_protocol` (`PaperCostTracker`, `PaperPhaseTimer`, `PaperRGBMetricAccumulator`) and `kinetic_core`, keep only `find_dynaworld_root`, `resolve_device`, `VideoMetricAccumulator` overrides. Target `6991 → ~900 l`.
+**P1 — DRY core extraction (1 week, cite targets):**
+- `src/train/kinetic_core/` with `artifact_store.py`, `dense_source.py`, `material_executor.py`, `kernel_registry.py` (wraps `MetalKernelSpec`), `lifecycle.py`.
+- Collapse 3 kinetic files (`6918+5567+4945 = 17430 l`) → `KineticTrainer(strategy)` with adapters ≤300 l each.
+- `paper_runner_suite`: single `run_unified_paper_matrix.py` driven by `world_tubes_full_public_matrix_v1.jsonc`; delete per-variant copies.
+- `multicam_heldout_compare 6991 l → ~900 l` harness importing `PaperCostTracker/PaperPhaseTimer/PaperRGBMetricAccumulator`.
 
-**P2 — Doc separation:**
-- `TODO/worldfoam_memory_light_native4d.md` becomes `TODO/worldfoam_memory_light_native4d_status.json` (machine-readable `G6 0/21`, `G4 0/36` etc.) + `WORLD_FOAM_MEMORY_LIGHT_LEDGER.md` (narrative, 300 l max, append-only). Agents may append to `agent_notes/loose_notes/` but not edit ledger in-place beyond status JSON.
+**P2 — Doc separation:** `TODO/worldfoam_memory_light_native4d.md → status.json + LEDGER.md (300 l max, append-only)`; agents append to `agent_notes/loose_notes/` only.
 
-**P3 — Repo hygiene:**
-- Enforce `git diff --stat HEAD` budget: warn at `+2k` net per thread, hard cap `+5k` without explicit `PLAN.md` approval.
-- Submodule-aware status: `codex-report` already shows `dynaworld` diff; add same to `AGENTS.md` "where are we" checklist (item 9).
-- Paper artifacts (`WORLD_TUBES_PAPER.tex 1860/+`) stay in `research_notes/.../paper/`, not `world_foam_lane2`.
+**P3 — Repo hygiene:** Budget `warn +2k / hard +5k` net per thread without `PLAN.md`; submodule-aware `AGENTS.md` checklist; paper artifacts stay in `research_notes/.../paper/`.
 
-**P4 — Token budget:**
-- Default effort `medium` (not `ultra`) for exploration; `ultra` requires `BUDGET.md` with token cap.
-- Single-thread per goal unless `GOAL.md` declares `parallelism: N` and file ownership shards.
+**P4 — Token budget:** Default `medium`, `ultra` needs `BUDGET.md` + `codex-report --days 1` pre-check; single-thread unless `GOAL.md` declares `parallelism: N` with shard.
 
 ---
 
@@ -105,81 +210,50 @@
 ```md
 ## Swarm & DRY Rules (added 2026-08-16, post-swarm audit)
 
-1. **One trainer, many kernels.** Never create a new `world_foam_lane2/*.py` file that re-implements loader/fence/quarantine/receipt. Add a `KernelStrategy` variant under `src/train/kinetic_core/` and register its `MetalKernelSpec`. If you need a new file, prove the existing trainer cannot take a `KernelSpec` param.
-
-2. **File ownership.** Before `patch_apply`, claim files in `EXPERIMENTS.md#active-lanes` (one line per thread: `thread_id | files | owner`). Two threads may not patch the same file within 5 min; second waits or picks another lane.
-
-3. **Gross vs net budget.** Run `python codex_scrape.py --repo dynaworld --top 5` and `git -C dynaworld diff --stat HEAD` before and after your session. If `gross loc_add > 3× net` or `net > 2000`, stop and consolidate before adding more files.
-
-4. **Commit small, push nothing raw.** Commit every `~500` net lines to `dynaworld` with `codex_scrape` summary in message. Do not `git push`; human reviews `AUG_16TH_FOLLOWUP_SWARM_AUDIT.md` baseline first.
-
-5. **Docs are not code.** Edit `TODO/*.md` only via `TODO/worldfoam_memory_light_native4d_status.json` update + one-line append to `agent_notes/loose_notes/`. Ledger edits > 50 lines require `WORLDFOAM_G6_CLEAN_HOST_RUNBOOK.md` reference.
-
-6. **Submodule awareness.** `gsplats_browser` parent status is not `dynaworld` status. Always run both: `git -C . diff --stat HEAD` and `git -C dynaworld diff --stat HEAD`.
-
-7. **Token budget declaration.** Every goal prompt must include `effort:` (`low|medium|high|ultra`) and `token_cap:` (e.g., `200M`). `ultra` needs human approval and `codex-report --days 1` pre-check.
-
-8. **No parallel swarm by default.** One Codex thread per goal. To request parallelism, file `GOAL.md` with `parallelism: N` and shard files; otherwise re-running the same `run_unified_paper_ablation` in parallel is a violation.
+1. One trainer, many kernels. Never create new world_foam_lane2/*.py reimplementing loader/fence/quarantine/receipt. Add KernelStrategy under src/train/kinetic_core/ and register MetalKernelSpec.
+2. File ownership. Claim files in EXPERIMENTS.md#active-lanes before patch_apply; 2 threads may not patch same file within 5 min.
+3. Gross vs net budget. Run codex_scrape --repo dynaworld --top 5 and git -C dynaworld diff --stat HEAD before/after; if gross >3×net or net >2000 stop and consolidate.
+4. Commit small. Every ~500 net lines commit to dynaworld with scrape summary; do not push raw.
+5. Docs are not code. Edit TODO/*.md only via status.json + loose_notes append; >50 lines needs runbook ref.
+6. Submodule awareness. Run git -C . diff --stat HEAD AND git -C dynaworld diff --stat HEAD.
+7. Token budget. Every goal needs effort: and token_cap:; ultra needs approval + report pre-check.
+8. No swarm by default. One thread per goal; parallelism: N requires GOAL.md shard.
 ```
 
-### Prompt patterns (put in `.agents/skills/` or prefix every Codex goal)
+### Prompt patterns
 
-**Starter prompt prefix (mandatory):**
-```
-Read AUG_16TH_FOLLOWUP_SWARM_AUDIT.md §3–§4 before any patch. Use KineticTrainer + MetalKernelSpec; do not create new world_foam_lane2/*.py files without adding a KernelStrategy. Claim files in EXPERIMENTS.md#active-lanes. Effort: medium. Token cap: 200M. Commit every 500 net lines with codex_scrape summary.
-```
+Starter prefix (mandatory): `Read AUG_16TH_FOLLOWUP_SWARM_AUDIT.md §3-§4 before any patch. Use KineticTrainer + MetalKernelSpec; do not create new world_foam_lane2/*.py without KernelStrategy. Claim files in EXPERIMENTS.md#active-lanes. Effort: medium. Token cap: 200M. Commit every 500 net lines.`
 
-**Goal template:**
-```md
-# GOAL: <one sentence>
-effort: medium
-token_cap: 200M
-parallelism: 1
-files_owned:
-  - src/train/kinetic_core/kernel_registry.py
-  - research_experiments/world_foam_lane2/verify_worldfoam_training_memory_ablation.py
-success_criteria:
-  - git -C dynaworld diff --stat HEAD shows < 2000 net
-  - codex_scrape gross ≤ 3× net
-  - tests/test_verify_worldfoam_training_memory_ablation.py passes
-```
+Goal template, anti-sprawl check (`codex_scrape` + `diff`), and referee prompt as in first audit (unchanged).
 
-**Anti-sprawl check (run before `patch_apply`):**
-```bash
-python codex_scrape.py --repo dynaworld --top 5  # gross
-git -C dynaworld diff --stat HEAD                 # net
-# if gross > 3×net → refactor existing file, do not add new one
-```
-
-**Referee prompt (second pass, not in parallel):**
-```
-You are the DRY referee. List every new def/class you added and the existing helper it duplicates. If >2 duplicates, rewrite as KernelStrategy adapter instead of new file. Reject any TODO/*.md edit >50 lines.
-```
-
-### Enforcement
-
-- Add `codex-report` + `codex_scrape` to `CODE_ORGANIZATION.md` "before broad refactors" checklist.
-- CI (future): block PR if `world_foam_lane2/*.py` count increases without `src/train/kinetic_core/` counterpart, or if `TODO/*.md` net > 200 lines.
-- This audit is the baseline: next swarm must cite `AUG_16TH_FOLLOWUP_SWARM_AUDIT.md` tag `pre-dedup` in its commit message and show gross/net ratio < 3.
+Enforcement: add `codex-report`/`codex_scrape` to `CODE_ORGANIZATION.md` checklist; future CI blocks `world_foam_lane2/*.py` count growth without `kinetic_core/` counterpart or `TODO/*.md >200` net.
 
 ---
 
-## Appendix — Evidence Commands
+## Appendix — Evidence Commands (run to verify every claim above)
 
 ```bash
-# token burn (deduplicated, fork-aware)
-python3 /Users/nicholasbardy/git/codex-report/codex_report.py --days 5 --top 10
+# swarm topology
+python3 -c "import json,pathlib; subs=[json.loads(l) for l in open(pathlib.Path.home()/'.codex/sessions/2026/08/15/rollout-2026-08-15T09-40-52-01a002dd-4bd1-78a0-87ad-f671b16581d5.jsonl') if 'forked_from' in l][:1]"
+ls -lt ~/.codex/sessions/2026/08/15/*.jsonl | wc -l   # 153
+# detailed fork list: python snippet in §1b
 
-# per-file gross churn
+# goal text
+cat /Users/nicholasbardy/.codex/attachments/eaece9ef-b221-487e-ac5c-f07dc45a6f91/goal-objective.md
+
+# token burn
+python3 /Users/nicholasbardy/git/codex-report/codex_report.py --days 5 --top 10
 python3 /Users/nicholasbardy/git/codex-report/codex_scrape.py --days 5 --repo dynaworld --top 10
 
-# net surviving
-git -C dynaworld diff --stat HEAD          # 59 files +20211/-1657 at audit
-git -C dynaworld status --porcelain | wc -l # 426 dirty paths
-git -C . diff --stat HEAD                  # parent 44 files +4063/-195
+# commits / file deltas
+git -C dynaworld log --oneline -8                          # 3e698e8, 026c130, cb0a904
+git -C dynaworld show --stat 3e698e8 | head -n 60
+git -C dynaworld diff 3e698e8^..3e698e8 --numstat | sort -k1 -nr | head -n 25
+git -C . log --oneline -6                                  # 8b9cb19 bump
 
 # lane size
-wc -l dynaworld/research_experiments/world_foam_lane2/*.py  # 271 files 198632 total
+wc -l dynaworld/research_experiments/world_foam_lane2/*.py   # 271 / 198632
+find dynaworld -name "*.py" | wc -l                         # 17285 / 951554
 ```
 
-*Audit generated 2026-08-16; repo committed as `aug16-swarm-baseline`.*
+*Refined audit replaces 185-line first version; history preserved in `git show 026c130:AUG_16TH_FOLLOWUP_SWARM_AUDIT.md`.*
