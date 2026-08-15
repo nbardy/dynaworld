@@ -1,0 +1,179 @@
+{
+  "benchmark": "world_tubes_spd4_bounded_16f_40step_seed17",
+  "provenance": {
+    "execution_source_state": "uncommitted_working_tree",
+    "packaging_note": "Report hashes identify the accepted raw artifacts. The execution predated the durable source commit and therefore is not clean-source publication evidence."
+  },
+  "rows": [
+    {
+      "alpha_mode": "peak_splat",
+      "amplitude_convention": "fiber_integrated",
+      "artifact_directory": "artifacts/spd4_bounded_16f_40step/legacy_256",
+      "atom_count": 256,
+      "backward_policy": "fast_exploration",
+      "backward_s": 1.8538594610290602,
+      "cold_compile_forward_s": 0.32859208299487364,
+      "frame_count": 16,
+      "heldout_cameras": [
+        "cam06"
+      ],
+      "heldout_eval_l1": 0.45313192738427055,
+      "heldout_eval_lpips": 0.899152934551239,
+      "heldout_eval_psnr": 5.986534588791922,
+      "heldout_eval_ssim": 0.021540850400924683,
+      "image_size": [
+        96,
+        128
+      ],
+      "label": "legacy_peak",
+      "max_overflow_tile_count": 0,
+      "media": [
+        "artifacts/spd4_bounded_16f_40step/legacy_256/star_uvt_train_view0_preview.png",
+        "artifacts/spd4_bounded_16f_40step/legacy_256/star_uvt_train_view0_side_by_side.mp4",
+        "artifacts/spd4_bounded_16f_40step/legacy_256/star_uvt_heldout_view0_preview.png",
+        "artifacts/spd4_bounded_16f_40step/legacy_256/star_uvt_heldout_view0_side_by_side.mp4"
+      ],
+      "media_all_present": true,
+      "optimizer_s": 0.1391219539946178,
+      "optimizer_state_bytes": 28700,
+      "parameter_bytes": 14336,
+      "parameter_count": 3584,
+      "rasterized_frames": 160,
+      "rasterized_pixels": 1597440,
+      "render_backend": "metal_tile",
+      "sampled_peak_current_allocated_bytes": 34956288,
+      "sampled_peak_driver_allocated_bytes": 63356928,
+      "seed": 17,
+      "serialized_checkpoint_bytes": 17169,
+      "source_report": "artifacts/spd4_bounded_16f_40step/legacy_256/comparison_report.json",
+      "source_report_sha256": "ebec1886ac77776e2d785700891d702b27afdc5d0ea24bba960ff9de03e0fac3",
+      "steady_forward_s": 2.421108664973872,
+      "steps": 40,
+      "target_frames": 160,
+      "target_pixels": 1597440,
+      "train_cameras": [
+        "cam04",
+        "cam09"
+      ],
+      "train_wall_s": 4.902030333003495,
+      "world_representation": "legacy_tube"
+    },
+    {
+      "alpha_mode": "peak_splat",
+      "amplitude_convention": "fiber_integrated",
+      "artifact_directory": "artifacts/spd4_bounded_16f_40step/full_spd4_199_param_matched_optimized",
+      "atom_count": 199,
+      "backward_policy": "fast_exploration",
+      "backward_s": 2.0509808699716814,
+      "cold_compile_forward_s": 0.22339808399556205,
+      "frame_count": 16,
+      "heldout_cameras": [
+        "cam06"
+      ],
+      "heldout_eval_l1": 0.37022341622246635,
+      "heldout_eval_lpips": 0.847080647945404,
+      "heldout_eval_psnr": 7.005440352285231,
+      "heldout_eval_ssim": 0.03437996143475175,
+      "image_size": [
+        96,
+        128
+      ],
+      "label": "full_spd4_peak_parameter_matched",
+      "max_overflow_tile_count": 0,
+      "media": [
+        "artifacts/spd4_bounded_16f_40step/full_spd4_199_param_matched_optimized/star_uvt_train_view0_preview.png",
+        "artifacts/spd4_bounded_16f_40step/full_spd4_199_param_matched_optimized/star_uvt_train_view0_side_by_side.mp4",
+        "artifacts/spd4_bounded_16f_40step/full_spd4_199_param_matched_optimized/star_uvt_heldout_view0_preview.png",
+        "artifacts/spd4_bounded_16f_40step/full_spd4_199_param_matched_optimized/star_uvt_heldout_view0_side_by_side.mp4"
+      ],
+      "media_all_present": true,
+      "optimizer_s": 0.08573054098815192,
+      "optimizer_state_bytes": 28688,
+      "parameter_bytes": 14328,
+      "parameter_count": 3582,
+      "rasterized_frames": 160,
+      "rasterized_pixels": 1597440,
+      "render_backend": "metal_tile",
+      "sampled_peak_current_allocated_bytes": 21033984,
+      "sampled_peak_driver_allocated_bytes": 46596096,
+      "seed": 17,
+      "serialized_checkpoint_bytes": 17613,
+      "source_report": "artifacts/spd4_bounded_16f_40step/full_spd4_199_param_matched_optimized/comparison_report.json",
+      "source_report_sha256": "3a289f5d6b7e3442baba9c154203b354d0e2977e09c7e6f097a5ef1df9330798",
+      "steady_forward_s": 2.251680336004938,
+      "steps": 40,
+      "target_frames": 160,
+      "target_pixels": 1597440,
+      "train_cameras": [
+        "cam04",
+        "cam09"
+      ],
+      "train_wall_s": 4.7511802920053015,
+      "world_representation": "full_spd4"
+    },
+    {
+      "alpha_mode": "beer_lambert",
+      "amplitude_convention": "fiber_integrated",
+      "artifact_directory": "artifacts/spd4_bounded_16f_40step/full_spd4_199_beer_fiber_optimized",
+      "atom_count": 199,
+      "backward_policy": "fast_exploration",
+      "backward_s": 2.0157237900275504,
+      "cold_compile_forward_s": 0.2162467499874765,
+      "frame_count": 16,
+      "heldout_cameras": [
+        "cam06"
+      ],
+      "heldout_eval_l1": 0.361051532957289,
+      "heldout_eval_lpips": 0.8432085365056992,
+      "heldout_eval_psnr": 7.133263388884319,
+      "heldout_eval_ssim": 0.03239064058288932,
+      "image_size": [
+        96,
+        128
+      ],
+      "label": "full_spd4_beer_fiber_parameter_matched",
+      "max_overflow_tile_count": 0,
+      "media": [
+        "artifacts/spd4_bounded_16f_40step/full_spd4_199_beer_fiber_optimized/star_uvt_train_view0_preview.png",
+        "artifacts/spd4_bounded_16f_40step/full_spd4_199_beer_fiber_optimized/star_uvt_train_view0_side_by_side.mp4",
+        "artifacts/spd4_bounded_16f_40step/full_spd4_199_beer_fiber_optimized/star_uvt_heldout_view0_preview.png",
+        "artifacts/spd4_bounded_16f_40step/full_spd4_199_beer_fiber_optimized/star_uvt_heldout_view0_side_by_side.mp4"
+      ],
+      "media_all_present": true,
+      "optimizer_s": 0.06854487399687059,
+      "optimizer_state_bytes": 28688,
+      "parameter_bytes": 14328,
+      "parameter_count": 3582,
+      "rasterized_frames": 160,
+      "rasterized_pixels": 1597440,
+      "render_backend": "metal_tile",
+      "sampled_peak_current_allocated_bytes": 20093952,
+      "sampled_peak_driver_allocated_bytes": 46596096,
+      "seed": 17,
+      "serialized_checkpoint_bytes": 17613,
+      "source_report": "artifacts/spd4_bounded_16f_40step/full_spd4_199_beer_fiber_optimized/comparison_report.json",
+      "source_report_sha256": "a24c490900b82a346cbb62fe1fc0721644c0fab265636b8e4b81dde882a4b367",
+      "steady_forward_s": 2.257159005050198,
+      "steps": 40,
+      "target_frames": 160,
+      "target_pixels": 1597440,
+      "train_cameras": [
+        "cam04",
+        "cam09"
+      ],
+      "train_wall_s": 4.6758278329944005,
+      "world_representation": "full_spd4"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "single-scene single-seed bounded convergence and physical-renderer ablation; not a publication-scale quality claim",
+  "summary": {
+    "parameter_count_delta_spd4_vs_legacy": -2,
+    "spd4_beer_driver_memory_ratio": 0.7354538401861909,
+    "spd4_beer_heldout_psnr_gain_db": 1.1467288000923972,
+    "spd4_beer_train_wall_ratio": 0.9538553446954092,
+    "spd4_peak_driver_memory_ratio": 0.7354538401861909,
+    "spd4_peak_heldout_psnr_gain_db": 1.0189057634933096,
+    "spd4_peak_train_wall_ratio": 0.9692270282412212
+  }
+}

@@ -3,14 +3,287 @@
 This folder is the active backlog. Use this index to route work before opening
 individual TODO files.
 
+## World Tubes Submission Critical Path
+
+The canonical, detailed Paper A finish checklist is
+[`world_tubes_paper_finish_master_plan_2026-08-13.md`](world_tubes_paper_finish_master_plan_2026-08-13.md).
+It separates mandatory source preservation, nine required runtime jobs,
+manuscript/venue work, contingent fixes, optional breadth, and research lanes
+that must remain out of scope.
+
 ## Current Project State
 
-2026-07-22 submission update: evidence schema v1, the fail-closed matrix
-runner, exact `F=4..128` replay-versus-compiled scaling, the verified theorem
-table, and a standalone LaTeX manuscript are now present. All three
-progressive-512 Coffee Martini seeds completed before the local-memory
-incident. Fixed and global-shuffle rows remain. D-NeRF now has a posed-frame
-adapter and an explicitly labelled one-frame-per-chart gauged fallback.
+2026-07-28 evidence-integrity correction: the selected-time trainer now emits
+evidence schema v2. It binds one canonical ordered sample schedule, all raw
+inputs, the decoded RGB/camera bundle, one cross-lane evaluator, hardware and
+runtime identity, each loaded native binary, checkpoints/media/configs, and
+the finalized W&B artifact. Reuse and matrix aggregation revalidate those
+identities instead of trusting report labels. This audit found that the three
+completed progressive rows predate these contracts; one WorldFoam W&B ID
+resolves to an earlier non-clean run, and schema v1 did not mechanically catch
+an evaluator aggregation difference. They remain historical diagnostics but
+are not acceptable paper evidence. The schema-v2 ledger is therefore `0/21`,
+not `3/21`; the minimum seven-row Coffee Martini submission subset is `0/7`
+and must be rerun after focused behavior verification. The other 14 rows are
+the stronger scene/camera-breadth target, not blockers for the narrow compiler
+paper. No such run is authorized on the incident workstation.
+
+2026-07-28 frozen-world evidence update: the central identical-world causal
+comparison now has a dedicated executor at
+`../research_experiments/paper_runner_suite/run_frozen_world_replay_compiled.py`.
+It trains one World Tubes checkpoint, hashes and freezes that state, then
+evaluates the same heldout targets through (A) per-frame STAR replay and
+(B) one compiled projective interval atlas. The artifact contract compares
+images, robust-L1, world-parameter VJPs, payload, runtime, atlas complexity,
+and fallback fraction; a failed threshold is preserved as a complete negative
+result. The executor now trains/saves once and can evaluate
+`F={4,8,16,32,64,128,full}` from the same hashed world. Every `F` uses ordered
+integer samples across the same full physical interval rather than a growing
+prefix, and exact indices/times are bound into the artifact. This is
+implemented and source-checked, **not yet a result**: focused behavior tests,
+non-unit selected-time atlas-slice parity, integrated warmed/repeated timing,
+and live MPS execution remain pending because the incident host is under severe unrelated
+memory/CPU pressure. Do not cite this comparison or add a baseline row until
+the generated report passes its verifier. Prefer the lane-isolated executor on
+an adequate clean host; do not rerun WorldFoam or dynamic 3DGS merely to obtain
+this evidence.
+
+2026-07-27 representation foundation update: the isolated native
+`mu4 + SPD(4)` source/compiler oracle and the shared WorldFoam M0--M5
+fixed-segment material evaluator are implemented. The former lowers exact
+affine geometry into the existing STAR record and retains conditional depth
+variance. The static-view q-UVT RGB direct-atomic route now implements
+nonlinear Beer--Lambert alpha/support/VJP. It supports both fiber-integrated
+projected optical thickness and a native world peak-density convention
+compiled through the physical fiber Jacobian and conditional variance.
+Projective atlas Beer rendering remains fail-closed.
+Conditional variance is now consumed by separate production
+`retained_fiber_metal` and `hybrid_retained_fiber` backends: a native tile
+certificate proves separated depth bands and routes ambiguous pixels through a
+fixed-quadrature retained-depth Metal forward/VJP. Trainer and unified-runner
+metadata include the physical backend, amplitude convention, quadrature,
+certificate, and fallback identity.
+The latter uses one parameterized Metal
+forward/VJP source, positive Bernstein P2 as the mandatory log-P2 challenger,
+scaled-erfcx tails rather than the falsified GL16 fallback, and fail-loud
+invalid-row handling. The combined focused suite reached `142 passed, 4
+skipped`; live Beer Metal was `15 passed`, the post-optimization SPD(4) suite
+was `32 passed`, and the retained-fiber gate reports `2.68e-7` forward and
+`1.27e-7` worst normalized VJP error. The material evaluator has independent
+central-difference VJP coverage for every mode, a 12-record CPU gate that
+reaches the tiny-tau series branch, and a verified 36-row/three-seed
+partial-chord fit artifact.
+Disjoint held-out chords show complementary matched-byte wins: M3 is exact on
+the positive-P2 family and M5 is exact on the convex-log-P2 family. No universal
+winner is promoted.
+
+The bounded 16-frame/40-step seed-17 ladder is now complete. At matched
+trainable scalars, legacy peak-splat used `4.9020s`, `63.36MB` peak driver, and
+reached `5.9865dB` heldout; corrected full-SPD(4) peak-splat used `4.7512s`,
+`46.60MB`, and reached `7.0054dB`; full-SPD(4) Beer/fiber used `4.6758s`,
+`46.60MB`, and reached `7.1333dB`. The initial `40.50s` SPD(4) result was an
+engineering failure, not inherent representation cost: removing an unused
+inverse/determinant and synchronous MPS scalar guards reduced an isolated
+199-atom projection from about `119ms` to `4.4ms`. Pre-fix artifacts are
+preserved and corrected directories end in `_optimized`.
+
+Deferred bounded extension work, after the World Tubes submission, is:
+(1) improve physical depth initialization and/or add
+a bounded color-commutator certificate, because the 199-atom hybrid stress
+row currently falls back on `64/64` tiles; (2) adaptive forward/VJP quadrature
+with an explicit error estimate; (3) carry Beer and retained-fiber through a
+certified nonlinear/projective camera atlas; (4) multi-seed, multi-scene
+bounded convergence on an adequate host; (5) a compact native-4D P0 geometry
+field/compiler; and separately (6) adaptive per-cell M3/M5 selection or a
+real-data held-out material gate before promoting richer materials. None of
+these closes the missing frozen public
+compiler result or the selected-time breadth matrix, so none belongs in the
+submission-critical queue. See
+`world_tubes_ordered_transfer_ablation.md` for the exact WT-OT0--3 paper
+ablation contract and
+`../agent_notes/loose_notes/2026-07-27_17-36-51_spd4_physical_renderer_and_bounded_training.md`
+for the implementation chronology.
+
+The exact implementation sequence for the memory-light native WorldFoam path
+is now isolated in `worldfoam_memory_light_native4d.md`. As of 2026-08-15, the
+1024-site training-memory adapter, shared-adjoint modes, same-representation
+compiled-framewise control, checkpoint/restart lifecycle, fresh-process
+producer, and fail-closed evidence schema are source-complete. This is not yet
+a memory result: the stale Metal extension must be rebuilt and the guarded
+`F=8/64/300` matrix must run on a quiet host before any fit-in-memory claim.
+The G4-v2 public-quality lane is also source-complete but remains `0/36`
+measured rows. Its immediate gate is the explicitly non-evidence Coffee
+Martini seed-17 two-route native pilot; only a verified pilot under the 2-GiB
+MPS and 4-GiB process-group caps unlocks the three-scene, three-seed,
+four-route matrix. Tests and dry plans are preflight only and count as zero
+ablation rows.
+The separate CPU G0/G3 representation ablation is now complete and accepted at
+`../outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/summary.json`:
+all eight named synthetic scenes crossed with all seven camera programs, four
+depth-layer counts, adaptive fallback, representative-depth sorting, and a
+depth-marginal comparator. The 128-layer fifth-percentile context PSNR is
+`37.9252 dB`; ordered transfer reduces crossing-family MSE by `82.25x` versus
+representative-depth sorting and `528.95x` versus depth marginalization; and
+the gauge-Jacobian gate is `3.33e-7` error with the physical measure versus
+`0.3053` without it. This closes synthetic exactness/visibility evidence, not
+G6 memory or G4 public quality. The immediate G6 sequence remains: rebuild the
+correct fused-slab extension, require all `133` schemas to register, rerun the
+dry plan with zero blockers, then execute and verify the `21` fresh-process
+measured rows plus three restart processes. The fail-closed Paper-B foundation
+bundle at
+`../research_notes/worldfoam_paper/generated/foundation_v1/` already packages
+the accepted CPU results and renders G4/G6 as explicitly unmeasured; replace
+those placeholders only through accepted producer artifacts, never by hand.
+Current source verification is green; the stale binary is missing `30`
+schemas.
+Its corrected CPU
+reference closes the fixed-word constant-state adjoint and the ordinary-depth
+fiber measure/affine-rescaling gate,
+track/time-blocked scratch, sparse boundary/site VJP, and the end-to-end CPU
+affine-log total-transfer adjoint. The scientist review's one strong formulation
+newly derived in this project, the translated optical-depth measure, is already
+integrated as a proof/tangent object; it maps back to the existing compact
+`(beta,m)` runtime word, does not replace the canonical execution path, and has
+not yet cleared an external literature-novelty review. The CPU seam now also
+covers adaptive primal/tangent rank, staged `K`-sample reduction, compact `B_p` topology/site
+scatter, caller-owned cross-`B_p` gradient reduction, continuous fixed-word P0
+transfer/Jacobian bounds, and a continuous all-competitor owner certificate.
+The source path now adds template-free schedules, a backpressured `B_p x K`
+native adapter, owner-only constrained P0 material steps, right-continuous
+piecewise-topology streaming, a bounded track-local strict certificate,
+material-only reverse without geometry bars, bounded per-block native topology
+reuse, and target-only material staging after an exact one-row camera check.
+Native topology retention is an explicit entry/byte-bounded LRU and can be
+disabled while one live token remains preflight-bounded. Memory reports must
+separate current cached-token bytes from the maximum live `B_p x K` scratch
+block; evicted blocks may be prepared again.
+Fit-derived barycentric weights close the `O(FJ)` per-spatial-block common
+sample path (`O(N_B FJ)` in the current full step) with
+explicit exact-node and dense-fallback accounting.
+Fixed-time sparse owner discovery now uses an exact `O(S log S)` lower
+envelope, and exact low-degree topology-event predicates now isolate rational
+and irrational event roots without requested-frame sampling. An exhaustive
+`O(S^3)` CPU reference now compiles half-open continuous owner charts and
+matches an independent exact oracle; a one-chart CPU bridge reaches exact
+fixed-`J` P0 node transfer, compact Lie sample reduction, and prefix-only
+material VJP with no frame-dependent structural/reverse state. This has now
+been superseded by an active-owner closure and CPU multi-chart route: supported
+strata match the exhaustive/oracle compilers; work is honestly
+`O(U S R_max) + O(W (S log S + S R_max))`; continuous primal and referenced-
+material actions are certified; and a frozen-program sparse VJP reaches
+positions, velocities, quadratic weights, affine rays, density, and RGB with
+`O(sum J_c)` reverse state. Provenance-sealed actual-rank batching now lowers
+real `(track,chart)` rows to bounded native-shaped CSR owners plus `[J,R]`
+physical lengths without global refinement or `J_max` padding. Its CPU Lie
+oracle, fake-native lifecycle adapter, node-length geometry bridge, and
+row-ragged sample reducer are green. The paper-observation seam groups arbitrary
+view/frame/pixel samples without Cartesian padding, joins heterogeneous native
+blocks through one caller-owned union-local compact bar, preserves one global
+loss denominator, and issues one optimizer authorization after exact coverage.
+A block-major CPU/fake-native bridge now keeps each spatial bundle across all
+temporal chunks, accumulates one bounded node cotangent, and runs each
+material-only word VJP once. It matches a direct-autograd oracle for `K=1/4`,
+keeps compiled work/runtime bytes fixed for `F=5/41`, allocates no `[J,W]`
+geometry bar, and peaks at the largest sequential bundle rather than their sum.
+An exact directional certificate proves structural reuse for one strict
+event-free chart. A separate exact CPU reference proves whole-direction
+persistence, root-free complements, endpoint re-isolation, and semantic owner-
+word agreement for separated singleton simple roots; unsupported strata fail
+closed. A bounded static-camera dataset compiler now exists in source;
+production-scale image-wide compilation, moving/gauged cameras, bounded-cell
+events, warm/output-sensitive affected-chart repair,
+structural/event/chart/schedule derivatives, and supported
+persistent/full-fiber seams remain open. Suffixed
+source-only Metal bridges cover constant-state replay,
+sparse Mobius incidence reduction, the compiled `J`-node Lie path, and a
+canonical owner-aware certificate/token lifecycle; earlier source-contract
+gates passed, but the current tree is unrun after the latest 2026-08-04 edits
+and the extension is unbuilt with no runtime parity. Selected-frame MP4 seeking,
+exact pixel-aware bounded target/ray staging, and the target-only material
+specialization passed earlier CPU/provider gates. For the procedural fixture,
+direct selected-pixel generation eliminates a source-audited `5.41 TiB`
+full-frame-decode amplification. A source-only per-camera pixel-time RGB8 mmap
+candidate exposes independently addressable pixels and closes every mapping
+before return; a strict source-only dataset-binding validator now exists, but
+it only compares declared decoded hashes and rehashes cache bytes. Its bounded
+converter must recompute raw/cache decoded equality; a populated binding,
+generated cache, system page-cache measurement, and runtime gate remain open.
+MP4 seeking followed by full-frame decode still does not close the scaling
+gate. Source-step integration and binary-time guard dispatch passed earlier
+focused gates; the current 2026-08-04 edits are unrun. A bounded point-cloud initializer,
+static-camera active-track factory, fixed-site manual SGD state, and raw-only
+restart checkpoint are implemented but runtime-unverified. A source-integrated
+caller-owned material-only coordinator now performs canonical exact coverage,
+uses the built-in bounded target decoder, and returns authorization plus its
+exact accumulator/replay receipt without mutating parameters. Its separate
+CPU-only updater uses one canonical material parameterization and requires
+explicit `48 B/site` live-state and `16 B/site` checkpoint admission. No
+complete production native-4D trainer exists. Native runtime, unified-runner
+registration, exact irrational native endpoints,
+projective camera programs, general multichart recertification, and public evidence
+remain open. The conservative route gate rejects the current low-run compiled
+fixture once all costs are counted, so realistic high-run rows are mandatory.
+Prepared native topology tokens now own no global `[F]` or chart-local `[F_c]`
+sample-time clone; only each live `[K]` block is staged.
+The green material step is still a hand-built fixed-topology fixture. The
+ragged per-view/global-denominator source contract now has a newer source-only
+request/step integration: material-only and full-geometry reverses are mutually
+exclusive, exact request deltas merge into world-bound bars, and optimizer
+authorization requires a sealed full-manifest replay. MPS preparation now
+requires exact compiled-schema attestation. A static lifecycle red-team then
+closed three hidden queue-growth seams: full decoded frames stay on CPU and
+only selected `[N,3]` chunks cross to the device; canonical completion fences
+follow every sample launch and active-block scatter; and each request delta is
+fenced before its tensors are released into the whole-step accumulator. The
+executor also requires a sealed fenced-reduction receipt before releasing a
+full-geometry `[J,W]` bar, without claiming that the executor itself performed
+the global commit. A final static failure-path pass makes abort
+fence-before-release, fences partial lane construction before unwind, and
+retains failed construction/abort/release lifetimes in an accumulator-owned
+restart-required quarantine instead of dropping asynchronous references. The
+older standalone full-geometry finalizer is CPU/fake-native-only and rejects
+accelerator admission. Fixed-camera full geometry now omits global and
+request-local ray cotangents; camera calibration remains opt-in. Float64
+sample interpolation is source-bounded by row subchunks, while its allocator/
+Python-object peak remains unmeasured. The material-only `F=8/64/300`
+acceptance gate is now the schema-v3 contract in
+`../research_experiments/world_foam_lane2/worldfoam_memory_scaling_acceptance_v3.json`:
+`F` means denser requested samples over one fixed physical interval and one
+fixed compiled world, not a longer sequence. Each fresh-process row must report
+RSS and saved-tensor hooks. Schema v3 hash-binds the transitive local-Python and
+declared-native source manifest, its capability-schema-3 MPS/direct-pixel
+contract, the raw MPS-limit receipt, and every parent-watchdog receipt. The
+producer is written to apply an effective `<=2 GiB` MPS allocator limit;
+separately, its parent polls process-group RSS at a configured 0.25-second
+interval and terminates after observing more than `4 GiB`, so that watchdog is
+sampled rather than an exact allocator-hard RSS cap. The public MPS counter
+configuration is sealed at 5.0 ms and its sampled maxima remain lower bounds.
+Observable resource attestation covers exactly node forward, loss-only sample
+accumulation, and material-only word VJP, but the query does not prove
+execution. Metal-private allocation and register/spill bytes remain
+unobservable and cannot be claimed. This gate is material-only; full-geometry
+evidence is a separate gate. The checked-in driver/config and latest producer,
+verifier, native, and test edits are source-only, unrun, and the native
+extension has not been rebuilt. `8 GiB` host availability is launch headroom
+for a quiet run, not a 32-GB machine requirement. CUDA requires a separately
+bound native port.
+The provider no longer retains the cold point-cloud templates, making the
+degree-2 steady geometry/material state `120*S` bytes and active material-step
+base `136*S+4` before artifacts and scratch. Lower-level test callback internals, decoder internals, real fence
+semantics, and allocator peak remain unverified, and the installed extension
+predates the required schemas. What remains is quiet-host coordinator-to-CPU-
+updater/two-step-resume verification, production-scale compiler
+serialization, a fenced accelerator updater, rebuild/native parity and
+allocator measurement, then strict forward-only evaluation/recertification
+and runner wiring.
+
+2026-07-22 historical submission update: evidence schema v1, the first
+fail-closed matrix runner, exact `F=4..128` replay-versus-compiled scaling, the
+verified theorem table, and a standalone LaTeX manuscript were added. All
+three progressive-512 Coffee Martini seeds completed before the local-memory
+incident, but the 2026-07-28 schema-v2 audit supersedes their former acceptance
+status. D-NeRF has a posed-frame adapter and an explicitly labelled
+one-frame-per-chart gauged fallback.
 Publication-scale local MPS execution is blocked: the interrupted fixed row
 drove the host into unified-memory compression/swap pressure. The runner now
 uses one child process per representation and resumes completed lane reports,
@@ -27,13 +300,41 @@ moves to a larger machine. No browser, V-JEPA, feature-token, Softmax,
 direct-serial, new-gauge, native-WorldFoam, or external-SOTA work should
 preempt the paper chain.
 
-The complete public workload is now frozen as the 21-row
+That workstation prohibition is not a 32-GB representation requirement. The
+audited bounded native WorldFoam core uses about `4 MiB` for node state plus
+bars and `0.75 MiB` for the target-only material block at
+`B_p=8192,K=8,J=16`; loss-only training allocates neither prediction nor
+explicit sample rays. Strict/evaluation media may add those bounded payloads. The
+catastrophic host estimate came from the dense CPU interval-proof oracle and
+old eager full-video/full-atlas objects; the dense oracle alone has a
+`>768 GiB` pointer-slot floor in that production-sized example. The sparse
+track-local proof route removes that structural host object, but real allocator
+and command-buffer peaks still must be measured before reopening local MPS.
+
+The complete selected-time public workload is fixed as the 21-row
 `src/train_configs/paper_protocols/world_tubes_full_public_matrix_v1.jsonc`:
 seven Coffee progressive/control rows, six alternate Coffee triplet rows, six
 additional-Neural3D-scene rows, one controlled D-NeRF row, and one separately
-labelled deterministic audit. Three progressive rows are accepted; 18 results
-remain. This unifies the queue and reproduction entrypoint but does not change
-the execution prohibition on the incident host.
+labelled deterministic audit. Three progressive rows exist as historical
+schema-v1 diagnostics, but zero rows are accepted under schema v2. The seven
+Coffee rows in `world_tubes_submission_matrix_v1.jsonc` are the minimum paper
+queue; the other 14 rows strengthen breadth. This does not change the execution
+prohibition on the incident host. The frozen identical-world
+replay-versus-compiled sweep and one bounded variable-camera closure/death
+curve are separate causal jobs and must run before the seven-row context table
+on an adequate clean host.
+
+The bounded variable-camera runner/verifier is implemented at
+`../research_experiments/star_uvt_feature_tubes/projective_variable_camera_closure_death_curve.py`;
+it has contract-test coverage but no runtime result. The submission-facing
+artifact generator is implemented at
+`../research_experiments/paper_runner_suite/generate_world_tubes_paper_artifacts.py`.
+Its current hash-verified placeholder bundle accepts theorem evidence only and
+names ten unresolved evidence records: the canonical matrix summary, seven
+public rows, the frozen report, and the variable-camera report. These
+correspond to nine runtime jobs because the matrix summary is produced after
+the seven public rows validate. A complete numeric paper bundle must be
+generated without `--allow-incomplete`.
 
 2026-07-19 unified paper-ablation runner: the shared typed sampler/stage/cost
 protocol and all three Metal-backed adapters are implemented. Staged and
@@ -123,9 +424,10 @@ As of 2026-05-28:
   `../tests/test_star_uvt_projective_decisive_demo_report.py`. The saved
   fixture artifact is
   `../outputs/benchmarks/2026-07-08_star_uvt_projective_decisive_demo_fixture/summary.json`:
-  per-frame replay and one compiled interval atlas match exactly
-  (`max_image_abs_error_vs_reference=0.0`, `psnr_vs_reference=120.0`) while the
-  compiled atlas uses `0.125x` interval entries and `0.216x` payload memory.
+	  per-frame replay and one compiled interval atlas match exactly
+	  (`max_image_abs_error_vs_reference=0.0`, `psnr_vs_reference=120.0`) while the
+	  compiled atlas uses `0.125x` interval entries and `0.216x` logical tensor
+	  volume. The latter is not topology-inclusive storage or peak memory.
   The first visibility stress suite is also green at
   `../research_experiments/star_uvt_feature_tubes/projective_visibility_stress_suite.py`
   with verifier coverage in
@@ -152,9 +454,10 @@ As of 2026-05-28:
   optical-transfer fixture, the WorldFoam owner-run/Metal comparison report,
   the scoped local-video quality table, the matched three-seed `coffee_martini`
   heldout-camera table, and the 128px capacity visual-compare report. It has
-  nine green evidence rows, no missing IDs, and `paper_ready=true` for the
-  current runner spine. This is a reproducible one-split real-data ablation
-  surface, not a multi-scene SOTA claim.
+  nine green evidence rows, no missing IDs, and the legacy local-schema flag
+  `paper_ready=true`. That flag described only the old runner inventory; it is
+  not evidence-schema-v2 acceptance, a submission-readiness claim, or a
+  multi-scene SOTA result.
 - The first tiny three-lane visual compare gate lives at
   `../outputs/visual_comparisons/2026-07-07_three_lane_visual_compare_report.md`.
   It verifies local visual artifacts for dynamic WorldFoam/PowerFoam Metal,
@@ -297,12 +600,15 @@ As of 2026-05-28:
   worker, and per-family RMS deltas make optimizer stalls visible. The
   exporter now fails closed on seed provenance and coordinate-frame ambiguity.
   The first train-camera-only pycolmap run yielded 815 bounded points, coherent
-  but sparse and not a drop-in 4,096-seed replacement. Immediate browser TODOs
-  are narrower: run matched 768-verified-plus-growth versus legacy-init and
-  fixed-topology/density ablations, add phase timing and LPIPS, then require
-  multi-scene/multi-seed evidence before a `BASELINES.md` row. Do not implement
-  a parallel WebGPU SfM/calibration stack or expose the incomplete
-  STAR/DynamicGs probes as production backends.
+  but sparse and not a drop-in 4,096-seed replacement. The 2026-07-31 fork adds
+  GPU timestamp phase timing, an executable Bun/headless-WebGPU harness, staged
+  one-VJP-per-splat backward, checkpoint-block replay, compact hot/cold
+  projection packets, and exact separable SSIM. Active parity and
+  order-controlled 8K/30K timings pass. Remaining browser TODOs are matched
+  768-verified-plus-growth versus legacy-init, fixed-topology/residual-density
+  ablations, LPIPS, and multi-scene/multi-seed evidence before a `BASELINES.md`
+  row. Do not implement a parallel WebGPU SfM/calibration stack or expose the
+  incomplete STAR/DynamicGs probes as production backends.
 - STAR UVT support/binner binfix lives in
   `../agent_notes/loose_notes/2026-05-26_18-52-25_star_uvt_binner_binfix_train.md`;
   current artifacts are

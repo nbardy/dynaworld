@@ -2,6 +2,7 @@
   // One frozen public-data matrix for the World Tubes submission. This is a
   // workload declaration, not permission to execute it on the incident host.
   "name": "world_tubes_full_public_matrix_v1",
+  "output_root": "outputs/benchmarks/2026-07-28_world_tubes_full_public_matrix_schema2",
   "runs": [
     {
       "role": "primary_progressive",

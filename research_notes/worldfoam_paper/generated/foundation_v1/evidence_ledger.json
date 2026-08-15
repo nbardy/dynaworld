@@ -1,0 +1,171 @@
+{
+  "accepted_count": 5,
+  "claim_boundary": {
+    "native_memory_fit": false,
+    "paper_ready": false,
+    "public_or_native_visibility_advantage": false,
+    "public_quality": false
+  },
+  "generator": "worldfoam_paper_b_foundation_artifacts",
+  "missing_count": 2,
+  "numeric_row_count": 16,
+  "records": [
+    {
+      "bytes": 9057,
+      "dependencies": [],
+      "errors": [],
+      "evidence_id": "m0_m5_segment_parity",
+      "gate": "G0/G2",
+      "numeric_rows_emitted": 2,
+      "path": "artifacts/foundation_gates/worldfoam_material_m0_m5_cpu_metal_20260727.json",
+      "scope": "local fixed-segment CPU correctness and historical source-hash-checked Metal forward/VJP",
+      "sha256": "61ed33d789f4d412b14d8034d304e714cc702e7aa208f8862bb975582b7bc689",
+      "status": "accepted",
+      "verifier": "strict_m0_m5_foundation_v1"
+    },
+    {
+      "bytes": 88277,
+      "dependencies": [],
+      "errors": [],
+      "evidence_id": "m3_m5_partial_chord_fit",
+      "gate": "material_ablation",
+      "numeric_rows_emitted": 2,
+      "path": "artifacts/foundation_gates/worldfoam_material_value_fit_cpu_20260727.json",
+      "scope": "three-seed synthetic heldout partial-chord capacity; complementarity, not a universal material winner",
+      "sha256": "3b9510c4382880fee5f88b13be11a32613b87d545c3e7cef98e58a3aef71ee12",
+      "status": "accepted",
+      "verifier": "verify_finite_element_material_fit.verify_artifact"
+    },
+    {
+      "bytes": 139661,
+      "dependencies": [
+        {
+          "bundle_path": "adaptive_material_basis_table.md",
+          "bytes": 365,
+          "path": "outputs/benchmarks/2026-08-15_worldfoam_adaptive_material_basis_cpu/adaptive_material_basis_table.md",
+          "sha256": "e8f5d10c249d44a30c3aca8403b302dc5bfa94a4784a226911d7ffaf9bee4736"
+        },
+        {
+          "bundle_path": "adaptive_material_basis_table.tex",
+          "bytes": 228,
+          "path": "outputs/benchmarks/2026-08-15_worldfoam_adaptive_material_basis_cpu/adaptive_material_basis_table.tex",
+          "sha256": "70f8299d390dfb1b9c6daa2412c02541aef67da9a99760d3bd89fa4a0c60e6be"
+        },
+        {
+          "bundle_path": "worldfoam_adaptive_material_basis.svg",
+          "bytes": 1822,
+          "path": "outputs/benchmarks/2026-08-15_worldfoam_adaptive_material_basis_cpu/figures/worldfoam_adaptive_material_basis.svg",
+          "sha256": "4e5b104c7b95b792ebe373e6729ae3c0576704da31254cd107a485d20372ed34"
+        }
+      ],
+      "errors": [],
+      "evidence_id": "adaptive_m3_m5_basis_selection",
+      "gate": "material_ablation",
+      "numeric_rows_emitted": 2,
+      "path": "outputs/benchmarks/2026-08-15_worldfoam_adaptive_material_basis_cpu/summary.json",
+      "scope": "three-seed float64 CPU synthetic adaptive M3/M5 selection on disjoint train/selection/heldout chords at matched 24-byte payloads plus one basis-tag bit; no native, public quality, renderer-speed, or memory claim",
+      "sha256": "7d15f9f16ab4804a48c3d2840d9cc0e50f768276838c88c5d41baeb936930b6d",
+      "status": "accepted",
+      "verifier": "verify_adaptive_material_basis_selection.verify_report"
+    },
+    {
+      "bytes": 8767,
+      "dependencies": [],
+      "errors": [
+        "coefficient-fit interaction accounting is inconsistent",
+        "coefficient_fit_interactions must be nonnegative and invariant in frame density",
+        "compiled total interaction proxy is inconsistent",
+        "compiled/exact total interaction proxy ratio is inconsistent",
+        "dense sample-weight fallback rows are out of range",
+        "linear sample-weight interaction accounting is inconsistent",
+        "total sample-weight interaction accounting is inconsistent",
+        "unsupported schema_version"
+      ],
+      "evidence_id": "compiled_lie_frame_density",
+      "gate": "G1/G6-foundation",
+      "numeric_rows_emitted": 0,
+      "path": "artifacts/foundation_gates/worldfoam_compiled_lie_frame_density_cpu_20260803.json",
+      "scope": "CPU fixed-surrogate requested-density accounting only; never native allocator evidence",
+      "sha256": "47d65046aa4c56819d361eaa8d6ad75f28ac746663c202b0397f08055409a941",
+      "status": "rejected",
+      "verifier": "compiled_lie_frame_density_gate.verify_compiled_lie_frame_density_report"
+    },
+    {
+      "bytes": 1198,
+      "dependencies": [],
+      "errors": [],
+      "evidence_id": "constant_density_ordered_transfer",
+      "gate": "G0/G2",
+      "numeric_rows_emitted": 1,
+      "path": "outputs/benchmarks/2026-07-08_worldfoam_cell_path_optical_transfer_summary.json",
+      "scope": "constant-density owner-word monoid/replay/finite-difference VJP only",
+      "sha256": "f95b5f753abb2cf742c3916d7d64a78676cd7055079dfc6f10362e18e56622bc",
+      "status": "accepted",
+      "verifier": "cell_path_optical_transfer_fixture.verify_summary"
+    },
+    {
+      "bytes": 262241,
+      "dependencies": [
+        {
+          "bundle_path": "worldfoam_synthetic_adaptive_fallback.svg",
+          "bytes": 3912,
+          "path": "outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/figures/worldfoam_synthetic_adaptive_fallback.svg",
+          "sha256": "fe5ea3198ebd646f9fcb523eb4cc9acb99ddf874184cd2883debb7309d956ab3"
+        },
+        {
+          "bundle_path": "worldfoam_synthetic_crossing_flicker.svg",
+          "bytes": 6061,
+          "path": "outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/figures/worldfoam_synthetic_crossing_flicker.svg",
+          "sha256": "577f98f07ab5e8c4e24aa700f19af01838461afcad29e02925f8f4ed1fac3385"
+        },
+        {
+          "bundle_path": "worldfoam_synthetic_depth_convergence.svg",
+          "bytes": 4948,
+          "path": "outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/figures/worldfoam_synthetic_depth_convergence.svg",
+          "sha256": "6f79e64b53799fdaee75ff93d1fbf34aa3924115f969135514b820534d4be14d"
+        }
+      ],
+      "errors": [],
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "gate": "G0/G3",
+      "numeric_rows_emitted": 9,
+      "path": "outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/summary.json",
+      "scope": "accepted full float64 CPU S1-S8/C1-C7 synthetic matrix; no native runtime, allocator, trained-image, or public-data claim",
+      "sha256": "72e75ead40c636df9cd14f6b9946b208c753cc41c7fdc677f6f457d20327c82c",
+      "status": "accepted",
+      "verifier": "verify_worldfoam_synthetic_visibility_suite.verify_report"
+    },
+    {
+      "bytes": null,
+      "dependencies": [],
+      "errors": [
+        "input file is missing"
+      ],
+      "evidence_id": "g4_public_quality",
+      "gate": "G4",
+      "numeric_rows_emitted": 0,
+      "path": "outputs/benchmarks/worldfoam_native4d_g4_public_quality_v2_selected_rays/worldfoam_public_quality_selected_ray_ablation.json",
+      "scope": "36 real rows: three public calibrated scenes, seeds 17/29/43, four matched selected-ray training routes, unchanged full 300-frame heldout evaluation",
+      "sha256": null,
+      "status": "missing",
+      "verifier": "verify_worldfoam_public_quality_ablation_v2.verify_artifact_file"
+    },
+    {
+      "bytes": null,
+      "dependencies": [],
+      "errors": [
+        "input file is missing"
+      ],
+      "evidence_id": "g6_native_memory",
+      "gate": "G1/G2/G6",
+      "numeric_rows_emitted": 0,
+      "path": "outputs/worldfoam_training_memory_ablation/worldfoam_training_memory_ablation.json",
+      "scope": "21 fresh-process native MPS systems rows with hard allocator and process-group RSS limits; synthetic trainability only",
+      "sha256": null,
+      "status": "missing",
+      "verifier": "verify_worldfoam_training_memory_ablation.verify_artifact_file"
+    }
+  ],
+  "rejected_count": 1,
+  "schema_version": 1
+}

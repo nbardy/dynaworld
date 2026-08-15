@@ -6,7 +6,7 @@ import {
 	TILED_BACKWARD_MODES,
 	TILED_PROJECTION_LAYOUTS,
 	TILED_SSIM_LAYOUTS,
-} from "./trainerWebGpu3dTiled.js?v=20260803-fullfps-pixelgs-1";
+} from "./trainerWebGpu3dTiled.js?v=20260814-camera-stress-1";
 
 export function resolveFastTileCapacity(
 	initialSplats,

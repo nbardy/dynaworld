@@ -1,6 +1,6 @@
 # World Tubes Paper: Ablations, Charts, Baselines, and Datasets
 
-Draft date: 2026-07-04
+Draft date: 2026-07-28
 
 This is the execution plan for turning the current Gauged UVT / projective
 interval evidence stack into a publishable arXiv paper. It is deliberately
@@ -13,8 +13,8 @@ Primary claim:
 ```text
 Known or low-dimensional camera programs let dynamic Gaussian primitives be
 compiled into reusable sensor-time world tubes. This makes the dominant
-world-side training bottlenecks scale with trace/event complexity rather than
-frame count.
+world-side bottlenecks in the tested fixed-topology training-step/world-VJP
+regime scale with trace/event complexity rather than frame count.
 ```
 
 Sharper wording for the paper:
@@ -22,8 +22,9 @@ Sharper wording for the paper:
 ```text
 We do not claim an information-theoretic sublinear bound in output samples.
 We claim and observe sublinear scaling of the dominant projection/support/
-binning/visibility/backward-replay bottlenecks; in the tested training regime
-this yields sublinear end-to-end training-time growth.
+binning/visibility/backward-replay bottlenecks under the tested fixed-topology
+compiler/evaluator regime. End-to-end training growth under structural
+invalidation and recompilation remains unclaimed.
 ```
 
 Do not claim:
@@ -39,23 +40,170 @@ The strongest publishable comparison is against **per-frame replay of the same
 representation**, then contextual comparison against external dynamic Gaussian
 baselines.
 
+The frozen-world executor is implemented in
+`research_experiments/paper_runner_suite/run_frozen_world_replay_compiled.py`.
+It trains one World Tubes world, hashes its final checkpoint, and evaluates
+per-frame replay versus one compiled interval atlas with identical heldout
+targets and world-parameter VJPs. The full-frame public result remains pending
+on an approved execution host.
+
+## 0.5 Pass-4 Strict-SPD(4) Source Gate
+
+The production STAR Metal back half already evaluates anisotropic
+`spatial_precision_uv` and pixel-varying affine `depth_affine_uv`. The new
+work is therefore a source/compiler gate, not a renderer fork:
+
+```text
+strict mean_xyzt + covariance_xyzt in Sym++(4)
+  -> affine camera-ray gauge
+  -> UVT mean and precision
+  -> affine conditional-depth plane
+  -> positive conditional-depth variance
+  -> confidence-band order certificate
+  -> existing STAR interval-atlas fields
+```
+
+Required CPU/reference tests:
+
+1. Random well-conditioned SPD(4) Cholesky/reconstruction error.
+2. Affine-gauge pushforward against direct joint Gaussian evaluation.
+3. Covariance-block conditional formulas against the equivalent
+   precision-block Schur complement.
+4. Motion-from-cross-covariance slices against direct Gaussian conditioning.
+5. Peak-preserving versus fiber-integrated amplitude conventions.
+6. Exact geometry and peak-preserving adapter parity with the existing UVT
+   atlas on its representable subset, plus an explicit test that the
+   fiber-optical-depth mapping is only a thin-opacity approximation to physical
+   Beer--Lambert alpha.
+7. Thick-depth overlap fixtures where separated means but overlapping
+   confidence bands reject hard ordering.
+8. Dense retained-fiber reference counterexamples for differently colored
+   overlap.
+
+Session acceptance:
+
+```text
+float64 algebra/reconstruction max error <= 1e-10
+gradient relative error <= 1e-5
+geometry/peak-preserving adapter parity at the declared dtype tolerance
+zero silent projection from full SPD(4) to the restricted legacy tuple
+```
+
+The reference/compiler gate and controlled tilt/depth-width capacity test now
+pass. The float32 source is wired as an opt-in `full_spd4` producer beside the
+default `legacy_tube` producer. The synthetic three-camera design has rank six
+over symmetric spatial covariance, begins with losses matched within 0.2%,
+and ends at `1.16e-13` MSE for full SPD(4) versus `2.07e-4` for the restricted
+source. This is a controlled capacity result, not a public-scene quality
+claim.
+
+Pass 4 has also moved beyond the source-only gate:
+
+1. The native Metal tile compiler carries conditional-depth variance into a
+   confidence-band order certificate. It accepts the fast hard-order route
+   only for separated bands and routes ambiguous, invalid, or overflowing
+   cells to retained depth.
+2. Physical Beer--Lambert alpha and its forward/VJP are implemented for the
+   selected static native-SPD(4) route.
+3. `retained_fiber_metal` and `hybrid_retained_fiber` provide differentiable
+   retained-depth optical transfer on that static route. The retained branch
+   consumes conditional depth variance; the ordinary peak-splat fast ABI still
+   does not.
+4. `dynamic_first_order` and `projective_first_order` compile a moving camera
+   through the tested homogeneous one-chart affine gauge. These are
+   first-order camera-program charts, not an exact nonlinear/projective
+   camera-path result; unsupported segmented programs remain fail-loud.
+
+The bounded Coffee Martini comparison now supplies short-run computational
+evidence. All rows use `cam04/cam09 -> cam06`, seed 17, 16 frames, 40 optimizer
+steps, four targets per step, and the same `direct_atomic+index_add` training
+route.
+
+| Representation / transfer | Atoms | Trainable scalars | Heldout PSNR (dB) | Train wall (s) | Sampled peak driver bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| legacy tube / peak splat | 256 | 3,584 | 5.9865 | 4.9020 | 63,356,928 |
+| full SPD(4) / peak splat | 199 | 3,582 | 7.0054 | 4.7512 | 46,596,096 |
+| full SPD(4) / Beer, fiber integrated | 199 | 3,582 | 7.1333 | 4.6758 | 46,596,096 |
+
+Evidence roots:
+
+```text
+artifacts/spd4_bounded_16f_40step/legacy_256/
+artifacts/spd4_bounded_16f_40step/full_spd4_199_param_matched_optimized/
+artifacts/spd4_bounded_16f_40step/full_spd4_199_beer_fiber_optimized/
+artifacts/spd4_retained_hybrid_smoke/
+```
+
+These one-seed, short-protocol rows refute the earlier interpretation that a
+roughly tenfold slowdown was inherent to native SPD(4) in this runner. They do
+not establish public-scene convergence superiority, a general speedup, or a
+representation-only memory advantage: the matched-SPD(4) rows use fewer atoms
+to match trainable-scalar count.
+
+The retained/hybrid smoke establishes a narrower result and exposes the next
+failure mode. At 16 atoms, `hybrid_retained_fiber` sends `10/64` tiles to
+retained depth and matches the full-retained result at recorded metric
+precision. At 199 atoms, the conservative certificate sends `64/64` tiles to
+fallback. Thus the mixed route is wired consistently on the small smoke, but
+dense-scene selectivity remains unresolved; the 199-atom result is a negative
+control, not a hybrid speed result.
+
+Still missing for a production-complete retained-fiber extension:
+
+```text
+certified nonlinear/projective camera charts with retained-fiber fallback
+adaptive, error-controlled retained-depth quadrature for forward and VJP
+a selective dense-scene certificate that preserves the declared error bound
+```
+
+These retained-fiber items do not block the central projective interval-atlas
+paper claim. The seven-row Coffee Martini progressive/control subset is the
+minimum matched-protocol public context table. The remaining 14 rows in the
+full public matrix are breadth targets, not blockers for the narrow compiler
+paper. Every publication run requires a separately approved, adequate
+execution host. The bounded local rows may enter an engineering table only
+with their one-seed/short-protocol label intact.
+
+### 0.6 World Tubes + Ordered Ray Transfer ablation
+
+The retained-depth extension should be described as **ordered ray transfer**,
+not as open-ray holonomy. It is inspired by connection and parallel-transport
+mathematics, while holonomy is reserved here for closed-loop transport. This
+is an opt-in World Tubes ablation, not a paper rename.
+
+| ID | Representation | Alpha / amplitude | Backend |
+| --- | --- | --- | --- |
+| WT-OT0 | `legacy_tube` | `peak_splat` | `metal_tile` |
+| WT-OT1 | `full_spd4` | `beer_lambert / fiber_integrated` | `metal_tile` |
+| WT-OT2 | `full_spd4` | `beer_lambert / fiber_integrated` | `retained_fiber_metal` |
+| WT-OT3 | `full_spd4` | `beer_lambert / fiber_integrated` | `hybrid_retained_fiber` |
+
+WT-OT2 is the all-retained oracle. WT-OT3 must report fallback fraction,
+reason bits, active atoms, minimum separation, fixed-quadrature identity,
+forward/backward time, memory, heldout quality, and image/VJP parity against
+WT-OT2. Run the checked-in 16-frame/40-step seed-17 protocol first. Do not add
+these rows to the frozen public matrix or spend multi-seed compute until the
+199-atom `64/64` negative control becomes selective. The full execution and
+falsification contract is `TODO/world_tubes_ordered_transfer_ablation.md`.
+
 ## 1. Baselines
 
 ### 1.1 Same-representation baselines
 
-These are mandatory because they isolate the contribution.
+These isolate the contribution, but they are not all separate submission
+blockers.
 
-| ID | Baseline | Purpose |
-| --- | --- | --- |
-| B0 | Per-frame STAR UVT / Gaussian-tube replay | Main baseline: project/bin/sort/render each frame. |
-| B1 | Per-frame replay with cached camera constants | Separates camera math caching from trace atlas. |
-| B2 | Cached active set, live depth/order | Tests whether support caching alone explains speed. |
-| B3 | Affine UVT trace atlas | Tests projective/gauge domains vs simple affine UVT. |
-| B4 | Projective trace atlas, no interval compression | Tests interval compression contribution. |
-| B5 | Projective interval atlas + marginalized conditional depth only | Tests whether mean-depth visibility is enough. |
-| B6 | Projective interval atlas + visibility gauge atlas | Proposed baseline-compatible method. |
-| B7 | Full atlas with fallback enabled | Robustness version under visibility stress. |
-| B8 | World-foam transmittance teaser | Optional non-baseline-compatible alpha/transmittance mode. |
+| ID | Baseline | Purpose | Closeout status |
+| --- | --- | --- | --- |
+| B0 | Per-frame STAR UVT / Gaussian-tube replay | Main causal baseline. | Implemented; public frozen sweep pending. |
+| B1 | Per-frame replay with cached camera constants | Separates camera caching from compilation. | Optional attribution row. |
+| B2 | Cached active set, live depth/order | Tests whether support caching alone explains speed. | Optional attribution row. |
+| B3 | Affine UVT trace atlas | Tests projective/gauge domains vs simple affine UVT. | Bounded synthetic artifact complete. |
+| B4 | Projective trace atlas, no interval compression | Tests interval compression. | Optional attribution row. |
+| B5 | Marginalized conditional depth only | Tests whether mean-depth visibility is enough. | Crossing negative control complete. |
+| B6 | Projective interval atlas + visibility gauge atlas | Proposed method. | Implemented; public frozen sweep pending. |
+| B7 | Full atlas with fallback enabled | Robustness under visibility stress. | Bounded stress complete; public fallback evidence pending. |
+| B8 | WorldFoam transmittance teaser | Non-baseline-compatible retained-depth context. | Optional and parked. |
 
 Required outputs:
 
@@ -154,16 +302,12 @@ report quality tether and scaling
 
 ### 2.3 D-NeRF
 
-Use for controlled synthetic dynamic object sequences. Good for comparisons
-where geometry/motion is known-ish and public scripts exist.
-
-Experiments:
-
-```text
-source-view or novel-view path replay
-orbit camera programs
-visibility stress on synthetic non-rigid motion
-```
+Use D-NeRF as a controlled posed-frame negative/control. Official matched-time
+train and test poses are discontinuous under the current adapter, so each frame
+forms a separate gauge chart. Report correctness, chart and fallback counts,
+and the absence of cross-frame reuse. Do not aggregate this row with
+synchronized multicamera scaling or present it as bounded-chart sublinear
+scaling.
 
 ### 2.4 HyperNeRF / DyCheck
 
@@ -578,62 +722,56 @@ one runnable demo command
 
 ## 6. Immediate Work Queue
 
-1. Build `paper_demo/` command:
+Submission-critical, in order:
 
-```text
-compile atlas -> render frame stack -> run backward -> emit JSON + contact sheet
-```
+1. Run one lane-isolated frozen identical-world job on an approved host with
+   explicit frame counts `0,4,8,16,32,64,128`. The implementation trains and
+   saves once, samples every `F` across the same full physical interval, and
+   rejects checkpoint, world-state, target-grid, or evaluator drift. First
+   verify non-unit selected-time full-atlas versus chunk-slice forward/VJP
+   parity. The runner preserves the original single-shot route timings as
+   correctness diagnostics and separately collects alternating paired,
+   synchronized timings with one warmup and five reported repeats by default.
+   Only the repeated timing summaries are eligible for speed claims. The live
+   report must also retain a topology-inclusive serialized compiled-atlas
+   artifact and route-scoped synchronized allocator baselines/peaks for replay
+   and compilation. Logical tensor volume is a work proxy only; it is not a
+   retained-storage or peak-memory result, and the interleaved parity replay
+   must not contaminate the compiled-route peak.
+2. Run the implemented bounded variable-camera closure/death gate while
+   holding the world, physical interval, and requested sample count fixed.
+   It compares the compiled atlas against an exact rational, per-sample
+   live-depth-order oracle and reports chart/event/trace counts, fallback,
+   image parity, and world-VJP parity. The static public sweep alone cannot
+   support the moving-camera claim.
+3. Complete the seven-row Coffee Martini schema-v2 submission subset:
+   progressive seeds `17/29/43`, pixel-matched fixed seeds `17/29/43`, and
+   global-shuffle seed `17`.
+4. Feed the verified JSON into
+   `generate_world_tubes_paper_artifacts.py`. Its default command must reject
+   incomplete evidence; only the verified complete bundle may feed the final
+   tables and figures. Package the one-command paper demo.
+5. Finish citations, venue LaTeX, reproducibility metadata, and rendered-PDF
+   verification.
 
-2. Generate synthetic trace suite.
+Breadth target after the minimum paper cut:
 
-3. Add the visibility gauge atlas synthetic test:
+- six alternate-triplet rows;
+- six additional-Neural3D rows;
+- one controlled D-NeRF row;
+- one separately labelled deterministic timing audit.
 
-```text
-pairwise Delta_ij sign certificates
-interval depth predicates
-commutation-bound acceptance
-fallback mask
-baseline sorted-render equivalence
-```
+Deferred extensions -- not submission blockers:
 
-4. Add one world-foam teaser scene:
-
-```text
-crossing translucent slabs or crossing Gaussian sheets
-compare baseline center sorting, visibility-gauge split/fallback, and
-foam transmittance integral
-```
-
-5. Export current internal artifacts into a paper table:
-
-```text
-artifact path
-claim
-metric
-value
-figure/table target
-```
-
-6. Run same-representation public subset:
-
-```text
-Neural 3D Video, 1-2 scenes, low resolution first
-D-NeRF, 2 synthetic scenes
-```
-
-7. Add baseline wrappers:
-
-```text
-per-frame replay
-affine UVT atlas
-projective interval atlas
-projective interval atlas + visibility gauge atlas
-fallback-enabled atlas
-```
-
-8. Generate charts from JSON summaries.
-
-9. Only then decide whether to spend time on external SOTA training runs.
+- generic Type-II composite-transfer and Type-III event-boundary records;
+- event-boundary gradient estimators and structural trust-region refresh;
+- full `360/720` multi-chart orbit transitions;
+- nonlinear/projective retained-fiber fallback;
+- adaptive retained-depth quadrature;
+- dense-scene retained-fiber certificate calibration;
+- multi-seed WT-OT0--3 convergence;
+- WorldFoam material-basis selection and native-4D integration;
+- external SOTA reproduction and CUDA portability.
 
 ## 7. Risk Register
 
@@ -673,7 +811,8 @@ fallback-enabled atlas
 | Result | Needed before paper? | Notes |
 | --- | --- | --- |
 | Synthetic exact correctness | Yes | This is the clean math proof. |
-| Public dataset same-representation frame scaling | Yes | At least N3DV + D-NeRF subset. |
+| Public Neural3D frozen replay-versus-compiled scaling | Yes | One learned checkpoint and identical targets; include the full-frame result and frame-count sweep. |
+| D-NeRF posed-frame fallback control | Yes, separately labelled | Official pose/time discontinuities require one frame per chart; report correctness and fallback behavior, not bounded-chart sublinear scaling. |
 | External 4DGS/STG comparison | Nice but not required for first arXiv | Contextual; avoid overclaim. |
 | Rolling shutter / exposure comparison | Strong if ready | Could be synthetic plus one real/video path. |
 | CUDA portability | Nice | Current MPS/Metal is acceptable for arXiv prototype if honest. |

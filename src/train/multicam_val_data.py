@@ -10,7 +10,6 @@ from PIL import Image
 
 from json_io import load_jsonl_objects
 
-
 ImageSizeLike = int | tuple[int, int] | list[int]
 
 
@@ -96,6 +95,7 @@ def _sample_video_frames(
     sample_fps: float,
     frame_count: int,
     target_size: ImageSizeLike,
+    sample_indices: list[int] | tuple[int, ...] | None = None,
 ) -> torch.Tensor:
     cv2 = _import_cv2()
     capture = cv2.VideoCapture(str(video_path))
@@ -107,9 +107,21 @@ def _sample_video_frames(
         capture.release()
         raise ValueError(f"Could not infer native FPS for {video_path}")
 
+    selected_indices = (
+        tuple(range(frame_count)) if sample_indices is None else tuple(int(index) for index in sample_indices)
+    )
+    if not selected_indices:
+        capture.release()
+        raise ValueError("video frame selection requires at least one sample index")
+    invalid = next(
+        (index for index in selected_indices if index < 0 or index >= int(frame_count)),
+        None,
+    )
+    if invalid is not None:
+        capture.release()
+        raise IndexError(f"video sample index {invalid} is outside [0, {int(frame_count)}) for {video_path}")
     native_frame_indices = [
-        int(round((start_seconds + float(index) / sample_fps) * native_fps))
-        for index in range(frame_count)
+        int(round((start_seconds + float(index) / sample_fps) * native_fps)) for index in selected_indices
     ]
     target_hw = _target_height_width(target_size)
     frames = []
@@ -136,7 +148,7 @@ def _sample_video_frames(
                 while next_decoded_index <= native_frame_index:
                     ok, decoded_frame = capture.read()
                     if not ok:
-                        timestamp = start_seconds + float(sample_index) / sample_fps
+                        timestamp = start_seconds + float(selected_indices[sample_index]) / sample_fps
                         raise RuntimeError(
                             f"Failed to read frame {next_decoded_index} at {timestamp:.3f}s from {video_path}"
                         )
@@ -153,7 +165,7 @@ def _sample_video_frames(
                 capture.set(cv2.CAP_PROP_POS_FRAMES, native_frame_index)
                 ok, frame_bgr = capture.read()
                 if not ok:
-                    timestamp = start_seconds + float(sample_index) / sample_fps
+                    timestamp = start_seconds + float(selected_indices[sample_index]) / sample_fps
                     raise RuntimeError(
                         f"Failed to read frame {native_frame_index} at {timestamp:.3f}s from {video_path}"
                     )
@@ -195,6 +207,31 @@ def load_multicam_val_camera_frames(
         sample_fps=fps,
         frame_count=frame_count,
         target_size=target_size,
+    )
+    if device is not None:
+        frames = frames.to(device)
+    return frames
+
+
+def load_multicam_val_selected_camera_frames(
+    *,
+    video_path: Path,
+    start_seconds: float,
+    fps: float,
+    frame_count: int,
+    sample_indices: list[int] | tuple[int, ...],
+    target_size: ImageSizeLike,
+    device: torch.device | str | None = None,
+) -> torch.Tensor:
+    """Decode only selected logical samples from a synchronized camera MP4."""
+
+    frames = _sample_video_frames(
+        video_path=video_path,
+        start_seconds=start_seconds,
+        sample_fps=fps,
+        frame_count=frame_count,
+        target_size=target_size,
+        sample_indices=sample_indices,
     )
     if device is not None:
         frames = frames.to(device)

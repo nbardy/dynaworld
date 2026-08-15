@@ -1,0 +1,42 @@
+% Fail-closed WorldFoam ICLR 2027 venue scaffold.
+% This is not a submission artifact and is intentionally not buildable.
+% WORLD_FOAM_SOURCE_SHA256: 82f886e3575f4a557f1085d23f0b62f97f8db9a6d82b333ea3ad966455a39456
+% WORLD_FOAM_BIBLIOGRAPHY_SHA256: eec358cbe843095cc06b99a1bb3b941c3664a53a35dc3986cc37713a0b6c53ec
+% WORLD_FOAM_EVIDENCE_MANIFEST_SHA256: b03e9813083e67efe4d7a5803e9f3cd1c7a4e20c4f6de526888d193ccb204da1
+% WORLD_FOAM_AI_USE_STATEMENT_SHA256: 2fcff164679443fdff9b305736ef8cd42966ffdfd10898c993a8a8eda1317e40
+
+\documentclass{article}
+\IfFileExists{iclr2027_conference.sty}{
+  \usepackage{iclr2027_conference}
+}{
+  \PackageError{worldfoam-venue}{Official ICLR 2027 style is unavailable}{
+    Acquire iclr2027.zip from the official URL, record its real archive and
+    style hashes in package_manifest.json, and retain anonymous review mode.
+  }
+}
+
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\title{WorldFoam: Camera-Compiled Ordered Ray Transfer for Dynamic Cellular Radiance Fields}
+\author{Anonymous}
+
+\begin{document}
+\PackageError{worldfoam-venue}{Venue source is still a blocked scaffold}{
+  Port the concise Markdown only after G4 and G6 are publication eligible.
+  Do not input placeholder fragments or unmeasured rows.
+}
+\maketitle
+
+% This is accepted float64 CPU G0/G3 evidence. It is the only generated result
+% fragment consumed by the pre-template scaffold.
+\input{../../generated/foundation_v1/synthetic_visibility_table.tex}
+
+% G4 public-quality and G6 native-memory outputs remain deliberately absent.
+% Their current generated SVGs explicitly say that they are not measured and
+% must never enter a submission PDF.
+
+\label{worldfoam-main-end}
+\bibliographystyle{plain}
+\bibliography{../../WORLD_FOAM_REFERENCES}
+\end{document}

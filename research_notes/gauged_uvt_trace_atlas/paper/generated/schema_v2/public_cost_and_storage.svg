@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360">
+<rect width="900" height="360" fill="white"/>
+<rect x="30" y="30" width="840" height="300" rx="12" fill="#fff7ed" stroke="#c2410c" stroke-width="3"/>
+<text x="450" y="125" text-anchor="middle" font-size="26" font-weight="bold">Public cost and stored state</text>
+<text x="450" y="175" text-anchor="middle" font-size="20" fill="#9a3412">NOT SUBMISSION-READY</text>
+<text x="450" y="220" text-anchor="middle" font-size="15">The expected schema-v2 matrix is incomplete.</text>
+<text x="450" y="260" text-anchor="middle" font-size="15">No numeric data plotted.</text>
+</svg>

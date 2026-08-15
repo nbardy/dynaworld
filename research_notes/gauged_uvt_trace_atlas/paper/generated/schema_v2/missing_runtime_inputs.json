@@ -1,0 +1,195 @@
+{
+  "inputs": [
+    {
+      "component": "public_context_matrix_summary",
+      "expected_summary": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2/matrix_summary.json",
+      "required_contract": {
+        "embedded_summaries_match_retained_json": true,
+        "exact_ordered_run_keys": [
+          "coffee_martini_full_300f_progressive_512_v1/seed_17/fast_exploration",
+          "coffee_martini_full_300f_progressive_512_v1/seed_29/fast_exploration",
+          "coffee_martini_full_300f_progressive_512_v1/seed_43/fast_exploration",
+          "coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_17/fast_exploration",
+          "coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_29/fast_exploration",
+          "coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_43/fast_exploration",
+          "coffee_martini_full_300f_progressive_global_shuffle_512_v1/seed_17/fast_exploration"
+        ],
+        "lane_row_count": 21,
+        "matrix": "world_tubes_submission_matrix_v1",
+        "run_count": 7,
+        "status": "complete"
+      },
+      "status": "missing",
+      "validation_errors": [
+        "canonical matrix_summary.json is missing"
+      ]
+    },
+    {
+      "component": "public_context",
+      "expected_summary": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2/coffee_martini_full_300f_progressive_512_v1/seed_17/run_summary.json",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_512_v1.jsonc",
+      "run_key": "coffee_martini_full_300f_progressive_512_v1/seed_17/fast_exploration",
+      "seed": 17,
+      "status": "missing",
+      "validation_errors": [],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "component": "public_context",
+      "expected_summary": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2/coffee_martini_full_300f_progressive_512_v1/seed_29/run_summary.json",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_512_v1.jsonc",
+      "run_key": "coffee_martini_full_300f_progressive_512_v1/seed_29/fast_exploration",
+      "seed": 29,
+      "status": "missing",
+      "validation_errors": [],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "component": "public_context",
+      "expected_summary": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2/coffee_martini_full_300f_progressive_512_v1/seed_43/run_summary.json",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_512_v1.jsonc",
+      "run_key": "coffee_martini_full_300f_progressive_512_v1/seed_43/fast_exploration",
+      "seed": 43,
+      "status": "missing",
+      "validation_errors": [],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "component": "public_context",
+      "expected_summary": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2/coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_17/run_summary.json",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_fixed_512_pixel_matched_v1.jsonc",
+      "run_key": "coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_17/fast_exploration",
+      "seed": 17,
+      "status": "missing",
+      "validation_errors": [],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "component": "public_context",
+      "expected_summary": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2/coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_29/run_summary.json",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_fixed_512_pixel_matched_v1.jsonc",
+      "run_key": "coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_29/fast_exploration",
+      "seed": 29,
+      "status": "missing",
+      "validation_errors": [],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "component": "public_context",
+      "expected_summary": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2/coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_43/run_summary.json",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_fixed_512_pixel_matched_v1.jsonc",
+      "run_key": "coffee_martini_full_300f_fixed_512_pixel_matched_v1/seed_43/fast_exploration",
+      "seed": 43,
+      "status": "missing",
+      "validation_errors": [],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "component": "public_context",
+      "expected_summary": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2/coffee_martini_full_300f_progressive_global_shuffle_512_v1/seed_17/run_summary.json",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_global_shuffle_512_v1.jsonc",
+      "run_key": "coffee_martini_full_300f_progressive_global_shuffle_512_v1/seed_17/fast_exploration",
+      "seed": 17,
+      "status": "missing",
+      "validation_errors": [],
+      "world_tubes_backward_policy": "fast_exploration"
+    },
+    {
+      "component": "frozen_world_scaling",
+      "expected_summary": "outputs/benchmarks/world_tubes_frozen_world_replay_compiled_v1/coffee_martini_full_300f_progressive_512_v1/seed_17/summary.json",
+      "required_contract": {
+        "frame_counts": [
+          0,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128
+        ],
+        "max_frames": 0,
+        "minimum_timing_repeats": 3,
+        "minimum_timing_warmups": 1,
+        "protocol": "coffee_martini_full_300f_progressive_512_v1",
+        "required_gates": [
+          "all_rows_accepted",
+          "publication_eligible",
+          "selected_time_slice_parity_accepted",
+          "all_rows_timing_publication_ready",
+          "checkpoint_shared_across_rows",
+          "world_state_shared_across_rows"
+        ],
+        "seed": 17
+      },
+      "status": "missing",
+      "validation_errors": []
+    },
+    {
+      "component": "moving_camera_density",
+      "expected_summary": "outputs/benchmarks/world_tubes_frozen_world_moving_camera_v1/coffee_martini_full_300f_progressive_512_v1/seed_17/summary.json",
+      "required_contract": {
+        "benchmark": "world_tubes_frozen_world_moving_camera_v1",
+        "camera_program": {
+          "compiler_chart_policy": "single_midpoint_first_order",
+          "frame_counts": [
+            8,
+            16,
+            32,
+            64
+          ],
+          "image_size": [
+            256,
+            256
+          ],
+          "mode": "bounded_yaw_projective_first_order_v1",
+          "multi_chart_gauge_compiler": false,
+          "path_scope": "bounded_open_path",
+          "sampling": "uniform_closed_interval",
+          "schema_version": 1,
+          "yaw_end_degrees": 22.5,
+          "yaw_start_degrees": -22.5,
+          "yaw_total_degrees": 45.0
+        },
+        "complete_negative_is_retained": true,
+        "frame_counts": [
+          8,
+          16,
+          32,
+          64
+        ],
+        "image_size": [
+          256,
+          256
+        ],
+        "protocol": "coffee_martini_full_300f_progressive_512_v1",
+        "publication_thresholds": {
+          "max_expensive_unresolved_fallback_fraction_exclusive": 0.02,
+          "max_f32_continuous_to_sliced_reference_ratio": 0.4,
+          "max_heavy_structural_ratio_t32_t8": 1.1,
+          "max_image_p999_abs_error": 0.00784313725490196,
+          "max_inference_break_even_frame_count": 8,
+          "max_interaction_memory_ratio_t32_t8": 1.1,
+          "max_loss_absolute_delta": 1e-05,
+          "max_lpips_delta": 0.001,
+          "max_training_break_even_frame_count": 16,
+          "max_world_vjp_global_normalized_l2_error": 1e-05,
+          "max_world_vjp_max_parameter_normalized_l2_error": 1e-05,
+          "min_certified_stable_or_event_aligned_fraction": 0.98,
+          "min_f32_forward_speedup": 2.0,
+          "min_f32_reverse_speedup": 2.0,
+          "min_f32_total_speedup": 1.7,
+          "min_image_psnr_db": 50.0
+        },
+        "seed": 17,
+        "timing_repeats": 5,
+        "timing_warmups": 1
+      },
+      "status": "missing",
+      "validation_errors": []
+    }
+  ],
+  "manuscript_package_required": true,
+  "readiness_scope": "evidence_artifact_bundle_only",
+  "schema_version": 1,
+  "submission_ready": false
+}

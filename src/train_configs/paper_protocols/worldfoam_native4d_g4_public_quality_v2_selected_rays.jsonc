@@ -1,0 +1,114 @@
+{
+  // Separate from the all-pixel G4-v1 contract. This is a matched selected-ray
+  // training ablation for all four routes, followed by the unchanged full
+  // 300-frame heldout evaluation. It is not evidence until every real-native
+  // row and the independent v2 verifier exist and pass.
+  "schema_version": 2,
+  "name": "worldfoam_native4d_g4_public_quality_v2_selected_rays",
+  "artifact_kind": "worldfoam-native4d-public-quality-selected-ray-ablation-v2",
+  "output_root": "outputs/benchmarks/worldfoam_native4d_g4_public_quality_v2_selected_rays",
+  "base_g4_v1": {
+    "path": "src/train_configs/paper_protocols/worldfoam_native4d_g4_public_quality_v1.jsonc",
+    "expected_sha256": "0dfe148c0c0f8fd3fca9a09fb094d5a526a1a819f40bdd77f19e5b1a857ba8ee"
+  },
+  "matrix": {
+    "scene_order": ["coffee_martini", "cook_spinach", "cut_roasted_beef"],
+    "seed_order": [17, 29, 43],
+    "route_order": [
+      "worldfoam_native4d",
+      "worldfoam_framewise_replay",
+      "world_tubes",
+      "dynamic_3dgs"
+    ],
+    "expected_row_count": 36,
+    "fresh_process_per_row": true
+  },
+  "training_sampling": {
+    "kind": "step_shared_bijective_sensor_pixel_blocks_v1",
+    "pixels_per_spacetime_sample": 1024,
+    "maximum_selected_pixels_per_chunk": 1024,
+    "same_pixel_set_across_batch_samples": true,
+    "without_replacement_within_sample": true,
+    "permutation_multiplier": 65537,
+    "rotation_derivation": "sha256(kind,sample_id,seed)-first-u64-mod-image-pixels",
+    "step_advance": "pixels_per_spacetime_sample",
+    "pixel_order_for_consumers": "ascending_pixel_id",
+    "route_specific_pixel_sampling_permitted": false
+  },
+  "training_loss": {
+    "identifier": "rgb_mse_mean_v1",
+    "formula": "mean((prediction-target)^2)",
+    "normalization": "mean_over_selected_rgb_scalars"
+  },
+  "fairness": {
+    "identical_spacetime_schedule_within_scene_seed": true,
+    "identical_selected_pixel_schedule_within_scene_seed": true,
+    "identical_target_and_loss_pixel_budget_all_routes": true,
+    "identical_optimizer_steps_all_routes": true,
+    // Metrics, pixel coverage, frame order, and media order are identical.
+    // Traversal and target-I/O are representation-specific, so heldout wall
+    // time is reported but is not a matched cross-route timing comparison.
+    "identical_final_heldout_metric_and_coverage_contract_all_routes": true,
+    "route_specific_training_rasterized_work_must_be_reported": true,
+    "training_rasterized_work_is_claimed_equal": false,
+    "reduced_pixels_only_for_worldfoam_permitted": false,
+    "all_pixel_g4_v1_mutated": false
+  },
+  "evaluation": {
+    "full_temporal_heldout_evaluation": true,
+    "full_pixel_heldout_evaluation": true,
+    "heldout_frame_count": 300,
+    "heldout_image_size": [384, 512],
+    "heldout_camera_count_per_scene": 1,
+    "heldout_target_pixels_per_row": 58982400,
+    "selected_ray_training_metrics_are_not_heldout_metrics": true
+  },
+  "expected_workload": {
+    "optimizer_steps": 300,
+    "spacetime_samples_per_step": 4,
+    "selected_target_pixels_per_step": 4096,
+    "selected_target_pixels_per_row": 1228800,
+    "selected_loss_scalars_per_row": 3686400,
+    "unique_sensor_pixel_coverage_per_row": 196608,
+    "minimum_sensor_pixel_visit_count": 1,
+    "maximum_sensor_pixel_visit_count": 2,
+    "all_pixel_cold_compile_reduction_factor": 192.0
+  },
+  "tractability_limits": {
+    "maximum_cold_track_compile_count": 1000000,
+    "maximum_complete_camera_record_validation_count": 300000000,
+    "maximum_admitted_site_reference_upper_bound": 1073741824,
+    "maximum_spatial_bundle_count": 10000,
+    "maximum_framewise_native_step_call_count": 20000,
+    "maximum_heldout_spatial_major_render_call_count": 20000,
+    "maximum_heldout_native_bundle_count": 20000,
+    "maximum_heldout_complete_camera_record_validation_count": 100000000,
+    "maximum_heldout_admitted_site_reference_upper_bound": 300000000,
+    "minimum_all_pixel_cold_compile_reduction_factor": 128.0
+  },
+  "execution": {
+    "row_worker": "src/train/train_worldfoam_native4d_public_quality_row_v2.py",
+    "source_capability": "src/train/worldfoam_g4_v2_source_capability.json",
+    "pilot_receipt": "outputs/benchmarks/worldfoam_native4d_g4_public_quality_v2_selected_rays/pilot/worldfoam_g4_v2_pilot_receipt.json",
+    "pilot_scene": "coffee_martini",
+    "pilot_seed": 17,
+    "pilot_required_routes": ["worldfoam_native4d", "worldfoam_framewise_replay"],
+    "maximum_projected_worldfoam_row_hours": 12.0,
+    "spatial_major_full_temporal_heldout_required": true,
+    "process_group_watchdog_required": true,
+    "maximum_worker_process_group_rss_bytes": 4294967296,
+    "worker_watchdog_poll_interval_seconds": 0.25,
+    "worker_timeout_seconds": 43200,
+    "pre_matrix_host_resource_guard_required": true,
+    "pre_matrix_minimum_free_disk_bytes": 8589934592,
+    "pre_matrix_minimum_available_memory_bytes": 8589934592,
+    "pre_matrix_maximum_swap_used_bytes": 2147483648,
+    "pre_matrix_maximum_load_average": 8.0,
+    "maximum_mps_working_set_bytes_per_worker": 2147483648,
+    "minimum_free_disk_bytes_before_worldfoam_row": 2147483648,
+    "real_native_only": true,
+    "proxy_or_smoke_evidence_permitted": false,
+    "abort_before_first_row_on_any_blocker": true,
+    "local_mps_execution_requires_explicit_acknowledgement": true
+  }
+}

@@ -21,6 +21,36 @@ from runtime_types import SequenceData
 from sequence_data import normalize_frame_times
 
 
+@dataclass(frozen=True)
+class MulticamVideoFrameSource:
+    """Metadata-only logical frame selection for one synchronized MP4."""
+
+    camera_name: str
+    video_path: Path
+    start_seconds: float
+    sample_fps: float
+    source_frame_count: int
+    selected_frame_indices: tuple[int, ...]
+    height: int
+    width: int
+
+    def __post_init__(self) -> None:
+        if not self.video_path.is_file():
+            raise FileNotFoundError(f"camera video does not exist: {self.video_path}")
+        if self.video_path.suffix.lower() != ".mp4":
+            raise ValueError(f"deferred camera targets require MP4 input: {self.video_path}")
+        if self.sample_fps <= 0.0 or self.source_frame_count < 1:
+            raise ValueError("camera video metadata requires positive fps and frame count")
+        if self.height < 1 or self.width < 1 or not self.selected_frame_indices:
+            raise ValueError("camera video metadata requires positive output dimensions and selected frames")
+        invalid = next(
+            (index for index in self.selected_frame_indices if index < 0 or index >= self.source_frame_count),
+            None,
+        )
+        if invalid is not None:
+            raise IndexError(f"selected camera frame {invalid} is outside [0, {self.source_frame_count})")
+
+
 @dataclass
 class MulticamVideoBundle:
     condition_sequence: SequenceData
@@ -41,6 +71,9 @@ class MulticamVideoBundle:
     pose_source: str | None = None
     anchor_c2w: torch.Tensor | None = None
     metadata: dict[str, Any] | None = None
+    train_frame_sources: tuple[MulticamVideoFrameSource, ...] = ()
+    heldout_frame_sources: tuple[MulticamVideoFrameSource, ...] = ()
+    deferred_target_frames: bool = False
 
     @property
     def train_view_count(self) -> int:
@@ -1529,9 +1562,13 @@ def load_multicam_video_bundle(
     target_size: ImageSizeLike,
     device: torch.device,
     frame_device: torch.device | None = None,
+    defer_video_frames: bool = False,
 ) -> MulticamVideoBundle:
     resolved_frame_device = device if frame_device is None else frame_device
     record = select_multicam_record(data_cfg)
+    defer_video_frames = bool(
+        defer_video_frames and str(record.get("dataset") or "") not in DNERF_DATASETS
+    )
     train_raw = data_cfg.get("multicam_train_cameras") or record.get("train_cameras")
     if train_raw:
         train_cameras = [str(camera) for camera in train_raw]
@@ -1553,45 +1590,104 @@ def load_multicam_video_bundle(
         condition_camera=condition_camera,
     )
 
-    camera_frame_count = requested_camera_frame_count(data_cfg, record)
-    train_frames = torch.stack(
-        [
-            load_camera_video(
-                record,
-                camera,
-                target_size=target_size,
-                device=resolved_frame_device,
-                frame_count=camera_frame_count,
-            )
-            for camera in train_cameras
-        ],
-        dim=0,
-    )
-    heldout_frames = torch.stack(
-        [
-            load_camera_video(
-                record,
-                camera,
-                target_size=target_size,
-                device=resolved_frame_device,
-                frame_count=camera_frame_count,
-            )
-            for camera in heldout_cameras
-        ],
-        dim=0,
-    )
-    max_frames = int(data_cfg.get("max_frames") or 0)
-    if max_frames > 0:
-        train_frames = train_frames[:, :max_frames].contiguous()
-        heldout_frames = heldout_frames[:, :max_frames].contiguous()
-    train_frames = select_configured_multiview_frames(train_frames, data_cfg.get("frame_indices"))
-    heldout_frames = select_configured_multiview_frames(heldout_frames, data_cfg.get("frame_indices"))
+    if isinstance(target_size, bool):
+        raise ValueError("target_size must be an integer or [height, width]")
+    if isinstance(target_size, int):
+        target_height = target_width = int(target_size)
+    elif isinstance(target_size, (tuple, list)) and len(target_size) == 2:
+        target_height, target_width = (int(value) for value in target_size)
+    else:
+        raise ValueError("target_size must be an integer or [height, width]")
+    if target_height < 1 or target_width < 1:
+        raise ValueError("target_size dimensions must be positive")
 
+    camera_frame_count = requested_camera_frame_count(data_cfg, record)
     frame_positions = list(range(camera_frame_count))
     if data_cfg.get("frame_indices") is not None:
-        frame_positions = [frame_positions[int(index)] for index in data_cfg["frame_indices"]]
+        selected_positions = [int(index) for index in data_cfg["frame_indices"]]
+        if not selected_positions:
+            raise ValueError("data.frame_indices must contain at least one index when provided.")
+        invalid = next(
+            (index for index in selected_positions if index < 0 or index >= camera_frame_count),
+            None,
+        )
+        if invalid is not None:
+            raise IndexError(f"data.frame_indices contains {invalid} outside [0, {camera_frame_count})")
+        frame_positions = [frame_positions[index] for index in selected_positions]
+    T = len(frame_positions)
+    H, W = target_height, target_width
 
-    _, T, _, H, W = train_frames.shape
+    def frame_source(camera_name: str) -> MulticamVideoFrameSource:
+        return MulticamVideoFrameSource(
+            camera_name=camera_name,
+            video_path=video_path_for_camera(record, camera_name),
+            start_seconds=camera_start_seconds(record, camera_name),
+            sample_fps=float(record["fps"]),
+            source_frame_count=camera_frame_count,
+            selected_frame_indices=tuple(frame_positions),
+            height=H,
+            width=W,
+        )
+
+    if defer_video_frames:
+        train_frame_sources = tuple(frame_source(camera) for camera in train_cameras)
+        heldout_frame_sources = tuple(frame_source(camera) for camera in heldout_cameras)
+        train_frames = torch.empty(
+            (len(train_cameras), T, 3, H, W),
+            dtype=torch.float32,
+            device="meta",
+        )
+        heldout_frames = torch.empty(
+            (len(heldout_cameras), T, 3, H, W),
+            dtype=torch.float32,
+            device="meta",
+        )
+    else:
+        train_frame_sources = ()
+        heldout_frame_sources = ()
+        train_frames = torch.stack(
+            [
+                load_camera_video(
+                    record,
+                    camera,
+                    target_size=target_size,
+                    device=resolved_frame_device,
+                    frame_count=camera_frame_count,
+                )
+                for camera in train_cameras
+            ],
+            dim=0,
+        )
+        heldout_frames = torch.stack(
+            [
+                load_camera_video(
+                    record,
+                    camera,
+                    target_size=target_size,
+                    device=resolved_frame_device,
+                    frame_count=camera_frame_count,
+                )
+                for camera in heldout_cameras
+            ],
+            dim=0,
+        )
+        max_frames = int(data_cfg.get("max_frames") or 0)
+        if max_frames > 0:
+            train_frames = train_frames[:, :max_frames].contiguous()
+            heldout_frames = heldout_frames[:, :max_frames].contiguous()
+        train_frames = select_configured_multiview_frames(
+            train_frames,
+            data_cfg.get("frame_indices"),
+        )
+        heldout_frames = select_configured_multiview_frames(
+            heldout_frames,
+            data_cfg.get("frame_indices"),
+        )
+        if tuple(train_frames.shape[1:]) != (T, 3, H, W):
+            raise ValueError(
+                "decoded train video shape does not match requested metadata: "
+                f"expected {(T, 3, H, W)}, got {tuple(train_frames.shape[1:])}"
+            )
     rig_init = str(camera_cfg.get("rig_init", "deepview")).lower()
     train_lens_models = None
     train_distortions = None
@@ -1802,5 +1898,10 @@ def load_multicam_video_bundle(
             "anchor_camera": anchor_camera,
             "condition_camera": condition_camera,
             "sample_layout": record.get("sample_layout", "synchronized_multicamera"),
+            "selected_frame_indices": frame_positions,
+            "deferred_target_frames": bool(defer_video_frames),
         },
+        train_frame_sources=train_frame_sources,
+        heldout_frame_sources=heldout_frame_sources,
+        deferred_target_frames=bool(defer_video_frames),
     )

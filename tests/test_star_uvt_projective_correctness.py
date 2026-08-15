@@ -68,6 +68,7 @@ from torch_gsplat_bridge_star_uvt import (  # noqa: E402
     render_uvt_tubes,
     render_uvt_tubes_gated,
     rebin_projective_trace_cell_atlas,
+    slice_projective_trace_cell_atlas_frames,
     split_projective_trace_cell_atlas_fallback_cells,
     split_projective_trace_windows,
     stratify_projective_trace_cell_atlas_visibility,
@@ -293,6 +294,178 @@ def _direct_continuous_cell_atlas(
         active_start=tuple(0 for _ in range(trace_count)),
         active_stop=tuple(1 for _ in range(trace_count)),
     )
+
+
+def test_projective_cell_atlas_frame_slices_preserve_reference_forward_and_vjp() -> None:
+    coeffs = torch.tensor(
+        [
+            [3.0, 0.1, 0.0, 3.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [4.0, -0.1, 0.0, 4.0, 0.0, 0.0, 1.2, 0.0, 0.0],
+            [5.0, 0.0, 0.0, 3.5, 0.1, 0.0, 1.8, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    opacity = torch.tensor(
+        [0.55, 0.45, 0.35],
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    color = torch.tensor(
+        [[0.9, 0.1, 0.05], [0.05, 0.8, 0.2], [0.1, 0.2, 0.9]],
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    atlas = ProjectiveTraceCellTraceAtlas(
+        coeffs=coeffs,
+        opacity=opacity,
+        color=color,
+        cells=[
+            ProjectiveTraceTileTimeCell(
+                tile_u=0,
+                tile_v=0,
+                start=0,
+                stop=2,
+                primitive_ids=(0, 2),
+                ordered_primitive_ids=(0, 2),
+                depth_intervals=((0.9, 1.1), (1.7, 1.9)),
+                fallback=False,
+                fallback_reasons=(),
+            ),
+            ProjectiveTraceTileTimeCell(
+                tile_u=0,
+                tile_v=0,
+                start=2,
+                stop=4,
+                primitive_ids=(1, 2),
+                ordered_primitive_ids=(1, 2),
+                depth_intervals=((1.1, 1.3), (1.7, 1.9)),
+                fallback=False,
+                fallback_reasons=(),
+            ),
+        ],
+        source_window_indices=(0, 1, 2),
+        source_primitive_ids=(10, 11, 12),
+        active_start=(0, 2, 0),
+        active_stop=(2, 4, 4),
+    )
+    times = torch.tensor([-1.5, -0.5, 0.5, 1.5], dtype=torch.float32)
+    render_args = {
+        "image_width": 8,
+        "image_height": 8,
+        "tile_size": 8,
+        "sigma_px": 1.0,
+    }
+    full = render_projective_trace_cell_atlas_reference(
+        atlas,
+        times,
+        **render_args,
+    )
+    chunks = [
+        render_projective_trace_cell_atlas_reference(
+            slice_projective_trace_cell_atlas_frames(
+                atlas,
+                start=start,
+                stop=stop,
+            ),
+            times[start:stop],
+            **render_args,
+        )
+        for start, stop in ((0, 2), (2, 4))
+    ]
+    concatenated = torch.cat(chunks, dim=0)
+
+    torch.testing.assert_close(concatenated, full, rtol=0.0, atol=1.0e-7)
+    first_slice = slice_projective_trace_cell_atlas_frames(
+        atlas,
+        start=0,
+        stop=2,
+    )
+    second_slice = slice_projective_trace_cell_atlas_frames(
+        atlas,
+        start=2,
+        stop=4,
+    )
+    assert first_slice.source_primitive_ids == (10, 12)
+    assert second_slice.source_primitive_ids == (11, 12)
+    assert all(
+        active_start < active_stop
+        for sliced in (first_slice, second_slice)
+        for active_start, active_stop in zip(
+            sliced.active_start,
+            sliced.active_stop,
+        )
+    )
+
+    weights = torch.linspace(0.1, 1.0, full.numel()).reshape_as(full)
+    full_grads = torch.autograd.grad(
+        (full * weights).sum(),
+        (coeffs, opacity, color),
+        retain_graph=True,
+    )
+    chunk_grads = torch.autograd.grad(
+        (concatenated * weights).sum(),
+        (coeffs, opacity, color),
+    )
+    for full_grad, chunk_grad in zip(full_grads, chunk_grads):
+        torch.testing.assert_close(
+            chunk_grad,
+            full_grad,
+            rtol=1.0e-6,
+            atol=1.0e-7,
+        )
+
+
+def test_projective_cell_atlas_frame_slice_can_be_temporally_empty() -> None:
+    atlas = ProjectiveTraceCellTraceAtlas(
+        coeffs=torch.tensor(
+            [[3.5, 0.0, 0.0, 3.5, 0.0, 0.0, 1.0, 0.0, 0.0]],
+            dtype=torch.float32,
+        ).contiguous(),
+        opacity=torch.tensor([0.7], dtype=torch.float32),
+        color=torch.tensor([[0.8, 0.2, 0.1]], dtype=torch.float32),
+        cells=[
+            ProjectiveTraceTileTimeCell(
+                tile_u=0,
+                tile_v=0,
+                start=2,
+                stop=4,
+                primitive_ids=(0,),
+                ordered_primitive_ids=(0,),
+                depth_intervals=((1.0, 1.2),),
+                fallback=False,
+                fallback_reasons=(),
+            )
+        ],
+        source_window_indices=(0,),
+        source_primitive_ids=(7,),
+        active_start=(2,),
+        active_stop=(4,),
+    )
+
+    empty = slice_projective_trace_cell_atlas_frames(
+        atlas,
+        start=0,
+        stop=2,
+    )
+
+    assert empty.coeffs.shape == (0, 9)
+    assert empty.opacity.shape == (0,)
+    assert empty.color.shape == (0, 3)
+    assert empty.cells == []
+    assert empty.source_window_indices == ()
+    assert empty.source_primitive_ids == ()
+    assert empty.active_start == ()
+    assert empty.active_stop == ()
+    rendered = render_projective_trace_cell_atlas_reference(
+        empty,
+        torch.tensor([-1.5, -0.5], dtype=torch.float32),
+        image_width=8,
+        image_height=8,
+        tile_size=8,
+        sigma_px=1.0,
+    )
+    torch.testing.assert_close(rendered, torch.zeros_like(rendered))
 
 
 def _mixed_fallback_cell_atlas() -> ProjectiveTraceCellTraceAtlas:

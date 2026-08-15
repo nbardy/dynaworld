@@ -908,7 +908,10 @@ class ReportWorldFoamForkShaderGoalStateTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed_prerequisite")
         self.assertFalse(result["shader_fork_smoke_state_fixed"])
         self.assertFalse(result["fixed_requirements"]["native_source_wiring"])
-        self.assertIn("source: variant_count is None, expected 3", result["failures"])
+        self.assertIn(
+            f"source: variant_count is None, expected {len(report_mod.DEFAULT_VARIANTS)}",
+            result["failures"],
+        )
         self.assertIn("source: variants is missing or not a list", result["failures"])
 
     def test_missing_referenced_shader_artifact_paths_fail_shader_fork_gates(self) -> None:
@@ -940,7 +943,7 @@ class ReportWorldFoamForkShaderGoalStateTests(unittest.TestCase):
         self.assertFalse(result["fixed_requirements"]["native_import_registration"])
         self.assertFalse(result["fixed_requirements"]["rebuilt_native_smoke_bundle"])
         self.assertIn(
-            "import: world_foam_lane2_fused_direct_v0: extension_library does not exist",
+            f"import: {report_mod.DEFAULT_VARIANTS[0][0]}: extension_library does not exist",
             result["failures"],
         )
         self.assertIn(

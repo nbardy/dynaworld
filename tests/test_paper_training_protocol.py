@@ -19,7 +19,12 @@ from paper_training_protocol import (
     resize_video_frames,
     scale_intrinsics,
 )
-from paper_training_types import ImageSize
+from paper_training_types import (
+    ImageSize,
+    PaperDatasetContract,
+    PaperStage,
+    PaperTrainingProtocol,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,6 +115,39 @@ def test_stage_defaults_to_declared_final_image_size() -> None:
     )
 
     assert stages[0].image_size == ImageSize(6, 10)
+
+
+def test_paper_protocol_rejects_short_epoch_remainder_batches() -> None:
+    dataset = PaperDatasetContract(
+        manifest="fixture.jsonl",
+        sample_id="fixture",
+        train_cameras=("cam0",),
+        heldout_cameras=("cam1",),
+        frame_count=5,
+        fps=4.0,
+    )
+
+    with pytest.raises(ValueError, match="divide the training sample epoch exactly"):
+        PaperTrainingProtocol(
+            name="nondivisible",
+            dataset=dataset,
+            steps=1,
+            max_train_seconds=1.0,
+            same_time_count=1,
+            local_time_count=0,
+            local_time_radius=0,
+            sampler_seed_offset=0,
+            stages=(
+                PaperStage(
+                    label="only",
+                    start_step=0,
+                    end_step=1,
+                    image_size=ImageSize(4, 4),
+                    primitive_count=1,
+                    frames_per_step=2,
+                ),
+            ),
+        )
 
 
 def test_checked_in_progressive_and_fixed_protocols_match_target_pixel_budget() -> None:

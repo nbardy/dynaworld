@@ -1,0 +1,62 @@
+{
+  "compatibility_boundary": {
+    "decoder": "pinned_schema_v2_compatibility_importer",
+    "dirty_schema_v1_178_179_candidate_imported": false,
+    "forbidden_decoder": "current_schema_v1_variable_camera_runner",
+    "source_schema_version": 2
+  },
+  "handoff": {
+    "all_receipts_verified": true,
+    "manifest_sha256": "b3790a2c9c528b628d73322b2592baff60550ee858db58ed2bb7ec4f3b9062d6",
+    "sha256s_sha256": "38e2a02cd72f8b3381dadaa135c1f9460c76d84f091647cc9bb8e580577053b5",
+    "star_uvt_commit": "6c9945258fb1b31c43418857eb5ead98e588fd77",
+    "superproject_commit": "d5b0db58c3038f25d14a5412b4cfe170c65eb3b8",
+    "verified_receipts": {
+      "MANIFEST.json": "b3790a2c9c528b628d73322b2592baff60550ee858db58ed2bb7ec4f3b9062d6",
+      "README.md": "2498a69c7805baedc309e78582d79852fdad29c865f23d67c2bb551da36fb169",
+      "artifacts/variable_camera/summary.json": "118f26857a1c51262f6d8b0a33d55ee037dc19a07713ce318aaab9878d5df198",
+      "artifacts/variable_camera/summary.md": "f393833a9d14bbace0ec5d7b6e9cf2330e39d436a091ec987536b4ab4c7fc3ef",
+      "assets/lpips/alexnet-owt-7be5be79.pth": "7be5be791159472b1fbf3c69796f7cb30dca7ad8466c2df70058c37116cdee02",
+      "assets/lpips/lpips-v0.1-alex-linear.pth": "df73285e35b22355a2df87cdb6b70b343713b667eddbda73e1977e0c860835c0",
+      "assets/native/powerfoam._C.cpython-311-darwin.so": "9197d05e712621b893224b85fa8e76a63c6896daeddf9cc7e729dce8acf11f14",
+      "assets/native/star_uvt._C.cpython-311-darwin.so": "452dbd0b09d8be890f0d79913d63bcfef9a41d37e4912be0003523d4ac7ad89d",
+      "assets/native/v5._C.cpython-311-darwin.so": "018245d206dd430b1709e35aeef881769a330c37af9d15851d4c3e9ad9c6532b",
+      "source/dynaworld-paper-freeze.bundle": "eb580b0468c25c9640ec1d36cdd5dfee05d0bf30d2a11d1bc2720c52c810d48f",
+      "source/fast-mac-world-tubes-star-freeze.bundle": "98ef22bd62d56a82bf210aa3d596a3754a29c6d42e70863896f5db3e97c69eb3"
+    }
+  },
+  "importer": {
+    "launches_renderer_or_training": false,
+    "path": "research_experiments/paper_runner_suite/import_world_tubes_variable_camera_schema_v2.py",
+    "sha256": "9bba7a65fdda526219c913a7442a450d0e24d616bc6a1ba752fdb8a7bfbcebd7",
+    "uses_current_schema_v1_runner": false
+  },
+  "kind": "world_tubes_variable_camera_schema_v2_compatibility_import",
+  "publication_rendering": {
+    "data_or_geometry_changed": false,
+    "derived_from": "variable_camera_closure_death.svg",
+    "derived_from_sha256": "a1e1a29c77578f1a8beb1520a69e4653ba241e804ac256d4ee59d89dae14cb43",
+    "display_only_change": "anchor first-death label inward",
+    "path": "research_notes/gauged_uvt_trace_atlas/paper/figures/world_tubes_variable_camera_closure_death_publication.svg",
+    "sha256": "fb5fad8a494230e3ca5108690cb26fe1a195d1db61e362a4a968a1fc0c5a2b74"
+  },
+  "receipt_payload_sha256": "46631ab8fdf3366f046f224b7b9344dc40e524b2f053ca4d586a4051126bf257",
+  "rendered_assets": {
+    "variable_camera_closure_death.svg": "a1e1a29c77578f1a8beb1520a69e4653ba241e804ac256d4ee59d89dae14cb43",
+    "variable_camera_table.md": "75adb7e011b19436a9caff3a8af22fe9525e9365b1118fd8fbe1dd2a8eb0c72a",
+    "variable_camera_table.tex": "154cedbbaefb73c94d0be3e0df1accc49599a996f9579348893a9ac96f56ce30"
+  },
+  "schema_version": 1,
+  "source_artifact": {
+    "path": "artifacts/paper_evidence/world_tubes_variable_camera_schema_v2_clean/summary.json",
+    "sha256": "118f26857a1c51262f6d8b0a33d55ee037dc19a07713ce318aaab9878d5df198"
+  },
+  "source_provenance": {
+    "implementation_manifest_sha256": "5ce27c6672825dacd6e96ccf697423ad34df4dac26a4cc3daa4d2d51aab4719a",
+    "repository_commit": "33a64aa44efd430f56eb284915aa47b3e5ec2b7d",
+    "repository_dirty": false,
+    "star_uvt_commit": "6c9945258fb1b31c43418857eb5ead98e588fd77",
+    "star_uvt_dirty": false
+  },
+  "status": "accepted"
+}

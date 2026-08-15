@@ -244,6 +244,7 @@ class SplatRenderConfig:
     alpha_threshold: float
     near_plane: float
     camera_projection: str
+    fast_mac_options: dict[str, Any] | None = None
 
 
 @torch.no_grad()
@@ -265,6 +266,7 @@ def render_splat_sequence(
             bound_scale=cfg.bound_scale,
             alpha_threshold=cfg.alpha_threshold,
             near_plane=cfg.near_plane,
+            fast_mac_options=cfg.fast_mac_options,
             camera_projection=cfg.camera_projection,
         )
         rgbs.append(image.permute(1, 2, 0).contiguous())

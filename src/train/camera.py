@@ -187,16 +187,15 @@ def _fisheye_theta_from_radius(radius_distorted, coeffs, iterations: int):
     return theta
 
 
-def _camera_frame_directions(
+def _camera_frame_directions_from_pixels(
     camera: CameraSpec,
-    height: int,
-    width: int,
+    xs: torch.Tensor,
+    ys: torch.Tensor,
+    *,
     device,
     dtype=torch.float32,
     distortion_iterations: int = 8,
-    pixel_center: float = 0.0,
 ):
-    xs, ys = _pixel_grid(height, width, device, dtype=dtype, pixel_center=pixel_center)
     fx = _camera_scalar_tensor(camera.fx, device=device, dtype=dtype)
     fy = _camera_scalar_tensor(camera.fy, device=device, dtype=dtype)
     cx = _camera_scalar_tensor(camera.cx, device=device, dtype=dtype)
@@ -243,6 +242,26 @@ def _camera_frame_directions(
     raise ValueError(f"Unknown lens_model: {camera.lens_model}")
 
 
+def _camera_frame_directions(
+    camera: CameraSpec,
+    height: int,
+    width: int,
+    device,
+    dtype=torch.float32,
+    distortion_iterations: int = 8,
+    pixel_center: float = 0.0,
+):
+    xs, ys = _pixel_grid(height, width, device, dtype=dtype, pixel_center=pixel_center)
+    return _camera_frame_directions_from_pixels(
+        camera,
+        xs,
+        ys,
+        device=device,
+        dtype=dtype,
+        distortion_iterations=distortion_iterations,
+    )
+
+
 def build_central_camera_rays(
     camera: CameraSpec,
     height: int,
@@ -275,6 +294,57 @@ def build_central_camera_rays(
     dirs_world = torch.einsum("ij,hwj->hwi", rotation, dirs_camera)
     dirs_world = torch.nn.functional.normalize(dirs_world, dim=-1)
     origins_world = origin.view(1, 1, 3).expand(height, width, 3)
+    return origins_world, dirs_world
+
+
+def build_camera_rays_at_pixels(
+    camera: CameraSpec,
+    pixel_indices: torch.Tensor,
+    *,
+    height: int,
+    width: int,
+    device=None,
+    dtype=torch.float32,
+    distortion_iterations: int = 8,
+    pixel_center: float = 0.0,
+):
+    """Build only selected flattened image rays, never an ``H x W`` grid.
+
+    Pixel ids use row-major ``y * width + x`` indexing and the same lens,
+    distortion, normalization, and pixel-center conventions as
+    :func:`build_camera_rays`.
+    """
+
+    if int(height) < 1 or int(width) < 1:
+        raise ValueError("camera ray selection requires positive dimensions")
+    pixels = torch.as_tensor(pixel_indices)
+    if pixels.ndim != 1 or pixels.numel() < 1:
+        raise ValueError("pixel_indices must be a non-empty one-dimensional tensor")
+    pixels = pixels.detach().to(device="cpu", dtype=torch.long)
+    invalid = pixels[(pixels < 0) | (pixels >= int(height) * int(width))]
+    if invalid.numel():
+        raise IndexError(f"camera ray pixel index {int(invalid[0])} is outside [0, {int(height) * int(width)})")
+
+    device = device or camera.camera_to_world.device
+    pixels = pixels.to(device=device)
+    ys = torch.div(pixels, int(width), rounding_mode="floor").to(dtype=dtype)
+    xs = torch.remainder(pixels, int(width)).to(dtype=dtype)
+    if pixel_center:
+        xs = xs + float(pixel_center)
+        ys = ys + float(pixel_center)
+    dirs_camera = _camera_frame_directions_from_pixels(
+        camera,
+        xs,
+        ys,
+        device=device,
+        dtype=dtype,
+        distortion_iterations=distortion_iterations,
+    )
+    rotation = camera.camera_to_world[:3, :3].to(device=device, dtype=dtype)
+    origin = camera.camera_to_world[:3, 3].to(device=device, dtype=dtype)
+    dirs_world = torch.einsum("ij,pj->pi", rotation, dirs_camera)
+    dirs_world = torch.nn.functional.normalize(dirs_world, dim=-1)
+    origins_world = origin.view(1, 3).expand(pixels.numel(), 3)
     return origins_world, dirs_world
 
 

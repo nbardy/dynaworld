@@ -231,24 +231,27 @@ function opacityAwarePixelBounds(projection, peakAlpha, width, height, alphaThre
 }
 
 function projectFrame(dataset, params, {
+	camera,
 	viewIndex,
 	frameIndex,
 	splatCount,
 	modelMode,
 	temporalSigma,
+	width,
+	height,
 }) {
 	const time = frameTime01(dataset, frameIndex);
-	const camera = dataset.cameras[viewIndex];
-	const aspect = dataset.width / dataset.height;
+	const renderCamera = camera ?? dataset.cameras[viewIndex];
+	const aspect = width / height;
 	return Array.from({ length: splatCount }, (_, index) => {
 		const base = index * SPLAT_FLOATS;
 		const projection = projectAnisotropicGaussianCpu({
 			center: worldCenter(params, base, time, modelMode),
 			logScales: [params[base + 12], params[base + 13], params[base + 14]],
 			quaternion: [params[base + 16], params[base + 17], params[base + 18], params[base + 19]],
-			camera,
+			camera: renderCamera,
 			aspect,
-			height: dataset.height,
+			height,
 		});
 		return {
 			index,
@@ -268,6 +271,11 @@ function binProjectedSplats(projected, width, height, tileSize, alphaThreshold) 
 			splat.projection, splat.peakAlpha, width, height, alphaThreshold,
 		);
 		if (!bounds) continue;
+		// The opacity-aware screen rectangle is deliberately used here: a
+		// low-opacity large covariance should not be classified as a giant
+		// floater when its visible support is actually compact.
+		splat.screenAreaFraction = (bounds.maxX - bounds.minX + 1)
+			* (bounds.maxY - bounds.minY + 1) / (width * height);
 		const minTileX = Math.floor(bounds.minX / tileSize);
 		const maxTileX = Math.floor(bounds.maxX / tileSize);
 		const minTileY = Math.floor(bounds.minY / tileSize);
@@ -303,12 +311,18 @@ function binProjectedSplats(projected, width, height, tileSize, alphaThreshold) 
 export function renderSnapshotFrame(dataset, params, {
 	viewIndex = 0,
 	frameIndex = 0,
+	camera = null,
+	width: requestedWidth = dataset.width,
+	height: requestedHeight = dataset.height,
 	splatCount: requestedSplatCount,
 	tileSize = DEFAULT_TILE_SIZE,
 	modelMode = 0,
 	temporalSigma = DEFAULT_TEMPORAL_SIGMA,
 	alphaThreshold = DEFAULT_ALPHA_THRESHOLD,
 	transmittanceThreshold = DEFAULT_TRANSMITTANCE_THRESHOLD,
+	collectGeometryDiagnostics = false,
+	nearDepthThreshold = 0,
+	largeFootprintFraction = 0.25,
 } = {}) {
 	assertDataset(dataset);
 	const splatCount = resolveSplatCount(params, requestedSplatCount);
@@ -319,19 +333,35 @@ export function renderSnapshotFrame(dataset, params, {
 	if (!Number.isSafeInteger(frameIndex) || frameIndex < 0 || frameIndex >= dataset.frameCount) {
 		throw new RangeError("frameIndex is outside dataset.frameCount.");
 	}
+	assertPositiveInteger(requestedWidth, "width");
+	assertPositiveInteger(requestedHeight, "height");
+	if (camera != null && (!camera.worldToCamera || !camera.intrinsics)) {
+		throw new TypeError("camera must provide worldToCamera and intrinsics.");
+	}
 	if (!(alphaThreshold > 0 && alphaThreshold < 1)
 		|| !(transmittanceThreshold > 0 && transmittanceThreshold < 1)) {
 		throw new RangeError("Raster thresholds must be finite values between zero and one.");
 	}
-	const { width, height } = dataset;
+	if (!Number.isFinite(nearDepthThreshold) || nearDepthThreshold < 0) {
+		throw new RangeError("nearDepthThreshold must be finite and nonnegative.");
+	}
+	if (!(largeFootprintFraction > 0 && largeFootprintFraction <= 1)) {
+		throw new RangeError("largeFootprintFraction must be in (0, 1].");
+	}
+	const width = requestedWidth;
+	const height = requestedHeight;
 	const projected = projectFrame(dataset, params, {
-		viewIndex, frameIndex, splatCount, modelMode, temporalSigma,
+		camera, viewIndex, frameIndex, splatCount, modelMode, temporalSigma, width, height,
 	});
 	const { tiles, tilesX } = binProjectedSplats(
 		projected, width, height, tileSize, alphaThreshold,
 	);
 	const rgb = new Float32Array(width * height * 3);
 	const coverage = new Float32Array(width * height);
+	const depthMean = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const depthStd = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const nearCoverage = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const largeFootprintCoverage = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
 	let primitiveEvaluations = 0;
 	for (let y = 0; y < height; y += 1) {
 		for (let x = 0; x < width; x += 1) {
@@ -343,6 +373,11 @@ export function renderSnapshotFrame(dataset, params, {
 			let green = 0;
 			let blue = 0;
 			let transmittance = 1;
+			let depthWeight = 0;
+			let depthFirstMoment = 0;
+			let depthSecondMoment = 0;
+			let nearContribution = 0;
+			let largeFootprintContribution = 0;
 			for (const splat of tile) {
 				primitiveEvaluations += 1;
 				const dx = pointX - splat.projection.center[0];
@@ -352,9 +387,22 @@ export function renderSnapshotFrame(dataset, params, {
 				if (!Number.isFinite(qform) || qform < 0 || qform > 9) continue;
 				const rawAlpha = splat.peakAlpha * Math.exp(-0.5 * qform);
 				const alpha = rawAlpha >= alphaThreshold ? Math.min(0.99, rawAlpha) : 0;
-				red += transmittance * alpha * splat.color[0];
-				green += transmittance * alpha * splat.color[1];
-				blue += transmittance * alpha * splat.color[2];
+				const contribution = transmittance * alpha;
+				red += contribution * splat.color[0];
+				green += contribution * splat.color[1];
+				blue += contribution * splat.color[2];
+				if (collectGeometryDiagnostics && contribution > 0) {
+					const depth = splat.projection.cameraPoint[2];
+					depthWeight += contribution;
+					depthFirstMoment += contribution * depth;
+					depthSecondMoment += contribution * depth * depth;
+					if (nearDepthThreshold > 0 && depth < nearDepthThreshold) {
+						nearContribution += contribution;
+					}
+					if (splat.screenAreaFraction >= largeFootprintFraction) {
+						largeFootprintContribution += contribution;
+					}
+				}
 				transmittance *= 1 - alpha;
 				if (transmittance < transmittanceThreshold) break;
 			}
@@ -363,6 +411,14 @@ export function renderSnapshotFrame(dataset, params, {
 			rgb[rgbBase + 1] = green;
 			rgb[rgbBase + 2] = blue;
 			coverage[pixel] = 1 - transmittance;
+			if (collectGeometryDiagnostics && depthWeight > 0) {
+				const mean = depthFirstMoment / depthWeight;
+				depthMean[pixel] = mean;
+				depthStd[pixel] = Math.sqrt(Math.max(0,
+					depthSecondMoment / depthWeight - mean * mean));
+				nearCoverage[pixel] = nearContribution;
+				largeFootprintCoverage[pixel] = largeFootprintContribution;
+			}
 		}
 	}
 	return {
@@ -372,6 +428,12 @@ export function renderSnapshotFrame(dataset, params, {
 		frameIndex,
 		rgb,
 		coverage,
+		...(collectGeometryDiagnostics ? {
+			depthMean,
+			depthStd,
+			nearCoverage,
+			largeFootprintCoverage,
+		} : {}),
 		primitiveEvaluations,
 		binnedReferences: tiles.reduce((sum, tile) => sum + tile.length, 0),
 	};

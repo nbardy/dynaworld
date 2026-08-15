@@ -55,6 +55,12 @@ public dynamic-NVS quality, official CUDA/Warp parity, or full topology-
 differentiable training.
 ```
 
+The Pass-4 finite-element CPU reference and fixed-tape Metal segment
+microkernel, even when numerically correct, instantiate only the local
+material map in this appendix. They are not evidence for compact native-4D
+parameter scaling, camera-path event scaling, trained image quality, or
+end-to-end renderer speed.
+
 ## A. Notation
 
 Sensor-time base:
@@ -578,6 +584,253 @@ bar c     = (1 - beta) bar m
 ```
 
 This is the first finite-difference target for owner-run cell-path VJP.
+
+## K2. Shared Finite-Element Segment ABI
+
+Freeze the geometry before comparing materials. A segment record supplies:
+
+```text
+xi in [0,1]                 normalized coordinate
+L > 0                       physical ray length
+mode in {M0,...,M5}
+theta = (theta0,theta1,theta2)
+appearance coefficients
+```
+
+and every material evaluator returns:
+
+```text
+(tau, beta, m, density_bounds, branch_code)
+beta = exp(-tau)
+g = (beta,m)
+```
+
+The owner word, endpoints, prefix/suffix scan, and output decoder are identical
+between modes. This is the shared optical-element ABI. `L` must already
+include the physical ray measure, or the camera gauge must supply the
+corresponding Jacobian.
+
+The required comparison set is:
+
+```text
+M0  P0 extinction, constant color
+M1  P0 extinction, affine color
+M2  positive Bernstein P1 extinction, constant color
+M3  positive Bernstein P2 extinction, constant color
+M4  log-P1 extinction, constant color
+M5  convex log-P2 extinction, constant color
+```
+
+### K2.1 Direct positive Bernstein segments
+
+For nonnegative controls `d_i`:
+
+```text
+sigma_P1(xi) = d0 (1-xi) + d1 xi
+tau_P1       = L (d0+d1)/2
+
+sigma_P2(xi)
+  = d0(1-xi)^2 + 2d1 xi(1-xi) + d2 xi^2
+tau_P2
+  = L (d0+d1+d2)/3.
+```
+
+Both density and optical depth are nonnegative. The gradients are constants:
+
+```text
+d tau_P1 / d(d0,d1)    = (L/2,L/2)
+d tau_P2 / d(d0,d1,d2) = (L/3,L/3,L/3).
+```
+
+Positive Bernstein P2 is the mandatory counterbaseline to log-P2. Both expose
+three scalar controls on the ray segment, but P2 needs only additions and a
+multiply for exact optical depth. Nonnegative P2 Lagrange nodal values do not
+provide this positivity theorem between nodes.
+
+### K2.2 P0 extinction with affine color
+
+Let:
+
+```text
+sigma(xi) = sigma0
+c(xi) = c_front + (c_back-c_front) xi
+tau = sigma0 L
+beta = exp(-tau).
+```
+
+Then the exact transfer color is:
+
+```text
+m =
+  [(1-beta)-h1(tau)] c_front
+  + h1(tau)c_back
+
+h1(tau) = [1-(1+tau)exp(-tau)]/tau.
+```
+
+Equivalently, with slope-form storage
+`c(xi)=c0+c1 xi`, this is
+`m=(1-beta)c0+h1(tau)c1`. The implementation ABI stores front and back colors,
+not an unlabeled slope, so the two conventions cannot be mixed silently.
+
+The removable singularity is evaluated by:
+
+```text
+h1(tau)
+  = tau/2 - tau^2/3 + tau^3/8 - tau^4/30 + O(tau^5).
+```
+
+This mode tests whether the quality gap is appearance rather than extinction.
+It shares the `(beta,m)` output ABI, but it must not be reduced to
+`m=(1-beta)c` with one representative color.
+
+### K2.3 Log-P1 segment
+
+Write negative log extinction as:
+
+```text
+q(xi) = b xi + c
+sigma(xi) = sigma_star exp(-q(xi)).
+```
+
+The fixed three-slot implementation sets `sigma_star=1`; any other positive
+reference scale is absorbed exactly by replacing `c` with
+`c-log(sigma_star)`. It is not an additional unreported coefficient.
+
+Then:
+
+```text
+tau = L sigma_star exp(-c) psi(b)
+psi(b) = (1-exp(-b))/b
+psi(0) = 1.
+```
+
+Near zero:
+
+```text
+psi(b) = 1 - b/2 + b^2/6 - b^3/24 + b^4/120 + O(b^5).
+```
+
+The implementation uses this local series because Metal does not provide a
+portable `expm1` contract in the current experimental extension.
+
+### K2.4 Convex log-P2 segment and coefficient VJP
+
+For M5:
+
+```text
+q(xi) = a xi^2 + b xi + c,     a >= 0
+sigma(xi) = sigma_star exp(-q(xi))
+M_n = integral_0^1 xi^n exp(-q(xi)) dxi
+tau = L sigma_star M_0.
+```
+
+For `a>0`:
+
+```text
+M_0 =
+  exp(-c+b^2/(4a)) sqrt(pi)/(2 sqrt(a))
+  * [
+      erf(sqrt(a)(xi+b/(2a)))
+    ]_0^1.
+```
+
+Coefficient and fixed-coordinate length derivatives are:
+
+```text
+d tau / da = -L sigma_star M_2
+d tau / db = -L sigma_star M_1
+d tau / dc = -L sigma_star M_0 = -tau
+d tau / dL = sigma_star M_0.
+```
+
+`M_1` and `M_2` are evaluated by moment identities or a matched local series,
+not by differentiating a cancellation-prone `erf` difference.
+
+For same-sign completed-square arguments, define:
+
+```text
+u0 = b/(2 sqrt(a))
+u1 = sqrt(a) + u0
+q0 = c
+q1 = a+b+c
+C  = sqrt(pi)/(2 sqrt(a)).
+```
+
+The scaled-tail formulas used by the implementation are:
+
+```text
+0 < u0 < u1:
+  M0 = C [
+      exp(-q0) erfcx(u0)
+    - exp(-q1) erfcx(u1)
+  ]
+
+u0 < u1 < 0:
+  M0 = C [
+      exp(-q1) erfcx(-u1)
+    - exp(-q0) erfcx(-u0)
+  ].
+```
+
+They avoid forming a huge completed-square prefactor and subtracting two
+nearly saturated `erf` values. The remaining moments follow from:
+
+```text
+M1 = [exp(-q0)-exp(-q1)-b M0] / (2a)
+M2 = [M0-b M1-exp(-q1)] / (2a).
+```
+
+If those float32 recurrences produce a nonfinite or negative moment, the Metal
+row is invalid and the host wrapper requires an explicit fallback; it is never
+silently replaced by a transparent segment.
+
+The required numerical branches are:
+
+```text
+|a| below parity-selected threshold
+    -> constant/linear moment series
+
+a > 0, ordinary arguments
+    -> completed-square erf difference
+
+a > 0, large same-sign tail arguments
+    -> scaled erfcx tail difference using endpoint densities
+
+a < 0
+    -> reject/fallback for M5; do not silently enter erfi
+
+nonfinite or cancellation-invalid optical depth/moment
+    -> reject/fallback and increment branch counter
+```
+
+The bounded integral exists for `a<0`, but its `erfi` evaluation and
+end-growing extinction are excluded from the first M5 contract. The
+small-curvature and direct-erf thresholds are empirical numerical parameters
+fixed by float64-versus-Metal parity sweeps. A fixed GL16 fallback is
+specifically excluded: it under-resolves legal narrow peaks such as
+`q(xi)=1000(xi-1/2)^2`.
+
+### K2.5 Transfer VJP
+
+For constant color, all M0/M2/M3/M4/M5 modes lower the resulting `tau` through:
+
+```text
+beta = exp(-tau)
+m = (1-beta)c
+bar tau = beta (dot(bar m,c) - bar beta).
+```
+
+The material coefficient VJP is:
+
+```text
+bar theta_j = bar tau * d tau / d theta_j.
+```
+
+M1 uses the exact affine-color moments above and differentiates both
+`(1-beta)` and `h1(tau)`. A fixed-tape Metal VJP test validates this local
+map only; endpoint derivatives, cell-word changes, and topology refresh remain
+separate gates.
 
 ## L. Commutator Visibility Theorem
 

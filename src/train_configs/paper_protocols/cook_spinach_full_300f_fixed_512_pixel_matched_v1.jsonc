@@ -1,0 +1,32 @@
+{
+  "name": "cook_spinach_full_300f_fixed_512_pixel_matched_v1",
+  "enabled": true,
+  "dataset": {
+    "manifest": "src/dataset_configs/neural3d_cook_spinach_train2_holdout1_full_300f_manifest.jsonl",
+    "sample_id": "neural3d_cook_spinach_train_cam14_cam18_holdout_cam16_full_300f",
+    "train_cameras": ["cam14", "cam18"],
+    "heldout_cameras": ["cam16"],
+    "frame_count": 300,
+    "fps": 30.0
+  },
+  // This is the scene-breadth sibling of the frozen Coffee Martini control.
+  // It changes only the calibrated scene/split; the optimizer and pixel budget
+  // remain identical across every G4 route.
+  "steps": 300,
+  "max_train_seconds": 86400.0,
+  "frames_per_step": 4,
+  "same_time_count": 2,
+  "local_time_count": 1,
+  "local_time_radius": 8,
+  "sampler_seed_offset": 7001,
+  "stages": [
+    {
+      "label": "fixed_512w",
+      "until_step": 300,
+      "image_size": [384, 512],
+      "primitive_count": 1024,
+      "frames_per_step": 4,
+      "lr_multiplier": 0.35
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="figure-title figure-description">
+<title id="figure-title">Projective gauge certification, splitting, lowering, and fallback</title>
+<desc id="figure-description">A Homogeneous camera trace enters a Candidate bounded interval. Denominator, fit, support, and visibility checks accept, split, or explicitly fall back before interval records reach Metal.</desc>
+<style>.background { fill: #ffffff; }
+.title { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 28px; font-weight: 700; }
+.subtitle { fill: #475569; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 400; }
+.lane-title { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 21px; font-weight: 700; }
+.node-title { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 19px; font-weight: 700; }
+.node-title-compact { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+.node-title-tight { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+.body { fill: #334155; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 400; }
+.small { fill: #475569; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 400; }
+.mono { fill: #172554; font-family: Menlo, Consolas, monospace; font-size: 18px; font-weight: 600; }
+.badge { fill: #ffffff; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+.arrow { fill: none; stroke: #334155; stroke-width: 2.4; }
+.arrow-blue { fill: none; stroke: #2563eb; stroke-width: 2.8; }
+.arrow-red { fill: none; stroke: #be123c; stroke-width: 2.4; }
+.arrow-green { fill: none; stroke: #047857; stroke-width: 2.8; }
+.loop { fill: none; stroke: #7c3aed; stroke-width: 2.5; stroke-dasharray: 8 6; }
+.boundary { fill: #fff7ed; stroke: #c2410c; stroke-width: 1.8; }
+.input { fill: #f8fafc; stroke: #64748b; stroke-width: 1.8; }
+.replay { fill: #fff1f2; stroke: #fb7185; stroke-width: 1.6; }
+.compile { fill: #eff6ff; stroke: #60a5fa; stroke-width: 1.8; }
+.cert { fill: #ecfdf5; stroke: #34d399; stroke-width: 1.8; }
+.decision { fill: #fffbeb; stroke: #f59e0b; stroke-width: 2; }
+.fallback { fill: #fef2f2; stroke: #ef4444; stroke-width: 2; }
+.note { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.4; }</style>
+<rect x="0" y="0" width="1200" height="760" rx="0" class="background"/>
+<text x="40" y="43" text-anchor="start" class="title"><tspan x="40" dy="0">Projective gauge domain: certify before dividing or reusing</tspan></text>
+<text x="40" y="72" text-anchor="start" class="subtitle"><tspan x="40" dy="0">Bounded camera-program segments only · no arbitrary 360° / 720° claim</tspan></text>
+<rect x="35" y="100" width="1130" height="110" rx="16" class="compile"/>
+<text x="65" y="133" text-anchor="start" class="lane-title"><tspan x="65" dy="0">Homogeneous camera trace</tspan></text>
+<text x="65" y="169" text-anchor="start" class="mono"><tspan x="65" dy="0">h_i(t) = P(t) X_i^h(t)</tspan></text>
+<text x="65" y="197" text-anchor="start" class="mono"><tspan x="65" dy="0">u_i = h_u / h_z</tspan></text>
+<text x="545" y="148" text-anchor="start" class="body"><tspan x="545" dy="0">Keep numerator and denominator separate</tspan><tspan x="545" dy="27">until projective validity is certified</tspan></text>
+<text x="930" y="165" text-anchor="start" class="small"><tspan x="930" dy="0">Pole = chart boundary</tspan></text>
+<rect x="25" y="250" width="210" height="100" rx="12" class="input"/>
+<text x="130" y="274" text-anchor="middle" class="node-title-compact"><tspan x="130" dy="0">Candidate bounded</tspan><tspan x="130" dy="21">interval</tspan></text>
+<text x="130" y="328" text-anchor="middle" class="small"><tspan x="130" dy="0">normalize time</tspan></text>
+<rect x="255" y="250" width="210" height="100" rx="12" class="cert"/>
+<text x="360" y="282" text-anchor="middle" class="node-title-compact"><tspan x="360" dy="0">Certify denominator</tspan></text>
+<text x="360" y="328" text-anchor="middle" class="small"><tspan x="360" dy="0">pole + near plane</tspan></text>
+<rect x="485" y="250" width="210" height="100" rx="12" class="cert"/>
+<text x="590" y="282" text-anchor="middle" class="node-title-compact"><tspan x="590" dy="0">Fit / certify trace</tspan></text>
+<text x="590" y="328" text-anchor="middle" class="small"><tspan x="590" dy="0">UV / depth residual</tspan></text>
+<rect x="715" y="250" width="210" height="100" rx="12" class="cert"/>
+<text x="820" y="282" text-anchor="middle" class="node-title-compact"><tspan x="820" dy="0">Certify support</tspan></text>
+<text x="820" y="328" text-anchor="middle" class="small"><tspan x="820" dy="0">footprint + tiles</tspan></text>
+<rect x="945" y="250" width="210" height="100" rx="12" class="cert"/>
+<text x="1050" y="282" text-anchor="middle" class="node-title-compact"><tspan x="1050" dy="0">Certify visibility</tspan></text>
+<text x="1050" y="328" text-anchor="middle" class="small"><tspan x="1050" dy="0">cell order</tspan></text>
+<path d="M 235 300 L 247 300" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="247,300 237,304.5 237,295.5" fill="#2563eb"/>
+<path d="M 465 300 L 477 300" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="477,300 467,304.5 467,295.5" fill="#2563eb"/>
+<path d="M 695 300 L 707 300" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="707,300 697,304.5 697,295.5" fill="#2563eb"/>
+<path d="M 925 300 L 937 300" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="937,300 927,304.5 927,295.5" fill="#2563eb"/>
+<polygon points="1050,390 1115,440 1050,490 985,440" class="decision"/>
+<text x="1050" y="433" text-anchor="middle" class="node-title"><tspan x="1050" dy="0">all</tspan><tspan x="1050" dy="20">certified?</tspan></text>
+<path d="M 1050 350 L 1050 385" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="1050,385 1045.5,375 1054.5,375" fill="#2563eb"/>
+<rect x="900" y="525" width="265" height="108" rx="13" class="cert"/>
+<text x="1032" y="557" text-anchor="middle" class="node-title"><tspan x="1032" dy="0">Lower interval record</tspan></text>
+<text x="1032" y="588" text-anchor="middle" class="small"><tspan x="1032" dy="0">tiles + precompiled cell order</tspan></text>
+<text x="1032" y="616" text-anchor="middle" class="small"><tspan x="1032" dy="0">Metal forward / VJP</tspan></text>
+<path d="M 1115 440 L 1175 440 L 1175 505 L 1032 505 L 1032 515" class="arrow-green" fill="none" stroke="#047857" stroke-width="2.8"/>
+<polygon points="1032,515 1027.5,505 1036.5,505" fill="#047857"/>
+<rect x="500" y="470" width="250" height="96" rx="13" class="decision"/>
+<text x="625" y="504" text-anchor="middle" class="node-title"><tspan x="625" dy="0">Split interval</tspan></text>
+<text x="625" y="536" text-anchor="middle" class="small"><tspan x="625" dy="0">root or midpoint</tspan></text>
+<path d="M 985 440 L 770 440 L 770 518 L 760 518" class="loop" fill="none" stroke="#7c3aed" stroke-width="2.5" stroke-dasharray="8 6"/>
+<polygon points="760,518 770,513.5 770,522.5" fill="#7c3aed"/>
+<path d="M 500 518 L 130 518 L 130 360" class="loop" fill="none" stroke="#7c3aed" stroke-width="2.5" stroke-dasharray="8 6"/>
+<polygon points="130,360 134.5,370 125.5,370" fill="#7c3aed"/>
+<rect x="390" y="605" width="330" height="82" rx="13" class="fallback"/>
+<text x="555" y="637" text-anchor="middle" class="node-title"><tspan x="555" dy="0">Explicit fallback</tspan></text>
+<text x="555" y="668" text-anchor="middle" class="small"><tspan x="555" dy="0">reason-labelled reference route</tspan></text>
+<path d="M 625 566 L 625 586 L 555 586 L 555 595" class="arrow-red" fill="none" stroke="#be123c" stroke-width="2.4"/>
+<polygon points="555,595 550.5,585 559.5,585" fill="#be123c"/>
+<rect x="25" y="590" width="320" height="108" rx="13" class="note"/>
+<text x="185" y="622" text-anchor="middle" class="node-title"><tspan x="185" dy="0">Certificate boundary</tspan></text>
+<text x="185" y="653" text-anchor="middle" class="small"><tspan x="185" dy="0">continuous denominator</tspan><tspan x="185" dy="27">sampled general residual</tspan></text>
+<rect x="25" y="716" width="1140" height="32" rx="9" class="boundary"/>
+<text x="595" y="738" text-anchor="middle" class="small"><tspan x="595" dy="0">Any denominator, fit, support, or visibility uncertainty causes a split or explicit fallback.</tspan></text>
+</svg>

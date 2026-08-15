@@ -1,0 +1,46 @@
+{
+  "name": "coffee_martini_protocol_smoke_2step_spd4_param_matched_199",
+  "enabled": true,
+  "comparison_scope": {
+    "purpose": "Match 199 full-SPD4 atoms (18 scalars each) to 256 legacy tubes (14 scalars each).",
+    "legacy_reference_protocol": "src/train_configs/paper_protocols/coffee_martini_protocol_smoke_2step.jsonc",
+    "legacy_reference_final_atoms": 256,
+    "legacy_reference_trainable_scalars": 3584,
+    "full_spd4_final_atoms": 199,
+    "full_spd4_trainable_scalars": 3582,
+    "not_a_public_quality_protocol": true
+  },
+  "dataset": {
+    "manifest": "src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl",
+    "sample_id": "neural3d_coffee_martini_train_cam04_cam09_holdout_cam06_full_300f",
+    "train_cameras": ["cam04", "cam09"],
+    "heldout_cameras": ["cam06"],
+    "frame_count": 4,
+    "fps": 30.0
+  },
+  "steps": 2,
+  "max_train_seconds": 300.0,
+  "frames_per_step": 2,
+  "same_time_count": 2,
+  "local_time_count": 0,
+  "local_time_radius": 0,
+  "sampler_seed_offset": 7001,
+  "stages": [
+    {
+      "label": "smoke_64w_param_matched",
+      "until_step": 1,
+      "image_size": [48, 64],
+      "primitive_count": 100,
+      "frames_per_step": 2,
+      "lr_multiplier": 1.0
+    },
+    {
+      "label": "smoke_128w_param_matched",
+      "until_step": 2,
+      "image_size": [96, 128],
+      "primitive_count": 199,
+      "frames_per_step": 2,
+      "lr_multiplier": 0.5
+    }
+  ]
+}

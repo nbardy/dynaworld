@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="340" viewBox="0 0 900 340">
+<title>WorldFoam Paper-B generated artifact</title>
+<desc>Deterministically generated from independently verified evidence; claim scope is recorded in the bundle ledger.</desc>
+<rect width="100%" height="100%" fill="#fbfbfd"/>
+<rect x="28" y="28" width="844" height="284" fill="#fff4f4" stroke="#b3261e" stroke-width="3" stroke-dasharray="10 7" rx="12"/>
+<text x="450" y="105" text-anchor="middle" font-family="sans-serif" font-size="25" font-weight="700">Native training memory and temporal sharing</text>
+<text x="450" y="155" text-anchor="middle" font-family="sans-serif" font-size="30" font-weight="800" fill="#b3261e">NOT MEASURED</text>
+<text x="450" y="205" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#4a4a4a">verified 21-row F=8/64/300 fresh-process artifact with native execution,</text>
+<text x="450" y="227" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#4a4a4a">staged/fused/framewise parity, restart parity, MPS/RSS peaks, and exact work receipts</text>
+</svg>

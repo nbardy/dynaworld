@@ -1,0 +1,876 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\documentclass[
+]{article}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{longtable,booktabs,array}
+\newcounter{none} % for unnumbered tables
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales image to fit in text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi% select the smaller of both
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
+}
+% Set default figure placement to htbp
+\def\fps@figure{htbp}
+\makeatother
+% definitions for citeproc citations
+\NewDocumentCommand\citeproctext{}{}
+\NewDocumentCommand\citeproc{mm}{%
+  \begingroup\def\citeproctext{#2}\cite{#1}\endgroup}
+\makeatletter
+ % allow citations to break across lines
+ \let\@cite@ofmt\@firstofone
+ % avoid brackets around text for \cite:
+ \def\@biblabel#1{}
+ \def\@cite#1#2{{#1\if@tempswa , #2\fi}}
+\makeatother
+\newlength{\cslhangindent}
+\setlength{\cslhangindent}{1.5em}
+\newlength{\csllabelwidth}
+\setlength{\csllabelwidth}{3em}
+\newenvironment{CSLReferences}[2] % #1 hanging-indent, #2 entry-spacing
+ {\begin{list}{}{%
+  \setlength{\itemindent}{0pt}
+  \setlength{\leftmargin}{0pt}
+  \setlength{\parsep}{0pt}
+  % turn on hanging indent if param 1 is 1
+  \ifodd #1
+   \setlength{\leftmargin}{\cslhangindent}
+   \setlength{\itemindent}{-1\cslhangindent}
+  \fi
+  % set entry spacing
+  \setlength{\itemsep}{#2\baselineskip}}}
+ {\end{list}}
+\usepackage{calc}
+\newcommand{\CSLBlock}[1]{\hfill\break\parbox[t]{\linewidth}{\strut\ignorespaces#1\strut}}
+\newcommand{\CSLLeftMargin}[1]{\parbox[t]{\csllabelwidth}{\strut#1\strut}}
+\newcommand{\CSLRightInline}[1]{\parbox[t]{\linewidth - \csllabelwidth}{\strut#1\strut}}
+\newcommand{\CSLIndent}[1]{\hspace{\cslhangindent}#1}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  pdftitle={WorldFoam: Camera-Compiled Ordered Ray Transfer for Dynamic Cellular Radiance Fields},
+  pdfauthor={Anonymous},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\title{WorldFoam: Camera-Compiled Ordered Ray Transfer for Dynamic
+Cellular Radiance Fields}
+\author{Anonymous}
+\date{}
+
+\begin{document}
+\maketitle
+
+\subsection{Abstract}\label{abstract}
+
+Dynamic volume renderers must preserve depth order when differently
+colored matter overlaps. Marginalizing the ray-depth coordinate can be
+exact for a Gaussian footprint, but it discards the ordered optical
+profile required by a general cellular medium. We introduce
+\textbf{WorldFoam}, a dynamic cellular radiance representation compiled
+along a known camera program. A camera gauge pulls extinction and
+emitted radiance onto ordered ray-depth fibers with the physical
+ray-length Jacobian. Each stable cell path becomes a front-to-back word
+whose exact action on rear radiance is the affine transfer
+\((\beta,m)\), while a translated optical-depth measure retains the
+ordered profile needed for proofs and geometry gradients. A certified
+atlas reuses owner words and transfer nodes only within stable event
+strata; chart splits and explicit fallback preserve semantics when order
+or support cannot be certified. Its adjoint first reduces sample
+cotangents into compiler-node cotangents and then reverses each ordered
+word once, separating shared world-side work from the unavoidable sample
+and output slice. This formulation defines a precise same-representation
+ablation against sequential per-frame replay and a fail-closed boundary
+for event, chart, and rank changes. On a source-bound float64 CPU suite
+spanning eight procedural scenes and seven camera programs, a 128-layer
+retained-depth evaluator attains 37.9252 dB fifth-percentile PSNR
+against a dense reference; separate analytic receipts cover the
+constant-density and gauge-change checks. On the two crossing families,
+its mean RGB MSE is 82.2477\(\times\) and 528.953\(\times\) lower than
+representative-depth sorting and depth marginalization, respectively;
+using the physical gauge Jacobian reduces maximum RGB error from
+0.305335 to \(3.32998\times10^{-7}\).
+
+\subsection{1. Introduction}\label{introduction}
+
+Three-dimensional Gaussian splatting is effective because it combines a
+compact learned world with projection, tile culling, ordered alpha
+compositing, and differentiable rasterization
+(\citeproc{ref-kerbl2023}{Kerbl et al. 2023}). Dynamic variants attach
+motion, deformation, or native spacetime structure to the primitives
+(\citeproc{ref-wu2024_4dgs}{Wu et al. 2024};
+\citeproc{ref-yang2024_deformable}{Yang et al. 2024};
+\citeproc{ref-li2024_spacetime}{Li et al. 2024}). Their image formation
+still encounters a basic visibility problem: two translucent
+contributors with different colors do not generally commute, and their
+front-to-back order can change under object or camera motion. Finer
+sorting improves consistency (\citeproc{ref-radl2024_stopthepop}{Radl et
+al. 2024}), while weighted or modified blending changes the transfer
+approximation (\citeproc{ref-mcguire2013_weighted_oit}{McGuire and
+Bavoil 2013}; \citeproc{ref-hou2025_sortfree}{Hou et al. 2025};
+\citeproc{ref-koo2026_blending}{Koo et al. 2026}).
+
+WorldFoam takes a different representation boundary. The world is a
+moving, bounded cell complex with extinction and radiance fields. A ray
+intersects a sequence of cell intervals, not an unordered set of
+screen-space footprints. Beer--Lambert transport composes these
+intervals as noncommuting affine actions on rear radiance
+(\citeproc{ref-tagliasacchi2022_volume}{Tagliasacchi and Mildenhall
+2022}). This retains the exact phenomenon that a depth marginal would
+erase.
+
+The challenge is to retain order without storing a dense frame-by-cell
+tape. For a fixed world and camera program, neighboring sensor-time
+samples often share event topology and admit a common temporal
+surrogate. We compile that structure into an atlas of stable owner
+words, transfer nodes, certificates, and sparse lowering rules.
+Requested samples evaluate the atlas and accumulate into node
+cotangents; the expensive ordered-word reverse is performed at the nodes
+rather than replayed independently at every requested time. This is a
+structural work claim, not permission to hide output, target, ray, or
+sample costs.
+
+\begin{figure}
+\centering
+\includegraphics[width=1\linewidth,height=\textheight,keepaspectratio]{/Users/nicholasbardy/git/gsplats_browser/dynaworld/tmp/pdfs/worldfoam_representation_split.png}
+\caption{World Tubes marginalizes ray depth when Gaussian closure is
+useful; WorldFoam retains an ordered depth profile and its exact affine
+transfer. The figure states a target contract, not a measured
+result.}\label{fig:representation-split}
+\end{figure}
+
+Our contributions are:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  A gauge-covariant ray-fiber formulation for dynamic cellular matter in
+  which the physical coefficient \(\lambda\,dz\) is invariant under
+  admissible depth reparameterization.
+\item
+  An order-explicit translated optical-depth measure and its exact
+  compact affine quotient \((\beta,m)\) for emission--absorption
+  transfer.
+\item
+  A certified camera-program atlas that shares owner words and transfer
+  nodes only inside stable strata and makes split/fallback behavior part
+  of the method.
+\item
+  A shared adjoint factorization that reduces sample cotangents to
+  temporal nodes before one ordered-word reverse per node, together with
+  a fair same-representation sequential replay control.
+\item
+  An artifact-gated evaluation protocol that separates algebraic
+  correctness, topology correctness, structural work, measured memory,
+  and public quality.
+\end{enumerate}
+
+\subsection{2. Related work}\label{related-work}
+
+\textbf{Gaussian and dynamic representations.} Gaussian splatting learns
+anisotropic primitives rendered by projection and ordered alpha
+compositing (\citeproc{ref-kerbl2023}{Kerbl et al. 2023}). Dynamic
+Gaussian methods add deformation, trajectories, temporal features, or
+spacetime covariance (\citeproc{ref-wu2024_4dgs}{Wu et al. 2024};
+\citeproc{ref-yang2024_deformable}{Yang et al. 2024};
+\citeproc{ref-li2024_spacetime}{Li et al. 2024}). WorldFoam is not
+another Gaussian parameterization. It keeps a cellular partition and
+integrates optical matter along ray intervals.
+
+\textbf{Cellular radiance fields.} Tetra-NeRF uses a Delaunay
+tetrahedralization as an explicit radiance-field scaffold
+(\citeproc{ref-kulhanek2023_tetranerf}{Kulhanek and Sattler 2023}).
+Radiant Foam uses a Voronoi partition and adjacency-based differentiable
+ray traversal (\citeproc{ref-govindarajan2025_radiantfoam}{Govindarajan
+et al. 2025}). Power Foam introduces bounded power cells that support
+both ray tracing and rasterization
+(\citeproc{ref-govindarajan2026_powerfoam}{Govindarajan et al. 2026}).
+These works establish important static cellular backends. WorldFoam asks
+a different question: when a cellular world and a camera program are
+dynamic, which ordered ray structure can be compiled and differentiated
+across requested times?
+
+\textbf{Visibility and transfer.} Accurate front-to-back sorting and
+order-independent approximations address different failure modes
+(\citeproc{ref-radl2024_stopthepop}{Radl et al. 2024};
+\citeproc{ref-mcguire2013_weighted_oit}{McGuire and Bavoil 2013};
+\citeproc{ref-hou2025_sortfree}{Hou et al. 2025};
+\citeproc{ref-koo2026_blending}{Koo et al. 2026}). WorldFoam keeps the
+ordinary emission--absorption law and therefore preserves its
+noncommutative color ordering. It may split a temporal chart at an order
+event; it does not declare the event irrelevant.
+
+\textbf{Dynamic view synthesis.} Public evaluation follows calibrated
+multi-view video and controlled dynamic-scene protocols such as Neural
+3D Video and D-NeRF (\citeproc{ref-li2022_neural3dvideo}{Li et al.
+2022}; \citeproc{ref-pumarola2021_dnerf}{Pumarola et al. 2021}).
+Matching their quality is an empirical gate, not a consequence of the
+transfer algebra.
+
+\subsection{3. WorldFoam}\label{worldfoam}
+
+\subsubsection{3.1 Ray bundle, camera gauge, and physical
+measure}\label{ray-bundle-camera-gauge-and-physical-measure}
+
+Let \(B=\Omega\times\mathcal T\) be the sensor-time base, with
+\(b=(u,v,t)\). A known camera program defines a clipped ray bundle
+\(\pi:E_\Gamma\rightarrow B\) and a world map
+
+\[
+\Gamma:E_\Gamma\rightarrow\mathbb R^3\times\mathcal T.
+\tag{1}
+\]
+
+A local gauge \(a\) identifies a regular bundle domain with coordinates
+\((b,z_a)\). Writing \(\Gamma_{x,a}\) for the spatial part, a world
+extinction density \(\rho\) pulls back to the coordinate extinction
+
+\[
+\lambda_a(b,z_a)
+=\rho\!\left(\Gamma_a(b,z_a)\right)
+ \left\|\partial_{z_a}\Gamma_{x,a}(b,z_a)\right\|.
+\tag{2}
+\]
+
+If \(z_b=h(b,z_a)\) is orientation preserving and covers the same
+clipped physical segment, then
+
+\[
+\lambda_b(b,z_b)\,dz_b=\lambda_a(b,z_a)\,dz_a.
+\tag{3}
+\]
+
+The optical transfer is therefore independent of the chosen depth
+coordinate. Equation (3) does not license crossing a singular gauge,
+changing the clipped segment, or reusing an owner word across an
+uncertified event. Those cases require a chart transition, split, or
+fallback.
+
+\subsubsection{3.2 Dynamic cells and the ordered owner
+word}\label{dynamic-cells-and-the-ordered-owner-word}
+
+Let a dynamic foam contain bounded cells \(C_i(t)\) with parameters
+\(\theta_i\), extinction \(\rho_i(x,t)\ge0\), and color
+\(c_i(x,t)\in\mathbb R^3\). A useful instance is a kinetic power diagram
+intersected with bounded supports, but the transfer construction only
+requires certified ray--cell intervals and owner identity.
+
+On a regular ray fiber, intersections produce a near-to-far word
+
+\[
+w_b=\bigl((i_r,z_r^-,z_r^+,\rho_r,c_r)\bigr)_{r=1}^{R_b}.
+\tag{4}
+\]
+
+For a piecewise-constant segment, its physical length is
+\(\ell_r=\int_{z_r^-}^{z_r^+}
+\|\partial_z\Gamma_x\|\,dz\) and its optical depth is
+\(\tau_r=\rho_r\ell_r\). Higher-order positive segment laws may replace
+this local material model without changing the word-level transfer ABI.
+Owner identity, interval endpoints, and provenance remain attached
+because equal rendered transfers can still have different geometry
+derivatives.
+
+\subsubsection{3.3 Ordered affine
+transfer}\label{ordered-affine-transfer}
+
+Represent the action of a front interval on rear radiance \(q\) by
+
+\[
+T(\beta,m):q\mapsto m+\beta q,
+\qquad 0<\beta\le1,
+\tag{5}
+\]
+
+where \(m\in\mathbb R^3\). For a constant-color segment,
+
+\[
+\beta_r=e^{-\tau_r},
+\qquad
+m_r=(1-\beta_r)c_r.
+\tag{6}
+\]
+
+Near-to-far composition is
+
+\[
+(\beta_1,m_1)\otimes(\beta_2,m_2)
+=\left(\beta_1\beta_2,\;m_1+\beta_1m_2\right).
+\tag{7}
+\]
+
+This associative product is generally noncommutative in \(m\). The final
+pixel is \(I=m+\beta I_{\rm bg}\). A balanced scan is possible, but an
+exact two-pass front-to-back implementation is important for memory: the
+backward can recompute one current prefix from the final transfer
+instead of retaining a suffix or reverse record for every run.
+
+\subsubsection{3.4 Translated optical-depth
+measure}\label{translated-optical-depth-measure}
+
+The compact transfer in Eq. (7) acts correctly on any rear radiance but
+forgets which ordered word generated it. To make ordering explicit,
+define
+
+\[
+K_0=0,\qquad K_r=\sum_{q\le r}\tau_q,\qquad \kappa=K_R,
+\tag{8}
+\]
+
+and the vector measure
+
+\[
+d\nu(s)=c_r\,ds,
+\qquad s\in[K_{r-1},K_r).
+\tag{9}
+\]
+
+Concatenating a rear word translates its measure by the front optical
+depth. The Laplace map
+
+\[
+\mathcal L(\kappa,\nu)
+=\left(e^{-\kappa},\int_0^\infty e^{-s}\,d\nu(s)\right)
+=(\beta,m)
+\tag{10}
+\]
+
+is a monoid homomorphism into Eq. (7). It is deliberately non-injective:
+\((\beta,m)\) is the exact four-scalar RGB executor state, whereas
+\((\kappa,\nu)\) and the owner word retain the depth-resolved
+information needed to reason about color-order changes and parameter
+attribution.
+
+For a stable word, moving an interface creates boundary-supported
+tangent mass proportional to the color jump across that interface. Thus
+a compact primal transfer does not imply that geometry gradients can
+discard the owner program. WorldFoam compresses the executor state while
+preserving the sparse program needed for its adjoint.
+
+\subsubsection{3.5 Stable-stratum camera-program
+atlas}\label{stable-stratum-camera-program-atlas}
+
+Over a bounded camera program, interval endpoints and owner order vary
+until an event predicate reaches a root. The compiler partitions
+sensor-time tracks into charts on which the owner word, support, event
+orientation, and selected temporal surrogate are certified. Each
+compiled block stores:
+
+\[
+\begin{aligned}
+&\text{tracks, chart bounds, temporal nodes, and owner words},\\
+&\text{sparse world attribution and fallback metadata}.
+\end{aligned}
+\tag{11}
+\]
+
+A simple root can terminate one stable chart and begin another.
+Simultaneous, ill-conditioned, or unresolved events fail closed.
+WorldFoam does not differentiate through the discrete selection of event
+roots, charts, temporal ranks, or fallback routes; it differentiates the
+fixed compiled surrogate inside an accepted stratum.
+
+\begin{figure}
+\centering
+\includegraphics[width=0.88\linewidth,height=\textheight,keepaspectratio]{/Users/nicholasbardy/git/gsplats_browser/dynaworld/tmp/pdfs/worldfoam_ray_fiber_atlas.png}
+\caption{A camera gauge lifts sensor-time samples to ordered ray-depth
+fibers. Stable owner words lower through an order-explicit measure to an
+exact affine transfer. Event roots split charts; unresolved domains fall
+back. Sample cotangents reduce to compiler nodes before ordered-word
+reversal.}\label{fig:ray-fiber-atlas}
+\end{figure}
+
+\subsubsection{3.6 Shared adjoint and honest work
+boundary}\label{shared-adjoint-and-honest-work-boundary}
+
+Let block \(b\) have \(J_b\) temporal nodes and \(W_b\) ordered
+owner/run entries across its tracks. Let \(g_j\) be the transfer at node
+\(j\) and \(w_j(t_f)\) the fixed temporal reconstruction weights. Sample
+cotangents reduce to node cotangents as
+
+\[
+\bar g_j
+=\sum_f w_j(t_f)
+  D\operatorname{decode}(g(t_f))^\top\bar I_f.
+\tag{12}
+\]
+
+The compiler then performs one ordered-word VJP per node and scatters
+the result through sparse owner attribution. The dominant ordered world
+work is
+
+\[
+W_{\rm world}=\Theta\!\left(\sum_b J_bW_b\right),
+\tag{13}
+\]
+
+for a fixed certified program. Requested sample evaluation, ray
+generation, target reads, residuals, outputs, and the sample-to-node
+reduction remain linear in the number of requested observations. No
+theorem turns an \(F\times H\times W\) video into constant work.
+
+The fair control is not a dense all-frame tape. It is the same WorldFoam
+world and transfer law replayed one requested frame at a time, with each
+frame's tape released after its gradient reaches one global bar. That
+control can also keep peak memory \(O(1)\) in \(F\), but it repeats the
+ordered world forward and reverse \(O(F)\) times. The paper therefore
+evaluates memory and world work separately.
+
+\subsubsection{3.7 Event and update
+boundary}\label{event-and-update-boundary}
+
+Within a fixed accepted chart, gradients flow through material
+parameters, segment lengths, cell trajectories, weights, and camera rays
+supported by the compiled surrogate. A geometry or camera update that
+invalidates a certificate requires recompilation. Reusing a stale owner
+word across a crossing would produce a smooth but wrong gradient;
+recertification is part of the optimizer contract, not an implementation
+detail.
+
+A flow-covariant optical connection is a possible future compression of
+coherent temporal change. It is not part of the main runtime claim here.
+It must first beat the direct transfer atlas under equal capacity, equal
+primal error, and equal tangent error; small curvature alone is not a
+systems result.
+
+\subsection{4. Implementation}\label{implementation}
+
+The implementation separates four interfaces:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  a CPU reference compiler that discovers and certifies kinetic owner
+  charts;
+\item
+  compact native-shaped blocks containing post-certification active
+  owners, node transfers, and sparse world attribution;
+\item
+  a selected-sample evaluator and sample-to-node reduction; and
+\item
+  staged and fused ordered-word VJPs that lower node bars to material
+  and geometry bars.
+\end{enumerate}
+
+Material segments share a parameterized ABI returning optical depth,
+affine transfer, bounds, and an explicit VJP. Constant P0 segments
+define the primary paper path. Richer positive-polynomial and
+log-polynomial segments are basis ablations, not separate renderer
+forks.
+
+The fused reverse removes an exposed node-by-run length-cotangent buffer
+by assembling material and kinetic-world bars inside the accepted block.
+It does not remove the primal owner words or node lengths. Targets and
+rays are read in bounded selected-sample chunks. Completion fences
+delimit when block-local device state, readback receipts, and request
+state may be released.
+
+\subsection{5. Experiments}\label{experiments}
+
+The experiments isolate five questions that are often conflated: Is the
+local transfer exact? Is a compiled chart topologically correct? Does
+the shared adjoint avoid repeated ordered world work? Does the complete
+trainer fit under a measured memory envelope? Does the representation
+learn competitive public novel-view quality?
+
+\subsubsection{5.1 Numerical and topology
+correctness}\label{numerical-and-topology-correctness}
+
+The numerical foundation compares every selected segment material
+against an independent high-precision integral and compares analytic
+VJPs against both an explicit oracle and finite differences. The
+accepted representation-level suite below uses constant density,
+differently colored crossings, thin occluders, moving bounded cells,
+finite exposure, and rolling shutter. It compares retained-depth
+integration against dense ray integration and two depth-collapsing
+baselines. End-to-end kinetic chart discovery, compiled-atlas parity,
+and native execution are separate experiments and are not certified by
+this artifact.
+
+The accepted G0/G3 CPU suite evaluates all \(8\times7=56\) scene--camera
+conditions at 13 times and 17 sensor locations. Its dense oracle uses
+2,048 depth samples per ray; the constant-density sphere and
+gauge-change checks also have analytic references. Table 1 reports
+aggregates recomputed by the independent verifier from the source-bound
+JSON, rather than training metrics or diagnostic CPU timing.
+
+\input{/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/worldfoam_paper/generated/foundation_v1/synthetic_visibility_table.tex}
+
+\begin{figure}
+\centering
+\includegraphics[width=0.92\linewidth,height=\textheight,keepaspectratio]{/Users/nicholasbardy/git/gsplats_browser/dynaworld/tmp/pdfs/worldfoam_synthetic_depth_convergence.png}
+\caption{Across all 56 synthetic scene--camera conditions, depth-layer
+error decreases with retained-depth resolution. The plotted quantity is
+median RGB absolute error against the 2,048-sample float64 CPU oracle;
+it is not a public-data quality or native-performance
+curve.}\label{fig:synthetic-depth-convergence}
+\end{figure}
+
+\begin{figure}
+\centering
+\includegraphics[width=0.92\linewidth,height=\textheight,keepaspectratio]{/Users/nicholasbardy/git/gsplats_browser/dynaworld/tmp/pdfs/worldfoam_synthetic_crossing_flicker.png}
+\caption{For the two differently colored crossing families,
+retained-depth evaluation reduces temporal flicker relative to
+representative-depth sorting and depth marginalization across the seven
+camera programs. This is a synthetic float64 CPU visibility
+result.}\label{fig:synthetic-crossing-flicker}
+\end{figure}
+
+\begin{figure}
+\centering
+\includegraphics[width=0.92\linewidth,height=\textheight,keepaspectratio]{/Users/nicholasbardy/git/gsplats_browser/dynaworld/tmp/pdfs/worldfoam_synthetic_adaptive_fallback.png}
+\caption{The representation-level coarse-to-fine policy routes difficult
+synthetic rays to the 128-layer fallback as camera motion and event
+difficulty increase. Fallback is part of the reported semantics, not
+discarded work; this plot does not certify an end-to-end kinetic
+compiler.}\label{fig:synthetic-adaptive-fallback}
+\end{figure}
+
+The accepted
+\href{outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/summary.json}{source-bound
+synthetic visibility artifact} records the complete protocol and source
+SHA-256 digests. Their short display prefixes are \texttt{e9e184ca56a5}
+and \texttt{dd77886d4979}; the verifier checks all 64 hex digits rather
+than these manuscript abbreviations.
+
+\subsubsection{5.2 Same-representation memory/work
+ablation}\label{same-representation-memorywork-ablation}
+
+The primary systems fixture fixes one \(384\times512\) camera program, a
+\(32\times32\) kinetic world, 512 selected pixel tracks, four compiler
+nodes, and the 300-time physical grid. Requested subsets use
+\(F\in\{8,64,300\}\). All 1024 sites remain eligible during
+certification; compact device blocks are formed only after active owners
+are witnessed.
+
+The protocol requires seven mode/frame combinations, each repeated in
+three fresh processes. They form three route families:
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3000}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.4000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Route
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Requested frames
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Purpose
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+staged sparse reverse & 8 & parity oracle for the fused reverse \\
+fused shared reverse & 8, 64, 300 & matched parity and
+requested-density scaling \\
+sequential same-representation replay & 8, 64, 300 & fair
+repeated-world-work control \\
+\end{longtable}
+}
+
+Each accepted row must perform one real optimizer mutation. The artifact
+must report compile, forward, backward, optimizer, and wall time; process RSS;
+public allocator current and driver peaks; retained logical bytes;
+target/ray traffic; sample interactions; node-forward work; ordered-word
+forward/reverse work; structural fingerprints; loss; gradient parity;
+and parameter-update parity. A failed resource guard is a failed
+measured row, not a silently censored control.
+
+The hypothesis is deliberately two-part:
+
+\[
+\begin{aligned}
+\text{compiled:}&\quad
+  W_{\rm world}\propto\sum_bJ_bW_b,\\
+\text{sequential replay:}&\quad
+  W_{\rm world}\propto F,\\
+\text{both:}&\quad
+  M_{\rm peak}=O(1)\text{ if frame scratch is released}.
+\end{aligned}
+\tag{14}
+\]
+
+\subsubsection{5.3 Material-basis
+ablation}\label{material-basis-ablation}
+
+Constant, affine-color, positive-polynomial, and convex log-polynomial
+segment families use one payload/ABI and disjoint train/held-out chords.
+The experiment tests whether one basis dominates or whether basis
+selection must be adaptive. It does not justify native integration
+merely because a basis fits the family that generated its synthetic
+target.
+
+\begin{figure}
+\centering
+\includegraphics[width=0.88\linewidth,height=\textheight,keepaspectratio]{/Users/nicholasbardy/git/gsplats_browser/dynaworld/tmp/pdfs/worldfoam_material_family_loss.png}
+\caption{At the same six-scalar payload, M3 and M5 each fit its own
+generating family while losing decisively on the other held-out family.
+The result establishes complementary material capacity, not renderer
+speed, public quality, or native
+memory.}\label{fig:worldfoam-material-family-loss}
+\end{figure}
+
+The matched held-out gate therefore rejects a universal material winner.
+Adaptive per-cell selection or real held-out material observations are
+required before either richer law can replace the constant-density path
+in a native renderer.
+
+\subsubsection{5.4 Public quality and visibility
+pathology}\label{public-quality-and-visibility-pathology}
+
+Public evaluation uses full calibrated multi-view sequences with
+held-out cameras, at least one controlled synthetic dynamic set, seeds
+fixed before inspection, and identical image metrics across routes.
+Baselines include dynamic Gaussian replay, World Tubes, static/streamed
+cellular controls where applicable, same-representation WorldFoam
+replay, and compiled WorldFoam.
+
+The crossing-opacity suite separately measures transmittance error, RGB
+error, temporal flicker, order flips, gradient continuity inside strata,
+split frequency, fallback fraction, active word length, and event
+density. This is the experiment that decides whether retained depth
+earns its extra complexity.
+
+\subsection{6. Discussion and
+limitations}\label{discussion-and-limitations}
+
+WorldFoam is useful only where retaining ordered depth changes the
+answer or the cost structure. For thin opaque surfaces or scenes already
+modeled well by Gaussian splats, World Tubes is the simpler primary
+method. For thick, differently colored overlap, a single representative
+depth can be inadequate, and the cell-path transfer gives a more
+faithful object.
+
+The formulation has hard boundaries. A point partition does not bound
+the number of cells stabbed by a ray. Event and chart complexity can
+grow with motion duration, cell count, and degeneracy. The compiler
+currently treats event, chart, rank, and fallback choices as discrete.
+Geometry steps may force recertification. The exact four-scalar transfer
+is not an exact replacement for owner topology in geometry gradients.
+Finally, frame-density-independent ordered world work does not remove
+the linear camera, target, sample, shading, and output slice.
+
+These boundaries make the ablations decisive. If compiled and sequential
+replay have comparable world work, the compiler has not earned its
+complexity. If measured memory does not remain inside the declared
+guard, analytic state counts are insufficient. If retained depth does
+not improve the visibility stress case or public held-out quality,
+WorldFoam should remain a reference renderer rather than become the
+production lane.
+
+\subsection{7. Conclusion}\label{conclusion}
+
+WorldFoam formulates dynamic cellular rendering as gauge-covariant
+ordered transfer on camera ray fibers. The translated optical-depth
+measure preserves the ordered profile; its affine quotient gives an
+exact compact executor; and a stable-stratum atlas exposes where
+temporal structure can be shared without crossing visibility events. The
+shared adjoint targets repeated ordered world work while retaining the
+unavoidable linear sample slice. The paper's systems and quality
+conclusions remain tied to matched, source-bound ablations rather than
+to representation-level byte formulas.
+
+\subsection{Reproducibility statement}\label{reproducibility-statement}
+
+The release package will include fixed configs, dataset/split manifests,
+compiler and native-source digests, fresh-process receipts, raw
+per-repeat rows, artifact verifiers, and scripts that regenerate every
+table and figure. Concept figures are deterministic and result-free.
+Measured figures and tables must be generated from accepted JSON rather
+than edited by hand.
+
+\subsection{Appendix A. Proof
+sketches}\label{appendix-a.-proof-sketches}
+
+\subsubsection{A.1 Gauge covariance}\label{a.1-gauge-covariance}
+
+For \(z_b=h(b,z_a)\) with positive derivative, physical arclength
+satisfies
+
+\[
+\left\|\partial_{z_b}\Gamma_x\right\|dz_b
+=\left\|\partial_{z_a}\Gamma_x\right\|dz_a.
+\]
+
+Multiplying by the scalar world extinction yields Eq. (3). The
+path-ordered product is therefore unchanged under a regular
+reparameterization of the same oriented clipped fiber. A singular chart
+or changed interval violates the assumptions and must not be merged by
+this argument.
+
+\subsubsection{A.2 Affine transfer
+homomorphism}\label{a.2-affine-transfer-homomorphism}
+
+Applying a front transfer \((\beta_1,m_1)\) to the result of a rear
+transfer \((\beta_2,m_2)\) gives
+
+\[
+m_1+\beta_1(m_2+\beta_2q)
+=(m_1+\beta_1m_2)+(\beta_1\beta_2)q,
+\]
+
+which proves Eq. (7). Translating the rear measure by front optical
+depth multiplies its Laplace contribution by \(e^{-\kappa_1}=\beta_1\),
+proving Eq. (10) respects the same product.
+
+\subsubsection{A.3 Shared-adjoint scope}\label{a.3-shared-adjoint-scope}
+
+Equation (12) is the chain rule for a fixed temporal reconstruction.
+Once all sample contributions have reached \(\bar g_j\), reversing the
+node word once is exact for that fixed surrogate. The statement does not
+cover derivatives of the compiler's discrete choices or prove a physical
+tangent approximation bound between nodes; those require separate
+certificates and ablations.
+
+\protect\phantomsection\label{refs}
+\subsection{References}\label{references}
+
+\protect\phantomsection\label{refs}
+\begin{CSLReferences}{1}{1}
+\bibitem[\citeproctext]{ref-govindarajan2026_powerfoam}
+Govindarajan, Shrisudhan, Daniel Rebain, Dor Verbin, Kwang Moo Yi, Anish
+Prabhu, and Andrea Tagliasacchi. 2026. {``{Power Foam: Unifying
+Real-Time Differentiable Ray Tracing and Rasterization}.''} \emph{arXiv
+Preprint arXiv:2604.24994}. \url{https://arxiv.org/abs/2604.24994}.
+
+\bibitem[\citeproctext]{ref-govindarajan2025_radiantfoam}
+Govindarajan, Shrisudhan, Daniel Rebain, Kwang Moo Yi, and Andrea
+Tagliasacchi. 2025. {``{Radiant Foam: Real-Time Differentiable Ray
+Tracing}.''} \emph{Proceedings of the IEEE/CVF International Conference
+on Computer Vision}, October, 4135--45.
+\url{https://arxiv.org/abs/2502.01157}.
+
+\bibitem[\citeproctext]{ref-hou2025_sortfree}
+Hou, Qiqi, Randall Rauwendaal, Zifeng Li, et al. 2025. {``{Sort-Free
+Gaussian Splatting via Weighted Sum Rendering}.''} \emph{International
+Conference on Learning Representations}.
+\url{https://openreview.net/forum?id=y8uPsxR8PN}.
+
+\bibitem[\citeproctext]{ref-kerbl2023}
+Kerbl, Bernhard, Georgios Kopanas, Thomas Leimkühler, and George
+Drettakis. 2023. {``{3D Gaussian Splatting for Real-Time Radiance Field
+Rendering}.''} \emph{ACM Transactions on Graphics} 42 (4): 1--14.
+\url{https://doi.org/10.1145/3592433}.
+
+\bibitem[\citeproctext]{ref-koo2026_blending}
+Koo, Junseo, Jinseo Jeong, and Gunhee Kim. 2026. {``{Gaussian Blending:
+Rethinking Alpha Blending in 3D Gaussian Splatting}.''}
+\emph{Proceedings of the AAAI Conference on Artificial Intelligence} 40:
+5744--54. \url{https://doi.org/10.1609/aaai.v40i7.37495}.
+
+\bibitem[\citeproctext]{ref-kulhanek2023_tetranerf}
+Kulhanek, Jonas, and Torsten Sattler. 2023. {``{Tetra-NeRF: Representing
+Neural Radiance Fields Using Tetrahedra}.''} \emph{arXiv Preprint
+arXiv:2304.09987}. \url{https://arxiv.org/abs/2304.09987}.
+
+\bibitem[\citeproctext]{ref-li2022_neural3dvideo}
+Li, Tianye, Mira Slavcheva, Michael Zollhöfer, et al. 2022. {``{Neural
+3D Video Synthesis From Multi-View Video}.''} \emph{Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+5521--31.
+
+\bibitem[\citeproctext]{ref-li2024_spacetime}
+Li, Zhan, Zhang Chen, Zhong Li, and Yi Xu. 2024. {``{Spacetime Gaussian
+Feature Splatting for Real-Time Dynamic View Synthesis}.''}
+\emph{Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition}, 8508--20.
+
+\bibitem[\citeproctext]{ref-mcguire2013_weighted_oit}
+McGuire, Morgan, and Louis Bavoil. 2013. {``{Weighted Blended
+Order-Independent Transparency}.''} \emph{Journal of Computer Graphics
+Techniques} 2 (2): 122--41.
+\url{https://www.jcgt.org/published/0002/02/09/}.
+
+\bibitem[\citeproctext]{ref-pumarola2021_dnerf}
+Pumarola, Albert, Enric Corona, Gerard Pons-Moll, and Francesc
+Moreno-Noguer. 2021. {``{D-NeRF: Neural Radiance Fields for Dynamic
+Scenes}.''} \emph{Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition}, 10318--27.
+
+\bibitem[\citeproctext]{ref-radl2024_stopthepop}
+Radl, Lukas, Michael Steiner, Mathias Parger, Alexander Weinrauch,
+Bernhard Kerbl, and Markus Steinberger. 2024. {``{StopThePop: Sorted
+Gaussian Splatting for View-Consistent Real-time Rendering}.''}
+\emph{ACM Transactions on Graphics} 43 (4): 1--17.
+\url{https://doi.org/10.1145/3658187}.
+
+\bibitem[\citeproctext]{ref-tagliasacchi2022_volume}
+Tagliasacchi, Andrea, and Ben Mildenhall. 2022. {``{Volume Rendering
+Digest (for NeRF)}.''} \emph{arXiv Preprint arXiv:2209.02417}.
+\url{https://arxiv.org/abs/2209.02417}.
+
+\bibitem[\citeproctext]{ref-wu2024_4dgs}
+Wu, Guanjun, Taoran Yi, Jiemin Fang, et al. 2024. {``{4D Gaussian
+Splatting for Real-Time Dynamic Scene Rendering}.''} \emph{Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+20310--20.
+
+\bibitem[\citeproctext]{ref-yang2024_deformable}
+Yang, Ziyi, Xinyu Gao, Wen Zhou, Shaohui Jiao, Yuqing Zhang, and
+Xiaogang Jin. 2024. {``{Deformable 3D Gaussians for High-Fidelity
+Monocular Dynamic Scene Reconstruction}.''} \emph{Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+20331--41.
+
+\end{CSLReferences}
+
+\end{document}

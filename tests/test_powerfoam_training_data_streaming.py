@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import torch
-
 import powerfoam_training_data as training_data
+import torch
 from camera import CameraSpec
 from powerfoam_eval_artifacts import _stream_aux_metrics
 
@@ -36,7 +35,11 @@ def test_paper_multicam_data_keeps_rays_lazy(monkeypatch) -> None:
         train_view_count=2,
         heldout_view_count=1,
         frame_count=3,
-        condition_sequence=SimpleNamespace(frames=frames[0], video_fps=30.0),
+        condition_sequence=SimpleNamespace(
+            frames=frames[0],
+            frame_times=torch.linspace(0.0, 1.0, 3),
+            video_fps=30.0,
+        ),
         metadata={"sample_id": "fixture"},
         train_camera_names=["a", "b"],
         heldout_camera_names=["c"],
@@ -71,12 +74,21 @@ def test_paper_multicam_data_keeps_rays_lazy(monkeypatch) -> None:
         torch.device("cpu"),
     )
 
-    assert data["targets"].shape == (6, 3, 4, 4)
+    assert data["targets"] is None
+    assert data["heldout_targets"] is None
     assert load_kwargs["frame_device"] == torch.device("cpu")
     assert data["sample_rays"] is None
     assert data["sample_ray_provider"].sample_count == 6
+    assert data["sample_target_provider"].sample_count == 6
     assert data["heldout_rays"] is None
     assert data["heldout_ray_provider"].sample_count == 3
+    assert data["heldout_target_provider"].sample_count == 3
+    assert data["init_frames"] is None
+    assert data["init_frames_residency"] == {
+        "enabled": False,
+        "resident_bytes": 0,
+        "shares_train_target_storage": False,
+    }
 
 
 def test_streamed_aux_metrics_visit_every_sample_in_bounded_ray_chunks() -> None:

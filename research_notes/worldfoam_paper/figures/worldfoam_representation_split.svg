@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="figure-title figure-description">
+<title id="figure-title">World Tubes and WorldFoam retain different ray information</title>
+<desc id="figure-description">The same dynamic world and camera program branch into a depth-marginalized Gaussian trace representation or a retained-depth ordered-transfer representation. The figure states structural, not measured, memory and work boundaries.</desc>
+<style>.background { fill: #ffffff; }
+.title { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 32px; font-weight: 700; }
+.subtitle { fill: #475569; font-family: Helvetica, Arial, sans-serif; font-size: 20px; font-weight: 400; }
+.lane { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 23px; font-weight: 700; }
+.node { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 20px; font-weight: 700; }
+.body { fill: #334155; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 400; }
+.mono { fill: #172554; font-family: Menlo, Consolas, monospace; font-size: 18px; font-weight: 600; }
+.badge { fill: #ffffff; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+.input { fill: #f8fafc; stroke: #64748b; stroke-width: 2; }
+.tubes { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+.foam { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+.measure { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 2; }
+.event { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; }
+.fallback { fill: #fff1f2; stroke: #e11d48; stroke-width: 2; }
+.boundary { fill: #fffbeb; stroke: #d97706; stroke-width: 2; }
+.ray { fill: none; stroke: #475569; stroke-width: 3; }
+.arrow-blue { fill: none; stroke: #2563eb; stroke-width: 3; }
+.arrow-green { fill: none; stroke: #059669; stroke-width: 3; }
+.arrow-purple { fill: none; stroke: #7c3aed; stroke-width: 3; }
+.dashed { fill: none; stroke: #ea580c; stroke-width: 2.5; stroke-dasharray: 8 6; }</style>
+<rect x="0" y="0" width="1200" height="760" rx="0" class="background"/>
+<text x="42" y="48" text-anchor="start" class="title"><tspan x="42" dy="0">One camera-ray bundle, two representation choices</tspan></text>
+<text x="42" y="80" text-anchor="start" class="subtitle"><tspan x="42" dy="0">World Tubes marginalizes depth; WorldFoam retains ordered depth transfer.</tspan></text>
+<rect x="50" y="112" width="1100" height="100" rx="16" class="input"/>
+<text x="600" y="145" text-anchor="middle" class="node"><tspan x="600" dy="0">Same learned dynamic world</tspan><tspan x="600" dy="30">Known camera program  Γ : (u, v, t, z) -&gt; (x, t)</tspan></text>
+<polygon points="598.5,212 598.5,238 601.5,238 601.5,212" fill="#2563eb"/>
+<polygon points="600,236.5 305,236.5 305,239.5 600,239.5" fill="#2563eb"/>
+<polygon points="303.5,238 303.5,265 306.5,265 306.5,238" fill="#2563eb"/>
+<polygon points="305,265 300,254 310,254" fill="#2563eb"/>
+<polygon points="598.5,212 598.5,238 601.5,238 601.5,212" fill="#059669"/>
+<polygon points="600,239.5 895,239.5 895,236.5 600,236.5" fill="#059669"/>
+<polygon points="893.5,238 893.5,265 896.5,265 896.5,238" fill="#059669"/>
+<polygon points="895,265 890,254 900,254" fill="#059669"/>
+<rect x="50" y="275" width="510" height="350" rx="18" class="tubes"/>
+<rect x="76" y="294" width="138" height="34" rx="17" fill="#2563eb"/>
+<text x="145" y="318" text-anchor="middle" class="badge"><tspan x="145" dy="0">WORLD TUBES</tspan></text>
+<text x="305" y="361" text-anchor="middle" class="lane"><tspan x="305" dy="0">Gaussian closure under marginalization</tspan></text>
+<rect x="88" y="390" width="434" height="82" rx="14" class="input"/>
+<text x="305" y="420" text-anchor="middle" class="body"><tspan x="305" dy="0">Depth marginal via Schur complement</tspan><tspan x="305" dy="27">UVT footprint + conditional-depth packet</tspan></text>
+<rect x="88" y="493" width="434" height="82" rx="14" class="input"/>
+<text x="305" y="523" text-anchor="middle" class="body"><tspan x="305" dy="0">Certified support and representative order</tspan><tspan x="305" dy="27">splat-compatible trace evaluator</tspan></text>
+<text x="305" y="588" text-anchor="middle" class="body"><tspan x="305" dy="0">Best when depth can be summarized</tspan><tspan x="305" dy="25">without changing the required transfer law.</tspan></text>
+<rect x="640" y="275" width="510" height="350" rx="18" class="foam"/>
+<rect x="666" y="294" width="118" height="34" rx="17" fill="#059669"/>
+<text x="725" y="318" text-anchor="middle" class="badge"><tspan x="725" dy="0">WORLDFOAM</tspan></text>
+<text x="895" y="361" text-anchor="middle" class="lane"><tspan x="895" dy="0">Retain ray depth z</tspan></text>
+<rect x="678" y="390" width="434" height="82" rx="14" class="input"/>
+<text x="895" y="420" text-anchor="middle" class="body"><tspan x="895" dy="0">Ordered cell-path word</tspan><tspan x="895" dy="27">physical intervals  (tau_r, c_r)</tspan></text>
+<rect x="678" y="493" width="434" height="82" rx="14" class="measure"/>
+<text x="895" y="523" text-anchor="middle" class="body"><tspan x="895" dy="0">Translated optical-depth measure  (kappa, nu)</tspan><tspan x="895" dy="27">Exact affine transfer  (beta, m)</tspan></text>
+<text x="895" y="588" text-anchor="middle" class="body"><tspan x="895" dy="0">Constant-state ordered reverse;</tspan><tspan x="895" dy="25">preserve owner words for world gradients.</tspan></text>
+<rect x="50" y="647" width="1100" height="50" rx="12" class="boundary"/>
+<text x="600" y="678" text-anchor="middle" class="node"><tspan x="600" dy="0">Target contract: shared compiled world-side work + linear sample / output slice</tspan></text>
+<text x="600" y="731" text-anchor="middle" class="subtitle"><tspan x="600" dy="0">No measured memory or speed claim in this figure</tspan></text>
+</svg>

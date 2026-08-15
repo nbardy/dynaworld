@@ -1,0 +1,181 @@
+{
+  "rows": [
+    {
+      "category": "local_material_correctness",
+      "claim_scope": "fixed segments only",
+      "evidence_id": "m0_m5_segment_parity",
+      "metric_1": "integral_max_abs_error",
+      "metric_2": "finite_difference_vjp_normalized_error",
+      "row_id": "m0_m5_cpu_segment_parity",
+      "value_1": 5.9570404165043556e-15,
+      "value_2": 6.859349373222745e-10,
+      "verdict": "accepted_local_cpu"
+    },
+    {
+      "category": "local_material_correctness",
+      "claim_scope": "fixed segments only; not current trainer runtime",
+      "evidence_id": "m0_m5_segment_parity",
+      "metric_1": "forward_normalized_error",
+      "metric_2": "vjp_normalized_error",
+      "row_id": "m0_m5_metal_segment_parity",
+      "value_1": 7.507716759391769e-08,
+      "value_2": 5.960464477539063e-08,
+      "verdict": "accepted_historical_source_hash_checked_metal"
+    },
+    {
+      "category": "material_capacity",
+      "claim_scope": "synthetic partial chords; no universal winner",
+      "evidence_id": "m3_m5_partial_chord_fit",
+      "metric_1": "M3_heldout_loss",
+      "metric_2": "M5_heldout_loss",
+      "row_id": "partial_chord_positive_p2",
+      "value_1": 5.2578895815493944e-17,
+      "value_2": 8.796685111786883e-05,
+      "verdict": "M3_family_win"
+    },
+    {
+      "category": "material_capacity",
+      "claim_scope": "synthetic partial chords; no universal winner",
+      "evidence_id": "m3_m5_partial_chord_fit",
+      "metric_1": "M3_heldout_loss",
+      "metric_2": "M5_heldout_loss",
+      "row_id": "partial_chord_convex_log_p2",
+      "value_1": 0.0013281964210344283,
+      "value_2": 6.188399567000404e-15,
+      "verdict": "M5_family_win"
+    },
+    {
+      "category": "material_basis_selection",
+      "claim_scope": "verified float64 CPU synthetic per-cell basis selection on disjoint chords; matched 24-byte M3/M5 payload plus one tag bit; no native, public-image, runtime, or memory claim",
+      "evidence_id": "adaptive_m3_m5_basis_selection",
+      "metric_1": "adaptive_to_best_fixed_ratio",
+      "metric_2": "adaptive_to_oracle_ratio",
+      "row_id": "adaptive_m3_m5_mean_loss",
+      "value_1": 0.3134053578693319,
+      "value_2": 1.0,
+      "verdict": "accepted_cpu_adaptive_selection"
+    },
+    {
+      "category": "material_basis_selection",
+      "claim_scope": "verified float64 CPU synthetic per-cell basis selection on disjoint chords; matched 24-byte M3/M5 payload plus one tag bit; no native, public-image, runtime, or memory claim",
+      "evidence_id": "adaptive_m3_m5_basis_selection",
+      "metric_1": "pure_family_selection_accuracy",
+      "metric_2": "selection_oracle_agreement",
+      "row_id": "adaptive_m3_m5_selection_accuracy",
+      "value_1": 1.0,
+      "value_2": 1.0,
+      "verdict": "accepted_cpu_adaptive_selection"
+    },
+    {
+      "category": "ordered_transfer_algebra",
+      "claim_scope": "constant-density owner word only",
+      "evidence_id": "constant_density_ordered_transfer",
+      "metric_1": "render_max_abs_error",
+      "metric_2": "vjp_max_abs_error",
+      "row_id": "constant_density_ordered_transfer",
+      "value_1": 0.0,
+      "value_2": 2.4557592070983958e-11,
+      "verdict": "accepted_cpu_constant_density"
+    },
+    {
+      "category": "synthetic_correctness",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "rgb_max_absolute_error",
+      "metric_2": "transmittance_max_absolute_error",
+      "row_id": "g0_analytic_constant_sphere",
+      "value_1": 0.0004355420320850678,
+      "value_2": 0.0005052691787544583,
+      "verdict": "accepted_cpu_g0"
+    },
+    {
+      "category": "synthetic_correctness",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "with_jacobian_rgb_max_error",
+      "metric_2": "without_over_with_error_ratio",
+      "row_id": "g0_physical_gauge_jacobian",
+      "value_1": 3.329976727695083e-07,
+      "value_2": 916927.4009053267,
+      "verdict": "accepted_cpu_g0"
+    },
+    {
+      "category": "synthetic_visibility",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "psnr_db_mean",
+      "metric_2": "psnr_db_p05",
+      "row_id": "g3_depth_layer_128_accuracy",
+      "value_1": 61.00175011680263,
+      "value_2": 37.92521152366744,
+      "verdict": "accepted_cpu_g3"
+    },
+    {
+      "category": "synthetic_visibility",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "depth_layer_128_rgb_mse_mean",
+      "metric_2": "representative_sorted_rgb_mse_mean",
+      "row_id": "g3_crossing_vs_representative_sort",
+      "value_1": 1.414974380679315e-05,
+      "value_2": 0.0011637838438611008,
+      "verdict": "accepted_cpu_g3"
+    },
+    {
+      "category": "synthetic_visibility",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "depth_layer_128_rgb_mse_mean",
+      "metric_2": "depth_marginal_rgb_mse_mean",
+      "row_id": "g3_crossing_vs_depth_marginal",
+      "value_1": 1.414974380679315e-05,
+      "value_2": 0.00748454452856657,
+      "verdict": "accepted_cpu_g3"
+    },
+    {
+      "category": "synthetic_visibility",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "depth_layer_128_flicker_mean",
+      "metric_2": "representative_sorted_flicker_mean",
+      "row_id": "g3_crossing_flicker_vs_representative_sort",
+      "value_1": 0.002486417801720492,
+      "value_2": 0.02206361148038069,
+      "verdict": "accepted_cpu_g3"
+    },
+    {
+      "category": "synthetic_visibility",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "depth_layer_128_gradient_variance_mean",
+      "metric_2": "representative_sorted_gradient_variance_mean",
+      "row_id": "g3_crossing_gradient_variance_vs_representative_sort",
+      "value_1": 2.7703643616359937e-05,
+      "value_2": 0.0021054758574574534,
+      "verdict": "accepted_cpu_g3"
+    },
+    {
+      "category": "synthetic_visibility",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "fallback_fraction_mean",
+      "metric_2": "fallback_fraction_p95",
+      "row_id": "g3_adaptive_fallback",
+      "value_1": 0.5146250808015514,
+      "value_2": 0.9524886877828054,
+      "verdict": "accepted_cpu_g3_diagnostic"
+    },
+    {
+      "category": "synthetic_visibility",
+      "claim_scope": "verified float64 CPU synthetic S1-S8/C1-C7 only; no native runtime, allocator, trained-image, or public-data claim",
+      "evidence_id": "synthetic_visibility_g0_g3",
+      "metric_1": "representative_sorted_order_flips",
+      "metric_2": "depth_layer_128_order_flips",
+      "row_id": "g3_crossing_order_flips",
+      "value_1": 20.0,
+      "value_2": 20.0,
+      "verdict": "accepted_cpu_g3_diagnostic"
+    }
+  ],
+  "schema_version": 1
+}

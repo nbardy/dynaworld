@@ -204,12 +204,18 @@ the uniform epoch measure. Progressive stages may change image size, active
 primitive count, K frames per step, and learning-rate multiplier. Every lane
 must report target frames/pixels separately from rasterized frames/pixels.
 
-Paper evidence schema v1 additionally requires heldout LPIPS, sampled peak
-device memory, serialized checkpoint bytes, synchronized phase timing, and
-representation-specific diagnostics. Neural3D breadth rows use this same
-synchronized multicamera contract. Their WorldFoam initializer must be
-explicitly scene-specific or labelled `video`; Coffee Martini geometry may not
-be inherited implicitly.
+Paper evidence schema v2 additionally requires heldout LPIPS, sampled peak
+device memory, serialized checkpoint bytes, synchronized phase timing,
+representation-specific diagnostics, clean source/native identities, exact
+ordered sample schedules, raw and decoded input identities, one canonical
+evaluator, retained artifacts, and the finalized W&B file. A self-consistent
+hash is not enough: `neural_3d_video` paper rows must declare the corrected
+`neural_3d_llff_opencv_relative_pinhole_v2` pose source, while D-NeRF rows must
+declare `dnerf_matched_time_blender_to_opencv_relative_pinhole`. The submission
+validator rejects the superseded Neural3D convention even if all lanes agree.
+Neural3D breadth rows use this same synchronized multicamera contract. Their
+WorldFoam initializer must be explicitly scene-specific or labelled `video`;
+Coffee Martini geometry may not be inherited implicitly.
 
 ## D-NeRF Controlled Posed-Frame Contract
 

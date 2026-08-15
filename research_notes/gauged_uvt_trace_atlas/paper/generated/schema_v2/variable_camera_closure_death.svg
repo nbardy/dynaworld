@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="460" viewBox="0 0 900 460">
+<rect width="900" height="460" fill="white"/>
+<text x="450.0" y="30" text-anchor="middle" font-size="18" font-weight="bold">Bounded variable-camera atlas closure and death</text>
+<line x1="90.0" y1="388.0" x2="870.0" y2="388.0" stroke="#111827"/>
+<line x1="90.0" y1="58.0" x2="90.0" y2="388.0" stroke="#111827"/>
+<text x="450.0" y="444" text-anchor="middle" font-size="13">Camera motion half-span (degrees)</text>
+<text x="20" y="230.0" transform="rotate(-90 20 230.0)" text-anchor="middle" font-size="13">Fraction / normalized error</text>
+<circle cx="90.00" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="134.70" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="201.75" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="268.80" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="335.85" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="402.89" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="469.94" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="536.99" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="604.04" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="738.14" cy="388.00" r="4" fill="#2563eb"/>
+<circle cx="827.54" cy="388.00" r="4" fill="#2563eb"/>
+<polyline class="data-line" points="90.00,388.00 134.70,388.00 201.75,388.00 268.80,388.00 335.85,388.00 402.89,388.00 469.94,388.00 536.99,388.00 604.04,388.00 738.14,388.00 827.54,388.00" fill="none" stroke="#2563eb" stroke-width="3"/>
+<line x1="105.0" y1="40.0" x2="133.0" y2="40.0" stroke="#2563eb" stroke-width="3"/>
+<text x="140.0" y="45.0" font-size="11">Fallback fraction</text>
+<circle cx="90.00" cy="320.75" r="4" fill="#dc2626"/>
+<circle cx="134.70" cy="196.87" r="4" fill="#dc2626"/>
+<circle cx="201.75" cy="150.76" r="4" fill="#dc2626"/>
+<circle cx="268.80" cy="254.66" r="4" fill="#dc2626"/>
+<circle cx="335.85" cy="137.02" r="4" fill="#dc2626"/>
+<circle cx="402.89" cy="58.00" r="4" fill="#dc2626"/>
+<circle cx="469.94" cy="249.13" r="4" fill="#dc2626"/>
+<circle cx="536.99" cy="197.20" r="4" fill="#dc2626"/>
+<circle cx="604.04" cy="143.46" r="4" fill="#dc2626"/>
+<circle cx="738.14" cy="93.94" r="4" fill="#dc2626"/>
+<circle cx="827.54" cy="88.75" r="4" fill="#dc2626"/>
+<polyline class="data-line" points="90.00,320.75 134.70,196.87 201.75,150.76 268.80,254.66 335.85,137.02 402.89,58.00 469.94,249.13 536.99,197.20 604.04,143.46 738.14,93.94 827.54,88.75" fill="none" stroke="#dc2626" stroke-width="3"/>
+<line x1="320.0" y1="40.0" x2="348.0" y2="40.0" stroke="#dc2626" stroke-width="3"/>
+<text x="355.0" y="45.0" font-size="11">Image max error (normalized)</text>
+<line x1="870.00" y1="58.0" x2="870.00" y2="388.0" stroke="#7f1d1d" stroke-width="2" stroke-dasharray="6 5"/>
+<text x="875.00" y="74.0" font-size="11" fill="#7f1d1d">first death</text>
+</svg>

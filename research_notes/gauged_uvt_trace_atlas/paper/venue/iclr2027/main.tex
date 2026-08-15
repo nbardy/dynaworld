@@ -1,0 +1,53 @@
+% Fail-closed World Tubes ICLR 2027 venue scaffold.
+% This is not a submission artifact and is intentionally not buildable.
+% WORLD_TUBES_SOURCE_SHA256: 17c6f45e0e017d694679e6eb5ebeca273d1b8331d93b02e550dc2a3a6b803b01
+% WORLD_TUBES_BIBLIOGRAPHY_SHA256: 1d82dc0cb80d8a7d7a8d6309c0c5531223eacfd5555611e9ffaa62f05819b741
+% WORLD_TUBES_EVIDENCE_MANIFEST_SHA256: 6ae45b0d56321af75b68f30e8ff7b750827d3775eb582a7e657b251630e79bc0
+% WORLD_TUBES_AI_USE_STATEMENT_SHA256: 78b16c1deea1a417e82332a6cf59ed6fa797c842627d340f88ddbeccb4ce4eb3
+
+\documentclass{article}
+\IfFileExists{iclr2027_conference.sty}{
+  \usepackage{iclr2027_conference}
+}{
+  \PackageError{world-tubes-venue}{Official ICLR 2027 style is unavailable}{
+    Acquire iclr2027.zip from the official URL, record its real archive and
+    style hashes in package_manifest.json, and retain anonymous review mode.
+  }
+}
+
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\title{World Tubes in Gauged Camera Space: Frame-Amortized Dynamic Gaussian Rendering}
+\author{Anonymous}
+
+\begin{document}
+\PackageError{world-tubes-venue}{Venue source is still a blocked scaffold}{
+  Port the concise Markdown only after every required evidence component is
+  publication eligible. Do not input warning fragments or partial rows.
+}
+\maketitle
+
+% The theorem/correctness and clean schema-v2 variable-camera components are
+% accepted evidence. They are the only generated result fragments consumed by
+% this pre-template scaffold.
+\begin{table}[t]
+  \centering
+  \caption{Certified bounded correctness components.}
+  \input{../../generated/schema_v2/theorem_table.tex}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption{Clean-source bounded variable-camera closure/death curve.}
+  \input{../../generated/schema_v2/variable_camera_table.tex}
+\end{table}
+
+% The frozen-world, moving-camera-density, and public-context fragments remain
+% deliberately absent. Their current generated files contain incomplete-gate
+% notices and must not enter a submission PDF.
+
+\label{world-tubes-main-end}
+\bibliographystyle{plain}
+\bibliography{../../WORLD_TUBES_REFERENCES}
+\end{document}

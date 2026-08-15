@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "paper_id": "worldfoam-paper-b",
+  "build_kind": "official_iclr2027_submission",
+  "venue": "ICLR",
+  "venue_year": 2027,
+  "anonymous_submission": true,
+  "package_status": "scaffold_blocked",
+  "submission_ready": false,
+  "template": {
+    "status": "unavailable",
+    "source_url": "https://github.com/ICLR/Master-Template/raw/master/iclr2027.zip",
+    "last_checked": "2026-08-15",
+    "http_status": 404,
+    "retrieved_at": null,
+    "archive_path": "iclr2027.zip",
+    "archive_sha256": null,
+    "style_path": "iclr2027_conference.sty",
+    "style_sha256": null
+  },
+  "entrypoint": "main.tex",
+  "recorder": "main.fls",
+  "auxiliary": "main.aux",
+  "compiled_pdf": "main.pdf",
+  "ai_use_statement": "AI_USE_STATEMENT.md",
+  "main_text_pages": null,
+  "total_pages": null,
+  "source_bindings": {
+    "concise_draft": {
+      "path": "research_notes/worldfoam_paper/WORLD_FOAM_ICLR_MAIN_DRAFT.md",
+      "sha256": "82f886e3575f4a557f1085d23f0b62f97f8db9a6d82b333ea3ad966455a39456",
+      "bytes": 30763
+    },
+    "bibliography": {
+      "path": "research_notes/worldfoam_paper/WORLD_FOAM_REFERENCES.bib",
+      "sha256": "eec358cbe843095cc06b99a1bb3b941c3664a53a35dc3986cc37713a0b6c53ec",
+      "bytes": 5115
+    },
+    "evidence_manifest": {
+      "path": "research_notes/worldfoam_paper/generated/foundation_v1/manifest.json",
+      "sha256": "c09d16220a4e1a796f3db0f71c5e8df1ec9557ea83a7a708ca219fa58a0b9cbd",
+      "bytes": 3662
+    },
+    "ai_use_statement": {
+      "path": "research_notes/worldfoam_paper/venue/iclr2027/AI_USE_STATEMENT.md",
+      "sha256": "2fcff164679443fdff9b305736ef8cd42966ffdfd10898c993a8a8eda1317e40",
+      "bytes": 1117
+    }
+  },
+  "asset_exports": [],
+  "pdf_visual_qa": {
+    "status": "not_run",
+    "pdf_sha256": null,
+    "page_count": null,
+    "inspected_pages": [],
+    "reviewed_at": null,
+    "checks": {}
+  },
+  "blockers": [
+    {
+      "id": "official_template",
+      "status": "external_unavailable",
+      "detail": "The official ICLR 2027 archive URL returned HTTP 404 on 2026-08-15. No older style is substituted."
+    },
+    {
+      "id": "g4_public_quality",
+      "status": "not_measured",
+      "detail": "No accepted public-data quality record exists; the generated G4 SVG is an explicit placeholder and is excluded."
+    },
+    {
+      "id": "g6_native_memory",
+      "status": "not_measured",
+      "detail": "No accepted 21-row fresh-process native memory/work artifact exists; the generated G6 SVG is an explicit placeholder and is excluded."
+    },
+    {
+      "id": "venue_build",
+      "status": "not_started",
+      "detail": "The concise Markdown has not been ported into an official ICLR 2027 source package."
+    },
+    {
+      "id": "pdf_visual_qa",
+      "status": "not_run",
+      "detail": "No official-template PDF exists to inspect."
+    }
+  ]
+}

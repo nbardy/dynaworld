@@ -100,6 +100,40 @@
 % Set default figure placement to htbp
 \def\fps@figure{htbp}
 \makeatother
+\usepackage{svg}
+% definitions for citeproc citations
+\NewDocumentCommand\citeproctext{}{}
+\NewDocumentCommand\citeproc{mm}{%
+  \begingroup\def\citeproctext{#2}\cite{#1}\endgroup}
+\makeatletter
+ % allow citations to break across lines
+ \let\@cite@ofmt\@firstofone
+ % avoid brackets around text for \cite:
+ \def\@biblabel#1{}
+ \def\@cite#1#2{{#1\if@tempswa , #2\fi}}
+\makeatother
+\newlength{\cslhangindent}
+\setlength{\cslhangindent}{1.5em}
+\newlength{\csllabelwidth}
+\setlength{\csllabelwidth}{3em}
+\newenvironment{CSLReferences}[2] % #1 hanging-indent, #2 entry-spacing
+ {\begin{list}{}{%
+  \setlength{\itemindent}{0pt}
+  \setlength{\leftmargin}{0pt}
+  \setlength{\parsep}{0pt}
+  % turn on hanging indent if param 1 is 1
+  \ifodd #1
+   \setlength{\leftmargin}{\cslhangindent}
+   \setlength{\itemindent}{-1\cslhangindent}
+  \fi
+  % set entry spacing
+  \setlength{\itemsep}{#2\baselineskip}}}
+ {\end{list}}
+\usepackage{calc}
+\newcommand{\CSLBlock}[1]{\hfill\break\parbox[t]{\linewidth}{\strut\ignorespaces#1\strut}}
+\newcommand{\CSLLeftMargin}[1]{\parbox[t]{\csllabelwidth}{\strut#1\strut}}
+\newcommand{\CSLRightInline}[1]{\parbox[t]{\linewidth - \csllabelwidth}{\strut#1\strut}}
+\newcommand{\CSLIndent}[1]{\hspace{\cslhangindent}#1}
 \setlength{\emergencystretch}{3em} % prevent overfull lines
 \providecommand{\tightlist}{%
   \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
@@ -107,32 +141,18 @@
 \IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
 \urlstyle{same}
 \hypersetup{
-  pdftitle={World Tubes in Gauged Camera Space: Sublinear Frame Scaling for Dynamic Gaussian Splatting},
+  pdftitle={World Tubes in Gauged Camera Space: Frame-Amortized Dynamic Gaussian Rendering},
   pdfauthor={Anonymous},
   hidelinks,
   pdfcreator={LaTeX via pandoc}}
 
-\title{World Tubes in Gauged Camera Space: Sublinear Frame Scaling for
-Dynamic Gaussian Splatting}
+\title{World Tubes in Gauged Camera Space: Frame-Amortized Dynamic
+Gaussian Rendering}
 \author{Anonymous}
-\date{2026-07-22}
+\date{2026-07-28}
 
 \begin{document}
 \maketitle
-
-Status: arXiv-style working manuscript with generated LaTeX. The
-certified correctness and same-representation scaling tables are
-populated, and the three-seed progressive Coffee Martini row is
-accepted. The remaining public matrix is paused after the local-memory
-incident. This is not a final submission until the pixel-matched/sampler
-controls and public-scene breadth in
-\texttt{WORLD\_TUBES\_EXPERIMENT\_PLAN.md} are complete.
-
-The frozen public workload now has one 21-row manifest: seven primary
-Coffee Martini/control rows, six alternate-triplet rows, six
-additional-Neural3D rows, one controlled D-NeRF row, and one separately
-labelled deterministic audit. Only the three primary progressive rows
-are currently accepted.
 
 \subsection{Abstract}\label{abstract}
 
@@ -150,46 +170,47 @@ compiler for dynamic Gaussian primitives. The core object is a
 sensor-time trace atlas over \texttt{(u,v,t)}: each spacetime primitive
 is pulled back through the camera-ray bundle and pushed forward along
 the ray fiber to produce a reusable viewport-time footprint, conditional
-depth model, support certificate, and adjoint structure. Locally, a
-spacetime Gaussian pulled through a camera gauge and integrated over ray
-depth yields a UVT footprint by a Schur-complement fiber
-marginalization. Globally, camera gauges and event-certified domains
-make this construction invariant to depth coordinates on bounded
-camera-path chart segments, including the tested orbit segments, finite
-exposure, and rolling shutter. The renderer evaluates frames as slices
-of the compiled atlas, while training accumulates gradients through a
-compiled interval VJP.
+depth model, support certificate, and adjoint structure. In a
+nonsingular affine local gauge, with an untruncated fiber and locally
+constant measure factor, a spacetime Gaussian yields a UVT footprint by
+exact Schur-complement fiber marginalization. Perspective camera
+programs instead require a certified local approximation or the
+implemented projective trace family; the affine closure is not asserted
+globally. Camera gauges and event-certified domains make the underlying
+trace integral invariant to depth coordinates on bounded camera-path
+chart segments, including the tested orbit segments, finite exposure,
+and rolling shutter. The renderer evaluates frames as slices of the
+compiled atlas, while training accumulates gradients through a
+fixed-topology compiled interval VJP.
 
-On our current STAR UVT / projective interval implementation, the
-compiled atlas shows sublinear world-side growth across frame count: the
-rerun over \texttt{F=\{4,8,16,32,64,128\}} keeps fixed payload growth at
-\texttt{1.0x} while per-frame replay grows \texttt{32.0x} (final payload
-ratio \texttt{0.03125}), with final fixed/replay CPU compile, forward,
-and backward ratios of \texttt{0.0477}, \texttt{0.181}, and
-\texttt{0.392}; trained high-motion traces keep final shared/per-frame
-interval-entry ratio below \texttt{0.149}, final trace-count ratio at
-\texttt{0.1}, final forward ratio below \texttt{0.266}, and final
-backward ratio below \texttt{0.094}. A broad real-video audit covers 10
-source-distinct cases, 20 projective-interval trainer payloads,
-gradient-preserving compiled-adjoint replacement, and fresh-process
-median timing with no-first/projective-total ratios of
-\texttt{0.565}/\texttt{0.836}. These results suggest that camera-path
-compilation is a practical complement to dynamic Gaussian
-representations: it does not claim an information-theoretic sublinear
-bound in the number of output pixels, but in the tested training regimes
-the dominant bottlenecks scale with trace/event complexity rather than
-frame count. The remaining per-pixel shading term is real, but
+On our current STAR UVT / projective interval implementation, a bounded
+same-representation fixture over \texttt{F=\{4,8,16,32,64,128\}} keeps
+fixed logical tensor-element volume growth at \texttt{1.0x} while
+per-frame replay grows \texttt{32.0x}; the final fixed/per-frame
+trace-count ratio is \texttt{0.03125}. A broad real-video audit covers
+10 source-distinct cases, 20 projective-interval trainer payloads, and
+gradient-preserving compiled-adjoint replacement. These results
+establish structural reuse and bounded correctness, not a publication
+timing claim. Warming and repeating replay versus compiled evaluation on
+one frozen learned world is the required runtime experiment. The method
+does not claim an information-theoretic sublinear bound in the number of
+output pixels: the remaining per-pixel shading term is real, while
 projection, support, binning, visibility metadata, and backward replay
-are amortized across time.
+are the work targeted for camera-program amortization.
 
-\subsection{1. Introduction}\label{1-introduction}
+\subsection{1. Introduction}\label{introduction}
 
 3D Gaussian Splatting (3DGS) made real-time neural rendering practical
 by replacing expensive volumetric ray marching with visibility-aware
-anisotropic splatting. Dynamic extensions such as 4D Gaussian Splatting,
-Deformable 3D Gaussians, Dynamic 3D Gaussians, and Spacetime Gaussian
-Feature Splatting extend the representation through deformation fields,
-persistent motion, or spacetime primitives. These methods improve
+anisotropic splatting (\citeproc{ref-kerbl2023}{Kerbl et al. 2023}).
+Dynamic extensions such as 4D Gaussian Splatting, Deformable 3D
+Gaussians, Dynamic 3D Gaussians, and Spacetime Gaussian Feature
+Splatting extend the representation through deformation fields,
+persistent motion, or spacetime primitives
+(\citeproc{ref-wu2024_4dgs}{Wu et al. 2024};
+\citeproc{ref-yang2024_deformable}{Ziyi Yang et al. 2024};
+\citeproc{ref-luiten2024}{Luiten et al. 2024};
+\citeproc{ref-li2024_spacetime}{Li et al. 2024}). These methods improve
 dynamic scene modeling, but they usually retain a per-target-view
 rendering loop: evaluate the primitive state at the requested timestamp,
 project to screen, build tile bins, estimate or sort depth order, shade,
@@ -202,13 +223,13 @@ camera couples image row to capture time. Training often revisits the
 same camera path or a small family of nearby paths many times. In these
 settings, the output image samples still scale as \texttt{O(F\ H\ W)},
 but the world-side work should not have to scale linearly with frame
-count \texttt{F}. The paper\textquotesingle s claim is therefore not
-that pixels disappear. It is that the expensive training bottlenecks
-that dominate dynamic Gaussian pipelines-\/-projection, support, tile
-membership, ordering metadata, and backward replay-\/-can scale with
-trace/event complexity instead of frame count. In our tested regimes
-this produces sublinear measured training-time growth for the compiled
-route.
+count \texttt{F}. The paper's claim is therefore not that pixels
+disappear. It is that the expensive training bottlenecks that dominate
+dynamic Gaussian pipelines--projection, support, tile membership,
+ordering metadata, and backward replay--can scale with trace/event
+complexity instead of frame count. The bounded fixture verifies
+structural reuse; the warmed, repeated frozen-world experiment is
+required before making a measured runtime-scaling claim.
 
 We propose to compile the dynamic world through the camera program
 itself. A world primitive is not projected independently into each
@@ -235,6 +256,57 @@ differentiable state. Frames are slices of this atlas, and
 finite-exposure or rolling-shutter images are integrals or row-coupled
 samples through the same object.
 
+The method keeps four layers distinct:
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Layer
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Object
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Contract
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+World representation & \texttt{W\_theta} & Camera-independent spacetime
+primitives and appearance. \\
+Camera-program compiler & \texttt{phi\ =\ C\_Gamma(theta;kappa)} & Lower
+one world and camera program into trace coefficients under certified
+discrete topology \texttt{kappa}. \\
+Atlas evaluator & \texttt{I\ =\ R(phi,kappa;y)} & Evaluate one
+sensor-time sample or batch without changing the learned world. \\
+Compiled adjoint &
+\texttt{D\_theta\ C\_Gamma(theta;kappa)\^{}T\ D\_phi\ R(phi,kappa)\^{}T}
+& Map image residuals through the evaluator and compiler back to the
+same world parameters. \\
+\end{longtable}
+}
+
+This separation matters experimentally. A faster evaluator with a
+different learned world is not evidence for compilation; the causal
+comparison freezes \texttt{W\_theta} and changes only whether
+\texttt{C\_Gamma} is replayed per frame or shared over the camera
+program.
+
+\begin{figure}
+\centering
+\pandocbounded{\includesvg[keepaspectratio]{research_notes/gauged_uvt_trace_atlas/paper/figures/world_tubes_system_overview.svg}}
+\caption{System overview. The causal comparison starts from the same
+learned world and known camera program. Per-frame replay rebuilds
+projection, support, binning, and order at each requested time; World
+Tubes compiles shared projective traces and certified tile-time cells,
+evaluates them with an interval Metal forward, and maps residuals
+through the interval and compiler VJPs to the same world parameters.
+Output production remains linear in the requested sensor samples.}
+\end{figure}
+
 This construction is not merely a renamed STAR UVT renderer. STAR UVT
 supplies the spacetime Gaussian representation and the sparse Metal
 execution lineage; the gauged camera-ray formulation supplies the new
@@ -252,58 +324,70 @@ Our contributions are:
 \begin{enumerate}
 \def\labelenumi{\arabic{enumi}.}
 \item
-  \textbf{A camera-ray bundle formulation for dynamic Gaussian
-  rendering.} We define a trace as
-  \texttt{pi\_*\ Gamma\^{}*\ world\_primitive}, i.e. pull the primitive
-  through the camera program and integrate/summarize it along the ray
-  fiber.
+  \textbf{A gauged camera-program compiler for dynamic Gaussian
+  rendering.} We define the invariant trace as
+  \texttt{pi\_*\ Gamma\^{}*\ world\_primitive}, then derive its exact
+  affine-Gaussian UVT marginal and conditional depth packet by a Schur
+  complement. The gauge Jacobian is part of the physical fiber measure,
+  not an optional implementation correction.
 \item
-  \textbf{A local Schur-complement derivation for world tubes.} Under a
-  local camera gauge, depth marginalization of a pulled-back spacetime
-  Gaussian gives a UVT Gaussian-like footprint and conditional depth
-  statistics used for support, visibility, and gradients.
+  \textbf{An event-certified projective trace and visibility atlas.}
+  Homogeneous camera traces are lowered into bounded rational/polynomial
+  interval records. Denominator, approximation, support, and local
+  depth-order tests determine whether an interval is emitted, split, or
+  routed to fallback. This retains the gauged
+  large-motion/order-crossing mathematics rather than reducing the
+  method to a faster STAR kernel.
 \item
-  \textbf{Event-certified gauge domains.} Instead of treating charts as
-  ad hoc fitted patches, we use gauge domains that certify projection
-  regularity, support validity, depth/order behavior, fallback
-  conditions, and backward support.
+  \textbf{A fixed-topology compiled evaluator and adjoint.} We implement
+  interval- compressed Metal forward and direct VJP paths. Trace
+  coefficients, opacity, temporal opacity, spatial precision, and color
+  remain differentiable, while support, bin membership, event topology,
+  order, and fallback choices are explicitly held fixed within an
+  adjoint block.
 \item
-  \textbf{A lifted visibility gauge atlas.} Footprint traces are pushed
-  down to \texttt{(u,v,t)} for support and shading, while visibility is
-  compiled from lifted depth/order fields before ray-depth structure is
-  discarded. Pairwise support-overlap predicates become sign
-  certificates over gauge domains.
-\item
-  \textbf{A projective interval atlas implementation.} We implement
-  interval compressed projective traces with Metal forward and direct
-  backward paths for a STAR UVT feature-tube route. Visibility order and
-  tile membership are compiled constants during the direct VJP, while
-  trace coefficients, opacity, temporal opacity, spatial precision, and
-  color remain differentiable.
-\item
-  \textbf{A sublinear frame-scaling evaluation protocol.} We report
-  payload, trace-count, interval-entry, forward, backward, and timing
-  ratios against per-frame replay, plus quality/media tethers to verify
-  that the compiled route preserves the baseline
-  renderer\textquotesingle s output and gradients.
+  \textbf{A causal frame-amortization evaluation contract.} Per-frame
+  replay and compiled evaluation share the exact learned world, camera
+  samples, renderer, loss, and world-parameter targets. We separately
+  report unavoidable sensor-sample work and the
+  projection/support/binning/visibility/backward metadata that the
+  camera-program compiler is designed to share.
 \end{enumerate}
 
-\subsection{2. Related Work}\label{2-related-work}
+\subsection{2. Related Work}\label{related-work}
 
-\textbf{Gaussian splatting.} 3DGS introduced anisotropic 3D Gaussian
-primitives and a visibility-aware rasterizer that supports real-time
-rendering and optimization. Our work keeps this rasterization motivation
-but changes the unit of compilation from one screen at one time to a
-sensor-time camera path.
+\textbf{Gaussian splatting.} Classical surface and EWA volume splatting
+formulate point/volume primitives as filtered screen footprints,
+including analytic integration of elliptical Gaussian reconstruction
+kernels in a locally affine ray-space approximation
+(\citeproc{ref-zwicker2001_surface}{Zwicker et al. 2001b},
+\citeproc{ref-zwicker2001_ewa_volume}{2001a}). 3DGS introduced learned
+anisotropic 3D Gaussian primitives and a visibility-aware rasterizer
+that supports real-time rendering and optimization
+(\citeproc{ref-kerbl2023}{Kerbl et al. 2023}). Mip-Splatting later makes
+the sampling/filtering boundary explicit for learned Gaussians
+(\citeproc{ref-yu2024_mipsplatting}{Yu et al. 2024}). Our work keeps
+this rasterization lineage but changes the unit of compilation from one
+screen at one time to a sensor-time camera path.
 
 \textbf{Dynamic Gaussian representations.} 4D-GS combines 3D Gaussians
 with 4D neural voxels and lightweight deformation prediction. Deformable
 3D Gaussians learn a canonical Gaussian scene plus deformation field.
 Dynamic 3D Gaussians track persistent Gaussians over time. Spacetime
 Gaussian Feature Splatting adds temporal opacity and parametric
-motion/rotation to Gaussian primitives. These methods primarily address
-the dynamic scene representation. We instead target the repeated
-rendering work induced by known camera paths and many temporal samples.
+motion/rotation to Gaussian primitives. Native 4DGS instead models the
+spacetime volume directly with anisotropic 4D Gaussian primitives
+(\citeproc{ref-wu2024_4dgs}{Wu et al. 2024};
+\citeproc{ref-yang2024_deformable}{Ziyi Yang et al. 2024};
+\citeproc{ref-luiten2024}{Luiten et al. 2024};
+\citeproc{ref-li2024_spacetime}{Li et al. 2024};
+\citeproc{ref-yang2024_native}{Zeyu Yang et al. 2024}). Our strict
+SPD(4) source uses the same standard full-covariance Gaussian
+mathematics; the contribution here is its camera-program lowering, event
+certification, reuse, and adjoint, not a new Gaussian family. These
+methods primarily address the dynamic scene representation. We instead
+target the repeated rendering work induced by known camera paths and
+many temporal samples.
 
 \textbf{Nonlinear cameras, rolling shutter, and ray-space splatting.}
 Gaussian Splatting on the Move models blur and rolling shutter under
@@ -311,19 +395,88 @@ natural camera motion. 3DGUT replaces the EWA projection approximation
 with an unscented transform to support nonlinear cameras, rolling
 shutter, and secondary rays. Our method is complementary:
 sigma/projective projection helps define or test gauge domains, while
-the trace atlas amortizes camera-path work over many samples.
+the trace atlas amortizes camera-path work over many samples
+(\citeproc{ref-seiskari2024}{Seiskari et al. 2025};
+\citeproc{ref-wu2025_3dgut}{Wu et al. 2025}).
 
-\textbf{Dynamic view-synthesis datasets.} Neural 3D Video, D-NeRF,
-HyperNeRF, DyCheck, Technicolor-style light-field videos, and Google
-Immersive-style captures provide public dynamic-scene benchmarks. Our
-paper should evaluate on public data for comparison, but the central
-experiments must also include a controlled synthetic trace suite where
-exact ray-fiber integration and visibility events are known.
+\textbf{Compositing and order alternatives.} Weighted blended
+order-independent transparency and Weighted Sum Rendering avoid exact
+sorting by changing the rendering law, while Gaussian Blending replaces
+scalar per-pixel alpha/transmittance with spatial distributions
+(\citeproc{ref-mcguire2013_weighted_oit}{McGuire and Bavoil 2013};
+\citeproc{ref-hou2025_sortfree}{Hou et al. 2025};
+\citeproc{ref-koo2026_blending}{Koo et al. 2026}). StopThePop instead
+improves view consistency with hierarchical per-ray depth sorting and
+makes the limitations of one representative splat depth especially
+relevant under camera rotation (\citeproc{ref-radl2024_stopthepop}{Radl
+et al. 2024}). World Tubes preserves the ordered front-to-back transfer
+law of the frozen STAR representation. Its visibility strata compile
+where that noncommutative ordering is stable and fall back where it is
+not; this is necessary for a causal replay-versus-compiled comparison.
 
-\subsection{3. Method}\label{3-method}
+\textbf{Dynamic view-synthesis datasets.} Neural 3D Video, D-NeRF, and
+HyperNeRF provide public real-multiview, controlled synthetic, and
+monocular dynamic-scene benchmarks. Our paper evaluates Neural 3D Video
+as its positive public multiview setting and uses D-NeRF only as a
+separately labelled posed-frame control. The central experiments also
+include a controlled synthetic trace suite where exact ray-fiber
+integration and visibility events are known
+(\citeproc{ref-li2022_neural3dvideo}{Li et al. 2022};
+\citeproc{ref-pumarola2021_dnerf}{Pumarola et al. 2021};
+\citeproc{ref-park2021_hypernerf}{Park et al. 2021}).
+
+\subsection{3. Method}\label{method}
+
+We use the following notation throughout. Script letters denote discrete
+compiler objects; lowercase functions denote fields evaluated at a
+sensor-time sample. In particular, \texttt{T} denotes the time domain
+only, while \texttt{Trans\_m} denotes front-to-back transmittance. We
+write \texttt{tau} for sensor-program time and use \texttt{t} as its
+scalar shorthand when no exposure or rolling-shutter offset is being
+distinguished.
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Symbol
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Meaning
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{B\ =\ Omega\ x\ T}, \texttt{y=(u,v,tau)} & Sensor-time base and
+one sensor-time sample. \\
+\texttt{E\_Gamma}, \texttt{pi:E\_Gamma-\textgreater{}B}, \texttt{F\_y} &
+Camera-ray bundle, bundle projection, and ray-depth fiber over
+\texttt{y}. \\
+\texttt{Gamma:E\_Gamma-\textgreater{}R\^{}3\ x\ R} & Known camera
+program, including its association between sensor time and world
+time. \\
+\texttt{w\_i}, \texttt{rho\_i} & Camera-independent world primitive and
+its density/opacity field. \\
+\texttt{bar\_rho\_i\ =\ pi\_*\ Gamma\^{}*\ rho\_i} & Gauge-invariant
+sensor-time trace of primitive \texttt{i}. \\
+\texttt{z\_a}, \texttt{J\_a} & Local ray-depth coordinate in gauge
+\texttt{a} and its physical fiber-measure factor. \\
+\texttt{C\_l}, \texttt{S\_l}, \texttt{Phi\_l}, \texttt{Pi\_l} &
+Certified atlas cell, active primitive set, trace functions, and
+compiled order/partial order. \\
+\texttt{phi=C\_Gamma(theta;kappa)} & Differentiable atlas coefficients
+compiled from world parameters \texttt{theta} with discrete topology
+\texttt{kappa} fixed. \\
+\texttt{I=R(phi,kappa)} & Atlas evaluator and rendered sensor-time
+samples. \\
+\texttt{lambda(y)=partial\ L/partial\ I(y)} & Image-space adjoint. \\
+\end{longtable}
+}
 
 \subsubsection{3.1 Sensor-time base and camera-ray
-bundle}\label{31-sensor-time-base-and-camera-ray-bundle}
+bundle}\label{sensor-time-base-and-camera-ray-bundle}
 
 Let the sensor-time base be:
 
@@ -367,11 +520,11 @@ For a density-like primitive, this becomes:
 \end{Highlighting}
 \end{Shaded}
 
-This equation is the renderer\textquotesingle s invariant object. It
-does not depend on a particular depth coordinate or local chart.
+This equation is the renderer's invariant object. It does not depend on
+a particular depth coordinate or local chart.
 
 \subsubsection{3.2 Gauges and event-certified
-domains}\label{32-gauges-and-event-certified-domains}
+domains}\label{gauges-and-event-certified-domains}
 
 A gauge is a local trivialization of the ray bundle over a domain
 \texttt{C\_a}:
@@ -402,6 +555,37 @@ least \texttt{0.600}. The matching gradient artifact agrees to
 \texttt{2.33e-12} relative error with the Jacobian; without it, gradient
 error is at least \texttt{0.592}.
 
+\textbf{Proposition 1 (fiber-gauge invariance).} Let gauges \texttt{a}
+and \texttt{b} describe the same physical fiber segment over \texttt{y},
+with a continuously differentiable, one-to-one coordinate change
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{z\_b = h\_ab(y,z\_a),}
+\NormalTok{Gamma\_a(y,z\_a) = Gamma\_b(y,h\_ab(y,z\_a)).}
+\end{Highlighting}
+\end{Shaded}
+
+Assume the primitive is integrable on that segment and the physical line
+measure is represented in the two coordinates by
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{J\_a(y,z\_a) dz\_a}
+\NormalTok{  = J\_b(y,h\_ab(y,z\_a)) |partial h\_ab / partial z\_a| dz\_a.}
+\end{Highlighting}
+\end{Shaded}
+
+Then \texttt{bar\_rho\_i\^{}a(y)=bar\_rho\_i\^{}b(y)}. The proof is the
+one-dimensional change-of-variables formula on \texttt{F\_y}. For an
+orientation-preserving gauge the absolute value can be dropped. If the
+coordinate map ceases to be one-to-one, its denominator reaches zero, or
+the two coordinates cover different clipped fiber segments, the
+proposition no longer applies; the compiler must end the cell, introduce
+a transition, or fall back. This is a coordinate-invariance statement,
+not a claim that one chart remains valid across a physical or projective
+event.
+
 We use the term \textbf{gauge domain} instead of weak chart. A gauge
 domain certifies:
 
@@ -425,25 +609,178 @@ real events: denominator zeros, behind-camera transitions, near/far
 crossings, support entering/leaving tiles, order swaps, and
 disocclusions.
 
-\textbf{Scope of the current implementation.} The compiler and
-experiments cover bounded, event-certified orbit segments inside one
-regular projective chart. They do not implement chart transitions for
-complete \texttt{360°} or repeated \texttt{720°} revolutions. We
-therefore make no full-orbit multi-gauge claim in this paper; such a
-transition system is future work rather than an untested part of the
-method.
+\textbf{Scope of the current implementation.} Static cameras use the
+exact affine gauge lowering, and moving-camera training has a
+differentiable one-chart first-order compiler. Separately, the
+projective compiler and experiments cover bounded, event-certified orbit
+segments inside one regular projective chart. The first-order moving
+chart is not asserted to equal a nonlinear pinhole program over
+arbitrarily long windows, and the projective path does not yet implement
+chart transitions for complete \texttt{360°} or repeated \texttt{720°}
+revolutions. We therefore make no exact long-window or full-orbit
+multi-gauge claim.
 
 \subsubsection{3.3 Local Gaussian fiber
-pushforward}\label{33-local-gaussian-fiber-pushforward}
+pushforward}\label{local-gaussian-fiber-pushforward}
 
-Let a spacetime Gaussian primitive be:
+\paragraph{Strict SPD(4) source object}\label{strict-spd4-source-object}
+
+The representation-level source object is a Gaussian measure or
+splat-shaped atom in world spacetime:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{rho\_i(x) = a\_i exp[{-}1/2 (x {-} m\_i)\^{}T Lambda\_i (x {-} m\_i)],}
-\NormalTok{x in R\^{}4.}
+\NormalTok{x = (X,Y,Z,T) in R\^{}4}
+\NormalTok{mu\_x in R\^{}4}
+\NormalTok{Sigma\_x in Sym++(4)}
+\NormalTok{rho\_i(x) = a\_i exp[{-}1/2 (x {-} mu\_x)\^{}T Sigma\_x\^{}\{{-}1\} (x {-} mu\_x)].}
 \end{Highlighting}
 \end{Shaded}
+
+Thus all ten independent covariance entries are available; an explicit
+velocity parameter is not required. For example, conditioning the native
+spacetime atom on time gives:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{E[X\_xyz | T=t]}
+\NormalTok{  = mu\_xyz + Sigma\_xyz,t Sigma\_tt\^{}\{{-}1\} (t {-} mu\_t).}
+\end{Highlighting}
+\end{Shaded}
+
+The space-time cross covariance therefore produces affine motion as a
+derived slice of one 4D object. This does not produce arbitrary curved
+motion from one Gaussian; curved trajectories require a richer
+primitive, a nonlinear coordinate map, or multiple atoms.
+
+Let a nonsingular affine local camera-ray gauge map world spacetime into
+ordered coordinates \texttt{s=(u,v,z,t)}:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{s = G x + b}
+\NormalTok{mu\_s = G mu\_x + b}
+\NormalTok{Sigma\_s = G Sigma\_x G\^{}T.}
+\end{Highlighting}
+\end{Shaded}
+
+Reorder \texttt{s} as \texttt{(r,z)}, where \texttt{r=(u,v,t)}, and
+partition:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{Sigma\_s =}
+\NormalTok{  [ Sigma\_rr  Sigma\_rz}
+\NormalTok{    Sigma\_zr  Sigma\_zz ].}
+\end{Highlighting}
+\end{Shaded}
+
+Then the exact UVT marginal and conditional fiber packet are:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{r \textasciitilde{} N(mu\_r, Sigma\_rr)}
+\NormalTok{Q\_r = Sigma\_rr\^{}\{{-}1\}}
+
+\NormalTok{E[z | r]}
+\NormalTok{  = mu\_z + Sigma\_zr Q\_r (r {-} mu\_r)}
+
+\NormalTok{nu\_z = Var(z | r)}
+\NormalTok{  = Sigma\_zz {-} Sigma\_zr Q\_r Sigma\_rz \textgreater{} 0.}
+\end{Highlighting}
+\end{Shaded}
+
+The last strict inequality follows from the Schur complement of
+\texttt{Sigma\_s\ in\ Sym++(4)}. The packet is therefore a full
+anisotropic UVT precision, an affine depth plane over \texttt{(u,v,t)},
+and a positive conditional depth variance. These are all consequences of
+one strict SPD(4) source, not separate motion laws.
+
+\textbf{Proposition 2 (standard conditional-Gaussian equivalence).} Fix
+a nonsingular affine gauge \texttt{s=Gx+b}. A strict SPD(4) Gaussian in
+\texttt{s=(r,z)} is equivalent to the tuple
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{mu\_r, mu\_z,}
+\NormalTok{Sigma\_rr in Sym++(3),}
+\NormalTok{beta in R\^{}3,}
+\NormalTok{nu\_z \textgreater{} 0,}
+\end{Highlighting}
+\end{Shaded}
+
+with conditional law
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{z | r \textasciitilde{} N(mu\_z + beta\^{}T(r{-}mu\_r), nu\_z).}
+\end{Highlighting}
+\end{Shaded}
+
+The forward direction is the partition above, with
+\texttt{beta\^{}T\ =\ Sigma\_zr\ Sigma\_rr\^{}\{-1\}}. Conversely, the
+tuple reconstructs the unique joint covariance
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{Sigma\_s =}
+\NormalTok{  [ Sigma\_rr             Sigma\_rr beta}
+\NormalTok{    beta\^{}T Sigma\_rr      nu\_z + beta\^{}T Sigma\_rr beta ],}
+\end{Highlighting}
+\end{Shaded}
+
+which is strict SPD because its Schur complement is \texttt{nu\_z};
+transforming with \texttt{Sigma\_x=G\^{}\{-1\}Sigma\_sG\^{}\{-T\}}
+recovers the world covariance. This is the ordinary marginal/conditional
+parameterization of a multivariate Gaussian. We use it to specify a
+compiler ABI, not to claim a new probability distribution or a new
+native-4D representation.
+
+Two amplitude conventions must not be conflated. A peak-preserving splat
+keeps \texttt{a\_i} as the amplitude of the maximum joint density along
+the conditional depth fiber and is compatible with STAR's factorized
+\texttt{alpha\ =\ opacity\ exp(-q\_r/2)} convention. A physical,
+untruncated fiber-integrated density with locally constant fiber-measure
+factor \texttt{J\_0} instead produces an optical-depth coefficient
+multiplied by:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{J\_0 sqrt(2 pi nu\_z).}
+\end{Highlighting}
+\end{Shaded}
+
+The compiler ABI must label which convention it emits. These are not two
+names for the same alpha. If
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{tau(r) = tau\_0 exp({-}q\_r/2),}
+\end{Highlighting}
+\end{Shaded}
+
+then physical Beer--Lambert opacity is:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{alpha\_phys(r) = 1 {-} exp[{-}tau(r)].}
+\end{Highlighting}
+\end{Shaded}
+
+The production interface now exposes both laws rather than silently
+identifying them. \texttt{peak\_splat} retains the historical factorized
+alpha, while \texttt{beer\_lambert} evaluates the physical map above
+with its exact alpha VJP and cutoff-support equation. The orthogonal
+amplitude axis is \texttt{fiber\_integrated} versus
+\texttt{peak\_density}. In the latter case the affine-gauge compiler
+applies the fiber measure and \texttt{sqrt(2\ pi\ nu\_z)} factor to
+obtain projected optical thickness; in the former the trainable value
+already has that projected meaning. The retained-fiber renderer
+additionally keeps \texttt{nu\_z} and the conditional Gaussian depth
+profile instead of collapsing the primitive to one alpha/depth event.
+
+\paragraph{Equivalent local precision
+form}\label{equivalent-local-precision-form}
 
 In a local gauge, linearize the camera map around \texttt{(y0,\ z0)}:
 
@@ -454,7 +791,8 @@ In a local gauge, linearize the camera map around \texttt{(y0,\ z0)}:
 \end{Highlighting}
 \end{Shaded}
 
-Let \texttt{delta\ =\ m\_i\ -\ x0} and
+Let \texttt{Lambda\_i\ =\ Sigma\_x\^{}\{-1\}},
+\texttt{delta\ =\ mu\_x\ -\ x0}, and
 \texttt{g\ =\ J\^{}T\ Lambda\_i\ delta}, partitioned as
 \texttt{g\ =\ {[}g\_y,\ g\_z{]}\^{}T}. Then the local exponent is
 \texttt{eta\^{}T\ H\ eta\ -\ 2\ g\^{}T\ eta\ +\ delta\^{}T\ Lambda\_i\ delta}.
@@ -510,16 +848,199 @@ negligible.
 Thus a pulled-back 4D world Gaussian becomes a 3D sensor-time footprint
 plus conditional depth and uncertainty. These quantities are exactly
 what a rasterizer needs for support, tile-time binning, visibility
-ordering, and gradient propagation.
+ordering, and gradient propagation. The covariance-block and
+precision-block derivations above are equivalent Gaussian identities;
+the former defines the canonical full-SPD(4) source contract, while the
+latter is convenient for a locally linearized camera map.
 
-\subsubsection{3.4 Trace atlas
-representation}\label{34-trace-atlas-representation}
+\subsubsection{3.4 Homogeneous projective traces and certified
+lowering}\label{homogeneous-projective-traces-and-certified-lowering}
+
+The affine Schur calculation gives the exact local Gaussian object, but
+a moving pinhole camera should not be approximated first in divided
+screen coordinates. Let \texttt{X\_i\^{}h(t)} be a homogeneous world
+point associated with primitive \texttt{i}, and let the camera program
+supply the projective matrix \texttt{P(t)}. We form the homogeneous
+camera trace
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{h\_i(t) = P(t) X\_i\^{}h(t)}
+\NormalTok{       = (h\_u,i(t), h\_v,i(t), h\_z,i(t)).}
+
+\NormalTok{u\_i(t) = h\_u,i(t) / h\_z,i(t),}
+\NormalTok{v\_i(t) = h\_v,i(t) / h\_z,i(t),}
+\NormalTok{d\_i(t) = h\_z,i(t).}
+\end{Highlighting}
+\end{Shaded}
+
+The quotient is taken only after the denominator has been certified. On
+a candidate time interval \texttt{I\_l={[}t\_l\^{}-,t\_l\^{}+{]}},
+define normalized local time
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{t\_l\^{}c = (t\_l\^{}{-} + t\_l\^{}+) / 2,}
+\NormalTok{t\_l\^{}s = (t\_l\^{}+ {-} t\_l\^{}{-}) / 2 \textgreater{} 0,}
+\NormalTok{s     = (t {-} t\_l\^{}c) / t\_l\^{}s,       s in [{-}1,1].}
+\end{Highlighting}
+\end{Shaded}
+
+For the implemented degree-one or degree-two trace family, the compiler
+stores
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{h\_k,i(s) = sum\_\{r=0\}\^{}p a\_\{k,i,r\} s\^{}r,}
+\NormalTok{k in \{u,v,z\},       p in \{1,2\}.}
+\end{Highlighting}
+\end{Shaded}
+
+These coefficients may be exact for a supported camera/motion family or
+fitted from the declared camera samples. Keeping the homogeneous
+numerator and denominator separate exposes projective boundaries and
+avoids fitting a smooth polynomial through a pole in \texttt{u} or
+\texttt{v}.
+
+For every primitive and candidate interval, the compiler evaluates four
+kinds of conditions:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Projective validity.} \texttt{h\_z,i} must retain the declared
+  physical sign and satisfy
+  \texttt{min\_\{s\ in\ {[}-1,1{]}\}\ \textbar{}h\_z,i(s)\textbar{}\ \textgreater{}=\ epsilon\_z},
+  together with the near/far-plane constraints. For
+  \texttt{p\textless{}=2}, the denominator range and minimum margin are
+  checked from the endpoints and stationary point; a sign/range test
+  detects a real root. A between-frame pole therefore cannot pass merely
+  because sampled frames are valid.
+\item
+  \textbf{Trace approximation.} The divided trace and conditional-depth
+  record must meet the declared UV/depth tolerance against the
+  camera-program samples used by the certificate. A supplied analytic
+  interval bound may replace this sampled residual.
+\item
+  \textbf{Support validity.} The projected footprint plus declared
+  approximation padding must conservatively determine active tiles and
+  interval gates.
+\item
+  \textbf{Visibility validity.} Every locally support-overlapping pair
+  must have a stable order, an accepted commutation error, or an
+  explicit fallback label.
+\end{enumerate}
+
+The present implementation has a continuous quadratic denominator test.
+Its general UV/depth fit residual is verified on the declared bounded
+probe/sample set; it is not presented as a continuous-time approximation
+theorem. The variable-camera experiment likewise compares 64 fixed
+physical-time samples against exact rational centers and live per-sample
+order. This distinction is why the paper claims bounded tested
+camera-program segments rather than exact arbitrary trajectories.
+
+An accepted interval is lowered into one STAR-compatible trace record:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{R\_i,l = \{}
+\NormalTok{  homogeneous center coefficients a\_u, a\_v, a\_z,}
+\NormalTok{  opacity and optional temporal{-}opacity coefficients,}
+\NormalTok{  spatial precision / support padding,}
+\NormalTok{  cell depth and optional affine depth{-}plane coefficients,}
+\NormalTok{  color or feature payload,}
+\NormalTok{  active time interval [t\_l\^{}{-},t\_l\^{}+),}
+\NormalTok{  active tiles and compiled local order}
+\NormalTok{\}.}
+\end{Highlighting}
+\end{Shaded}
+
+The lowering policy is deterministic and fail-closed:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{compile\_camera\_program(world, Gamma, tolerances):}
+\NormalTok{    queue \textless{}{-} initial bounded camera{-}program intervals}
+\NormalTok{    atlas \textless{}{-} empty}
+
+\NormalTok{    while queue is not empty:}
+\NormalTok{        I \textless{}{-} pop(queue)}
+\NormalTok{        H \textless{}{-} fit\_or\_form\_homogeneous\_traces(world, Gamma, I)}
+\NormalTok{        Dcert \textless{}{-} certify\_denominators\_and\_physical\_depth(H, I)}
+\NormalTok{        Ecert \textless{}{-} measure\_trace\_residual\_and\_support(H, I)}
+
+\NormalTok{        if Dcert or Ecert fails:}
+\NormalTok{            if I can be split:}
+\NormalTok{                push split\_at\_midpoint(I)}
+\NormalTok{            else:}
+\NormalTok{                atlas.emit\_fallback(I, reason=Dcert or Ecert)}
+\NormalTok{            continue}
+
+\NormalTok{        G \textless{}{-} build\_local\_support\_overlap\_graph(H, I)}
+\NormalTok{        Ocert \textless{}{-} certify\_cell\_depth\_order(G, I)}
+\NormalTok{        if Ocert is unresolved:}
+\NormalTok{            if I can be split:}
+\NormalTok{                push split\_at\_certified\_order\_root\_or\_midpoint(I)}
+\NormalTok{            else:}
+\NormalTok{                atlas.emit\_fallback(I, reason=Ocert)}
+\NormalTok{            continue}
+
+\NormalTok{        atlas.emit(lower\_to\_interval\_records(H, Ecert, Ocert, I))}
+
+\NormalTok{    return atlas}
+\end{Highlighting}
+\end{Shaded}
+
+Splitting changes chart/event complexity, not the requested output
+sampling density by definition. In an easy bounded program, the same
+accepted interval can serve many requested times. Near a pole, support
+change, order crossing, or large residual, the interval subdivides or
+dies into fallback rather than silently extrapolating.
+
+\textbf{Production depth boundary.} The compiler can carry an affine
+local section
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{z\_i(u,v,t) = z\_c,i(t)}
+\NormalTok{           + z\_u,i(t) (u{-}u\_c,i(t))}
+\NormalTok{           + z\_v,i(t) (v{-}v\_c,i(t)).}
+\end{Highlighting}
+\end{Shaded}
+
+That field is useful for diagnostics, source gradients, and tighter
+compiler- side certificates. When image/tile dimensions are supplied,
+the current fallback marker bounds this affine section over a tile and
+flags a UV depth-line event. After certification, however, the interval
+Metal compositor consumes one precompiled order per tile-time cell; it
+does not perform arbitrary pixel- varying live sorting. A cell for which
+one cell order cannot be certified must be split or routed to fallback.
+The implemented claim is therefore affine tile-depth certification
+followed by scalar cell ordering, not a general per-pixel visibility
+solver.
+
+\begin{figure}
+\centering
+\pandocbounded{\includesvg[keepaspectratio]{research_notes/gauged_uvt_trace_atlas/paper/figures/world_tubes_projective_compiler.svg}}
+\caption{Projective compiler. Homogeneous camera traces remain undivided
+while the compiler certifies the projective denominator, trace
+approximation, support, and visibility on a bounded interval. A
+certified interval is lowered with a precompiled cell order; an
+unresolved interval is deterministically split or, at the minimum
+interval, sent to an explicit reason-labelled fallback. The current
+continuous certificate covers the quadratic denominator, while general
+UV/depth residuals use the declared bounded sample set.}
+\end{figure}
+
+\subsubsection{3.5 Trace atlas
+representation}\label{trace-atlas-representation}
 
 The compiled atlas is:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{K\_Gamma = \{ C\_l, A\_l, T\_l, Pi\_l, E\_l \}\_\{l=1\}\^{}L.}
+\NormalTok{K\_Gamma = \{ C\_l, S\_l, Phi\_l, Pi\_l, E\_l \}\_\{l=1\}\^{}L.}
 \end{Highlighting}
 \end{Shaded}
 
@@ -528,8 +1049,8 @@ where:
 \begin{Shaded}
 \begin{Highlighting}[]
 \NormalTok{C\_l       gauge domain / event cell in (u,v,t)}
-\NormalTok{A\_l       active primitive set}
-\NormalTok{T\_l       trace functions: alpha\_i,l(y), c\_i,l(y), z\_i,l(y)}
+\NormalTok{S\_l       active primitive set}
+\NormalTok{Phi\_l     trace functions: alpha\_i,l(y), c\_i,l(y), z\_i,l(y)}
 \NormalTok{Pi\_l      stable total order, partial order, or commutation certificate}
 \NormalTok{E\_l       error, support, fallback, and backward metadata}
 \end{Highlighting}
@@ -540,7 +1061,7 @@ them in the compiled order:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{I(y) = sum\_m T\_m(y) alpha\_\{pi\_m,l\}(y) c\_\{pi\_m,l\}(y).}
+\NormalTok{I(y) = sum\_m Trans\_m(y) alpha\_\{pi\_m,l\}(y) c\_\{pi\_m,l\}(y).}
 \end{Highlighting}
 \end{Shaded}
 
@@ -548,7 +1069,7 @@ The transmittance is:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{T\_m(y) = product\_\{n\textless{}m\} (1 {-} alpha\_\{pi\_n,l\}(y)).}
+\NormalTok{Trans\_m(y) = product\_\{n\textless{}m\} (1 {-} alpha\_\{pi\_n,l\}(y)).}
 \end{Highlighting}
 \end{Shaded}
 
@@ -571,8 +1092,7 @@ Finite exposure is an integral through the atlas:
 Rolling shutter replaces \texttt{tau} with a row/time-coupled sensor
 program.
 
-\subsubsection{3.5 Visibility gauge
-atlas}\label{35-visibility-gauge-atlas}
+\subsubsection{3.6 Visibility gauge atlas}\label{visibility-gauge-atlas}
 
 Depth marginalization alone does not make alpha compositing linear in
 depth. The footprint trace:
@@ -599,9 +1119,10 @@ primitive pairs whose sensor-time footprints overlap inside the same
 tile-time cell. \texttt{Delta\_l} stores certified depth/order
 predicates, \texttt{Pi\_l} stores the induced total order or
 partial-order DAG, and \texttt{R\_l} stores commutation residuals and
-fallback metadata. This avoids the all-pairs \texttt{N\^{}2} problem:
-pairwise certification is local in support overlap and event complexity,
-not global in primitive count.
+fallback metadata. This makes certification output-sensitive to local
+support overlap and event complexity instead of constructing irrelevant
+global pairs. Dense overlap remains quadratic in the worst case and is
+measured rather than hidden.
 
 For each primitive we keep conditional depth:
 
@@ -611,13 +1132,22 @@ For each primitive we keep conditional depth:
 \end{Highlighting}
 \end{Shaded}
 
-or a conservative lifted interval in a depth/order gauge:
+With \texttt{sigma\_z,i\ =\ sqrt(nu\_z,i)}, a concrete conservative
+confidence band is:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{D\_i(y) = [z\_i\^{}{-}(y), z\_i\^{}+(y)].}
+\NormalTok{D\_i(y) =}
+\NormalTok{  [z\_hat\_i(y) {-} k sigma\_z,i {-} delta\_fit,i,}
+\NormalTok{   z\_hat\_i(y) + k sigma\_z,i + delta\_fit,i].}
 \end{Highlighting}
 \end{Shaded}
+
+Here \texttt{k} is the declared tail width and \texttt{delta\_fit,i}
+bounds camera-chart or trace approximation error. This is a sufficient
+order certificate, not a necessary one. Unlike a mean-depth test, it
+rejects thick overlapping conditional fibers even when their means are
+separated.
 
 For support-overlapping pairs, define either a center-depth difference:
 
@@ -652,8 +1182,8 @@ depth curves high-curvature, while projective time, inverse depth, log
 depth, or denominator gauges can make them rational, low-degree, or
 interval-friendly.
 
-If unresolved pairs remain, we bound the effect of swapping two
-translucent contributors:
+If unresolved pairs remain, a general certificate can bound the effect
+of swapping two translucent contributors:
 
 \begin{Shaded}
 \begin{Highlighting}[]
@@ -661,33 +1191,70 @@ translucent contributors:
 \end{Highlighting}
 \end{Shaded}
 
-Unresolved pairs below tolerance are marked commutable. Important
-unresolved pairs induce an event boundary or fallback. Fallback is part
-of the theorem of the implementation: hard regions can be rendered by
-local live sorting or a reference path, while the rest of the atlas
-retains shared metadata.
+The implemented hybrid currently uses the stricter depth-band separation
+certificate rather than this color-commutation residual. In the general
+criterion, unresolved pairs below tolerance could be marked commutable;
+important unresolved pairs induce an event boundary or fallback.
+Fallback is part of the theorem of the implementation: hard regions can
+be rendered by local live sorting or a reference path, while the rest of
+the atlas retains shared metadata.
 
-The baseline-compatible theorem is:
+The production distinction is important. Mean-depth sorting remains the
+fast baseline-compatible path, but the hybrid renderer now consumes the
+conditional variance bands above. Certified tiles use the fast Metal
+compositor; rejected tiles keep the Gaussian depth profiles and use an
+integrated retained-fiber Metal forward/VJP. This closes the static
+affine-Gaussian fallback path. It does not yet close the exact
+projective/nonlinear-camera case: that route still needs projective
+retained-depth records, approximation-error propagation, and a certified
+quadrature policy.
+
+\textbf{Proposition 3 (fixed-cell compositing correctness).} Fix an
+atlas cell \texttt{C\_l}. Assume its active set contains every primitive
+whose baseline support intersects the cell, and let
+\texttt{epsilon\_trace,l} bound the accumulated image effect of trace
+approximation and support padding on that cell. Suppose the compiled
+order differs from the baseline live order only through a sequence
+\texttt{Q\_l} of adjacent swaps, where every swapped support-overlapping
+pair satisfies
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{Within a domain C\_l, if every support{-}overlapping pair has a certified order}
-\NormalTok{or a certified commutation residual below epsilon, then compiled compositing}
-\NormalTok{matches the baseline sorted{-}Gaussian renderer up to epsilon and trace}
-\NormalTok{approximation error.}
+\NormalTok{sup\_\{y in C\_l\}}
+\NormalTok{  alpha\_i(y) alpha\_j(y) ||c\_i(y){-}c\_j(y)|| \textless{}= epsilon\_ij.}
 \end{Highlighting}
 \end{Shaded}
 
-This claim is intentionally baseline-relative. It reproduces the chosen
-Gaussian-splat compositing semantics. It does not claim that
-center-depth alpha compositing is a physically exact solution of
-radiative transfer.
+Then the baseline-relative image error is bounded by
 
-\subsubsection{3.6 WorldFoam as lifted
-transmittance}\label{36-worldfoam-as-lifted-transmittance}
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{sup\_\{y in C\_l\} ||I\_compiled(y){-}I\_replay(y)||}
+\NormalTok{  \textless{}= epsilon\_trace,l + sum\_\{(i,j) in Q\_l\} epsilon\_ij.}
+\end{Highlighting}
+\end{Shaded}
+
+In particular, exact traces plus a certified identical order give exact
+baseline replay on \texttt{C\_l}. The proof applies the two-layer swap
+identity above to each adjacent transposition and uses the triangle
+inequality; preceding transmittance can only reduce the contribution
+because it lies in \texttt{{[}0,1{]}}. Cells that fail the active-set,
+order, or error assumptions are not covered by this proposition and must
+be split or evaluated by the declared fallback.
+
+This proposition is intentionally baseline-relative. It reproduces the
+chosen Gaussian-splat compositing semantics. It does not claim that
+center-depth alpha compositing is a physically exact solution of
+radiative transfer. The current projective production path primarily
+uses certified scalar/cell order and fallback; the commutation bound
+states the admissible extension but is not silently credited as
+implemented dense-scene selectivity.
+
+\subsubsection{3.7 Noncommutation boundary and ordered ray
+transfer}\label{noncommutation-boundary-and-ordered-ray-transfer}
 
 The visibility gauge atlas preserves baseline Gaussian-splat semantics.
-A more radical extension is to retain the lifted ray-fiber opacity field
+A more radical sibling method retains the lifted ray-fiber opacity field
 itself:
 
 \begin{Shaded}
@@ -701,22 +1268,69 @@ transmittance:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{tau(y,z) = integral\_\{z\_front\}\^{}\{z\} sigma\_l(y,s) ds}
-\NormalTok{T(y,z)   = exp({-}tau(y,z))}
-\NormalTok{I(y)     = integral T(y,z) sigma\_l(y,z) c\_l(y,z) dz.}
+\NormalTok{Omega\_y(z) = integral\_\{z\_front\}\^{}\{z\} sigma\_l(y,s) ds}
+\NormalTok{Trans\_y(z) = exp({-}Omega\_y(z))}
+\NormalTok{I(y)       = integral Trans\_y(z) sigma\_l(y,z) c\_l(y,z) dz.}
 \end{Highlighting}
 \end{Shaded}
 
-This \textbf{world foam} mode dissolves depth order into cumulative
-opacity along the ray fiber. It is cleaner for physical transmittance,
-finite exposure, and translucent ambiguity, but it is less directly
-baseline-compatible with standard Gaussian splat alpha compositing. We
-therefore treat it as a separate representation layer and a second paper
-direction: world tubes compile primitive support and differentiable
-attributes; WorldFoam compiles lifted opacity/transmittance for
-visibility.
+The split is algebraic, not merely architectural. One thin alpha/color
+event acts on background radiance with:
 
-\subsubsection{3.7 Compiled adjoints}\label{37-compiled-adjoints}
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{G\_i =}
+\NormalTok{  [ (1{-}alpha\_i) I\_C    alpha\_i c\_i ]}
+\NormalTok{  [ 0                  1           ].}
+\end{Highlighting}
+\end{Shaded}
+
+For two contributors:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{[G\_i,G\_j]\_color = alpha\_i alpha\_j (c\_i{-}c\_j).}
+\end{Highlighting}
+\end{Shaded}
+
+Thus order is irrelevant only when one contributor is transparent, their
+colors agree, or a declared residual tolerance makes the swap
+immaterial. More strongly, total opacity, constant color, and one
+representative depth do not determine an extended colored depth profile:
+two primitives can have the same summaries while interleaving their
+optical mass differently and producing different images. This is why
+confidence-band overlap rejected by Section 3.6 cannot be repaired in
+general by sorting conditional means.
+
+\textbf{World Tubes + Ordered Ray Transfer} resolves that scoped
+Gaussian case by retaining the ambiguous ray-depth fiber and evaluating
+the ordered optical transfer:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{A\_y(z) =}
+\NormalTok{  [ {-}sigma\_y(z) I\_C    sigma\_y(z)c\_y(z) ]}
+\NormalTok{  [ 0                  0                 ]}
+
+\NormalTok{M\_y = P exp integral A\_y(z) dz.}
+\end{Highlighting}
+\end{Shaded}
+
+The product integral is invariant to an orientation-preserving change of
+the ray-depth coordinate when the physical-length Jacobian is included.
+Its piecewise-constant implementation is an associative
+visibility-monoid scan. The current World Tubes extension is a bounded
+static-affine fallback for native Gaussian depth fibers. Selectivity has
+been demonstrated only on the small static-affine fixture; the dense
+fixture falls back everywhere. \textbf{WorldFoam} is the broader,
+separate representation contract for general cellular fields, cell/event
+words, and richer finite-element material laws; the scoped Gaussian
+fallback is not a claim that WorldFoam has been absorbed into STAR UVT.
+
+Material-basis selection for general cellular fields is evaluated in the
+separate WorldFoam study and is outside the scope of this paper.
+
+\subsubsection{3.8 Compiled adjoints}\label{compiled-adjoints}
 
 Inside a gauge domain with fixed support and visibility metadata,
 rendering is differentiable with respect to trace parameters. For a
@@ -724,8 +1338,8 @@ primitive \texttt{i}, the local derivative of compositing is:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{dI/dc\_i     = T\_i alpha\_i,}
-\NormalTok{dI/dalpha\_i = T\_i (c\_i {-} I\_behind,i).}
+\NormalTok{dI/dc\_i     = Trans\_i alpha\_i,}
+\NormalTok{dI/dalpha\_i = Trans\_i (c\_i {-} I\_behind,i).}
 \end{Highlighting}
 \end{Shaded}
 
@@ -734,27 +1348,232 @@ The gradient of the loss is:
 \begin{Shaded}
 \begin{Highlighting}[]
 \NormalTok{dL/dtheta\_i =}
-\NormalTok{  sum\_l integral\_\{C\_l\} A\_l(y)\^{}T dI(y)/dtheta\_i dy,}
+\NormalTok{  sum\_l integral\_\{C\_l\} lambda(y)\^{}T dI(y)/dtheta\_i dy,}
 \end{Highlighting}
 \end{Shaded}
 
-where \texttt{A\_l(y)\ =\ dL/dI(y)} is the image adjoint. The compiled
+where \texttt{lambda(y)\ =\ dL/dI(y)} is the image adjoint. The compiled
 implementation uses interval Metal forward and direct VJP with topology,
 active intervals, and visibility cells held as compiled constants. Trace
 coefficients, opacity, temporal opacity, spatial precision, and colors
 remain differentiable.
 
-\subsection{4. Implementation}\label{4-implementation}
+More explicitly, let \texttt{phi=C\_Gamma(theta;kappa)} denote the
+differentiable atlas coefficients emitted from world parameters
+\texttt{theta}, and let the event-cell topology and replay tape be
+\texttt{kappa}. For an image residual \texttt{lambda(y)=dL/dI(y)}, the
+backward chain is:
 
-Our current implementation is a STAR UVT / projective interval backend.
-A trace stores homogeneous/projective time coefficients, opacity,
-optional temporal opacity coefficients, optional spatial precision,
-optional depth-affine terms, and color. Tile-time cells store active
-intervals and visibility metadata. The hot path packs accepted cells
-once into spatial tile bins and uses per-entry
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{image residual lambda}
+\NormalTok{  {-}\textgreater{} g\_phi = D\_phi R(phi, kappa)\^{}T lambda}
+\NormalTok{  {-}\textgreater{} g\_theta = D\_theta C\_Gamma(theta; kappa)\^{}T g\_phi}
+\NormalTok{  {-}\textgreater{} gradients of world means, SPD(4) factors, opacity, and appearance.}
+\end{Highlighting}
+\end{Shaded}
+
+The first arrow is the interval evaluator VJP. The second accumulates
+trace coefficient gradients through gauge transforms, projective/local
+trace coefficients, and Schur-complement lowering into the shared world
+source. Cell topology, order decisions, and fallback choices are
+piecewise-constant during this VJP; event-boundary derivatives require a
+separate estimator and are not silently included. An implementation that
+stops at \texttt{g\_phi}, or optimizes a detached atlas directly, is an
+atlas-fitting baseline rather than the claimed compiled-world adjoint.
+
+\textbf{Proposition 4 (fixed-topology compiled adjoint).} Fix
+\texttt{kappa} and suppose \texttt{C\_Gamma(theta;kappa)} and
+\texttt{R(phi,kappa)} are differentiable in a neighborhood of the
+current world parameters. For
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{L(theta;kappa) = ell(R(C\_Gamma(theta;kappa),kappa), I\_star),}
+\end{Highlighting}
+\end{Shaded}
+
+the world gradient is
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{grad\_theta L}
+\NormalTok{  = D\_theta C\_Gamma(theta;kappa)\^{}T}
+\NormalTok{    D\_phi R(phi,kappa)\^{}T}
+\NormalTok{    grad\_I ell.}
+\end{Highlighting}
+\end{Shaded}
+
+This is the ordinary chain rule for the compiler/evaluator composition.
+It is valid within a structural stratum where perturbing \texttt{theta}
+does not change the active support, interval split, tile membership,
+order, or fallback decision. At a structural boundary, the
+implementation must recompile or use a separate boundary estimator;
+Proposition 4 does not assign a derivative to the discrete change in
+\texttt{kappa}.
+
+\subsubsection{3.9 Work model and claim
+boundary}\label{work-model-and-claim-boundary}
+
+Let \texttt{F} be the number of requested times, \texttt{P=H\ W} the
+pixels per time, \texttt{N} the world primitive count, \texttt{L} the
+number of accepted chart/event cells, \texttt{N\_tr} the compiled
+primitive-trace records across those cells, \texttt{B\_int} the
+interval-bin entries, and \texttt{K} the materialized primitive-pixel
+interactions. A useful work decomposition is
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{W\_replay(F)}
+\NormalTok{  = sum\_\{f=1\}\^{}F [W\_project(f) + W\_support(f)}
+\NormalTok{                 + W\_bin(f) + W\_visibility(f)]}
+\NormalTok{    + W\_shade(K),}
+
+\NormalTok{W\_compiled(F)}
+\NormalTok{  = W\_compile(N,L,N\_tr,B\_int)}
+\NormalTok{    + W\_trace\_eval(F,N\_tr,B\_int)}
+\NormalTok{    + W\_shade(K).}
+\end{Highlighting}
+\end{Shaded}
+
+A coarse dense-world accounting isolates the persistent metadata terms
+as
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{W\_meta,replay   = O(F N + B\_replay),}
+\NormalTok{W\_meta,compiled = O(N\_tr + B\_int),       with N\_tr \textless{}= N L.}
+\end{Highlighting}
+\end{Shaded}
+
+These are accounting identities for the declared records, not lower
+bounds; spatial culling can reduce both routes.
+
+Both routes must write \texttt{F\ P} output samples, and both pay for
+the actual shading/compositing interactions represented by \texttt{K}.
+World Tubes targets the first bracket in \texttt{W\_replay}: projection,
+conservative support, tile/bin membership, stable visibility metadata,
+and the corresponding world-to-trace backward tape.
+\texttt{W\_trace\_eval} denotes evaluating the already compiled trace
+and interval gates at requested times, excluding the separately counted
+primitive-pixel shading/compositing work. For a fixed bounded camera
+program whose chart/event structure does not grow when time sampling is
+densified, \texttt{L}, \texttt{N\_tr}, and the persistent interval
+metadata can remain fixed while the replay metadata grows with
+\texttt{F}. This is the regime measured by the fixed-chart structural
+experiment.
+
+No universal asymptotic statement follows without an assumption on event
+complexity. A near-plane singularity, rapid support churn, dense order
+crossings, or conservative fallback can make \texttt{L}, \texttt{N\_tr},
+\texttt{B\_int}, or live replay work grow proportionally to \texttt{F}.
+The compiled evaluator also still samples the trace and accumulates
+image residuals at the requested times. Accordingly, our claim is
+conditional frame amortization of world-side work, not sublinear
+materialization of images and not end-to-end sublinear training through
+topology changes.
+
+For timing, compile cost must be reported separately. If
+\texttt{c\_replay} is the median per-time replay cost and
+\texttt{c\_eval} the median per-time atlas-evaluation cost under the
+same frozen world, the idealized amortization point is
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{F\_break\_even = W\_compile / (c\_replay {-} c\_eval),}
+\end{Highlighting}
+\end{Shaded}
+
+defined only when \texttt{c\_replay\ \textgreater{}\ c\_eval}. The
+publication experiment measures the complete warmed, repeated route
+rather than treating this formula or logical tensor volume as a timing,
+storage, or peak-memory result.
+
+\subsection{4. Implementation}\label{implementation}
+
+The implementation retains the historical STAR UVT / projective interval
+backend and adds a parallel native-SPD(4) source plus physical transfer
+paths. The production experiment surface has four explicit axes:
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Axis
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Implemented values
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+World source & \texttt{legacy\_tube}, \texttt{full\_spd4} \\
+Renderer & \texttt{dense}, \texttt{metal\_tile},
+\texttt{retained\_fiber\_metal}, \texttt{hybrid\_retained\_fiber} \\
+Alpha law & \texttt{peak\_splat}, \texttt{beer\_lambert} \\
+Amplitude convention & \texttt{fiber\_integrated},
+\texttt{peak\_density} \\
+\end{longtable}
+}
+
+\texttt{legacy\_tube} remains the default and has 10 geometry / 14 total
+trainable scalars per atom. \texttt{full\_spd4} is opt-in and has 14
+geometry / 18 total scalars. Its lossless chart stores a spacetime mean,
+a conditional spatial Cholesky factor, a space-time tilt, and a positive
+temporal precision. Static cameras use the exact affine-gauge
+pushforward. \texttt{dynamic\_first\_order} and
+\texttt{projective\_first\_order} use the same differentiable one-chart
+first-order moving-camera compiler; this compiler matches the
+camera-program value and Jacobian at the chart point but is not an exact
+long-window nonlinear projection.
+
+Both sources lower into the established q-UVT footprint and affine
+conditional-depth fields. The full-SPD(4) lowering additionally retains
+conditional-depth variance and the declared amplitude semantics. The
+fast \texttt{metal\_tile} path consumes the footprint and affine mean
+depth. The \texttt{hybrid\_retained\_fiber} path also consumes
+conditional-depth variance: a tile-level confidence-band certificate
+selects either the fast compositor or the retained-depth fallback.
+\texttt{retained\_fiber\_metal} runs the physical retained-depth
+transfer everywhere and serves as the integrated oracle for the hybrid
+path.
+
+\texttt{peak\_splat} preserves the historical
+\texttt{opacity\ exp(-q/2)} behavior. \texttt{beer\_lambert} implements
+\texttt{1-exp{[}-tau\_0\ exp(-q/2){]}}, its exact VJP, and its
+alpha-cutoff support equation in the Metal kernel.
+\texttt{fiber\_integrated} treats the trainable amplitude as projected
+peak optical thickness. For \texttt{full\_spd4\ +\ beer\_lambert},
+\texttt{peak\_density} instead compiles world peak density through the
+affine fiber-measure factor and conditional variance. Invalid
+combinations fail closed: the legacy source accepts only
+\texttt{fiber\_integrated}, \texttt{peak\_density} requires
+\texttt{full\_spd4\ +\ beer\_lambert}, and retained-fiber renderers
+require Beer--Lambert semantics.
+
+The retained path evaluates the combined Gaussian extinction and
+emission field along depth, performs front-to-back Beer--Lambert
+transfer, and provides a native Metal VJP for q-UVT mean/precision,
+conditional depth mean/slope and variance, optical thickness, and color.
+The production entry points are
+\texttt{render\_retained\_fiber\_metal(...)} and
+\texttt{render\_variance\_certified\_hybrid\_metal(...)}. They are
+called from the same multicamera trainer and unified paper runner as the
+fast STAR path.
+
+The primary projective interval backend stores homogeneous/projective
+time coefficients, opacity, optional temporal opacity coefficients,
+optional spatial precision, optional depth-affine terms, and color. The
+affine depth-plane terms can be carried through the trace ABI, but they
+are used compiler-side to bound tile depth and flag UV depth-line
+events. The production Metal compositor then consumes the accepted
+scalar cell order instead of solving a pixel-varying order field.
+Tile-time cells store active intervals and visibility metadata. The hot
+path packs accepted cells once into spatial tile bins and uses per-entry
 \texttt{{[}active\_start,\ active\_stop)} checks in the Metal kernel.
-
-The forward path is:
+Its forward path is:
 
 \begin{Shaded}
 \begin{Highlighting}[]
@@ -786,21 +1605,47 @@ via a custom autograd function:
 \end{Highlighting}
 \end{Shaded}
 
-Current limitations of this implementation:
+The physical retained-depth route is currently integrated with the
+affine q-UVT producer, not with the full projective trace family.
+Current limitations are therefore:
 
 \begin{Shaded}
 \begin{Highlighting}[]
 \NormalTok{MPS/Metal backend}
 \NormalTok{RGB / feature\_dim=3 route for the projective interval trainer}
 \NormalTok{compiled visibility/order and tile membership held fixed during direct VJP}
-\NormalTok{fallback support present, but broad fallback{-}heavy scenes remain a stress case}
+\NormalTok{legacy/restricted producer remains the default; full{-}SPD(4) is explicit opt{-}in}
+\NormalTok{moving{-}camera SPD(4) compilation is first{-}order within one chart}
+\NormalTok{projective compositor consumes precompiled cell order; arbitrary per{-}pixel live sorting is not implemented}
+\NormalTok{exact retained{-}depth transfer for nonlinear/projective traces is not implemented}
+\NormalTok{retained{-}fiber quadrature is fixed rather than adaptive/error{-}certified}
+\NormalTok{the present variance certificate can conservatively route every dense tile to fallback}
+\NormalTok{event topology and fallback choices remain fixed during their VJPs}
 \NormalTok{STAR UVT support/visibility/composition quality is a separate active research lane}
 \end{Highlighting}
 \end{Shaded}
 
-These are implementation limits, not limits of the bundle formulation.
+The strict-SPD(4) reference/compiler, synthetic capacity gate, trainable
+producer, and Metal forward/VJP checks now pass. In the rank-six
+three-camera capacity fixture, full SPD(4) reaches \texttt{1.16e-13} MSE
+while the restricted source retains \texttt{2.07e-4} MSE from a matched
+initial loss. The RGB parameterization uses 18 trainable scalars per
+full-SPD(4) atom versus 14 per restricted atom, a
+\texttt{18/14\ =\ 1.2857x} per-atom capacity mismatch. The fixture
+therefore isolates expressivity; the bounded experiment in Section 6
+separately includes a 199-atom / 3,582-parameter full-SPD(4) row against
+the 256-atom / 3,584-parameter restricted source.
 
-\subsection{5. Experiments}\label{5-experiments}
+For Beer--Lambert, CPU analytic/autograd/finite-difference tests and
+native Metal forward/direct-VJP parity pass, including cutoff and clamp
+branches. The retained-fiber Metal gate also passes forward and all
+source VJPs, and the hybrid path is exercised through the training seam.
+The final focused validation suite reports
+\texttt{143\ passed,\ 4\ skipped}. These are implementation and
+bounded-mechanical checks. They do not turn the short single-seed rows
+below into paper-quality convergence evidence.
+
+\subsection{5. Experiments}\label{experiments}
 
 The final paper should separate four questions:
 
@@ -823,7 +1668,7 @@ The final paper should separate four questions:
 \end{enumerate}
 
 \subsubsection{5.1 Synthetic trace
-correctness}\label{51-synthetic-trace-correctness}
+correctness}\label{synthetic-trace-correctness}
 
 Controlled scenes of analytic 4D Gaussians with known camera programs:
 
@@ -851,7 +1696,7 @@ Metrics:
 \end{Highlighting}
 \end{Shaded}
 
-\subsubsection{5.2 Frame-count scaling}\label{52-frame-count-scaling}
+\subsubsection{5.2 Frame-count scaling}\label{frame-count-scaling}
 
 Compare per-frame replay against compiled atlas for fixed camera paths:
 
@@ -865,7 +1710,7 @@ Metrics:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{payload bytes}
+\NormalTok{logical tensor{-}element bytes (not topology{-}inclusive storage)}
 \NormalTok{trace count}
 \NormalTok{tile/bin entries}
 \NormalTok{interval entries}
@@ -873,7 +1718,7 @@ Metrics:
 \NormalTok{GPU forward time}
 \NormalTok{GPU backward time}
 \NormalTok{total step time}
-\NormalTok{peak memory}
+\NormalTok{route{-}scoped sampled peak memory (required, not supplied by logical volume)}
 \end{Highlighting}
 \end{Shaded}
 
@@ -882,22 +1727,13 @@ Current internal evidence:
 \begin{Shaded}
 \begin{Highlighting}[]
 \NormalTok{bounded{-}orbit F: 4, 8, 16, 32, 64, 128}
-\NormalTok{fixed payload growth: 1.0x vs per{-}frame replay 32.0x}
-\NormalTok{final fixed/replay payload ratio: 0.03125}
-\NormalTok{final fixed/replay CPU compile ratio: 0.0477}
-\NormalTok{final fixed/replay forward ratio: 0.181}
-\NormalTok{final fixed/replay backward ratio: 0.392}
-\NormalTok{trained interval{-}entry growth ratio: 0.148}
-\NormalTok{final trained trace{-}count ratio: 0.1}
-\NormalTok{final trained forward ratio: \textless{}= 0.266}
-\NormalTok{final trained backward ratio: \textless{}= 0.094}
-\NormalTok{fresh{-}process median no{-}first ratio: 0.565}
-\NormalTok{fresh{-}process median projective{-}total ratio: 0.836}
+\NormalTok{fixed logical{-}volume growth: 1.0x vs per{-}frame replay 32.0x}
+\NormalTok{final fixed/per{-}frame trace{-}count ratio: 0.03125}
+\NormalTok{publication timing: pending warmed repeated frozen{-}world sweep}
 \end{Highlighting}
 \end{Shaded}
 
-\subsubsection{5.3 Camera-family
-scaling}\label{53-camera-family-scaling}
+\subsubsection{5.3 Camera-family scaling}\label{camera-family-scaling}
 
 For a low-dimensional camera family \texttt{Q\ x\ Omega\ x\ T}, compare
 one shared family atlas against replaying one atlas per camera parameter
@@ -915,19 +1751,106 @@ Current internal evidence:
 
 \begin{Shaded}
 \begin{Highlighting}[]
-\NormalTok{Q2 shared payload growth: 1.0x}
-\NormalTok{Q2 replay payload growth: 64.0x}
-\NormalTok{Q2 final payload ratio: 0.0625}
+\NormalTok{Q2 shared logical{-}volume growth: 1.0x}
+\NormalTok{Q2 replay logical{-}volume growth: 64.0x}
+\NormalTok{Q2 final logical{-}volume ratio: 0.0625}
 \NormalTok{Q2 final chart ratio: 0.015625}
 \NormalTok{Q2 max UV fit residual: 0.111 px}
 \end{Highlighting}
 \end{Shaded}
 
+The camera compiler must also emit a diagnostic vector per gauge domain:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{minimum projective denominator margin}
+\NormalTok{maximum UV reprojection residual (pixels)}
+\NormalTok{maximum depth{-}model residual}
+\NormalTok{support{-}certificate slack / under{-}coverage count}
+\NormalTok{minimum certified order margin}
+\NormalTok{conditional{-}depth variance range}
+\NormalTok{chart and event{-}cell counts}
+\NormalTok{fallback fraction and reason histogram}
+\end{Highlighting}
+\end{Shaded}
+
+We will sweep orbit span, FOV, camera-to-primitive distance, primitive
+anisotropy, and motion magnitude with matched world parameters. Each
+sweep compares the affine/local trace closure, the projective trace
+family, and dense per-frame replay. The resulting
+affine-versus-projective \textbf{closure/death curves} plot
+image/gradient error, chart count, and fallback fraction against camera
+nonlinearity. They locate where the affine approximation ceases to meet
+its declared tolerance and whether projective lowering extends that
+range before certification correctly routes samples to a new cell or
+fallback. The bounded runner and verifier are implemented at
+\texttt{projective\_variable\_camera\_closure\_death\_curve.py}. It
+fixes one synthetic world, physical interval, and sample count; uses
+exact rational centers with per-sample live depth ordering as the
+oracle; and binds chart/event/trace counts, fallback, image error, and
+fixed-topology world VJPs. Its runtime curve remains pending and no
+boundary value is claimed here.
+
+\begin{table*}[t]
+\centering
+\caption{Bounded variable-camera closure/death curve.}
+\label{tab:variable-camera-closure}
+\input{research_notes/gauged_uvt_trace_atlas/paper/generated/schema_v2/variable_camera_table.tex}
+\end{table*}
+
 \subsubsection{5.4 Real-video renderer
-equivalence}\label{54-real-video-renderer-equivalence}
+equivalence}\label{real-video-renderer-equivalence}
 
 Use source-distinct real videos and compare compiled projective interval
 renderer against the cadence/per-frame route.
+
+The publication comparison uses a frozen identical-world replay
+protocol:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Train one declared world representation to checkpoint
+  \texttt{theta\_star}.
+\item
+  Freeze \texttt{theta\_star}, target camera samples, precision, shading
+  settings, loss, background, and pixel batch.
+\item
+  Route A lowers that same checkpoint independently for each target
+  frame.
+\item
+  Route B compiles that same checkpoint once for the complete camera
+  program and evaluates identical targets.
+\item
+  Compare images, losses, world-parameter VJPs, payload, and timing; do
+  not train separate route-specific worlds.
+\end{enumerate}
+
+The lane-isolated runner for this causal protocol is implemented at
+\texttt{run\_frozen\_world\_replay\_compiled.py}. It snapshots and
+hashes the final learned world, repeats one-frame STAR
+projection/bin/render for every selected heldout target, compiles one
+event-stratified interval atlas from the same state, and reports
+image/loss/world-VJP parity, payload, timing, and fallback. One
+invocation can now train/save once and evaluate
+\texttt{F=\{4,8,16,32,64,128,full\}} from that exact checkpoint. Each
+\texttt{F} uses an ordered integer time grid spanning the same full
+physical interval rather than a growing prefix, and the artifact binds
+the selected indices and centered times. Each \texttt{F} compiles its
+own atlas from the same frozen world/program; the experiment does not
+claim that one identical atlas object is reused across different
+sampling densities. The frozen report's current payload ratio covers
+route tensor payload only; it excludes interval/cell and replay-bin
+topology, allocator overhead, and transient working memory, and is
+explicitly ineligible as a storage or full interaction-memory claim.
+Route-scoped peak memory and topology-inclusive bytes remain required
+for that stronger comparison. Its non-unit selected-time chunk parity,
+warmed/repeated timing, and publication-scale result are still pending
+on an approved host. Existing broad-video and frame-scaling artifacts
+remain renderer-equivalence and same-representation evidence at their
+recorded scopes; this implementation does not retroactively relabel them
+as a fully frozen public-checkpoint result.
 
 Metrics:
 
@@ -959,40 +1882,46 @@ Current internal evidence:
 \end{Highlighting}
 \end{Shaded}
 
+\begin{figure}
+\centering
 \pandocbounded{\includegraphics[keepaspectratio,alt={Qualitative real-video tether for the accepted projective decisive-demo artifact. Columns compare the target, compiled World Tubes render, and error views at sampled times; the figure is a correctness/media tether rather than a public-dataset quality claim.}]{research_notes/gauged_uvt_trace_atlas/paper/figures/real_video_equivalence.jpg}}
+\caption{Qualitative real-video tether for the accepted projective
+decisive-demo artifact. Columns compare the target, compiled World Tubes
+render, and error views at sampled times; the figure is a
+correctness/media tether rather than a public-dataset quality claim.}
+\end{figure}
 
 \subsubsection{5.5 Public dataset
-comparison}\label{55-public-dataset-comparison}
+comparison}\label{public-dataset-comparison}
 
-The paper should evaluate public data in two ways:
+The paper separates three kinds of public evidence:
 
 \begin{enumerate}
 \def\labelenumi{\arabic{enumi}.}
 \item
-  \textbf{In-representation ablation:} train or initialize our STAR
-  UVT/projective primitives on public sequences, then compare
-  frame-by-frame replay versus compiled atlas. This is the cleanest
-  evaluation of the contribution.
+  \textbf{Compiler-causal evaluation.} Freeze one learned World Tubes
+  checkpoint and compare per-frame replay with one compiled atlas on
+  identical public targets. This is the public evaluation of the paper's
+  compiler contribution.
 \item
-  \textbf{External dynamic-GS comparison:} compare speed/quality against
-  existing dynamic Gaussian baselines where feasible, but present this
-  as contextual comparison rather than the main theorem.
+  \textbf{Representation and context evaluation.} Train World Tubes,
+  WorldFoam, and dynamic 3DGS under the shared progressive, fixed, and
+  sampler-control protocols. These selected-time trainer rows compare
+  quality, cost, and stored state; they do not evaluate the compiled
+  projective atlas.
+\item
+  \textbf{External comparison.} Report published or reproduced
+  dynamic-scene baselines as contextual quality and efficiency
+  references, not as substitutes for the same-representation causal
+  comparison.
 \end{enumerate}
 
-Recommended datasets:
-
-\begin{Shaded}
-\begin{Highlighting}[]
-\NormalTok{Neural 3D Video: real multiview dynamic scenes}
-\NormalTok{D{-}NeRF: controlled synthetic dynamic scenes}
-\NormalTok{HyperNeRF / DyCheck: monocular/topology stress tests}
-\NormalTok{Technicolor{-}style light{-}field scenes: synchronized camera array stress}
-\NormalTok{internal broad10 real{-}video set: engineering{-}only unless made reproducible}
-\end{Highlighting}
-\end{Shaded}
+Neural 3D Video is the positive multiview setting. D-NeRF is a labelled
+one-frame-per-chart negative/control under the current posed-frame
+adapter and is not evidence for bounded-chart sublinear scaling.
 
 \subsubsection{5.6 Finite exposure and rolling
-shutter}\label{56-finite-exposure-and-rolling-shutter}
+shutter}\label{finite-exposure-and-rolling-shutter}
 
 Compare:
 
@@ -1011,14 +1940,14 @@ Metrics:
 \begin{Highlighting}[]
 \NormalTok{quality vs high{-}sample reference}
 \NormalTok{unique time samples}
-\NormalTok{payload growth}
+\NormalTok{logical tensor{-}volume growth}
 \NormalTok{forward/backward time}
 \NormalTok{rolling row{-}time correctness}
 \end{Highlighting}
 \end{Shaded}
 
 \subsubsection{5.7 Visibility stress
-tests}\label{57-visibility-stress-tests}
+tests}\label{visibility-stress-tests}
 
 Create scenes where the compiler should fail locally:
 
@@ -1044,13 +1973,14 @@ Metrics:
 \end{Highlighting}
 \end{Shaded}
 
-\subsection{6. Tables and figures}\label{6-tables-and-figures}
+\subsection{6. Tables and figures}\label{tables-and-figures}
 
-Two accepted figures are packaged with the manuscript: the real-video
-equivalence contact sheet above and the partial progressive Coffee
-Martini heldout-PSNR comparison below. They are derived from
-verifier-accepted source artifacts. The remaining submission figures
-are:
+One provisional figure is packaged with the manuscript: the verified
+bounded real-video equivalence contact sheet above. Schema-v1
+public-data figures are excluded. The artifact generator emits
+fail-closed schema-v2 public, frozen, and variable-camera SVGs, but
+those remain placeholders until their complete components verify. The
+remaining submission figures are:
 
 \begin{enumerate}
 \def\labelenumi{\arabic{enumi}.}
@@ -1072,13 +2002,17 @@ are:
   \textbf{System diagram:} compile, atlas, Metal interval forward,
   direct VJP.
 \item
-  \textbf{Scaling chart:} frame count vs payload/bin/forward/backward
-  ratio.
+  \textbf{Scaling chart:} frame count vs
+  logical-volume/bin/forward/backward ratio.
 \item
   \textbf{Camera-family chart:} Q-grid replay vs shared family atlas.
 \item
   \textbf{Fallback stress chart:} fallback fraction vs visibility
   density.
+\item
+  \textbf{Closure/death curves:} affine and projective error/fallback
+  versus camera nonlinearity, annotated by compiler diagnostics and
+  certification events.
 \end{enumerate}
 
 Core tables:
@@ -1096,104 +2030,159 @@ Core tables:
 \end{Shaded}
 
 \subsubsection{6.1 Certified correctness and theorem
-table}\label{61-certified-correctness-and-theorem-table}
+table}\label{certified-correctness-and-theorem-table}
 
-All rows below are generated from verifier-accepted JSON artifacts.
-Their scope is bounded event-certified projective chart segments; they
-do not assert an unimplemented full \texttt{360/720} multi-chart
-transition.
+The table is injected from the submission artifact bundle. Its retained
+source reports are byte-pinned and the rows are rederived by the
+Torch-free submission generator. Bounded-fixture timing rows are
+forbidden here; speed belongs to the frozen-world table below. The scope
+is bounded event-certified projective chart segments and does not assert
+an unimplemented full \texttt{360/720} multi-chart transition.
 
-{\def\LTcaptype{none} % do not increment counter
-\begin{longtable}[]{@{}llrr@{}}
-\toprule\noalign{}
-Claim & Metric & Value & Acceptance \\
-\midrule\noalign{}
-\endhead
-\bottomrule\noalign{}
-\endlastfoot
-Fiber value is gauge invariant & max relative error &
-\texttt{3.50087e-13} & \texttt{\textless{}=\ 1e-10} \\
-Fiber gradient is gauge invariant & max gradient relative error &
-\texttt{2.32523e-12} & \texttt{\textless{}=\ 1e-9} \\
-Compiled atlas matches dense/replay image & max absolute image error &
-\texttt{0} & \texttt{\textless{}=\ 1e-5} \\
-Unstratified interval exposes an order-crossing failure & raw crossing
-quality error & \texttt{0.186742} & \texttt{\textgreater{}\ 1e-5}
-(expected failure) \\
-Visibility crossing is repaired by stratification & stratified crossing
-quality error & \texttt{0} & \texttt{\textless{}=\ 1e-5} \\
-Finite exposure / rolling shutter forward parity & max Metal absolute
-error & \texttt{5.96046e-08} & \texttt{\textless{}=\ 1e-5} \\
-Finite exposure / rolling shutter gradient parity & max Metal gradient
-relative error & \texttt{6.37738e-07} & \texttt{\textless{}=\ 1e-5} \\
-Mixed fallback preserves gradients & max mixed gradient relative error &
-\texttt{7.40632e-07} & \texttt{\textless{}=\ 1e-5} \\
-Bounded-orbit chart reuses payload at \texttt{F=128} & fixed/replay
-trace ratio & \texttt{0.03125} & \texttt{\textless{}\ 0.25} \\
-Bounded-orbit compiled forward is faster at \texttt{F=128} &
-fixed/replay forward ratio & \texttt{0.181323} &
-\texttt{\textless{}\ 0.5} \\
-Bounded-orbit compiled backward is faster at \texttt{F=128} &
-fixed/replay backward ratio & \texttt{0.392235} &
-\texttt{\textless{}\ 0.5} \\
-\end{longtable}
-}
+\begin{table*}[t]
+\centering
+\caption{Certified bounded correctness and structural trace reuse.}
+\label{tab:certified-correctness}
+\input{research_notes/gauged_uvt_trace_atlas/paper/generated/schema_v2/theorem_table.tex}
+\end{table*}
 
 \subsubsection{6.2 Exact same-representation frame
-scaling}\label{62-exact-same-representation-frame-scaling}
+scaling}\label{exact-same-representation-frame-scaling}
 
-The accepted \texttt{F=\{4,8,16,32,64,128\}} experiment compares
-per-frame STAR replay with the compiled projective atlas at identical
-representation settings. Fixed payload growth is \texttt{1.0x} while
-replay grows \texttt{32.0x}; at \texttt{F=128}, fixed/replay payload,
-compile, forward, and backward ratios are \texttt{0.03125},
-\texttt{0.047677}, \texttt{0.181323}, and \texttt{0.392235}. This is the
-central causal systems result. Public quality rows test whether that
-compiler result survives real scene breadth; they are not substitutes
-for this same-representation comparison.
+The verified \texttt{F=\{4,8,16,32,64,128\}} fixture compares per-frame
+STAR replay with the compiled projective atlas at identical
+representation settings. Fixed logical tensor-element volume growth is
+\texttt{1.0x} while replay grows \texttt{32.0x}; at \texttt{F=128}, the
+fixed/per-frame trace-count ratio is \texttt{0.03125}. The fixture's
+historical single-shot timings are diagnostics and are excluded from the
+submission timing claim. Logical-volume accounting double-counts shared
+replay tensors and excludes topology, packed bins, and transients, so it
+is not a storage or peak-memory claim.
 
-\subsubsection{6.3 Public comparison
-status}\label{63-public-comparison-status}
+The submission timing table below is generated only from a
+publication-eligible frozen-checkpoint sweep with raw samples, at least
+one warmup, and at least three repeats. Until that artifact exists it
+renders an explicit non-submission-ready placeholder.
 
-The shared progressive/fixed/global-shuffle Coffee Martini protocols,
-evidence schema, and matrix generator are complete. Three clean-source
-progressive-512 runs (seeds 17, 29, and 43) completed for all
-representations on the full 300-frame sequence. The table reports final
-checkpoints and equal optimizer, target-frame, and target-pixel budgets.
-Storage and parameter counts are not matched: World Tubes shares
-temporal trace state, while dynamic 3DGS and WorldFoam retain
-substantial per-frame state.
+\begin{table*}[t]
+\centering
+\caption{Frozen identical-world replay versus compiled-atlas scaling.}
+\label{tab:frozen-world-scaling}
+\input{research_notes/gauged_uvt_trace_atlas/paper/generated/schema_v2/frozen_scaling_table.tex}
+\end{table*}
+
+This experiment tests whether replay equivalence and reuse survive a
+learned real scene. The three-lane public training matrix uses
+selected-time rendering and is reported only as representation-and-cost
+context; it is not compiler evidence.
+
+\subsubsection{6.3 Bounded SPD(4), alpha-law, and fallback
+integration}\label{bounded-spd4-alpha-law-and-fallback-integration}
+
+A single-seed, 16-frame, 40-step Coffee Martini fixture exercises the
+production selector end to end. The parameter-matched rows differ by
+only two trainable scalars. Times are synchronized training wall times,
+and driver memory is the sampled peak reported by the isolated run.
 
 {\def\LTcaptype{none} % do not increment counter
-\begin{longtable}[]{@{}lrrrrrrr@{}}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.1304}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.1739}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.1739}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.1739}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.1739}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.1739}}@{}}
 \toprule\noalign{}
-Representation & Heldout PSNR & SSIM & LPIPS & L1 & Train wall (s) &
-Peak driver (GB) & Checkpoint (MB) \\
+\begin{minipage}[b]{\linewidth}\raggedright
+Source / transfer
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Atoms
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Parameters
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Heldout PSNR
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Train wall (s)
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Peak driver bytes
+\end{minipage} \\
 \midrule\noalign{}
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-World Tubes & \texttt{5.9153\ +/-\ 0.0053} & \texttt{0.03549} &
-\texttt{0.98305} & \texttt{0.45120} & \texttt{78.33\ +/-\ 21.00} &
-\texttt{3.114} & \texttt{0.060} \\
-WorldFoam & \texttt{5.6159\ +/-\ 0.0083} & \texttt{0.00460} &
-\texttt{0.97054} & \texttt{0.47221} & \texttt{361.82\ +/-\ 55.90} &
-\texttt{15.794} & \texttt{116.748} \\
-Dynamic 3DGS & \texttt{4.9110\ +/-\ 0.0001} & \texttt{0.28267} &
-\texttt{0.90228} & \texttt{0.52139} & \texttt{79.44\ +/-\ 6.59} &
-\texttt{20.557} & \texttt{17.206} \\
+\texttt{legacy\_tube\ +\ peak\_splat} & 256 & 3,584 & \texttt{5.9865} &
+\texttt{4.9020} & \texttt{63,356,928} \\
+\texttt{full\_spd4\ +\ peak\_splat} & 199 & 3,582 & \texttt{7.0054} &
+\texttt{4.7512} & \texttt{46,596,096} \\
+\texttt{full\_spd4\ +\ beer\_lambert\ +\ fiber\_integrated} & 199 &
+3,582 & \texttt{7.1333} & \texttt{4.6758} & \texttt{46,596,096} \\
 \end{longtable}
 }
 
-\pandocbounded{\includegraphics[keepaspectratio,alt={Heldout PSNR for the three accepted full-300-frame progressive Coffee Martini seeds. The figure does not include the missing fixed, sampler, camera-triplet, scene-breadth, or D-NeRF controls.}]{research_notes/gauged_uvt_trace_atlas/paper/figures/coffee_progressive_heldout_psnr.png}}
+An equal-count 256-atom full-SPD(4) diagnostic reached heldout PSNR
+\texttt{7.0888}, but its evaluation reported tile overflow. It is
+retained as a failure-bearing diagnostic and excluded from
+matched-quality claims.
 
-These are accepted evidence rows, but not a complete public comparison.
-The absolute reconstruction quality is low and the metrics disagree:
-World Tubes has the best PSNR/L1, whereas dynamic 3DGS has the best
-SSIM/LPIPS. The pixel-matched fixed control, global-shuffle control,
-additional camera triplets, two additional Neural3D scenes, and
-controlled D-NeRF row remain mandatory before submission claims are
-frozen.
+The hybrid certificate also has a bounded stress result. With 16 atoms
+it routed 10 of 64 tiles to retained-fiber transfer and matched the
+recorded all-retained heldout metrics. With 199 atoms it routed 64 of 64
+tiles to fallback. This verifies the integrated branch and its separate
+native VJP gate, but it is not an explicit full-image/VJP parity
+artifact and also shows that the current dense-scene confidence bands
+are too conservative to establish a selective-performance win.
+
+These rows are short, single-seed integration evidence. They do not
+establish convergence, scene breadth, or paper-quality superiority. A
+less conservative selective certificate and adaptive/error-certified
+retained quadrature are future work for this extension, not submission
+blockers for the central projective interval-atlas result. The
+submission still requires the declared public controls and scene
+breadth.
+
+\subsubsection{6.4 Public representation and cost
+context}\label{public-representation-and-cost-context}
+
+The shared progressive, fixed, and global-shuffle protocols, evidence
+schema, and matrix generator are implemented, pending focused behavior
+verification. These rows train World Tubes with selected-time STAR
+rendering, WorldFoam, and dynamic 3DGS under matched optimizer,
+target-frame, and target-pixel budgets. They compare learned
+representation quality, runtime, and stored state; they do not compare
+per-frame replay with the compiled projective atlas. Evidence schema v2
+is source-complete but not yet runtime-verified. It binds exact
+schedule, raw and decoded data, canonical evaluation, runtime/native
+binaries, retained artifacts, and finalized W\&B files. None of the
+seven core or 21 full-breadth rows is currently accepted. The canonical
+evaluator clamps predictions to L1/MSE over all RGB elements, derives
+PSNR once from the global MSE, averages SSIM/LPIPS over the full
+declared image set, and uses a fixed black background with no color
+calibration. The seven core rows must be rerun for the minimum paper
+cut; the remaining 14 are breadth targets. Storage and parameter counts
+are not matched: World Tubes shares temporal trace state, while dynamic
+3DGS and WorldFoam retain substantial per-frame state. The table below
+is generated only when all seven schema-v2 controls pass. It emits no
+partial numeric rows.
+
+\begin{table*}[t]
+\centering
+\caption{Public representation and cost context under the declared schema-v2 controls.}
+\label{tab:public-context}
+\input{research_notes/gauged_uvt_trace_atlas/paper/generated/schema_v2/public_context_table.tex}
+\end{table*}
+
+The causal public compiler experiment is specified separately through
+the frozen identical-world protocol in Section 5.4 and remains pending.
+It uses a static heldout Neural3D camera; bounded moving-camera scaling
+is currently synthetic.
+
+Schema-v1 numbers and their plot are intentionally absent from the
+manuscript. Schema-v2 reruns of the progressive rows, pixel-matched
+fixed control, and global-shuffle control form the seven-row minimum
+public context table. Additional camera triplets, two additional
+Neural3D scenes, the controlled D-NeRF row, and the deterministic timing
+audit are the stronger 21-row breadth target, not blockers for the
+narrow compiler claim.
 
 The next fixed-512 run was killed after severe unified-memory
 compression and swap pressure destabilized the local workstation. Its
@@ -1203,7 +2192,7 @@ execution remains unauthorized until targets/rays/evaluation are
 streamed or a larger machine is used.
 
 \subsection{7. Discussion and
-limitations}\label{7-discussion-and-limitations}
+limitations}\label{discussion-and-limitations}
 
 The method is not a universal replacement for dynamic Gaussian scene
 representations. It is a renderer/compiler layer for known or
@@ -1212,13 +2201,14 @@ samples reuse a smooth camera path or path family.
 
 It is also not an information-theoretic claim that total work is
 sublinear in materialized output pixels. The sharper claim is empirical
-and architectural: in regimes where dynamic Gaussian training is
-dominated by world-side projection, support, binning, visibility, and
-backward replay, compiling those events into world tubes makes the
-dominant bottlenecks scale with trace/event complexity instead of frame
-count. In our tested regime this yields sublinear end-to-end
-training-time growth, while preserving a residual per-pixel shading
-term.
+and architectural: in fixed-topology regimes where a dynamic Gaussian
+training step is dominated by world-side projection, support, binning,
+visibility, and backward replay, compiling those events into world tubes
+is designed to make the dominant bottlenecks scale with trace/event
+complexity instead of frame count. The structural reuse is verified,
+while the warmed repeated frozen-world runtime result remains pending.
+We do not yet claim sublinear end-to-end training growth under
+structural invalidation and recompilation.
 
 Failure modes:
 
@@ -1228,8 +2218,11 @@ Failure modes:
 \NormalTok{very wide FOV / near{-}camera splats require more gauge domains}
 \NormalTok{single random novel views do not amortize compile cost}
 \NormalTok{current implementation is RGB/MPS/STAR{-}UVT scoped}
+\NormalTok{first{-}order moving{-}camera charts require bounded approximation error}
+\NormalTok{fixed retained{-}fiber quadrature lacks an adaptive error certificate}
+\NormalTok{dense scenes can make the current variance certificate fall back everywhere}
 \NormalTok{current broad real{-}video evidence proves renderer equivalence, not general SOTA quality}
-\NormalTok{world foam may be a better alpha/transmittance model, but it changes semantics}
+\NormalTok{general cellular WorldFoam fields remain a different representation contract}
 \end{Highlighting}
 \end{Shaded}
 
@@ -1247,74 +2240,157 @@ The hierarchy is:
 \begin{Shaded}
 \begin{Highlighting}[]
 \NormalTok{World Tubes:}
-\NormalTok{  sublinear camera{-}path compilation for dynamic Gaussian{-}splat semantics.}
+\NormalTok{  sublinear camera{-}path compilation for dynamic Gaussian sources, with}
+\NormalTok{  selectable peak{-}splat or Beer{-}{-}Lambert transfer.}
 
 \NormalTok{Visibility Gauge Atlas:}
-\NormalTok{  certified depth/order compilation for baseline{-}compatible alpha compositing.}
+\NormalTok{  certified depth/order compilation; accepted tiles use fast compositing and}
+\NormalTok{  rejected affine{-}Gaussian tiles can use retained{-}fiber transfer.}
 
 \NormalTok{World Foam:}
-\NormalTok{  lifted opacity/transmittance compilation that avoids discrete depth sorting}
-\NormalTok{  and moves toward volumetric ray{-}fiber transport.}
+\NormalTok{  general cellular opacity/transmittance fields and finite{-}element materials,}
+\NormalTok{  beyond the Gaussian retained{-}fiber fallback implemented here.}
 \end{Highlighting}
 \end{Shaded}
 
-\subsection{8. Conclusion}\label{8-conclusion}
+\subsection{8. Conclusion}\label{conclusion}
 
 We presented World Tubes in Gauged Camera Space, a trace-atlas renderer
 for dynamic Gaussian splatting. By defining rendering as a camera-ray
 bundle pushforward, deriving local Schur-complement UVT footprints, and
 compiling event-certified gauge domains into interval tile-time
 metadata, the method shares projection, support, binning, visibility,
-and backward work across time. The current implementation demonstrates
-sublinear world-side scaling and a compiled-adjoint training route on
-STAR UVT/projective interval traces. The next step toward publication is
-a public benchmark suite that reproduces these scaling claims on
-standard dynamic-view datasets and controlled visibility stress tests.
+and backward work across time. The implementation now includes parallel
+restricted and native-SPD(4) sources, static affine and first-order
+moving-camera compilation, selectable peak-splat and Beer--Lambert laws,
+explicit amplitude conventions, and a bounded retained-fiber extension.
+It also demonstrates cross-frame structural state reuse and a
+compiled-adjoint training route on STAR UVT/projective interval traces.
+The remaining submission work is evidence closure: the frozen
+fixed-interval same-checkpoint sweep, one bounded variable-camera
+closure/death curve, the seven schema-v2 Coffee Martini control rows,
+and final citation/figure/table packaging. The remaining 14 public rows
+are a post-minimum breadth target. Exact retained-depth transfer for
+nonlinear/projective traces, adaptive quadrature, and dense-scene
+certificate calibration remain follow-up work rather than requirements
+for the central claim.
 
-\subsection{References To Cite}\label{references-to-cite}
+\subsection{References}\label{references}
 
-\begin{itemize}
-\tightlist
-\item
-  Kerbl et al., "3D Gaussian Splatting for Real-Time Radiance Field
-  Rendering," SIGGRAPH 2023. \url{https://arxiv.org/abs/2308.04079}
-\item
-  Wu et al., "4D Gaussian Splatting for Real-Time Dynamic Scene
-  Rendering," CVPR 2024. \url{https://arxiv.org/abs/2310.08528}
-\item
-  Yang et al., "Deformable 3D Gaussians for High-Fidelity Monocular
-  Dynamic Scene Reconstruction," 2023.
-  \url{https://arxiv.org/abs/2309.13101}
-\item
-  Luiten et al., "Dynamic 3D Gaussians: Tracking by Persistent Dynamic
-  View Synthesis," 2023. \url{https://arxiv.org/abs/2308.09713}
-\item
-  Li et al., "Spacetime Gaussian Feature Splatting for Real-Time Dynamic
-  View Synthesis," CVPR 2024. \url{https://arxiv.org/abs/2312.16812}
-\item
-  Jiang et al., "Gaussian Splatting on the Move: Blur and Rolling
-  Shutter Compensation for Natural Camera Motion," 2024.
-  \url{https://arxiv.org/abs/2403.13327}
-\item
-  Wu et al., "3DGUT: Enabling Distorted Cameras and Secondary Rays in
-  Gaussian Splatting," CVPR 2025. \url{https://arxiv.org/abs/2412.12507}
-\item
-  Li et al., "Neural 3D Video Synthesis from Multi-view Video," CVPR
-  2022. \url{https://arxiv.org/abs/2103.02597}
-\item
-  Pumarola et al., "D-NeRF: Neural Radiance Fields for Dynamic Scenes,"
-  CVPR 2021. \url{https://arxiv.org/abs/2011.13961}
-\item
-  Park et al., "HyperNeRF: A Higher-Dimensional Representation for
-  Topologically Varying Neural Radiance Fields," SIGGRAPH Asia 2021.
-  \url{https://hypernerf.github.io/}
-\item
-  Hou et al., "Sort-free Gaussian Splatting via Weighted Sum Rendering,"
-  ICLR 2025. \url{https://arxiv.org/abs/2410.18931}
-\item
-  Koo et al., "Gaussian Blending: Rethinking Alpha Blending in 3D
-  Gaussian Splatting," AAAI 2026.
-  \url{https://doi.org/10.1609/aaai.v40i7.37495}
-\end{itemize}
+\protect\phantomsection\label{refs}
+\begin{CSLReferences}{1}{1}
+\bibitem[\citeproctext]{ref-hou2025_sortfree}
+Hou, Qiqi, Randall Rauwendaal, Zifeng Li, et al. 2025. {``{Sort-Free
+Gaussian Splatting via Weighted Sum Rendering}.''} \emph{International
+Conference on Learning Representations}.
+\url{https://openreview.net/forum?id=y8uPsxR8PN}.
+
+\bibitem[\citeproctext]{ref-kerbl2023}
+Kerbl, Bernhard, Georgios Kopanas, Thomas Leimkühler, and George
+Drettakis. 2023. {``{3D Gaussian Splatting for Real-Time Radiance Field
+Rendering}.''} \emph{ACM Transactions on Graphics} 42 (4): 1--14.
+\url{https://doi.org/10.1145/3592433}.
+
+\bibitem[\citeproctext]{ref-koo2026_blending}
+Koo, Junseo, Jinseo Jeong, and Gunhee Kim. 2026. {``{Gaussian Blending:
+Rethinking Alpha Blending in 3D Gaussian Splatting}.''}
+\emph{Proceedings of the AAAI Conference on Artificial Intelligence} 40:
+5744--54. \url{https://doi.org/10.1609/aaai.v40i7.37495}.
+
+\bibitem[\citeproctext]{ref-li2022_neural3dvideo}
+Li, Tianye, Mira Slavcheva, Michael Zollhöfer, et al. 2022. {``{Neural
+3D Video Synthesis From Multi-View Video}.''} \emph{Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+5521--31.
+
+\bibitem[\citeproctext]{ref-li2024_spacetime}
+Li, Zhan, Zhang Chen, Zhong Li, and Yi Xu. 2024. {``{Spacetime Gaussian
+Feature Splatting for Real-Time Dynamic View Synthesis}.''}
+\emph{Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition}, 8508--20.
+
+\bibitem[\citeproctext]{ref-luiten2024}
+Luiten, Jonathon, Georgios Kopanas, Bastian Leibe, and Deva Ramanan.
+2024. {``{Dynamic 3D Gaussians: Tracking by Persistent Dynamic View
+Synthesis}.''} \emph{2024 International Conference on 3D Vision (3DV)},
+800--809. \url{https://doi.org/10.1109/3DV62453.2024.00044}.
+
+\bibitem[\citeproctext]{ref-mcguire2013_weighted_oit}
+McGuire, Morgan, and Louis Bavoil. 2013. {``{Weighted Blended
+Order-Independent Transparency}.''} \emph{Journal of Computer Graphics
+Techniques} 2 (2): 122--41.
+\url{https://www.jcgt.org/published/0002/02/09/}.
+
+\bibitem[\citeproctext]{ref-park2021_hypernerf}
+Park, Keunhong, Utkarsh Sinha, Peter Hedman, et al. 2021. {``{HyperNeRF:
+A Higher-Dimensional Representation for Topologically Varying Neural
+Radiance Fields}.''} \emph{ACM Transactions on Graphics} 40 (6).
+\url{https://doi.org/10.1145/3478513.3480487}.
+
+\bibitem[\citeproctext]{ref-pumarola2021_dnerf}
+Pumarola, Albert, Enric Corona, Gerard Pons-Moll, and Francesc
+Moreno-Noguer. 2021. {``{D-NeRF: Neural Radiance Fields for Dynamic
+Scenes}.''} \emph{Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition}, 10318--27.
+
+\bibitem[\citeproctext]{ref-radl2024_stopthepop}
+Radl, Lukas, Michael Steiner, Mathias Parger, Alexander Weinrauch,
+Bernhard Kerbl, and Markus Steinberger. 2024. {``{StopThePop: Sorted
+Gaussian Splatting for View-Consistent Real-time Rendering}.''}
+\emph{ACM Transactions on Graphics} 43 (4): 1--17.
+\url{https://doi.org/10.1145/3658187}.
+
+\bibitem[\citeproctext]{ref-seiskari2024}
+Seiskari, Otto, Jerry Ylilammi, Valtteri Kaatrasalo, et al. 2025.
+{``{Gaussian Splatting on the Move: Blur and Rolling Shutter
+Compensation for Natural Camera Motion}.''} \emph{Computer Vision --
+ECCV 2024}, Lecture notes in computer science, vol. 15129: 160--77.
+\url{https://doi.org/10.1007/978-3-031-73209-6_10}.
+
+\bibitem[\citeproctext]{ref-wu2024_4dgs}
+Wu, Guanjun, Taoran Yi, Jiemin Fang, et al. 2024. {``{4D Gaussian
+Splatting for Real-Time Dynamic Scene Rendering}.''} \emph{Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+20310--20.
+
+\bibitem[\citeproctext]{ref-wu2025_3dgut}
+Wu, Qi, Janick Martinez Esturo, Ashkan Mirzaei, Nicolas Moënne-Loccoz,
+and Zan Gojcic. 2025. {``{3DGUT: Enabling Distorted Cameras and
+Secondary Rays in Gaussian Splatting}.''} \emph{Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+26036--46.
+
+\bibitem[\citeproctext]{ref-yang2024_native}
+Yang, Zeyu, Zijie Pan, Xiatian Zhu, et al. 2024. {``{4D Gaussian
+Splatting: Modeling Dynamic Scenes with Native 4D Primitives}.''}
+\emph{arXiv Preprint arXiv:2412.20720}.
+\url{https://arxiv.org/abs/2412.20720}.
+
+\bibitem[\citeproctext]{ref-yang2024_deformable}
+Yang, Ziyi, Xinyu Gao, Wen Zhou, Shaohui Jiao, Yuqing Zhang, and
+Xiaogang Jin. 2024. {``{Deformable 3D Gaussians for High-Fidelity
+Monocular Dynamic Scene Reconstruction}.''} \emph{Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+20331--41.
+
+\bibitem[\citeproctext]{ref-yu2024_mipsplatting}
+Yu, Zehao, Anpei Chen, Binbin Huang, Torsten Sattler, and Andreas
+Geiger. 2024. {``{Mip-Splatting: Alias-free 3D Gaussian Splatting}.''}
+\emph{Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition}, 19447--56.
+
+\bibitem[\citeproctext]{ref-zwicker2001_ewa_volume}
+Zwicker, Matthias, Hanspeter Pfister, Jeroen van Baar, and Markus Gross.
+2001a. {``{EWA Volume Splatting}.''} \emph{Proceedings of IEEE
+Visualization}, 29--36.
+\url{https://www.merl.com/publications/TR2001-27}.
+
+\bibitem[\citeproctext]{ref-zwicker2001_surface}
+Zwicker, Matthias, Hanspeter Pfister, Jeroen van Baar, and Markus Gross.
+2001b. {``{Surface Splatting}.''} \emph{Proceedings of the 28th Annual
+Conference on Computer Graphics and Interactive Techniques}, 371--78.
+\url{https://doi.org/10.1145/383259.383300}.
+
+\end{CSLReferences}
 
 \end{document}

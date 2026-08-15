@@ -11,6 +11,7 @@ current full-frame system.
 
 | Item | Current state |
 | --- | --- |
+| Source state | `9cfe24d` (`Page and compact high-resolution browser training`) |
 | Browser backend | `tiled3d`, full-frame 16x16 tiled raster and shared backward |
 | Control backend | `sampled3d`, 96 sampled rays and RGB MSE/support guards |
 | Dataset | Coffee Martini |
@@ -21,6 +22,9 @@ current full-frame system.
 | Initialization | 4,096 train-visible Ex4DGS SfM points in `cam04` coordinates |
 | Objective | `0.8 L1 + 0.2 (1 - SSIM)` |
 | SSIM implementation | 11x11 reflected uniform box window |
+| Checkpoint precision | packed FP16 storage by default; training arithmetic remains FP32 |
+| GPU target residency | one RGBA32F camera/time page |
+| Host target residency | complete decoded Float32 tensor; not yet shared across workers |
 | Motion representation | 3D covariance plus linear or linear+sinusoidal center motion and temporal gate |
 | Topology | fixed allocation with GPU split/fill/recycle through step 60,000 |
 | Validation | asynchronous 12x12 sparse grid and global-luma SSIM proxy |
@@ -33,6 +37,8 @@ Evidence:
 - `web/dynaworld_browser_trainer/trainerWebGpu3dTiled.js`
 - `web/dynaworld_browser_trainer/coffee_martini_train17_holdout1.json`
 - `web/dynaworld_browser_trainer/benchmark_results/2026-07-28_tiled_scaling_apple_m4.json`
+- `web/dynaworld_browser_trainer/benchmark_results/2026-07-28_tiled_memory_precision_apple_m4.json`
+- `agent_notes/loose_notes/2026-07-28_16-28-58_browser_target_paging_and_precision.md`
 - `research_notes/browser_4dgs_baseline.md`
 
 ## 1. User Questions
@@ -103,29 +109,93 @@ It depends on the comparison.
 - The current live SPA at 4,096 splats has recently shown about 250-280
   completed steps/s.
 - The isolated current full-frame kernel at 96x72 and 4,096 matched splats and
-  capacity has a three-run median of 470 steps/s.
+  capacity reaches 359 steps/s with FP32 checkpoints and 403 steps/s with
+  packed-FP16 checkpoints.
 
-The live value is therefore slower than the isolated kernel by roughly 40-47%,
-but it is doing the live worker, preview, status, metrics, and validation job.
+The live value is therefore roughly 30-38% below the isolated packed-FP16
+interval, while also running preview, status, metric, and validation services.
+That gap is not yet phase-attributed, so it should not all be blamed on the UI.
 It is not a return to the 7.3 steps/s structural failure.
 
 ### Resolution And Splat Scaling
 
-Apple M4, three repeats, 32 warmup steps, GPU queue drained:
+Apple M4, 32 warmup plus 128 measured GPU-drained steps. The 384x288/4,096
+FP32 endpoint is the median of three repeats; the other cells are single
+intervals:
 
 | Raster | 768 splats | 1,536 splats | 4,096 splats |
 | --- | ---: | ---: | ---: |
-| 96x72 | 1,268 steps/s | 933 steps/s | 470 steps/s |
-| 192x144 | 699 steps/s | 557 steps/s | 386 steps/s |
+| 96x72 | 1,233 steps/s | 863 steps/s | 359 steps/s |
+| 192x144 | 675 steps/s | 462 steps/s | 240 steps/s |
+| 384x288 | 266 steps/s | 182 steps/s | 118 steps/s |
 
-Increasing pixels by 4x retained 55%, 60%, and 82% of the original step rate.
-At high splat count, the splat-side work dominates enough that 4x pixels cost
-only about 18% of steps/s. This supports the user's intuition that resolution is
-relatively cheap in the measured range.
+At 4,096 splats, packed-FP16 checkpoints improve the three raster points to
+403, 294, and 132 steps/s. Pixels are not free: 4x pixels from 96x72 to
+192x144 retains 55%, 54%, and 67% of FP32 throughput, while another 4x pixels
+retains 39%, 39%, and 49%. Splat work is important, but the current full-image
+SSIM, checkpoint, and backward work make raster cost substantial.
 
-The current 384x288 path does not reach a throughput result. Its all-camera,
-all-time RGBA32F target tensor is about 486 MiB in one storage binding. The
-right fix is target paging or streaming, not a smaller raster kernel.
+The 384x288 benchmark is systems evidence only: it nearest-neighbor scales the
+96x72 targets, so it adds compute but no image detail. True detail requires a
+new bundle exported at the higher source resolution.
+
+### Memory And Precision Followup
+
+The former 384x288 blocker is fixed. The tiled backend pages one camera/time
+RGBA32F target before each step and reuses that 1.69 MiB GPU buffer. It also
+removed the 162 MiB pair-gradient slab, compacts pair IDs and references, and
+uses one 0.375 MiB FP32 gradient record per splat.
+
+At 384x288/4,096, the dominant GPU binding is now the forward checkpoint tape:
+
+| Buffer | Current |
+| --- | ---: |
+| Target page | 1.69 MiB |
+| Forward checkpoints | 108 MiB |
+| Pair IDs and references | 13.5 MiB |
+| FP32 gradient accumulator | 0.375 MiB |
+
+Packed FP16 is used only for stored forward checkpoints. Projection,
+covariance, compositing, SSIM, gradients, trainable parameters, and Adam
+moments remain FP32. At 384x288 the planner spends FP16's saving on twice as
+many checkpoints, using the same 108 MiB but reducing backward replay. The
+matched median improves from 118 to 132 steps/s, and loss after 1,024
+submissions differs from FP32 by only `1.13e-6`.
+
+The unresolved memory problem is host-side. The all-camera/all-time 384x288
+Float32 tensor is still about 486 MiB and may be cloned into the training and
+validation workers. The next memory change should retain canonical RGBA8
+atlas bytes, share them or decode inside the owning worker, and page a packed
+target or texture. Requesting a larger GPU storage binding would preserve the
+wrong ownership model.
+
+### Code Quality Followup
+
+The data and worker boundaries are mostly healthy: the browser export remains
+a thin adapter over the canonical multicamera contract, the optimizer owns one
+worker, validation owns another, and the backend registry names the two real
+SPA choices.
+
+The main code-health debt is inside the renderer:
+
+- `trainerWebGpu3d.js` is 1,740 lines and `trainerWebGpu3dTiled.js` is 1,263;
+- the tiled trainer subclasses the sampled trainer and calls
+  `super.createPipelines()`, `super.createBuffers()`, and
+  `super.createBindGroups()`;
+- this compiles sampled-only pipelines, creates sampled-only buffers, then
+  replaces some of them;
+- the inherited initialization still requests nine storage buffers per shader
+  stage, while the portable WebGPU guaranteed minimum is lower;
+- the tiled sort/backward path requests 24 KiB of workgroup storage, also above
+  the portable guaranteed minimum;
+- many tests inspect generated source contracts, while complete WGSL
+  value/gradient readback parity is still missing.
+
+The right refactor is a small shared runtime for device, cameras,
+initialization, parameters, render preview, and disposal, with sibling sampled
+and tiled trainers owning only their pipelines and buffers. It should not
+create a browser/Python trainer hierarchy or merge this demo into the paper
+runner.
 
 ### Why 11x11 Rather Than Whole Image?
 
@@ -151,10 +221,12 @@ A matched speed ablation at 96x72 and 1,536 splats measured:
 | 11x11 box | 933 |
 
 The 7x7 window is about 26% faster end to end. No matched quality run exists,
-so it cannot be promoted. The best standards-preserving path is a separable
-11-tap Gaussian forward and transpose backward, ideally with target-only
-moments precomputed. That reduces each 2D convolution from 121 neighborhood
-taps to 22 while preserving the intended objective.
+so it cannot be promoted. These absolute timings also predate the compact
+gradient/checkpoint layout in `9cfe24d`; they are directional evidence about
+window cost, not current throughput. The best standards-preserving path is a
+separable 11-tap Gaussian forward and transpose backward, ideally with
+target-only moments precomputed. That reduces each 2D convolution from 121
+neighborhood taps to 22 while preserving the intended objective.
 
 ### Metal Comparison
 
@@ -170,6 +242,19 @@ The saved 7.18 ms Metal probe used 768 splats and omitted parts of the complete
 optimizer contract. Other native rows use 8,192 or 65,536 splats, different
 features, resolutions, or batch dimensions. Saying WebGPU is within 20-30% of
 Metal would currently be invented. A matched phase-timed harness is required.
+
+Faster-GS is useful design evidence, not a substitute for that harness. It
+reports that splat-list processing is strongly memory-bound, emphasizes
+opacity-aware ellipse bounds and front-to-back backward, and finds that
+parameter update becomes important after raster optimizations. The browser now
+has opacity-aware bounds and front-to-back replay, but it has not measured
+whether SSIM, checkpoint replay, atomics, sorting, or Adam is the present
+bottleneck. Port the paper's hypotheses as ablations, not its speedup as an
+expectation.
+
+Primary source:
+
+- Faster-GS: <https://arxiv.org/abs/2602.09999>
 
 ## 3. How To Ask Our Own Good Questions
 
@@ -188,11 +273,26 @@ A useful project question should contain:
    distinguish.
 10. **Lane boundary:** browser ergonomics, baseline validity, renderer research,
     or paper evidence.
+11. **Evidence state:** observed, inferred, proposed, or externally reported.
+12. **Information efficiency:** decisions unlocked per implementation hour and
+    benchmark minute.
 
 Bad questions usually omit the decision or comparison contract. “Can we make it
 faster?” is open-ended. “At fixed 96x72, 4,096 splats, and identical objective,
 does separable Gaussian SSIM reduce median phase time by at least 20% without
 changing CPU/WGSL value or gradient beyond tolerance?” is actionable.
+
+For this project, score a proposed question before executing it:
+
+```text
+priority =
+    (correctness_risk * decisions_unlocked * transfer_value)
+    / (implementation_hours + benchmark_hours + proxy_risk)
+```
+
+The score is ordinal rather than numerically scientific. Its purpose is to
+force comparison. A cheap GPU gradient parity fixture ranks above a large
+learning-rate sweep because it can invalidate every later convergence result.
 
 ## 4. Loop 1 Questions: Inventory (50)
 
@@ -878,6 +978,47 @@ Reduce to ten questions. Each final question must:
 - state the current provisional answer;
 - avoid creating another renderer lane unless earlier evidence demands it.
 
+### Loop Rerun Outcome At `9cfe24d`
+
+The five refinement passes were rerun against the post-paging source state.
+This matters because several Loop 6 questions have changed status:
+
+| Gate | State | Consequence |
+| --- | --- | --- |
+| Canonical data/split adapter | green | reuse it; do not create browser split semantics |
+| One-frame GPU target paging | green for `tiled3d` | 384x288 binding blocker is closed |
+| Packed-FP16 checkpoint storage | green | keep as default; retain FP32 math |
+| 4,096 tile capacity and 2D indirect dispatch | green | former silent truncation/dispatch ceilings are closed |
+| Complete CPU/WGSL image parity | red | blocks strong correctness claims |
+| Complete CPU/WGSL gradient/update parity | red | blocks LR and convergence conclusions |
+| Phase timing | red | blocks the next kernel choice and Metal comparison |
+| Full-image heldout metrics | red | blocks quality promotion |
+| Host RGBA8/shared target ownership | red | blocks normal high-resolution SPA use |
+| Canonical separable Gaussian SSIM | red | blocks objective parity with 3DGS |
+| Fixed versus recycle topology ablation | red | topology benefit is unknown |
+| Complete dynamic-3DGS/native-4DGS browser baseline | red | blocks representation ranking |
+| Tiled/sampled runtime separation | amber | code and portability debt, not a quality blocker |
+
+This rerun changes the immediate sequence:
+
+```text
+GPU value/gradient parity
+-> full-image metrics plus per-family update diagnostics
+-> phase timing and host target ownership
+-> small convergence screen
+-> canonical SSIM/topology ablations
+-> representation decision
+```
+
+The process rejected three tempting shortcuts:
+
+1. Do not broaden FP16 into optimizer or covariance math before a measured
+   memory/throughput need and a convergence parity run.
+2. Do not tune learning rates from sparse proxy curves before WGSL update
+   parity and dimensionless update ratios are visible.
+3. Do not wire every shader into the SPA before one complete dynamic baseline
+   establishes the residual capacity gap.
+
 ## 8. Final Set Of Ten Powerful Questions
 
 ### 1. What Exactly Is The Current Browser Training Contract?
@@ -928,30 +1069,35 @@ Stop condition:
 - all value and gradient families pass declared tolerances on at least two
   overlapping-splat fixtures.
 
-### 3. Where Does End-To-End Time Go, And How Does It Scale?
+### 3. Where Do End-To-End Time And Memory Go, And How Do They Scale?
 
 Why it matters:
 
-The July 28 matrix shows useful aggregate scaling but cannot identify the next
-kernel optimization or support a matched Metal claim.
+The July 28 matrix shows useful aggregate scaling, and paging removes the old
+GPU target-buffer wall. It still cannot identify the next kernel optimization,
+the best checkpoint-memory policy, or a matched Metal claim.
 
 Possible subquestions:
 
 - What are bin, sort, raster, SSIM, backward, update, and topology times?
 - What do preview, metrics, validation, and completion probes cost live?
 - How do phases scale over raster by splat count?
-- What is actual peak allocated and bound memory?
+- What is actual peak allocated, bound, and host-resident memory?
+- Should packed-FP16 savings buy denser checkpoints or halve checkpoint memory?
+- How many target copies exist across the main, train-worker, and validation
+  paths, and can canonical RGBA8 or worker-owned decode remove them?
+- What sampled-only pipelines and buffers does the tiled subclass still create?
 - Can an identical mathematical harness run through Metal?
 
 Artifact:
 
-- GPU timestamp and memory JSON for WebGPU, plus a separately labeled matched
-  Metal result if implemented.
+- GPU timestamp, device-memory, host-memory, and checkpoint-policy JSON for
+  WebGPU, plus a separately labeled matched Metal result if implemented.
 
 Stop condition:
 
-- at least 90% of step time is assigned to measured phases and repeat variance
-  is below a declared bound.
+- at least 90% of step time and 95% of resident bytes are assigned to measured
+  owners, and repeat variance is below a declared bound.
 
 ### 4. Is Initialization The Dominant Quality Advantage Or Blocker?
 
@@ -964,7 +1110,10 @@ Possible subquestions:
 
 - How do SfM, random, perturbed-SfM, and train-only alternatives compare?
 - Does local-PCA anisotropy help?
-- How much information was reconstructed using cameras later called heldout?
+- Was the external source PLY reconstructed with the camera later called
+  heldout, even though export-time visibility filtering uses train cameras?
+- Can a train-camera-only seed cloud be generated under the canonical data
+  contract?
 - Does seed count or placement matter more than final capacity?
 - How much of the early visual quality exists at step zero?
 
@@ -988,10 +1137,14 @@ resource. More tuning should target a diagnosed mechanism.
 Possible subquestions:
 
 - Are gradient or update norms vanishing by parameter family?
+- Are dimensionless update-to-parameter ratios sensible for position, scale,
+  rotation, color, opacity, and motion?
 - Is active support collapsing or saturating?
-- Does more capacity help when placement is fixed?
+- Does more capacity or raster detail help when placement is fixed?
 - Does fixed topology versus recycle change the plateau?
 - Do independent per-frame Gaussians establish a much higher oracle?
+- Does the plateau persist in full-image heldout metrics, or only in the sparse
+  UI proxy?
 
 Artifact:
 
@@ -1008,8 +1161,9 @@ Stop condition:
 Why it matters:
 
 SSIM is standard in 3DGS, but the current browser uses a noncanonical box
-window. Window size, weighting, implementation, and wall-time cost are separate
-questions.
+window. At 96x72, an 11x11 window also spans a large fraction of the image.
+Window size, weighting, implementation, genuine detail, and wall-time cost are
+separate questions.
 
 Possible subquestions:
 
@@ -1064,7 +1218,10 @@ Possible subquestions:
 
 - What ceiling does the current trajectory model reach?
 - What ceiling does complete calibrated dynamic 3DGS reach?
-- Does native 4DGS solve a failure that dynamic 3DGS leaves?
+- Does Fudan native 4DGS, with a full 4D covariance and conditional 3D render,
+  solve a failure that dynamic 3DGS leaves?
+- Is the Wu et al. HexPlane/deformation method being mislabeled as the same
+  "4D-GS" baseline, despite being a different representation?
 - Does World Tubes provide measurable temporal sharing at equal quality?
 - Which implementation can reuse the current tiled raster, worker, and data path?
 
@@ -1115,6 +1272,11 @@ Possible subquestions:
 - Which external or internal baseline must be matched?
 - What quality, speed, memory, and robustness thresholds apply?
 - What commands and artifacts reproduce the result?
+- Is the tiled runtime separated cleanly from sampled-ray pipelines and buffers?
+- Do requested WebGPU limits respect portable minima or explicitly report the
+  supported-device envelope?
+- Are `PROJECT_INDEX.md`, `README.md`, `TODO/README.md`, `EXPERIMENTS.md`, and
+  `BASELINES.md` synchronized with the implementation?
 - Which failures keep the system in prototype status?
 
 Artifact:
@@ -1130,20 +1292,35 @@ Stop condition:
 
 ### Answer 1: Current Contract
 
-The current contract is now clear:
+The active source state is `9cfe24d`. Its resolved contract is:
 
-- Coffee Martini, 17 train cameras, `cam06` held out;
-- 16 synchronized times at 96x72;
-- 4,096 Ex4DGS SfM XYZRGB seeds transformed into `cam04` coordinates;
-- default `tiled3d` full-frame training;
-- one camera/time image per Adam step, scheduled over all 272 pairs;
-- 24-float anisotropic primitives with linear or linear+sinusoidal center motion;
-- `0.8 L1 + 0.2 (1 - 11x11 box SSIM)`;
-- fixed 4,096 capacity with recycle maintenance;
-- worker-owned optimization, 20 FPS three-view preview, asynchronous validation.
+- Coffee Martini has 18 selected cameras: 17 train cameras and `cam06` held
+  out.
+- Sixteen synchronized times are selected, giving 272 train camera/time pairs.
+- Training uses a 96x72 raster and 4,096 requested splats at 4,096 capacity.
+- Initialization takes 4,096 XYZRGB points from the external Ex4DGS
+  `input.ply`, filters for train-camera visibility, and transforms them into
+  `cam04` OpenCV coordinates.
+- `tiled3d` is the default full-frame backend. One complete camera/time image
+  is optimized per Adam step, while the scheduler covers all 272 pairs.
+- Each primitive has anisotropic 3D scale and rotation, RGB, opacity, temporal
+  support, and linear or linear-plus-sinusoidal center motion.
+- The objective is `0.8 L1 + 0.2 (1 - 11x11 box SSIM)`.
+- The effective default learning rates are `4.375e-4` center, `1.875e-3`
+  color, `1.0e-3` opacity, `2.5e-4` motion, `5.625e-4` scale, and
+  `3.125e-4` rotation.
+- Allocation is fixed at 4,096. GPU maintenance can fill unused slots and
+  recycle weak slots through step 60,000; at 4,096/4,096 it can only recycle.
+- Stored forward checkpoints use packed FP16 by default. Parameters,
+  projection, compositing, loss arithmetic, gradients, and Adam state remain
+  FP32.
+- Optimization and validation run in separate workers. The UI streams a
+  looping three-camera preview without intentionally synchronizing every step.
 
-The README and July 28 benchmark artifact now record this. A generated
-machine-checked ledger is still missing.
+The selected model is therefore a compact dynamic 3D Gaussian trajectory
+model, not Fudan native 4DGS and not World Tubes. The README and result
+artifacts describe the contract, but one generated, machine-checked state
+ledger tied to UI defaults is still missing.
 
 ### Answer 2: Correctness
 
@@ -1153,85 +1330,151 @@ Established:
 
 - CPU anisotropic projection and VJP tests cover center, scale, and quaternion.
 - CPU windowed L1/SSIM analytic gradient passes finite differences.
-- source tests protect full-frame scheduling, sorting structure, shared
-  backward, and indirect dispatch.
+- source and runtime tests protect full-frame scheduling, target-page ordering,
+  tile capacity, two-dimensional indirect dispatch, exact stop-rank
+  conversion, sorting structure, and shared backward.
+- the post-paging browser gate currently passes 53 focused tests.
 - live runs show finite loss and parameter motion with zero observed overflow.
 
 Missing:
 
-- CPU versus WGSL rendered-image readback parity;
+- CPU versus WGSL full rendered RGB/alpha parity;
 - CPU versus WGSL per-parameter gradient readback parity;
-- a fixture proving the complete optimizer step, not only CPU helpers;
+- readback parity for one complete Adam update, not only CPU helpers;
+- adversarial fixtures with overlapping, nearly opaque, clipped, and
+  equal-depth splats;
 - explicit failure on all resource and overflow conditions.
 
-Therefore no strong quality or speed claim should bypass the GPU parity gate.
+The recent capacity, dispatch, paging, and index fixes remove known structural
+errors. They do not prove the WGSL calculus. No strong convergence comparison
+should bypass the GPU value, gradient, and update parity gate.
 
-### Answer 3: Timing And Scaling
+### Answer 3: Timing, Scaling, Memory, And Precision
 
-Aggregate scaling is measured:
+The synchronized Apple M4 FP32-checkpoint matrix is now:
 
 | Raster | 768 | 1,536 | 4,096 |
 | --- | ---: | ---: | ---: |
-| 96x72 | 1,268 | 933 | 470 steps/s |
-| 192x144 | 699 | 557 | 386 steps/s |
+| 96x72 | 1,233 | 863 | 359 steps/s |
+| 192x144 | 675 | 462 | 240 steps/s |
+| 384x288 | 266 | 182 | 118 steps/s |
 
-This answers two user intuitions:
+At 4,096 splats, packed-FP16 checkpoints reach 403, 294, and 132 steps/s
+at the same three rasters. At 384x288, loss after 1,024 submissions differs
+from the FP32-checkpoint run by only `1.13e-6`. This is encouraging storage
+precision evidence, not a complete long-run quality equivalence test.
 
-1. Current live 250-280 steps/s at 4,096 is lower than isolated 470 because the
-   SPA includes live services.
-2. Resolution is relatively cheap in this range. Four times the pixels retain
-   82% of step rate at 4,096 splats.
+Two earlier intuitions need correction:
 
-At 384x288, resource layout fails first: the monolithic target binding is about
-486 MiB. Phase timing and a matched Metal row remain missing. The existing
-Metal projection/raster probes cannot support a 20-30% comparison claim.
+1. Resolution is not almost free. At 4,096 splats, each 4x increase in pixels
+   retains about 67% and then 49% of FP32 throughput.
+2. The 384x288 GPU target limit is fixed. One 1.69 MiB RGBA32F target page
+   replaces the former 486 MiB all-target GPU binding.
+
+The main 384x288/4,096 GPU allocations are approximately 108 MiB of forward
+checkpoints, 13.5 MiB of pair IDs/references, 1.69 MiB of target page, and
+0.375 MiB of FP32 gradient accumulation. The packed mode currently spends its
+storage saving on checkpoints twice as frequently, reducing replay while
+keeping the checkpoint allocation near 108 MiB. A memory-first policy that
+keeps the old checkpoint spacing should reduce that allocation toward 54 MiB;
+that is an inference and needs a measured mode.
+
+The remaining large target-memory issue is on the host. A decoded 384x288
+Float32 all-target tensor is about 486 MiB and may be duplicated across main,
+training-worker, and validation-worker ownership. Canonical RGBA8 storage,
+shared transfer where available, or worker-owned decode is the next memory
+change. Raising the GPU storage-buffer limit would restore the wrong design.
+
+Live 96x72/4,096 observations around 250-280 steps/s remain 30-38% below the
+isolated packed result. We do not yet know how much belongs to raster,
+checkpoint replay, SSIM, Adam, target transfer, preview, metrics, or
+validation. GPU timestamps, host-memory accounting, and removal of inherited
+sampled-only resources are needed before another optimization.
+
+There is still no mathematically matched full-step Metal result. Existing
+Metal probes cannot justify the claim that WebGPU is only 20-30% slower.
 
 ### Answer 4: Initialization
 
 The active run is not random and is not initialized perfectly on target pixels.
-It uses external SfM points and point colors, filtered for training-camera
-visibility and transformed into the canonical anchor frame. Initial anisotropy
-comes from local neighborhoods; opacity begins at 0.1.
+It uses external SfM points and point colors, applies export-time
+training-camera visibility filtering, and transforms them into the canonical
+anchor frame. Initial anisotropy comes from local neighborhoods; opacity
+begins at 0.1.
+
+There is an important fairness caveat: the source PLY is an external Ex4DGS
+artifact. The bundle records train-camera filtering, but its provenance does
+not prove that `cam06` was excluded when the source reconstruction itself was
+created. The image split is honest; the initialization may still contain
+privileged heldout-camera geometry. A train-camera-only reconstruction is
+required for a strict novel-view baseline.
 
 The earliest visually flattering browser lane used image-space target-grid or
 target-pixel color initialization and a temporal-mean background. That was much
 closer to a source-view memorization prior and is not an honest 3D baseline.
 
-No matched SfM/random/perturbed initialization sweep exists, so the current
-quality contribution of initialization is unknown.
+The correct ablation is step-zero plus equal-wall-time comparison of external
+SfM, train-only SfM, perturbed SfM, and random initialization, with identical
+capacity and seeds. Until that exists, we do not know how much early quality
+comes from the representation versus the seed cloud.
 
 ### Answer 5: Plateau
 
-The plateau is not diagnosed. Current evidence suggests several plausible
-contributors:
+The plateau and rough loss curves are observed but not diagnosed. A curve that
+mixes 272 heterogeneous camera/time tasks will naturally be noisier than a
+single-view overfit, so sample loss must be separated from a fixed full-image
+evaluation set. Plausible causes include:
 
+- unverified WGSL gradients or poorly scaled updates in one parameter family;
 - only 4,096 primitives for a multicamera dynamic scene;
+- a 96x72 training signal with no true high-resolution detail;
 - constant RGB across views;
 - covariance fixed over time;
 - a limited linear/sinusoidal trajectory basis;
 - fixed-capacity topology driven by short-horizon statistics;
-- noncanonical box SSIM at very low raster resolution;
-- possibly unverified WGSL gradient details.
+- a broad uniform 11x11 box objective at low raster resolution;
+- privileged but imperfect geometry initialization.
 
-More raw steps are unlikely to solve these by themselves. Gradient/update
-traces plus fixed-topology, capacity, objective, and per-frame oracle
-interventions are the shortest diagnostic route.
+The shortest causal sequence is:
+
+1. pass tiny WGSL value/gradient/update parity;
+2. log fixed-pair full-image loss, PSNR, canonical SSIM, support, and
+   dimensionless update-to-parameter ratios by family;
+3. compare fixed topology with recycle under the same schedule;
+4. run small matched interventions for capacity, learning-rate scale, objective,
+   and trajectory basis;
+5. train independent per-frame Gaussian oracles to measure the cost of temporal
+   sharing separately from raster or optimizer failure.
+
+More raw steps should not be purchased until one of those tests predicts that
+steps are the limiting resource. A successful diagnosis must improve a
+predeclared heldout metric in a repeat, not merely lower sampled training loss.
 
 ### Answer 6: SSIM
 
-An 11x11 local window is standard; whole-image SSIM is not a suitable
-replacement. The official 3DGS recipe uses an 11x11 Gaussian window with sigma
-1.5 and mixes `1-SSIM` with L1.
+An 11x11 local Gaussian window with sigma 1.5 is the conventional implementation
+used by official 3DGS; whole-image moments are not a suitable replacement. The
+local gradient identifies where luminance, contrast, and structure disagree,
+whereas a global statistic can remain similar after an object moves.
 
 The browser currently uses an 11x11 box window. Its gradient is mathematically
-correct for the CPU analogue, but WGSL parity is unverified. A 7x7 box window
-improves median whole-step throughput from 933 to 1,174 steps/s at
-96x72/1,536, about 26%, but has no quality result and changes the objective.
+correct for the CPU analogue, but WGSL parity is unverified. At 96x72, eleven
+rows are 15% of the image height, and a uniform box gives distant taps the same
+weight as central taps. That is much broader than an 11x11 Gaussian's effective
+support and may suppress detail; this is a hypothesis, not yet an ablation
+result.
+
+An older 96x72/1,536 ablation measured 1,174 steps/s for 7x7 box versus 933 for
+11x11 box, about 26% faster. Those absolute rates predate `9cfe24d`, and no
+quality result exists, so they are only directional evidence that window work
+matters.
 
 The recommended implementation is separable 11x11 Gaussian SSIM with
 target-only moment caching and a transpose-filter backward. That preserves the
-baseline objective while reducing theoretical neighborhood taps from 121 to 22
-per separable convolution.
+baseline objective while reducing each 2D filter from 121 to 22 taps. Compare
+L1-only, current box, and canonical Gaussian objectives at both equal steps and
+equal wall time. Use a genuinely higher-resolution bundle before claiming that
+an objective recovered image detail.
 
 Primary references:
 
@@ -1253,15 +1496,39 @@ There is no canonical variable-count prune/spawn buffer and no matched evidence
 that recycle improves heldout quality.
 
 So the truthful status is: dynamic placement within fixed capacity, implemented
-but not yet validated as beneficial.
+but not yet validated as beneficial. The first ablation should expose fixed
+topology as a control, accumulate parent/weak-slot evidence across the full
+camera/time schedule, and report maintenance cost, utilization, rare-time
+support, and heldout quality.
+
+Original 3DGS gradient-driven clone/split/prune is the canonical comparison.
+3DGS-MCMC offers a fixed-count relocation interpretation that is especially
+relevant to a browser memory budget. Neither should be copied before current
+recycle earns or loses its place under a matched test.
+
+Primary references:
+
+- Original 3DGS: <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>
+- 3DGS-MCMC: <https://arxiv.org/abs/2404.09591>
 
 ### Answer 8: Representation
 
 The active backend is neither native 4DGS nor World Tubes. It is a compact
 dynamic 3D Gaussian approximation with optional harmonic trajectory.
 
-The standalone STAR and DynamicGs files are useful correctness probes, not good
-SPA options yet. Exposing them now would imply parity they do not have.
+Three commonly conflated baselines must remain distinct:
+
+1. a calibrated dynamic 3DGS baseline directly optimizing time-dependent 3D
+   Gaussian attributes;
+2. Wu et al. 4D-GS, which combines 3D Gaussians with a HexPlane-inspired 4D
+   neural voxel encoding and deformation MLP;
+3. Fudan native 4DGS, which optimizes native 4D Gaussian primitives and renders
+   a time-conditioned 3D Gaussian plus temporal marginal.
+
+World Tubes is a fourth research lane with a different temporal-sharing
+contract. The standalone STAR, DynamicGs, and tube shaders are useful probes,
+not complete SPA options. Exposing them now would imply data, objective,
+optimizer, topology, validation, and backward parity they do not have.
 
 The next complete baseline should be calibrated dynamic 3DGS because it is the
 closest controlled extension and can reuse the tiled raster, data, worker,
@@ -1272,8 +1539,9 @@ topology are complete. The same gate applies to World Tubes.
 
 Primary 4DGS sources:
 
-- <https://fudan-zvg.github.io/4d-gaussian-splatting/>
-- <https://github.com/fudan-zvg/4d-gaussian-splatting>
+- Wu et al. deformation 4D-GS: <https://arxiv.org/abs/2310.08528>
+- Fudan native 4DGS: <https://fudan-zvg.github.io/4d-gaussian-splatting/>
+- Fudan code: <https://github.com/fudan-zvg/4d-gaussian-splatting>
 
 ### Answer 9: Robustness
 
@@ -1288,32 +1556,57 @@ Robustness is not established. Current observations come from:
 No result should be phrased as a general dynamic-view synthesis improvement.
 The minimum useful extension is three seeds, another heldout camera, one more
 scene, full-image metrics, and a second WebGPU device for performance claims.
+Initialization provenance and true source resolution must be held explicit in
+every row.
 
 ### Answer 10: Baseline Status
 
 The browser trainer is a substantially better prototype than it was:
 
 - calibrated multicamera data;
-- honest train/heldout split;
+- a nominal train/heldout image split with an initialization-provenance caveat;
 - strong nonrandom 3D initialization;
 - full-frame tiled raster;
 - shared analytic backward;
 - L1 plus local SSIM training;
 - trainable anisotropy and motion;
-- fixed-capacity topology;
+- fixed-capacity fill/recycle topology;
+- paged GPU targets and packed-FP16 checkpoint storage;
 - nonblocking workers, live multi-view time preview, and useful charts;
-- synchronized scaling benchmark and tests.
+- a 3x3 raster/splat scaling benchmark and 53 focused browser tests.
 
 It is not yet a solid research baseline. The missing graduation gates are:
 
 1. complete CPU/WGSL value and gradient parity;
-2. canonical Gaussian SSIM;
-3. full-image paper metrics;
-4. diagnosed convergence plateau;
-5. matched initialization and topology ablations;
-6. robustness beyond one scene/camera/device;
-7. a reproducible accepted row in `BASELINES.md`.
+2. a train-camera-only initialization provenance path;
+3. canonical Gaussian SSIM and full-image paper metrics;
+4. phase timing and complete host/device memory accounting;
+5. a diagnosed convergence plateau;
+6. matched initialization, learning-rate, capacity, objective, and topology
+   ablations;
+7. robustness beyond one scene, heldout camera, seed, and device;
+8. a reproducible accepted row in `BASELINES.md`.
 
-The best next order is correctness parity, phase timing and target paging,
-canonical SSIM, then matched quality diagnostics. New representation backends
-should wait until those results show a specific remaining gap.
+The execution portfolio is:
+
+| Priority | Work | Decision unlocked |
+| --- | --- | --- |
+| P0 | Tiny CPU/WGSL RGB, alpha, gradient, and Adam-update parity | Whether convergence tuning is meaningful |
+| P0 | Fixed full-image validation set with PSNR, Gaussian SSIM, and L1 | Whether visual quality actually improves |
+| P1 | GPU phase timestamps plus host/device resident-byte accounting | Which speed or memory optimization to implement |
+| P1 | Per-family gradient and dimensionless update telemetry | Whether LR or gradient flow causes the plateau |
+| P1 | Canonical separable Gaussian SSIM with target caching | A comparable and potentially faster objective |
+| P1 | Canonical RGBA8/shared or worker-owned target decode | High-resolution operation without host multiplication |
+| P2 | Matched screen of initialization, LR scale, capacity, topology, and trajectory | The first causal quality intervention |
+| P2 | Fixed-count recycle versus canonical density-control comparison | Whether dynamic topology earns its complexity |
+| P2 | Split sampled and tiled runtimes into sibling implementations | Remove dead resources and reduce correctness risk |
+| P2 | Portable-limit mode or explicit supported-device report | Honest WebGPU portability |
+| P3 | Complete calibrated dynamic 3DGS baseline | A controlled representation ceiling |
+| P3 | Native 4DGS and World Tubes only after oracle evidence | Avoid decorative backend selectors |
+| P3 | Multi-seed, multi-heldout, multi-scene, multi-device matrix | Scope the claim |
+| P4 | Completion verifier, `BASELINES.md` row, and synchronized project docs | Graduate from demo to baseline |
+
+This order improves detail, convergence, speed, memory, and code quality without
+confounding them. New representation work should begin only after parity,
+metrics, and diagnostics identify a residual capability gap rather than an
+implementation defect.

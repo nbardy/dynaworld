@@ -1,0 +1,44 @@
+{
+  "name": "coffee_martini_protocol_bounded_16f_40step",
+  "enabled": true,
+  "comparison_scope": {
+    "purpose": "Memory-bounded 16-frame convergence ladder for legacy and full-SPD4 sources at the same 256-atom count.",
+    "same_atom_count": true,
+    "matched_parameter_count": false,
+    "not_a_public_quality_protocol": true,
+    "local_mps_guard": "Run one representation per fresh process; do not increase frames, resolution, or atom count in this protocol."
+  },
+  "dataset": {
+    "manifest": "src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl",
+    "sample_id": "neural3d_coffee_martini_train_cam04_cam09_holdout_cam06_full_300f",
+    "train_cameras": ["cam04", "cam09"],
+    "heldout_cameras": ["cam06"],
+    "frame_count": 16,
+    "fps": 30.0
+  },
+  "steps": 40,
+  "max_train_seconds": 300.0,
+  "frames_per_step": 4,
+  "same_time_count": 2,
+  "local_time_count": 2,
+  "local_time_radius": 1,
+  "sampler_seed_offset": 7016,
+  "stages": [
+    {
+      "label": "bounded_64w",
+      "until_step": 10,
+      "image_size": [48, 64],
+      "primitive_count": 128,
+      "frames_per_step": 4,
+      "lr_multiplier": 1.0
+    },
+    {
+      "label": "bounded_128w",
+      "until_step": 40,
+      "image_size": [96, 128],
+      "primitive_count": 256,
+      "frames_per_step": 4,
+      "lr_multiplier": 0.5
+    }
+  ]
+}

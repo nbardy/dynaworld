@@ -258,10 +258,18 @@ camera-path compiler paper.
 
 Status: useful demo, parked for research claims.
 
-Keep it runnable and visually inspectable. Do not continue optimizer and
-density-control variants until tiled image-space backward plus a matched
-ablation produces a real quality gain. Browser "World Tubes-style" is a
-simplified motion mode, not native World Tubes parity.
+Keep it runnable and visually inspectable. The active train17/holdout1 demo now
+has a full-frame opacity-aware tiled raster, exact windowed DSSIM, trainable
+temporal mixture, and bounded fixed-capacity split/recycle. Its fast fork uses
+staged projected gradients, one 3D VJP per splat, compact hot/cold projection
+packets, and checkpoint-block replay; the older direct tiled path remains a
+live control. It is still a systems demo rather than a paper renderer.
+`Harmonic trajectory splats` is not native World Tubes or native 4DGS parity.
+The standalone affine STAR and bounded DynamicGs shaders are microbenchmarks,
+not interchangeable SPA backends. Further promotion requires a matched
+quality/performance ablation and the native backend contracts described in
+`browser_4dgs_baseline.md`; browser work does not create a Python trainer or
+paper lane.
 
 ### Lane L: PowerFoam Post-Audit
 
@@ -377,3 +385,62 @@ either renderer is a broad SOTA dynamic-NVS replacement
 
 The immediate scientific bottleneck is no longer missing mathematics. It is
 matched public breadth under a frozen training and cost protocol.
+
+## 7. 2026-07-26 Open-Ray Transfer Clarification
+
+The moving-camera ordered-transfer proposal sharpens Paper B without changing
+the lane priority above. The original intake used “ray holonomy,” but an open
+camera ray ordinarily has a transfer operator or parallel transport.
+“Holonomy” is reserved here for closed loops, including the older cell-graph
+loop diagnostic.
+
+Terminology:
+
+```text
+camera program:
+    defines the measurement bundle and changes the observation
+
+gauge:
+    chooses local coordinates/trivialization within that bundle
+
+open-ray transfer:
+    path-ordered optical transfer accumulated along one ray fiber
+```
+
+The proposal's retained-fiber connection:
+
+```text
+H_C(y) = P exp integral_{F_y} Gamma_C^* A
+```
+
+is the continuous form of WorldFoam's existing optical-transfer monoid. Its
+commutator theorem is the exact limitation behind World Tubes visibility
+certificates:
+
+```text
+[T_i,T_j] color = alpha_i alpha_j (c_i - c_j).
+```
+
+Therefore:
+
+```text
+World Tubes / STAR UVT:
+    remains Paper A and the current finish-first lane
+
+WorldFoam / gauge-covariant open-ray transfer:
+    remains Paper B and receives the retained-fiber, convex-potential,
+    discriminant-compiler, and transfer-ODE research branches
+```
+
+Paper A may use the terminology correction and noncommutation theorem to state
+its approximation boundary. It should not absorb the unimplemented
+self-normalized convex-potential atom or path-ordered transfer renderer.
+
+The complete intake, equations, claims, failure regimes, and falsification
+ladder are preserved at the historical filename below. Its terminology is
+superseded by this clarification:
+
+```text
+research_notes/worldfoam_paper/scientist_notes/
+2026-07-26_gauge_invariant_ray_holonomy_intake_and_paper_split.md
+```

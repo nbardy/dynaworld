@@ -3,10 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
-import torch
-
 
 PaperRepresentation = Literal["world_tubes", "worldfoam", "dynamic_3dgs"]
+
+PAPER_DATASET_POSE_SOURCES = {
+    "neural_3d_video": "neural_3d_llff_opencv_relative_pinhole_v2",
+    "dnerf": "dnerf_matched_time_blender_to_opencv_relative_pinhole",
+}
+
+
+def expected_paper_pose_source(dataset_family: object) -> str:
+    normalized = str(dataset_family or "").strip().lower()
+    try:
+        return PAPER_DATASET_POSE_SOURCES[normalized]
+    except KeyError as error:
+        raise ValueError(
+            f"unsupported paper dataset family for pose-source validation: {normalized!r}"
+        ) from error
 
 
 @dataclass(frozen=True)
@@ -124,6 +137,14 @@ class PaperTrainingProtocol:
             for stage in self.stages
         ):
             raise ValueError("same_time_count + local_time_count must fit every paper stage batch")
+        for stage in self.stages:
+            if self.dataset.samples_per_epoch % stage.frames_per_step != 0:
+                raise ValueError(
+                    "paper protocol requires every stage batch to divide the "
+                    "training sample epoch exactly: "
+                    f"stage {stage.label!r} uses frames_per_step={stage.frames_per_step}, "
+                    f"but samples_per_epoch={self.dataset.samples_per_epoch}"
+                )
 
     @property
     def final_stage(self) -> PaperStage:
@@ -188,6 +209,8 @@ class SpacetimeBatch:
             raise ValueError("spacetime batch samples must be unique")
 
     def flat_indices(self, frame_count: int, *, device: torch.device | str) -> torch.Tensor:
+        import torch
+
         return torch.tensor(
             [sample.flat_index(frame_count) for sample in self.samples],
             dtype=torch.long,

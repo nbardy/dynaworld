@@ -1,0 +1,310 @@
+{
+  "acceptance": {
+    "boundary_grad_max_abs": 1e-10,
+    "depth_coefficient_grad_max_abs": 1e-10,
+    "loss_max_abs": 1e-12,
+    "prediction_max_abs": 1e-12,
+    "reverse_state_frame_scale_max": 1.1,
+    "site_color_grad_max_abs": 1e-12,
+    "site_density_grad_max_abs": 1e-06
+  },
+  "atlas_structural_bytes": 3840,
+  "compiler_policy_has_no_frame_count": true,
+  "failures": [],
+  "fixture": "hard_dormant_colored_tail_fixed_topology",
+  "frame_block_size": 4,
+  "frame_counts": [
+    16,
+    64,
+    256,
+    1024
+  ],
+  "physical_interval": [
+    -1.0,
+    1.0
+  ],
+  "policy": {
+    "forward_absolute_tolerance": 1e-10,
+    "forward_relative_tolerance": 1e-06,
+    "heldout_direction_count": 2,
+    "heldout_validation_count": 16,
+    "max_chart_count": 8,
+    "max_split_depth": 3,
+    "node_count_schedule": [
+      2,
+      4,
+      8,
+      16
+    ],
+    "probe_direction_count": 2,
+    "probe_validation_count": 17,
+    "tangent_absolute_tolerance": 1e-10,
+    "tangent_relative_tolerance": 0.001
+  },
+  "prepared_track_block_bytes": 84,
+  "rows": [
+    {
+      "accumulator_bytes_excluding_atlas": 672,
+      "boundary_finalize_calls": 1,
+      "chart_count": 3,
+      "chart_sample_counts": [
+        4,
+        4,
+        8
+      ],
+      "compiled_to_exact_reverse_interaction_ratio": 0.625,
+      "compiled_to_exact_total_interaction_proxy_ratio": 1.75,
+      "compiled_total_interaction_proxy": 168,
+      "error": {
+        "boundary_grad_max_abs": 6.38378239159465e-16,
+        "depth_coefficient_grad_max_abs": 6.298433996576591e-14,
+        "loss_max_abs": 0.0,
+        "prediction_max_abs": 1.1102230246251565e-16,
+        "site_color_grad_max_abs": 1.3877787807814457e-17,
+        "site_density_grad_max_abs": 3.576442945572508e-08
+      },
+      "exact_replay_forward_run_interactions": 32,
+      "exact_replay_reverse_run_interactions": 64,
+      "exact_total_interaction_proxy": 96,
+      "frame_count": 16,
+      "frame_run_reverse_state_elements": 0,
+      "logical_selected_reverse_state_bytes_excluding_targets_and_predictions": 2536,
+      "per_sample_run_tape_bytes": 0,
+      "prediction_bytes": 384,
+      "refresh_world_forward_run_interactions": 40,
+      "retained_prediction_bytes": 0,
+      "retained_target_bytes": 0,
+      "run_count": 2,
+      "sample_basis_interactions": 88,
+      "sample_block_count": 4,
+      "sampled_validation_count_in_warm_step": 0,
+      "selection_signature": [
+        [
+          -1.0,
+          -0.5,
+          16
+        ],
+        [
+          -0.5,
+          0.0,
+          2
+        ],
+        [
+          0.0,
+          1.0,
+          2
+        ]
+      ],
+      "step_world_reverse_run_interactions": 40,
+      "target_bytes": 384,
+      "total_node_count": 20,
+      "track_count": 1,
+      "world_finalize_calls": 1
+    },
+    {
+      "accumulator_bytes_excluding_atlas": 672,
+      "boundary_finalize_calls": 1,
+      "chart_count": 3,
+      "chart_sample_counts": [
+        16,
+        16,
+        32
+      ],
+      "compiled_to_exact_reverse_interaction_ratio": 0.15625,
+      "compiled_to_exact_total_interaction_proxy_ratio": 1.125,
+      "compiled_total_interaction_proxy": 432,
+      "error": {
+        "boundary_grad_max_abs": 7.155734338404329e-16,
+        "depth_coefficient_grad_max_abs": 9.603168954486208e-14,
+        "loss_max_abs": 5.551115123125783e-17,
+        "prediction_max_abs": 1.1102230246251565e-16,
+        "site_color_grad_max_abs": 5.551115123125783e-17,
+        "site_density_grad_max_abs": 8.493172007914898e-09
+      },
+      "exact_replay_forward_run_interactions": 128,
+      "exact_replay_reverse_run_interactions": 256,
+      "exact_total_interaction_proxy": 384,
+      "frame_count": 64,
+      "frame_run_reverse_state_elements": 0,
+      "logical_selected_reverse_state_bytes_excluding_targets_and_predictions": 2536,
+      "per_sample_run_tape_bytes": 0,
+      "prediction_bytes": 1536,
+      "refresh_world_forward_run_interactions": 40,
+      "retained_prediction_bytes": 0,
+      "retained_target_bytes": 0,
+      "run_count": 2,
+      "sample_basis_interactions": 352,
+      "sample_block_count": 16,
+      "sampled_validation_count_in_warm_step": 0,
+      "selection_signature": [
+        [
+          -1.0,
+          -0.5,
+          16
+        ],
+        [
+          -0.5,
+          0.0,
+          2
+        ],
+        [
+          0.0,
+          1.0,
+          2
+        ]
+      ],
+      "step_world_reverse_run_interactions": 40,
+      "target_bytes": 1536,
+      "total_node_count": 20,
+      "track_count": 1,
+      "world_finalize_calls": 1
+    },
+    {
+      "accumulator_bytes_excluding_atlas": 672,
+      "boundary_finalize_calls": 1,
+      "chart_count": 3,
+      "chart_sample_counts": [
+        64,
+        64,
+        128
+      ],
+      "compiled_to_exact_reverse_interaction_ratio": 0.0390625,
+      "compiled_to_exact_total_interaction_proxy_ratio": 0.96875,
+      "compiled_total_interaction_proxy": 1488,
+      "error": {
+        "boundary_grad_max_abs": 6.548581121812447e-16,
+        "depth_coefficient_grad_max_abs": 7.64483962245599e-14,
+        "loss_max_abs": 2.7755575615628914e-17,
+        "prediction_max_abs": 4.440892098500626e-16,
+        "site_color_grad_max_abs": 1.6653345369377348e-16,
+        "site_density_grad_max_abs": 2.2029061100227107e-09
+      },
+      "exact_replay_forward_run_interactions": 512,
+      "exact_replay_reverse_run_interactions": 1024,
+      "exact_total_interaction_proxy": 1536,
+      "frame_count": 256,
+      "frame_run_reverse_state_elements": 0,
+      "logical_selected_reverse_state_bytes_excluding_targets_and_predictions": 2536,
+      "per_sample_run_tape_bytes": 0,
+      "prediction_bytes": 6144,
+      "refresh_world_forward_run_interactions": 40,
+      "retained_prediction_bytes": 0,
+      "retained_target_bytes": 0,
+      "run_count": 2,
+      "sample_basis_interactions": 1408,
+      "sample_block_count": 64,
+      "sampled_validation_count_in_warm_step": 0,
+      "selection_signature": [
+        [
+          -1.0,
+          -0.5,
+          16
+        ],
+        [
+          -0.5,
+          0.0,
+          2
+        ],
+        [
+          0.0,
+          1.0,
+          2
+        ]
+      ],
+      "step_world_reverse_run_interactions": 40,
+      "target_bytes": 6144,
+      "total_node_count": 20,
+      "track_count": 1,
+      "world_finalize_calls": 1
+    },
+    {
+      "accumulator_bytes_excluding_atlas": 672,
+      "boundary_finalize_calls": 1,
+      "chart_count": 3,
+      "chart_sample_counts": [
+        256,
+        256,
+        512
+      ],
+      "compiled_to_exact_reverse_interaction_ratio": 0.009765625,
+      "compiled_to_exact_total_interaction_proxy_ratio": 0.9296875,
+      "compiled_total_interaction_proxy": 5712,
+      "error": {
+        "boundary_grad_max_abs": 7.337880303381894e-16,
+        "depth_coefficient_grad_max_abs": 7.022073894580316e-14,
+        "loss_max_abs": 8.326672684688674e-17,
+        "prediction_max_abs": 5.551115123125783e-16,
+        "site_color_grad_max_abs": 1.3877787807814457e-16,
+        "site_density_grad_max_abs": 7.984562452401436e-11
+      },
+      "exact_replay_forward_run_interactions": 2048,
+      "exact_replay_reverse_run_interactions": 4096,
+      "exact_total_interaction_proxy": 6144,
+      "frame_count": 1024,
+      "frame_run_reverse_state_elements": 0,
+      "logical_selected_reverse_state_bytes_excluding_targets_and_predictions": 2536,
+      "per_sample_run_tape_bytes": 0,
+      "prediction_bytes": 24576,
+      "refresh_world_forward_run_interactions": 40,
+      "retained_prediction_bytes": 0,
+      "retained_target_bytes": 0,
+      "run_count": 2,
+      "sample_basis_interactions": 5632,
+      "sample_block_count": 256,
+      "sampled_validation_count_in_warm_step": 0,
+      "selection_signature": [
+        [
+          -1.0,
+          -0.5,
+          16
+        ],
+        [
+          -0.5,
+          0.0,
+          2
+        ],
+        [
+          0.0,
+          1.0,
+          2
+        ]
+      ],
+      "step_world_reverse_run_interactions": 40,
+      "target_bytes": 24576,
+      "total_node_count": 20,
+      "track_count": 1,
+      "world_finalize_calls": 1
+    }
+  ],
+  "schema_version": 2,
+  "scope": {
+    "atlas_world_snapshot_bound": true,
+    "compact_spatial_world_gradients": false,
+    "continuous_jacobian_certificate": false,
+    "cpu_only": true,
+    "fixed_topology": true,
+    "measured_allocator_peak": false,
+    "native_runtime_parity": false,
+    "sampled_directional_rank_gate": true,
+    "staged_sample_accumulation": true
+  },
+  "selected_rank_independent_of_frame_count": true,
+  "selection_signature": [
+    [
+      -1.0,
+      -0.5,
+      16
+    ],
+    [
+      -0.5,
+      0.0,
+      2
+    ],
+    [
+      0.0,
+      1.0,
+      2
+    ]
+  ],
+  "verified": true
+}

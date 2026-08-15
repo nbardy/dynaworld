@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "venue": "ICLR",
+  "venue_year": 2027,
+  "anonymous_submission": true,
+  "package_status": "scaffold_blocked",
+  "submission_ready": false,
+  "template": {
+    "status": "unavailable",
+    "source_url": "https://github.com/ICLR/Master-Template/raw/master/iclr2027.zip",
+    "last_checked": "2026-08-15",
+    "http_status": 404,
+    "retrieved_at": null,
+    "archive_path": "iclr2027.zip",
+    "archive_sha256": null,
+    "style_path": "iclr2027_conference.sty",
+    "style_sha256": null
+  },
+  "entrypoint": "main.tex",
+  "recorder": "main.fls",
+  "auxiliary": "main.aux",
+  "compiled_pdf": "main.pdf",
+  "ai_use_statement": "AI_USE_STATEMENT.md",
+  "main_text_pages": null,
+  "total_pages": null,
+  "source_bindings": {
+    "concise_draft": {
+      "path": "research_notes/gauged_uvt_trace_atlas/paper/WORLD_TUBES_ICLR_MAIN_DRAFT.md",
+      "sha256": "17c6f45e0e017d694679e6eb5ebeca273d1b8331d93b02e550dc2a3a6b803b01",
+      "bytes": 28403
+    },
+    "bibliography": {
+      "path": "research_notes/gauged_uvt_trace_atlas/paper/WORLD_TUBES_REFERENCES.bib",
+      "sha256": "1d82dc0cb80d8a7d7a8d6309c0c5531223eacfd5555611e9ffaa62f05819b741",
+      "bytes": 6977
+    },
+    "evidence_manifest": {
+      "path": "research_notes/gauged_uvt_trace_atlas/paper/generated/schema_v2/artifact_manifest.json",
+      "sha256": "6ae45b0d56321af75b68f30e8ff7b750827d3775eb582a7e657b251630e79bc0",
+      "bytes": 3104
+    },
+    "ai_use_statement": {
+      "path": "research_notes/gauged_uvt_trace_atlas/paper/venue/iclr2027/AI_USE_STATEMENT.md",
+      "sha256": "78b16c1deea1a417e82332a6cf59ed6fa797c842627d340f88ddbeccb4ce4eb3",
+      "bytes": 1079
+    }
+  },
+  "asset_exports": [],
+  "pdf_visual_qa": {
+    "status": "not_run",
+    "pdf_sha256": null,
+    "page_count": null,
+    "inspected_pages": [],
+    "reviewed_at": null,
+    "checks": {}
+  },
+  "blockers": [
+    {
+      "id": "official_template",
+      "status": "external_unavailable",
+      "detail": "The official ICLR 2027 archive URL returned HTTP 404 on 2026-08-15. No older style is substituted."
+    },
+    {
+      "id": "evidence_bundle",
+      "status": "incomplete",
+      "detail": "The clean schema-v2 variable-camera closure/death ablation is accepted through its fixed-SHA compatibility receipt. Frozen same-world scaling, learned-world moving-camera density, and public-context rows remain missing."
+    },
+    {
+      "id": "venue_build",
+      "status": "not_started",
+      "detail": "The concise Markdown has not been ported into an official ICLR 2027 source package."
+    },
+    {
+      "id": "pdf_visual_qa",
+      "status": "not_run",
+      "detail": "No official-template PDF exists to inspect."
+    }
+  ]
+}

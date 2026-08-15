@@ -271,6 +271,18 @@
 						<div><span>Detail MAE</span><strong id="detailMaeValue">--</strong></div>
 						<div><span>Lowpass PSNR</span><strong id="lowPassPsnrValue">--</strong></div>
 						<div><span>Camera PSNR</span><strong id="cameraPsnrValue">--</strong></div>
+						<div title="Worst 1.05x optical zoom or 1.5% principal-point shift against a crop-resampled real target; train / heldout">
+							<span>Zoom/Shift PSNR</span><strong id="cameraOpticalPsnrValue">--</strong>
+						</div>
+						<div title="Worst bounded physical pose: fraction of composed alpha contributed closer than the Pixel-GS camera-radius threshold; train / heldout">
+							<span>Pose Near α</span><strong id="cameraNearAlphaValue">--</strong>
+						</div>
+						<div title="Worst bounded physical pose: fraction of composed alpha from splats whose opacity-aware support rectangle covers at least 25% of the image; train / heldout">
+							<span>Pose Giant α</span><strong id="cameraGiantAlphaValue">--</strong>
+						</div>
+						<div title="Worst bounded physical pose: coverage-weighted contributor depth standard deviation divided by mean depth; train / heldout">
+							<span>Ray Depth σ/z</span><strong id="cameraDepthSpreadValue">--</strong>
+						</div>
 						<div><span>GPU Buffers</span><strong id="gpuMemoryValue">--</strong></div>
 					<div>
 						<span>Heldout Cov</span>
@@ -426,6 +438,6 @@
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260803-fullfps-pixelgs-1"></script>
+		<script type="module" src="./app.js?v=20260814-camera-stress-1"></script>
 	</body>
 </html>

@@ -1,0 +1,33 @@
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrlr}
+\toprule
+Evidence & Metric 1 & Value & Metric 2 & Value \\
+\midrule
+M0--M5 CPU parity & integral max abs. err. & 5.957e-15 & FD VJP norm. err. & 6.859e-10 \\
+M0--M5 Metal parity (historical) & forward norm. err. & 7.508e-08 & VJP norm. err. & 5.960e-08 \\
+Positive-P2 target & M3 heldout loss & 5.258e-17 & M5 heldout loss & 8.797e-05 \\
+Convex-log-P2 target & M3 heldout loss & 1.328e-03 & M5 heldout loss & 6.188e-15 \\
+Adaptive M3/M5 mean loss & adaptive / best fixed & 3.134e-01 & adaptive / oracle & 1.000e+00 \\
+Adaptive M3/M5 selection & pure-family accuracy & 1.000e+00 & oracle agreement & 1.000e+00 \\
+Constant-density transfer & render max abs. err. & 0.000e+00 & VJP max abs. err. & 2.456e-11 \\
+G0 analytic sphere & RGB max abs. err. & 4.355e-04 & transmittance max abs. err. & 5.053e-04 \\
+G0 physical gauge Jacobian & with-Jac. RGB max err. & 3.330e-07 & no-Jac./Jac. error ratio & 9.169e+05 \\
+G3 128-layer accuracy & PSNR mean (dB) & 6.100e+01 & PSNR p05 (dB) & 3.793e+01 \\
+G3 crossing vs. repr. sort & 128-layer RGB MSE & 1.415e-05 & repr.-sort RGB MSE & 1.164e-03 \\
+G3 crossing vs. depth marginal & 128-layer RGB MSE & 1.415e-05 & depth-marginal RGB MSE & 7.485e-03 \\
+G3 crossing flicker & 128-layer flicker & 2.486e-03 & repr.-sort flicker & 2.206e-02 \\
+G3 crossing gradient variance & 128-layer grad. var. & 2.770e-05 & repr.-sort grad. var. & 2.105e-03 \\
+G3 adaptive fallback & fallback mean & 5.146e-01 & fallback p95 & 9.525e-01 \\
+G3 crossing order flips & repr.-sort flips & 2.000e+01 & 128-layer flips & 2.000e+01 \\
+\midrule
+G3 & \multicolumn{4}{l}{ACCEPTED: CPU synthetic only; not native/public evidence} \\
+G4 & \multicolumn{4}{l}{NOT MEASURED: public quality} \\
+G6 & \multicolumn{4}{l}{NOT MEASURED: native memory} \\
+\bottomrule
+\end{tabular}
+\caption{Verifier-accepted WorldFoam foundation and CPU synthetic evidence. G3 covers only the S1--S8/C1--C7 float64 CPU suite; it is not native-runtime or public-data evidence. The Metal row is historical and source-hash checked. Adaptive M3/M5 rows are synthetic chord-selection evidence and do not authorize native material promotion. Missing G4/G6 gates remain explicitly unmeasured.}
+\label{tab:worldfoam-foundation}
+\end{table*}

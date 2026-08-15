@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="figure-title figure-description">
+<title id="figure-title">World Tubes camera-program compiler and compiled adjoint</title>
+<desc id="figure-description">The Same learned world and Known camera program enter Per-frame replay or World Tubes compilation. A Camera-program compiler produces a Projective trace atlas and Certified tile-time cells for the Metal interval forward, Metal interval VJP, Compiler VJP, and World gradients.</desc>
+<style>.background { fill: #ffffff; }
+.title { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 28px; font-weight: 700; }
+.subtitle { fill: #475569; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 400; }
+.lane-title { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 21px; font-weight: 700; }
+.node-title { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 19px; font-weight: 700; }
+.node-title-compact { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+.node-title-tight { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+.body { fill: #334155; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 400; }
+.small { fill: #475569; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 400; }
+.mono { fill: #172554; font-family: Menlo, Consolas, monospace; font-size: 18px; font-weight: 600; }
+.badge { fill: #ffffff; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+.arrow { fill: none; stroke: #334155; stroke-width: 2.4; }
+.arrow-blue { fill: none; stroke: #2563eb; stroke-width: 2.8; }
+.arrow-red { fill: none; stroke: #be123c; stroke-width: 2.4; }
+.arrow-green { fill: none; stroke: #047857; stroke-width: 2.8; }
+.loop { fill: none; stroke: #7c3aed; stroke-width: 2.5; stroke-dasharray: 8 6; }
+.boundary { fill: #fff7ed; stroke: #c2410c; stroke-width: 1.8; }
+.input { fill: #f8fafc; stroke: #64748b; stroke-width: 1.8; }
+.replay { fill: #fff1f2; stroke: #fb7185; stroke-width: 1.6; }
+.compile { fill: #eff6ff; stroke: #60a5fa; stroke-width: 1.8; }
+.cert { fill: #ecfdf5; stroke: #34d399; stroke-width: 1.8; }
+.decision { fill: #fffbeb; stroke: #f59e0b; stroke-width: 2; }
+.fallback { fill: #fef2f2; stroke: #ef4444; stroke-width: 2; }
+.note { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.4; }</style>
+<rect x="0" y="0" width="1200" height="700" rx="0" class="background"/>
+<text x="40" y="43" text-anchor="start" class="title"><tspan x="40" dy="0">World Tubes: compile world-side work across a camera program</tspan></text>
+<text x="40" y="72" text-anchor="start" class="subtitle"><tspan x="40" dy="0">One learned world and camera program; two routes to the same sensor samples</tspan></text>
+<rect x="35" y="118" width="225" height="88" rx="14" class="input"/>
+<text x="147" y="150" text-anchor="middle" class="node-title"><tspan x="147" dy="0">Same learned world θ</tspan></text>
+<text x="147" y="181" text-anchor="middle" class="body"><tspan x="147" dy="0">motion · opacity · color</tspan></text>
+<rect x="35" y="238" width="225" height="88" rx="14" class="input"/>
+<text x="147" y="260" text-anchor="middle" class="node-title"><tspan x="147" dy="0">Known camera</tspan><tspan x="147" dy="22">program Γ</tspan></text>
+<text x="147" y="310" text-anchor="middle" class="body"><tspan x="147" dy="0">poses · intrinsics · times</tspan></text>
+<rect x="300" y="100" width="860" height="185" rx="18" class="replay"/>
+<rect x="320" y="116" width="104" height="30" rx="15" fill="#be123c"/>
+<text x="372" y="137" text-anchor="middle" class="badge"><tspan x="372" dy="0">BASELINE</tspan></text>
+<text x="430" y="139" text-anchor="start" class="lane-title"><tspan x="430" dy="0">Per-frame replay</tspan></text>
+<rect x="330" y="170" width="170" height="82" rx="11" class="input"/>
+<text x="415" y="201" text-anchor="middle" class="node-title"><tspan x="415" dy="0">Evaluate world</tspan></text>
+<text x="415" y="230" text-anchor="middle" class="small"><tspan x="415" dy="0">at t_f</tspan></text>
+<rect x="535" y="170" width="170" height="82" rx="11" class="input"/>
+<text x="620" y="201" text-anchor="middle" class="node-title"><tspan x="620" dy="0">Project + bin</tspan></text>
+<text x="620" y="230" text-anchor="middle" class="small"><tspan x="620" dy="0">support and order</tspan></text>
+<rect x="740" y="170" width="170" height="82" rx="11" class="input"/>
+<text x="825" y="201" text-anchor="middle" class="node-title"><tspan x="825" dy="0">Composite</tspan></text>
+<text x="825" y="230" text-anchor="middle" class="small"><tspan x="825" dy="0">one image I_f</tspan></text>
+<rect x="945" y="170" width="170" height="82" rx="11" class="input"/>
+<text x="1030" y="201" text-anchor="middle" class="node-title"><tspan x="1030" dy="0">Repeat</tspan></text>
+<text x="1030" y="230" text-anchor="middle" class="small"><tspan x="1030" dy="0">f = 1 … F</tspan></text>
+<path d="M 500 211 L 525 211" class="arrow-red" fill="none" stroke="#be123c" stroke-width="2.4"/>
+<polygon points="525,211 515,215.5 515,206.5" fill="#be123c"/>
+<path d="M 705 211 L 730 211" class="arrow-red" fill="none" stroke="#be123c" stroke-width="2.4"/>
+<polygon points="730,211 720,215.5 720,206.5" fill="#be123c"/>
+<path d="M 910 211 L 935 211" class="arrow-red" fill="none" stroke="#be123c" stroke-width="2.4"/>
+<polygon points="935,211 925,215.5 925,206.5" fill="#be123c"/>
+<path d="M 260 162 L 285 162 L 285 193 L 320 193" class="arrow-red" fill="none" stroke="#be123c" stroke-width="2.4"/>
+<polygon points="320,193 310,197.5 310,188.5" fill="#be123c"/>
+<path d="M 260 282 L 280 282 L 280 230 L 320 230" class="arrow-red" fill="none" stroke="#be123c" stroke-width="2.4"/>
+<polygon points="320,230 310,234.5 310,225.5" fill="#be123c"/>
+<rect x="300" y="315" width="860" height="315" rx="18" class="compile"/>
+<rect x="320" y="332" width="134" height="30" rx="15" fill="#2563eb"/>
+<text x="387" y="353" text-anchor="middle" class="badge"><tspan x="387" dy="0">WORLD TUBES</tspan></text>
+<text x="468" y="355" text-anchor="start" class="lane-title"><tspan x="468" dy="0">Compile once; evaluate many times</tspan></text>
+<rect x="330" y="386" width="170" height="96" rx="12" class="input"/>
+<text x="415" y="408" text-anchor="middle" class="node-title-tight"><tspan x="415" dy="0">Camera-program</tspan><tspan x="415" dy="21">compiler</tspan></text>
+<text x="415" y="464" text-anchor="middle" class="small"><tspan x="415" dy="0">certify / split / fallback</tspan></text>
+<rect x="535" y="386" width="170" height="96" rx="12" class="input"/>
+<text x="620" y="408" text-anchor="middle" class="node-title-tight"><tspan x="620" dy="0">Projective trace</tspan><tspan x="620" dy="21">atlas</tspan></text>
+<text x="620" y="464" text-anchor="middle" class="small"><tspan x="620" dy="0">traces + intervals</tspan></text>
+<rect x="740" y="386" width="170" height="96" rx="12" class="cert"/>
+<text x="825" y="408" text-anchor="middle" class="node-title-tight"><tspan x="825" dy="0">Certified tile-time</tspan><tspan x="825" dy="21">cells</tspan></text>
+<text x="825" y="464" text-anchor="middle" class="small"><tspan x="825" dy="0">support + order</tspan></text>
+<rect x="945" y="386" width="170" height="96" rx="12" class="input"/>
+<text x="1030" y="408" text-anchor="middle" class="node-title-tight"><tspan x="1030" dy="0">Metal interval</tspan><tspan x="1030" dy="21">forward</tspan></text>
+<text x="1030" y="464" text-anchor="middle" class="small"><tspan x="1030" dy="0">slice at t_f</tspan></text>
+<path d="M 500 431 L 525 431" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="525,431 515,435.5 515,426.5" fill="#2563eb"/>
+<path d="M 705 431 L 730 431" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="730,431 720,435.5 720,426.5" fill="#2563eb"/>
+<path d="M 910 431 L 935 431" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="935,431 925,435.5 925,426.5" fill="#2563eb"/>
+<path d="M 260 162 L 282 162 L 282 410 L 320 410" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="320,410 310,414.5 310,405.5" fill="#2563eb"/>
+<path d="M 260 282 L 290 282 L 290 452 L 320 452" class="arrow-blue" fill="none" stroke="#2563eb" stroke-width="2.8"/>
+<polygon points="320,452 310,456.5 310,447.5" fill="#2563eb"/>
+<rect x="945" y="505" width="170" height="60" rx="11" class="input"/>
+<text x="1030" y="542" text-anchor="middle" class="node-title-tight"><tspan x="1030" dy="0">Metal interval VJP</tspan></text>
+<rect x="740" y="505" width="170" height="60" rx="11" class="input"/>
+<text x="825" y="542" text-anchor="middle" class="node-title-tight"><tspan x="825" dy="0">Compiler VJP</tspan></text>
+<rect x="535" y="505" width="170" height="60" rx="11" class="input"/>
+<text x="620" y="542" text-anchor="middle" class="node-title-tight"><tspan x="620" dy="0">World gradients</tspan></text>
+<path d="M 945 535 L 920 535" class="arrow-green" fill="none" stroke="#047857" stroke-width="2.8"/>
+<polygon points="920,535 930,530.5 930,539.5" fill="#047857"/>
+<path d="M 740 535 L 715 535" class="arrow-green" fill="none" stroke="#047857" stroke-width="2.8"/>
+<polygon points="715,535 725,530.5 725,539.5" fill="#047857"/>
+<path d="M 535 535 L 285 535 L 285 190 L 260 190" class="arrow-green" fill="none" stroke="#047857" stroke-width="2.8"/>
+<polygon points="260,190 270,185.5 270,194.5" fill="#047857"/>
+<text x="1144" y="542" text-anchor="middle" class="mono"><tspan x="1144" dy="0">λ</tspan></text>
+<path d="M 1132 535 L 1120 535" class="arrow-green" fill="none" stroke="#047857" stroke-width="2.8"/>
+<polygon points="1120,535 1130,530.5 1130,539.5" fill="#047857"/>
+<rect x="330" y="585" width="785" height="30" rx="8" class="note"/>
+<text x="722" y="606" text-anchor="middle" class="small"><tspan x="722" dy="0">Shared metadata: traces · support · bins · visibility · backward tape</tspan></text>
+<rect x="35" y="652" width="1125" height="34" rx="8" class="boundary"/>
+<text x="597" y="675" text-anchor="middle" class="small"><tspan x="597" dy="0">Claim boundary: world-side metadata is shared; unavoidable F × H × W outputs and shading remain.</tspan></text>
+</svg>

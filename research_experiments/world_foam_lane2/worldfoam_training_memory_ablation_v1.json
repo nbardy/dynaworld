@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "config_id": "worldfoam-training-memory-ablation-1024site-v1",
+  "benchmark": "worldfoam_training_memory_ablation",
+  "backend": "mps",
+  "execution_scope": "production_spatial_native_full_geometry_manual_sgd",
+  "image": {
+    "height": 384,
+    "width": 512
+  },
+  "camera": {
+    "program": {
+      "kind": "fixed_pinhole_world_to_camera_v1",
+      "fx": 460.8,
+      "fy": 460.8,
+      "cx": 255.5,
+      "cy": 191.5,
+      "world_to_camera_row_major": [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+      ]
+    },
+    "program_sha256": "95b2f7cd2b22a21eb0f42197f9e6010889ff1ffbb4d8a6e6a715448564c3b9d2"
+  },
+  "track_manifest": {
+    "kind": "fixed_regular_selected_pixel_grid_v1",
+    "track_count": 512,
+    "grid_rows": 16,
+    "grid_columns": 32,
+    "row_formula": "row=6+24*r for r in [0,15]",
+    "column_formula": "column=8+16*c for c in [0,31]",
+    "track_id_formula": "track_id=32*r+c",
+    "pixel_id_formula": "pixel_id=(6+24*r)*512+(8+16*c)",
+    "ordered_manifest_digest_algorithm": "sha256-canonical-json-track_id-row-column-pixel_id-v1",
+    "ordered_manifest_sha256": "d643b6d2fff6cb25acbbe457ca424384c430ac050cd91b54086a19cd07ee915f",
+    "identical_tracks_across_requested_frame_counts": true
+  },
+  "target_source": {
+    "kind": "procedural_teacher_direct_selected_pixel_stream_v1",
+    "teacher_formula": "u=(column+0.5)/512;v=(row+0.5)/384;t=-1+2*i/299;rgb=(0.5+0.25*sin(2*pi*(u+0.15*t)),0.5+0.25*sin(2*pi*(v-0.10*t)+2*pi/3),0.5+0.25*sin(2*pi*(u+v+0.05*t)+4*pi/3))",
+    "teacher_generation_sha256": "b2b83969b14f316433d5e8fb6a2b930c725ff56910059c4e43d19415470e5196",
+    "direct_selected_pixel_only": true,
+    "full_frame_materialization": false,
+    "maximum_resident_observations": 4096,
+    "maximum_resident_target_tensor_bytes": 49152,
+    "loss": "global_rgb_mean",
+    "loss_denominator_formula": "512*requested_frame_count*3"
+  },
+  "temporal_grid": {
+    "dataset_frame_count": 300,
+    "physical_t_min": -1.0,
+    "physical_t_max": 1.0,
+    "dataset_grid_formula": "t_i=-1+2*i/299",
+    "requested_frame_counts": [8, 64, 300],
+    "requested_subset_formula": "endpoint_including_even_index_v1"
+  },
+  "procedural_world": {
+    "kind": "rectangular_kinetic_power_sites_v1",
+    "rows": 32,
+    "columns": 32,
+    "site_count": 1024,
+    "x_min": -1.55,
+    "x_max": 1.55,
+    "y_min": -1.55,
+    "y_max": 1.55,
+    "z_base": 2.4,
+    "z_wave_amplitude": 0.12,
+    "position_formula": "x=-1.55+3.10*c/31;y=-1.55+3.10*r/31;z=2.4+0.12*sin(2*pi*r/31)*cos(2*pi*c/31)",
+    "velocity_formula": "vx=0.025*sin(2*pi*r/31);vy=0.025*cos(2*pi*c/31);vz=0.01*sin(2*pi*(r+c)/62)",
+    "weight_formula": "w0=-0.15+0.30*((17*r+29*c)%31)/30;w1=0.04*sin(2*pi*(r-c)/31)",
+    "generation_seed": 17029
+  },
+  "material": {
+    "model": "physical_p0_beer_lambert_v1",
+    "initializer": "external_physical_p0_procedural_v1",
+    "rgb_formula": "rgb=(0.15+0.70*c/31,0.15+0.70*r/31,0.20+0.60*((r+c)%32)/31)",
+    "density_formula": "sigma=0.04+0.08*((13*r+7*c)%32)/31",
+    "minimum_density": 0.04,
+    "maximum_density": 0.12,
+    "background_rgb": [0.02, 0.025, 0.03]
+  },
+  "compiler": {
+    "near": 0.2,
+    "far": 6.0,
+    "node_count": 4,
+    "rank_selection_provenance": "worldfoam-training-memory-fixed-rank-four-v1",
+    "certification_mode": "all_competitor_active_owner",
+    "maximum_sites_per_track_compile": 1024,
+    "active_owner_source_policy": "witnessed_active_owner_words_only",
+    "lazy_competitor_pair_cache": true,
+    "heuristic_spatial_culling_allowed": false,
+    "cold_cpu_compile_allowed_and_measured": true,
+    "cone_tolerance": 0.00001,
+    "maximum_charts_per_track": 32,
+    "maximum_owner_runs_per_chart": 1024
+  },
+  "spatial_streaming": {
+    "partition_semantics": "post_certification_active_owner_device_lowering_v1",
+    "maximum_active_sites_per_device_block": 64,
+    "maximum_device_blocks_per_request": 16,
+    "maximum_active_union_sites_per_request": 1024,
+    "maximum_tracks_per_request": 128,
+    "maximum_rows_per_native_block": 128,
+    "maximum_words_per_native_block": 131072,
+    "maximum_observations_per_chunk": 4096,
+    "maximum_samples_per_launch": 4096,
+    "artifact_store_maximum_entries": 1,
+    "native_token_cache_maximum_entries": 1
+  },
+  "optimizer": {
+    "kind": "manual_sgd_cpu_v1",
+    "learning_rate": 0.001,
+    "momentum": 0.0,
+    "weight_decay": 0.0,
+    "gradient_clipping": "none",
+    "mutation_steps_per_row": 1,
+    "lifecycle_frame_count": 8,
+    "lifecycle_step_count": 2,
+    "checkpoint_after_step": 1,
+    "restart_replays_step": 2
+  },
+  "state_accounting": {
+    "weight_coefficient_count": 2,
+    "material_parameter_bytes_per_site": 16,
+    "material_physical_snapshot_bytes_per_site": 16,
+    "material_gradient_buffer_bytes_per_site": 16,
+    "material_live_state_bytes_per_site": 48,
+    "trainable_live_geometry_state_bytes_per_site": 64,
+    "combined_live_state_bytes_per_site": 112,
+    "device_material_snapshot_bytes_per_site": 16,
+    "global_material_bar_bytes_per_site": 16,
+    "transient_global_geometry_bar_bytes_per_site": 64,
+    "optimizer_history_bytes_per_site": 0,
+    "combined_checkpoint_bytes_per_site": 80,
+    "live_state_plus_checkpoint_bytes_per_site": 192,
+    "live_state_plus_checkpoint_payload_clone_peak_bytes_per_site": 272
+  },
+  "ablation": {
+    "repeat_count": 3,
+    "staged_mode": "staged_sparse",
+    "staged_frame_counts": [8],
+    "fused_mode": "fused_union_v2",
+    "fused_frame_counts": [8, 64, 300],
+    "control_mode": "per_frame_replay_sequential",
+    "control_frame_counts": [8, 64, 300],
+    "control_same_representation": true,
+    "control_releases_frame_tape_before_next_frame": true,
+    "control_expected_peak_scaling_in_frame_count": "O(1)",
+    "control_expected_world_work_scaling_in_frame_count": "O(F)",
+    "control_measured_required_frame_counts": [8, 64, 300],
+    "control_censorable_frame_counts": [],
+    "control_preflight_required_before_launch": false,
+    "control_memory_censor_policy": "no_censorship_parent_guard_failure_is_failed_row_v1",
+    "matched_repeat_indices": [0, 1, 2],
+    "fixed_camera": true,
+    "train_geometry": true,
+    "train_material": true
+  },
+  "memory_limits_bytes": {
+    "maximum_mps_working_set": 2147483648,
+    "maximum_worker_process_group_rss": 4294967296,
+    "maximum_process_rss_peak_delta": 2147483648,
+    "maximum_sampled_mps_current_delta": 2147483648,
+    "maximum_sampled_mps_driver_delta": 2147483648,
+    "maximum_bridge_visible_peak": 67108864,
+    "maximum_frame_invariant_live_logical": 1073741824,
+    "maximum_artifact_store_resident": 536870912
+  }
+}

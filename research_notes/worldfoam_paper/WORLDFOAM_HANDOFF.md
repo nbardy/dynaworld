@@ -2,6 +2,14 @@
 
 Date: 2026-07-05
 
+Status: historical handoff. Its chronology is preserved, but its "current"
+status and next-work queue are superseded by
+`WORLD_FOAM_MEMORY_LIGHT_THEOREM_LEDGER_2026-08-03.md`,
+`WORLD_FOAM_DYNAMIC_DEPTH_ORDER_MATHEMATICIAN_PROMPT.md`, and
+`../../TODO/worldfoam_memory_light_native4d.md`. In particular, active kinetic
+CPU compilation, multi-chart transfer, material-action certification, and a
+frozen-program sparse geometry/material VJP have landed since this note.
+
 Purpose: give a clean-thread agent enough context to continue the WorldFoam
 paper/implementation lane without re-deriving the whole trail. This is about
 what we tried, what the current solution is, which math is shared with World
@@ -631,7 +639,7 @@ refresh/rebuild when needed
 fallback or split chaotic domains
 ```
 
-### B3. Backward needs prefix/suffix or endpoint metadata
+### B3. General backward needs behind-state information
 
 For transmittance, density gradients depend on what is behind the point:
 
@@ -639,7 +647,7 @@ For transmittance, density gradients depend on what is behind the point:
 dI/d sigma(z) = T(z) (c(z) - I_behind(z))
 ```
 
-That means backward needs either:
+For general material laws, backward needs either:
 
 ```text
 stored prefix/suffix state
@@ -648,7 +656,11 @@ endpoint-winner tape
 or recomputation
 ```
 
-This is why the shader lane tried so many tape/recompute variants.
+The later finite-P0 implementation selected exact recomputation: one forward
+gets the final affine transfer and a second front-to-back scan keeps only the
+current prefix state. It needs no stored per-run suffix/reverse array. This is
+why the earlier shader lane's tape variants are historical alternatives rather
+than the current P0 memory contract.
 
 ### B4. Memory can become the whole problem
 

@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="540" viewBox="0 0 900 540">
+<title>Crossing-scene temporal error</title>
+<desc>Temporal flicker error plotted against Camera program : nominal speed.</desc>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="92.0" y="34" font-family="Helvetica,Arial,sans-serif" font-size="22" font-weight="700">Crossing-scene temporal error</text>
+<line x1="92.0" y1="464.0" x2="668.0" y2="464.0" stroke="#222" stroke-width="1.5"/>
+<line x1="92.0" y1="66.0" x2="92.0" y2="464.0" stroke="#222" stroke-width="1.5"/>
+<line x1="92.0" y1="464.00" x2="668.0" y2="464.00" stroke="#e5e7eb"/>
+<text x="82.0" y="468.00" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">1.3e-03</text>
+<line x1="92.0" y1="384.40" x2="668.0" y2="384.40" stroke="#e5e7eb"/>
+<text x="82.0" y="388.40" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">2.9e-03</text>
+<line x1="92.0" y1="304.80" x2="668.0" y2="304.80" stroke="#e5e7eb"/>
+<text x="82.0" y="308.80" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">6.2e-03</text>
+<line x1="92.0" y1="225.20" x2="668.0" y2="225.20" stroke="#e5e7eb"/>
+<text x="82.0" y="229.20" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">1.3e-02</text>
+<line x1="92.0" y1="145.60" x2="668.0" y2="145.60" stroke="#e5e7eb"/>
+<text x="82.0" y="149.60" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">2.9e-02</text>
+<line x1="92.0" y1="66.00" x2="668.0" y2="66.00" stroke="#e5e7eb"/>
+<text x="82.0" y="70.00" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">6.2e-02</text>
+<text x="92.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C1:0.00</text>
+<text x="188.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C2:0.35</text>
+<text x="284.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C6:0.60</text>
+<text x="380.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C3:0.65</text>
+<text x="476.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C5:0.80</text>
+<text x="572.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C4:1.80</text>
+<text x="668.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C7:2.50</text>
+<polygon points="92.63,413.87 188.63,369.06 187.37,366.34 91.37,411.15" fill="#2a6fbb"/>
+<polygon points="187.81,369.19 283.81,381.36 284.19,378.39 188.19,366.22" fill="#2a6fbb"/>
+<polygon points="283.83,381.37 379.83,392.34 380.17,389.35 284.17,378.38" fill="#2a6fbb"/>
+<polygon points="379.09,392.04 475.09,465.19 476.91,462.81 380.91,389.65" fill="#2a6fbb"/>
+<polygon points="476.78,465.28 572.78,406.47 571.22,403.91 475.22,462.72" fill="#2a6fbb"/>
+<polygon points="572.03,406.69 668.03,405.06 667.97,402.06 571.97,403.69" fill="#2a6fbb"/>
+<circle cx="92.00" cy="412.51" r="4" fill="#2a6fbb"/>
+<circle cx="188.00" cy="367.70" r="4" fill="#2a6fbb"/>
+<circle cx="284.00" cy="379.87" r="4" fill="#2a6fbb"/>
+<circle cx="380.00" cy="390.84" r="4" fill="#2a6fbb"/>
+<circle cx="476.00" cy="464.00" r="4" fill="#2a6fbb"/>
+<circle cx="572.00" cy="405.19" r="4" fill="#2a6fbb"/>
+<circle cx="668.00" cy="403.56" r="4" fill="#2a6fbb"/>
+<circle cx="706" cy="54" r="5" fill="#2a6fbb"/>
+<text x="720" y="58" font-family="Helvetica,Arial,sans-serif" font-size="13">depth_layer_128</text>
+<polygon points="92.00,173.96 188.00,173.88 188.00,170.88 92.00,170.96" fill="#d94841"/>
+<polygon points="187.97,173.88 283.97,175.87 284.03,172.87 188.03,170.88" fill="#d94841"/>
+<polygon points="284.03,175.87 380.03,173.70 379.97,170.70 283.97,172.87" fill="#d94841"/>
+<polygon points="379.40,173.57 475.40,215.75 476.60,213.00 380.60,170.83" fill="#d94841"/>
+<polygon points="476.65,215.73 572.65,169.80 571.35,167.09 475.35,213.02" fill="#d94841"/>
+<polygon points="572.32,169.91 668.32,149.20 667.68,146.26 571.68,166.98" fill="#d94841"/>
+<circle cx="92.00" cy="172.46" r="4" fill="#d94841"/>
+<circle cx="188.00" cy="172.38" r="4" fill="#d94841"/>
+<circle cx="284.00" cy="174.37" r="4" fill="#d94841"/>
+<circle cx="380.00" cy="172.20" r="4" fill="#d94841"/>
+<circle cx="476.00" cy="214.38" r="4" fill="#d94841"/>
+<circle cx="572.00" cy="168.45" r="4" fill="#d94841"/>
+<circle cx="668.00" cy="147.73" r="4" fill="#d94841"/>
+<circle cx="706" cy="76" r="5" fill="#d94841"/>
+<text x="720" y="80" font-family="Helvetica,Arial,sans-serif" font-size="13">representative_depth_sorted</text>
+<polygon points="92.01,214.95 188.01,213.99 187.99,210.99 91.99,211.95" fill="#7a4db3"/>
+<polygon points="188.45,213.92 284.45,183.70 283.55,180.84 187.55,211.06" fill="#7a4db3"/>
+<polygon points="284.08,183.77 380.08,178.81 379.92,175.82 283.92,180.77" fill="#7a4db3"/>
+<polygon points="380.16,178.81 476.16,168.31 475.84,165.33 379.84,175.83" fill="#7a4db3"/>
+<polygon points="476.74,168.12 572.74,113.42 571.26,110.81 475.26,165.52" fill="#7a4db3"/>
+<polygon points="572.65,113.46 668.65,67.35 667.35,64.65 571.35,110.76" fill="#7a4db3"/>
+<circle cx="92.00" cy="213.45" r="4" fill="#7a4db3"/>
+<circle cx="188.00" cy="212.49" r="4" fill="#7a4db3"/>
+<circle cx="284.00" cy="182.27" r="4" fill="#7a4db3"/>
+<circle cx="380.00" cy="177.32" r="4" fill="#7a4db3"/>
+<circle cx="476.00" cy="166.82" r="4" fill="#7a4db3"/>
+<circle cx="572.00" cy="112.11" r="4" fill="#7a4db3"/>
+<circle cx="668.00" cy="66.00" r="4" fill="#7a4db3"/>
+<circle cx="706" cy="98" r="5" fill="#7a4db3"/>
+<text x="720" y="102" font-family="Helvetica,Arial,sans-serif" font-size="13">depth_marginal</text>
+<text x="380.00" y="518" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="15">Camera program : nominal speed</text>
+<text x="20" y="265.00" text-anchor="middle" transform="rotate(-90 20 265.00)" font-family="Helvetica,Arial,sans-serif" font-size="15">Temporal flicker error</text>
+</svg>

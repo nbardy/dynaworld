@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
-
-from pipeline.diagnostics import ReconstructionEvalAccumulator, reconstruction_eval_metrics
+from paper_training_protocol import PaperRGBMetricAccumulator
 from perceptual_metrics import video_lpips
+from pipeline.diagnostics import reconstruction_eval_metrics
 from powerfoam_eval_color import (
     apply_eval_color_calibration,
     fit_eval_color_calibration,
@@ -17,8 +17,8 @@ from powerfoam_eval_render import powerfoam_eval_batch_size, render_powerfoam_sa
 from powerfoam_objectives import composite_fixed_background
 from train_artifacts import write_json
 from train_logging import log_wandb_run_payload_lazy, mapped_metric_payload, should_log_video
-from wandb_media import build_rgb_alpha_eval_media_payload
 from video_io import save_rgb_alpha_eval_media, video_fps_from_config
+from wandb_media import build_rgb_alpha_eval_media_payload
 
 
 @dataclass(frozen=True)
@@ -47,14 +47,55 @@ def _chunk_rays(
     return None if rays is None else rays[start:stop]
 
 
+def _target_sample_count(
+    targets: torch.Tensor | None,
+    target_provider: Any | None,
+    *,
+    split: str,
+) -> int:
+    if targets is not None and target_provider is not None:
+        raise ValueError(f"provide materialized {split} targets or a target provider, not both")
+    if target_provider is not None:
+        count = int(target_provider.sample_count)
+    elif targets is not None:
+        count = int(targets.size(0))
+    else:
+        raise ValueError(f"{split} targets require a materialized tensor or target provider")
+    if count < 1:
+        raise ValueError(f"{split} targets require at least one sample")
+    return count
+
+
+def _chunk_targets(
+    targets: torch.Tensor | None,
+    target_provider: Any | None,
+    start: int,
+    stop: int,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    if target_provider is not None:
+        if targets is not None:
+            raise ValueError("provide materialized targets or a target provider, not both")
+        return target_provider.select(
+            torch.arange(start, stop, dtype=torch.long),
+            device=device,
+        )
+    if targets is None:
+        raise ValueError("target chunk requires a materialized tensor or target provider")
+    return targets[start:stop].detach().to(device=device, dtype=torch.float32)
+
+
 @torch.no_grad()
 def _stream_aux_metrics(
     model: Any,
-    targets: torch.Tensor,
+    targets: torch.Tensor | None,
     frame_indices: torch.Tensor,
     rays: torch.Tensor | None,
     ray_provider: Any | None,
     cfg: dict[str, Any],
+    *,
+    target_provider: Any | None = None,
 ) -> dict[str, float]:
     weighted_keys = (
         "aux_mean_contrib",
@@ -79,7 +120,13 @@ def _stream_aux_metrics(
         count = stop - start
         chunk = model.aux_metrics(
             frame_indices[start:stop],
-            targets[start:stop],
+            _chunk_targets(
+                targets,
+                target_provider,
+                start,
+                stop,
+                device=frame_indices.device,
+            ),
             rays=_chunk_rays(rays, ray_provider, start, stop),
         )
         if not chunk:
@@ -115,12 +162,13 @@ def _stream_aux_metrics(
 @torch.no_grad()
 def _stream_eval_split(
     model: Any,
-    targets: torch.Tensor,
+    targets: torch.Tensor | None,
     frame_indices: torch.Tensor,
     rays: torch.Tensor | None,
     ray_provider: Any | None,
     cfg: dict[str, Any],
     *,
+    target_provider: Any | None = None,
     prefix: str,
     include_lpips: bool,
 ) -> StreamedEvalSplit:
@@ -129,7 +177,11 @@ def _stream_eval_split(
     if media_limit is None:
         media_limit = int(frame_indices.numel())
     selected = _media_positions(int(frame_indices.numel()), int(media_limit))
-    accumulator = ReconstructionEvalAccumulator(cfg, prefix)
+    accumulator = PaperRGBMetricAccumulator(
+        ssim_window_size=int(cfg["losses"]["ssim_window_size"]),
+        ssim_c1=float(cfg["losses"]["ssim_c1"]),
+        ssim_c2=float(cfg["losses"]["ssim_c2"]),
+    )
     media_renders = []
     media_targets = []
     media_alphas = []
@@ -145,7 +197,13 @@ def _stream_eval_split(
             rays=chunk_rays,
         )
         renders = composite_fixed_background(renders, alphas, cfg["render"])
-        target_chunk = targets[start:stop].detach().cpu()
+        target_chunk = _chunk_targets(
+            targets,
+            target_provider,
+            start,
+            stop,
+            device=torch.device("cpu"),
+        )
         accumulator.update(renders, target_chunk)
         if include_lpips:
             lpips_sum += video_lpips(renders, target_chunk) * float(stop - start)
@@ -156,7 +214,7 @@ def _stream_eval_split(
             media_renders.append(renders[local])
             media_targets.append(target_chunk[local])
             media_alphas.append(alphas[local])
-    metrics = accumulator.metrics()
+    metrics = accumulator.metrics(prefix=prefix)
     if include_lpips:
         if lpips_count < 1:
             raise ValueError("heldout LPIPS requires at least one rendered frame")
@@ -171,7 +229,7 @@ def _stream_eval_split(
 
 def log_powerfoam_artifacts(
     model: Any,
-    targets: torch.Tensor,
+    targets: torch.Tensor | None,
     cfg: dict[str, Any],
     step: int,
     output_dir: Path,
@@ -180,17 +238,25 @@ def log_powerfoam_artifacts(
     frame_indices: torch.Tensor | None = None,
     rays: torch.Tensor | None = None,
     ray_provider: Any | None = None,
+    target_provider: Any | None = None,
     heldout_targets: torch.Tensor | None = None,
     heldout_frame_indices: torch.Tensor | None = None,
     heldout_rays: torch.Tensor | None = None,
     heldout_ray_provider: Any | None = None,
+    heldout_target_provider: Any | None = None,
 ) -> dict[str, float]:
     model.eval()
     device = next(model.parameters()).device
+    target_count = _target_sample_count(targets, target_provider, split="training")
     if frame_indices is None:
-        frame_indices = torch.arange(targets.size(0), device=device, dtype=torch.long)
+        frame_indices = torch.arange(target_count, device=device, dtype=torch.long)
     else:
         frame_indices = frame_indices.to(device=device, dtype=torch.long)
+    if int(frame_indices.numel()) != target_count:
+        raise ValueError(
+            "training target/frame-index count mismatch: "
+            f"{target_count} targets versus {int(frame_indices.numel())} frame indices"
+        )
     stream_paper_eval = (
         bool(cfg["paper_protocol"]["enabled"])
         and str(cfg["render"]["eval_color_calibration"]) == "none"
@@ -203,6 +269,7 @@ def log_powerfoam_artifacts(
             rays,
             ray_provider,
             cfg,
+            target_provider=target_provider,
             prefix="eval",
             include_lpips=False,
         )
@@ -210,6 +277,8 @@ def log_powerfoam_artifacts(
         metrics = dict(train_eval.metrics)
         calibration = None
     else:
+        if target_provider is not None or targets is None:
+            raise ValueError("target providers require streamed paper evaluation")
         renders, alphas = render_powerfoam_samples(
             model,
             frame_indices,
@@ -229,13 +298,36 @@ def log_powerfoam_artifacts(
         if calibration is not None:
             metrics.update(reconstruction_eval_metrics(raw_renders, targets_cpu, cfg, prefix="uncalibrated_eval"))
     if stream_paper_eval:
-        metrics.update(_stream_aux_metrics(model, targets, frame_indices, rays, ray_provider, cfg))
+        metrics.update(
+            _stream_aux_metrics(
+                model,
+                targets,
+                frame_indices,
+                rays,
+                ray_provider,
+                cfg,
+                target_provider=target_provider,
+            )
+        )
     else:
         metrics.update(model.aux_metrics(frame_indices, targets, rays=rays))
     heldout_renders = None
     heldout_alphas = None
     heldout_targets_cpu = None
-    if heldout_targets is not None and heldout_frame_indices is not None:
+    has_heldout_targets = heldout_targets is not None or heldout_target_provider is not None
+    if has_heldout_targets != (heldout_frame_indices is not None):
+        raise ValueError("heldout targets and heldout frame indices must be provided together")
+    if has_heldout_targets and heldout_frame_indices is not None:
+        heldout_count = _target_sample_count(
+            heldout_targets,
+            heldout_target_provider,
+            split="heldout",
+        )
+        if int(heldout_frame_indices.numel()) != heldout_count:
+            raise ValueError(
+                "heldout target/frame-index count mismatch: "
+                f"{heldout_count} targets versus {int(heldout_frame_indices.numel())} frame indices"
+            )
         if stream_paper_eval:
             heldout_eval = _stream_eval_split(
                 model,
@@ -244,6 +336,7 @@ def log_powerfoam_artifacts(
                 heldout_rays,
                 heldout_ray_provider,
                 cfg,
+                target_provider=heldout_target_provider,
                 prefix="heldout_eval",
                 include_lpips=int(step) == int(cfg["train"]["steps"]),
             )
@@ -252,6 +345,8 @@ def log_powerfoam_artifacts(
             heldout_alphas = heldout_eval.alphas
             metrics.update(heldout_eval.metrics)
         else:
+            if heldout_target_provider is not None or heldout_targets is None:
+                raise ValueError("target providers require streamed paper evaluation")
             heldout_renders, heldout_alphas = render_powerfoam_samples(
                 model,
                 heldout_frame_indices,

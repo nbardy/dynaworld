@@ -1,0 +1,275 @@
+{
+  // Frozen before any G4 measurements. This file is a workload/evidence
+  // contract, not permission to run it on a resource-stressed host.
+  "schema_version": 1,
+  "name": "worldfoam_native4d_g4_public_quality_v1",
+  "artifact_kind": "worldfoam-native4d-public-quality-ablation-v1",
+  "output_root": "outputs/benchmarks/worldfoam_native4d_g4_public_quality_v1",
+  "dataset_family": "neural_3d_video",
+  "device": "mps",
+  "seeds": [17, 29, 43],
+  "scenes": [
+    {
+      "scene": "coffee_martini",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_full_300f_fixed_512_pixel_matched_v1.jsonc",
+      "initialization": {
+        "source_asset": {
+          "path": "research_experiments/dynamic_foam/artifacts/neural3d_coffee_martini_cam04_anchor_ex4dgs_input_128px_xy24_z4_120_trainvisible.ply",
+          "expected_bytes": 232466,
+          "expected_sha256": "568879af883469cc63a9782bbbf09abc8aa38d0403f2a31a7f400fcf67108224",
+          "minimum_point_count": 1024
+        },
+        "initializer": {
+          "source_path": "research_experiments/dynamic_foam/artifacts/neural3d_coffee_martini_cam04_anchor_ex4dgs_input_128px_xy24_z4_120_trainvisible.ply",
+          "source_coordinate_frame": "model",
+          "point_transform": null,
+          "maximum_source_asset_bytes": 16777216,
+          "maximum_source_point_count": 100000,
+          "site_count": 1024,
+          "sample_mode": "sha256_rank",
+          "sample_seed": 17029,
+          "coordinate_quantization_step": 0.0009765625,
+          "weight_coefficients": [0.0, 0.0],
+          "weight_quantization_step": 0.0009765625,
+          "initial_density": 0.0625
+        },
+        "builder": {
+          "script_path": "research_experiments/dynamic_foam/prepare_ex4dgs_anchor_point_cloud.py",
+          "argv": [
+            "data/external/ex4dgs_pretrained/extracted/coffee_martini/input.ply",
+            "--manifest", "src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl",
+            "--sample-id", "neural3d_coffee_martini_train_cam04_cam09_holdout_cam06_full_300f",
+            "--output", "research_experiments/dynamic_foam/artifacts/neural3d_coffee_martini_cam04_anchor_ex4dgs_input_128px_xy24_z4_120_trainvisible.ply",
+            "--train-camera", "cam04", "--train-camera", "cam09",
+            "--heldout-camera", "cam06", "--anchor-camera", "cam04",
+            "--render-size", "128", "--translation-scale", "1.0",
+            "--xy-extent", "24.0", "--z-min", "4.0", "--z-max", "120.0",
+            "--min-visible-train-views", "1"
+          ],
+          "deterministic_output_required": true
+        }
+      }
+    },
+    {
+      "scene": "cook_spinach",
+      "protocol": "src/train_configs/paper_protocols/cook_spinach_full_300f_fixed_512_pixel_matched_v1.jsonc",
+      "initialization": {
+        "source_asset": {
+          "path": "research_experiments/dynamic_foam/artifacts/neural3d_cook_spinach_train2_feature_triangulation_10frames_512px_orb_dense_reproj8.ply",
+          "expected_bytes": null,
+          "expected_sha256": null,
+          "minimum_point_count": 1024
+        },
+        "initializer": {
+          "source_path": "research_experiments/dynamic_foam/artifacts/neural3d_cook_spinach_train2_feature_triangulation_10frames_512px_orb_dense_reproj8.ply",
+          "source_coordinate_frame": "model",
+          "point_transform": null,
+          "maximum_source_asset_bytes": 16777216,
+          "maximum_source_point_count": 100000,
+          "site_count": 1024,
+          "sample_mode": "sha256_rank",
+          "sample_seed": 17029,
+          "coordinate_quantization_step": 0.0009765625,
+          "weight_coefficients": [0.0, 0.0],
+          "weight_quantization_step": 0.0009765625,
+          "initial_density": 0.0625
+        },
+        "builder": {
+          "script_path": "research_experiments/dynamic_foam/build_multiview_feature_triangulation_point_cloud.py",
+          "argv": [
+            "src/train_configs/local_mac_powerfoam_metal_multicam_neural3d_coffee_train2_holdout1_feature_triangulation_init_raytrace_128_16f_1024cells_40step_lowgeom_noaux.jsonc",
+            "--paper-protocol", "src/train_configs/paper_protocols/cook_spinach_full_300f_fixed_512_pixel_matched_v1.jsonc",
+            "--output", "research_experiments/dynamic_foam/artifacts/neural3d_cook_spinach_train2_feature_triangulation_10frames_512px_orb_dense_reproj8.ply",
+            "--target-size", "512", "--frame-indices", "0,30,60,90,120,150,180,210,240,270",
+            "--method", "orb", "--max-features", "8192",
+            "--ratio", "0.9", "--reproj-error-px", "8.0",
+            "--min-angle-deg", "0.1", "--max-points", "8192"
+          ],
+          "deterministic_output_required": true
+        }
+      }
+    },
+    {
+      "scene": "cut_roasted_beef",
+      "protocol": "src/train_configs/paper_protocols/cut_roasted_beef_full_300f_fixed_512_pixel_matched_v1.jsonc",
+      "initialization": {
+        "source_asset": {
+          "path": "research_experiments/dynamic_foam/artifacts/neural3d_cut_roasted_beef_train2_feature_triangulation_10frames_512px_orb_dense_reproj8.ply",
+          "expected_bytes": null,
+          "expected_sha256": null,
+          "minimum_point_count": 1024
+        },
+        "initializer": {
+          "source_path": "research_experiments/dynamic_foam/artifacts/neural3d_cut_roasted_beef_train2_feature_triangulation_10frames_512px_orb_dense_reproj8.ply",
+          "source_coordinate_frame": "model",
+          "point_transform": null,
+          "maximum_source_asset_bytes": 16777216,
+          "maximum_source_point_count": 100000,
+          "site_count": 1024,
+          "sample_mode": "sha256_rank",
+          "sample_seed": 17029,
+          "coordinate_quantization_step": 0.0009765625,
+          "weight_coefficients": [0.0, 0.0],
+          "weight_quantization_step": 0.0009765625,
+          "initial_density": 0.0625
+        },
+        "builder": {
+          "script_path": "research_experiments/dynamic_foam/build_multiview_feature_triangulation_point_cloud.py",
+          "argv": [
+            "src/train_configs/local_mac_powerfoam_metal_multicam_neural3d_coffee_train2_holdout1_feature_triangulation_init_raytrace_128_16f_1024cells_40step_lowgeom_noaux.jsonc",
+            "--paper-protocol", "src/train_configs/paper_protocols/cut_roasted_beef_full_300f_fixed_512_pixel_matched_v1.jsonc",
+            "--output", "research_experiments/dynamic_foam/artifacts/neural3d_cut_roasted_beef_train2_feature_triangulation_10frames_512px_orb_dense_reproj8.ply",
+            "--target-size", "512", "--frame-indices", "0,30,60,90,120,150,180,210,240,270",
+            "--method", "orb", "--max-features", "8192",
+            "--ratio", "0.9", "--reproj-error-px", "8.0",
+            "--min-angle-deg", "0.1", "--max-points", "8192"
+          ],
+          "deterministic_output_required": true
+        }
+      }
+    }
+  ],
+  "routes": [
+    {
+      "route": "worldfoam_native4d",
+      "lane": "worldfoam_native4d",
+      "execution_mode": "compiled_shared_adjoint",
+      "backend": "metal_real_native",
+      "same_representation_group": "worldfoam_retained_depth_v1"
+    },
+    {
+      "route": "worldfoam_framewise_replay",
+      "lane": "worldfoam_native4d",
+      "execution_mode": "framewise_same_representation",
+      "backend": "metal_real_native",
+      "same_representation_group": "worldfoam_retained_depth_v1"
+    },
+    {
+      "route": "world_tubes",
+      "lane": "world_tubes",
+      "execution_mode": "selected_time_uvt_replay",
+      "backend": "star_uvt_metal",
+      "same_representation_group": "world_tubes_v1"
+    },
+    {
+      "route": "dynamic_3dgs",
+      "lane": "dynamic_3dgs",
+      "execution_mode": "per_frame_dynamic_splats",
+      "backend": "fast_mac_metal",
+      "same_representation_group": "dynamic_3dgs_v1"
+    }
+  ],
+  "compiler": {
+    "near": 0.25,
+    "far": 128.0,
+    "node_count": 4,
+    "maximum_sites_per_track_compile": 1024,
+    "maximum_charts_per_track": 32,
+    "maximum_owner_runs_per_chart": 1024,
+    "rank_selection_provenance": "worldfoam-g4-fixed-rank-four-v1"
+  },
+  "worldfoam_runtime": {
+    "schema_version": 1,
+    "background_rgb": [0.0, 0.0, 0.0],
+    "shared_reverse_mode": "fused_union_v2",
+    "maximum_samples_per_launch": 4096,
+    "maximum_artifact_accounted_bytes_per_entry": 268435456,
+    "maximum_material_state_logical_tensor_bytes": 1048576,
+    "maximum_tracks_per_bundle": 128,
+    "maximum_observations_per_bundle": 4096,
+    "maximum_rows_per_native_block": 128,
+    "cone_tolerance": 0.00001,
+    "material_parameterization": {
+      "density_beta": 1.0,
+      "density_threshold": 20.0,
+      "minimum_density": 0.0,
+      "color_epsilon": 0.0001
+    },
+    "material_sgd_policy": {
+      "color_learning_rate": 0.01,
+      "density_learning_rate": 0.001,
+      "maximum_absolute_raw_color_value": 15.0,
+      "maximum_absolute_raw_density_value": 128.0
+    },
+    "artifact_store_policy": {
+      "maximum_entries": 1,
+      "maximum_resident_accounted_bytes": 268435456
+    },
+    "lazy_memory_policy": {
+      "max_global_material_and_bar_tensor_bytes": 1048576,
+      "max_bundle_observation_count": 4096,
+      "max_lane_resident_logical_tensor_bytes": 268435456,
+      "max_active_node_and_vjp_tensor_bytes": 268435456,
+      // A 32,768-pixel mapped read has a certified 70-byte/observation
+      // selected-index + RGB normalization peak (2,293,760 bytes). This is
+      // still pixel-bounded and never materializes a 384x512 float frame.
+      "max_decoded_frame_scratch_tensor_bytes": 4194304,
+      "max_selected_frame_target_tensor_bytes": 1048576,
+      "max_sample_launch_tensor_bytes": 268435456,
+      "max_coordinator_visible_live_tensor_bytes": 268435456,
+      "target_frame_access_mode": "stream_once_no_step_cache",
+      "max_step_target_frame_cache_tensor_bytes": 0
+    },
+    "full_geometry_memory_policy": {
+      "maximum_global_geometry_bar_logical_tensor_bytes": 1048576,
+      "maximum_geometry_bridge_visible_peak_logical_tensor_bytes": 268435456,
+      "maximum_fused_union_transaction_scratch_tensor_bytes": 268435456
+    },
+    "combined_sgd_policy": {
+      "position_learning_rate": 0.0002,
+      "velocity_learning_rate": 0.0002,
+      "weight_learning_rate": 0.0002,
+      "maximum_absolute_position_update": 1.0,
+      "maximum_absolute_velocity_update": 1.0,
+      "maximum_absolute_weight_update": 1.0,
+      "maximum_absolute_position_value": 128.0,
+      "maximum_absolute_velocity_value": 16.0,
+      "maximum_absolute_weight_value": 128.0,
+      "maximum_combined_state_logical_tensor_bytes": 1048576,
+      "maximum_update_candidate_logical_tensor_bytes": 1048576,
+      "maximum_candidate_world_geometry_clone_logical_tensor_bytes": 1048576,
+      "maximum_update_validation_scratch_logical_tensor_bytes": 1048576,
+      "maximum_old_candidate_authorization_logical_tensor_bytes": 1048576,
+      "maximum_checkpoint_logical_tensor_bytes": 1048576,
+      "maximum_state_checkpoint_logical_tensor_bytes": 1048576,
+      "maximum_state_checkpoint_payload_logical_tensor_bytes": 1048576,
+      "maximum_transaction_tracked_logical_and_store_accounted_bytes": 1073741824,
+      "maximum_recompile_request_count": 196608,
+      "maximum_recompile_track_id_logical_bytes": 4718592,
+      "maximum_artifact_accounted_bytes": 268435456
+    }
+  },
+  "public_protocol": {
+    "dataset_frame_count": 300,
+    "image_size": [384, 512],
+    "optimizer_steps": 300,
+    "frames_per_step": 4,
+    "primitive_count": 1024,
+    "target_pixel_budget": 235929600,
+    "require_calibrated_multiview": true,
+    "require_final_checkpoint_heldout_evaluation": true,
+    "require_full_temporal_heldout_evaluation": true,
+    "require_identical_evaluator_within_scene_seed": true,
+    "require_identical_sample_schedule_within_scene_seed": true,
+    "require_wandb_run_file": true,
+    "require_clean_source": true
+  },
+  "acceptance": {
+    "minimum_native_heldout_psnr": 13.0,
+    "minimum_native_heldout_ssim": 0.15,
+    "minimum_mean_psnr_delta_vs_framewise_replay_db": -1.0,
+    "minimum_worst_psnr_delta_vs_framewise_replay_db": -2.0,
+    "minimum_mean_ssim_delta_vs_framewise_replay": -0.03,
+    "maximum_mean_lpips_delta_vs_framewise_replay": 0.05,
+    "maximum_mean_psnr_deficit_vs_best_gaussian_db": 4.0,
+    "maximum_worst_psnr_deficit_vs_best_gaussian_db": 6.0
+  },
+  "execution_guard": {
+    "minimum_available_memory_bytes": 8589934592,
+    "maximum_swap_used_bytes": 2147483648,
+    "minimum_disk_free_bytes": 34359738368,
+    "maximum_load_1m_per_logical_cpu": 0.75,
+    "run_one_fresh_process_at_a_time": true,
+    "abort_before_first_row_if_any_route_is_unavailable": true
+  }
+}

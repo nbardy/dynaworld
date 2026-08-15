@@ -1,5 +1,6 @@
 {
   "name": "world_tubes_submission_matrix_v1",
+  "output_root": "outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2",
   "runs": [
     {
       "role": "primary_progressive",

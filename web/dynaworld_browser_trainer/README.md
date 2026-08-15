@@ -697,6 +697,39 @@ train cameras. A measured 4,096-splat validation pass took about 4.5 seconds on
 the local Apple browser in the earlier contended run and 1.4-1.9 seconds in the
 final clean smoke, without pausing the optimizer.
 
+### Bounded camera-stress diagnostic
+
+The validation worker also evaluates a deterministic camera-stress stencil at
+the center time on two representative train cameras and the heldout camera.
+It is deliberately capped at 48 pixels high and runs beside, never inside, the
+continuous WebGPU optimizer queue.
+
+Two kinds of perturbation must not be conflated:
+
+- **Optical zoom/shift:** focal length changes by `1.05x` or `1/1.05x`, and
+  the principal point shifts by `+/-1.5%` on each axis. These preserve the
+  captured camera center and orientation, so the real frame can be exactly
+  crop-resampled into a valid target. `Zoom/Shift PSNR` is therefore a real
+  pixel metric, reported as train / heldout.
+- **Physical pose:** dolly by `+/-3%` of pivot distance, translate laterally by
+  `+/-1.5%` of camera-rig radius, or orbit by `+/-2 degrees`. No captured target
+  exists at those poses. The UI consequently reports geometry-risk indicators,
+  not invented PSNR: near-camera alpha contribution, alpha from splats whose
+  opacity-aware support rectangle covers at least 25% of the image, and
+  coverage-weighted contributor depth spread `sigma/z`.
+
+The risk indicators are useful for detecting the translucent-cloud failure
+seen under small camera motion, but they are not calibrated geometry error and
+have no promotion threshold yet. They use only the learned splats, known camera
+calibration, and captured RGB images; no monocular or foundation-model depth
+prior is involved.
+
+The diagnostic changes no loss, gradient, topology, or default regularizer.
+Its purpose is to make the failure measurable before choosing an intervention.
+The first candidate intervention is multiview, transmittance-aware contribution
+tracking followed by fixed-budget relocation of persistently unsupported
+splats; that remains an ablation, not a claimed default.
+
 ## July 28 Scaling Result
 
 The synchronized Apple M4 benchmark creates a fresh WebGPU device per run, uses

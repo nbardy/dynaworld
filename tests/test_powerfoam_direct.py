@@ -610,6 +610,45 @@ def test_powerfoam_paper_ray_provider_matches_materialized_view_major_grid() -> 
     assert torch.allclose(selected, expected[[3, 0, 2]])
 
 
+def test_powerfoam_paper_ray_provider_generates_stage_rays_from_scaled_intrinsics() -> None:
+    device = torch.device("cpu")
+    camera = CameraSpec(
+        fx=8.0,
+        fy=6.0,
+        cx=4.0,
+        cy=3.0,
+        camera_to_world=build_look_at_camera_to_world(
+            torch.tensor([0.25, -0.1, -1.0], dtype=torch.float32)
+        ),
+        lens_model="radial_tangential",
+        distortion=(0.01, -0.02, 0.001, -0.002, 0.003),
+    )
+    provider = PowerFoamRayProvider(((camera,),), height=6, width=8, device=device)
+    expected_camera = CameraSpec(
+        fx=4.0,
+        fy=2.0,
+        cx=2.0,
+        cy=1.0,
+        camera_to_world=camera.camera_to_world,
+        lens_model=camera.lens_model,
+        distortion=camera.distortion,
+    )
+
+    selected = provider.select(
+        torch.tensor([0], dtype=torch.long),
+        height=2,
+        width=4,
+    )
+    expected = powerfoam_rays_from_camera(
+        expected_camera,
+        height=2,
+        width=4,
+        device=device,
+    )
+
+    assert torch.allclose(selected, expected)
+
+
 def test_powerfoam_direct_shared_state_accepts_posed_multiview_rays() -> None:
     device = torch.device("cpu")
     image_size = 4

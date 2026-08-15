@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="440" viewBox="0 0 720 440">
+<title>Adaptive WorldFoam M3/M5 basis selection</title>
+<desc>Mean held-out material loss for fixed M3, fixed M5, validation-selected adaptive basis, and a diagnostic held-out oracle.</desc>
+<style>.title{font:700 22px sans-serif;fill:#111}.axis{font:14px sans-serif;fill:#333}.label{font:14px sans-serif;fill:#222}.value{font:12px monospace;fill:#111}</style>
+<rect width="720" height="440" fill="white"/>
+<text x="360" y="34" text-anchor="middle" class="title">Adaptive per-cell material basis selection</text>
+<text x="24" y="220" transform="rotate(-90 24 220)" text-anchor="middle" class="axis">-log10(mean held-out loss), higher is better</text>
+<line x1="74" y1="354" x2="686" y2="354" stroke="#222" stroke-width="1.5"/>
+<rect x="108" y="207.666" width="92" height="146.334" fill="#4C78A8"/><text x="154" y="378" text-anchor="middle" class="label">Fixed M3</text><text x="154" y="199.666" text-anchor="middle" class="value">9.64e-04</text><rect x="250" y="137.708" width="92" height="216.292" fill="#F58518"/><text x="296" y="378" text-anchor="middle" class="label">Fixed M5</text><text x="296" y="129.708" text-anchor="middle" class="value">3.49e-05</text><rect x="392" y="113.259" width="92" height="240.741" fill="#54A24B"/><text x="438" y="378" text-anchor="middle" class="label">Adaptive</text><text x="438" y="105.259" text-anchor="middle" class="value">1.09e-05</text><rect x="534" y="113.259" width="92" height="240.741" fill="#B279A2"/><text x="580" y="378" text-anchor="middle" class="label">Oracle</text><text x="580" y="105.259" text-anchor="middle" class="value">1.09e-05</text>
+<text x="360" y="418" text-anchor="middle" class="axis">Disjoint train / selection / held-out partial chords; float64 CPU</text>
+</svg>

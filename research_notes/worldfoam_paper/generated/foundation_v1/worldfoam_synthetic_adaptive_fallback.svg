@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="540" viewBox="0 0 900 540">
+<title>Adaptive retained-depth fallback versus camera speed</title>
+<desc>Fallback fraction plotted against Camera program : nominal speed.</desc>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="92.0" y="34" font-family="Helvetica,Arial,sans-serif" font-size="22" font-weight="700">Adaptive retained-depth fallback versus camera speed</text>
+<line x1="92.0" y1="464.0" x2="668.0" y2="464.0" stroke="#222" stroke-width="1.5"/>
+<line x1="92.0" y1="66.0" x2="92.0" y2="464.0" stroke="#222" stroke-width="1.5"/>
+<line x1="92.0" y1="464.00" x2="668.0" y2="464.00" stroke="#e5e7eb"/>
+<text x="82.0" y="468.00" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">0.472</text>
+<line x1="92.0" y1="384.40" x2="668.0" y2="384.40" stroke="#e5e7eb"/>
+<text x="82.0" y="388.40" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">0.492</text>
+<line x1="92.0" y1="304.80" x2="668.0" y2="304.80" stroke="#e5e7eb"/>
+<text x="82.0" y="308.80" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">0.511</text>
+<line x1="92.0" y1="225.20" x2="668.0" y2="225.20" stroke="#e5e7eb"/>
+<text x="82.0" y="229.20" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">0.53</text>
+<line x1="92.0" y1="145.60" x2="668.0" y2="145.60" stroke="#e5e7eb"/>
+<text x="82.0" y="149.60" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">0.55</text>
+<line x1="92.0" y1="66.00" x2="668.0" y2="66.00" stroke="#e5e7eb"/>
+<text x="82.0" y="70.00" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="13">0.569</text>
+<text x="92.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C1:0.00</text>
+<text x="188.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C2:0.35</text>
+<text x="284.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C6:0.60</text>
+<text x="380.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C3:0.65</text>
+<text x="476.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C5:0.80</text>
+<text x="572.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C4:1.80</text>
+<text x="668.00" y="488.00" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12">C7:2.50</text>
+<polygon points="93.08,330.04 189.08,229.96 186.92,227.89 90.92,327.97" fill="#c23b22"/>
+<polygon points="187.75,230.40 283.75,246.70 284.25,243.74 188.25,227.45" fill="#c23b22"/>
+<polygon points="283.08,246.40 379.08,320.88 380.92,318.51 284.92,244.03" fill="#c23b22"/>
+<polygon points="381.40,320.23 477.40,66.53 474.60,65.47 378.60,319.17" fill="#c23b22"/>
+<polygon points="474.54,66.35 570.54,464.35 573.46,463.65 477.46,65.65" fill="#c23b22"/>
+<polygon points="573.02,465.10 669.02,376.66 666.98,374.45 570.98,462.90" fill="#c23b22"/>
+<circle cx="92.00" cy="329.01" r="4" fill="#c23b22"/>
+<circle cx="188.00" cy="228.92" r="4" fill="#c23b22"/>
+<circle cx="284.00" cy="245.22" r="4" fill="#c23b22"/>
+<circle cx="380.00" cy="319.70" r="4" fill="#c23b22"/>
+<circle cx="476.00" cy="66.00" r="4" fill="#c23b22"/>
+<circle cx="572.00" cy="464.00" r="4" fill="#c23b22"/>
+<circle cx="668.00" cy="375.56" r="4" fill="#c23b22"/>
+<circle cx="706" cy="54" r="5" fill="#c23b22"/>
+<text x="720" y="58" font-family="Helvetica,Arial,sans-serif" font-size="13">all scenes</text>
+<text x="380.00" y="518" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="15">Camera program : nominal speed</text>
+<text x="20" y="265.00" text-anchor="middle" transform="rotate(-90 20 265.00)" font-family="Helvetica,Arial,sans-serif" font-size="15">Fallback fraction</text>
+</svg>

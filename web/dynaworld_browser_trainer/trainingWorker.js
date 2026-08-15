@@ -3,7 +3,7 @@ import {
 	resolveCamerasPerStep,
 	resolveRenderViewIndices,
 } from "./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1";
-import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260803-fullfps-pixelgs-1";
+import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260814-camera-stress-1";
 import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
 	WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
@@ -176,7 +176,7 @@ function render(now) {
 }
 
 function initializeValidationWorker(dataset, initialParams) {
-	validationWorker = new Worker(new URL("./validationWorker.js?v=20260803-fullfps-pixelgs-1", import.meta.url),
+	validationWorker = new Worker(new URL("./validationWorker.js?v=20260814-camera-stress-1", import.meta.url),
 		{ type: "module" });
 	return new Promise((resolve, reject) => {
 		let ready = false;

@@ -22,6 +22,7 @@ import {
 	DENSITY_STAT_DECAY,
 	browserLearningRates,
 } from "./trainingSchedule.js?v=20260803-fullfps-pixelgs-1";
+import { cameraRigRadius } from "./orbitCamera.js?v=20260813-camera-stress-1";
 
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 export const DEFAULT_TILE_SIZE = 16;
@@ -99,29 +100,7 @@ export function resolvePixelDepthGamma(value = PIXEL_GS_DEPTH_GAMMA) {
 }
 
 export function cameraSceneRadius(cameras) {
-	if (!Array.isArray(cameras) || cameras.length === 0) {
-		throw new TypeError("cameraSceneRadius needs at least one calibrated camera.");
-	}
-	const centers = cameras.map((camera) => {
-		const matrix = camera?.worldToCamera;
-		if (!matrix || matrix.length !== 16 || !Array.from(matrix).every(Number.isFinite)) {
-			throw new TypeError("Every camera needs a finite 4x4 worldToCamera matrix.");
-		}
-		const translation = [matrix[3], matrix[7], matrix[11]];
-		return [
-			-(matrix[0] * translation[0] + matrix[4] * translation[1] + matrix[8] * translation[2]),
-			-(matrix[1] * translation[0] + matrix[5] * translation[1] + matrix[9] * translation[2]),
-			-(matrix[2] * translation[0] + matrix[6] * translation[1] + matrix[10] * translation[2]),
-		];
-	});
-	const mean = [0, 1, 2].map((axis) =>
-		centers.reduce((sum, center) => sum + center[axis], 0) / centers.length);
-	const radius = 1.1 * Math.max(...centers.map((center) => Math.hypot(
-		center[0] - mean[0], center[1] - mean[1], center[2] - mean[2],
-	)));
-	// Pixel-GS's camera-radius definition collapses for a single camera. A
-	// unit fallback keeps the optional guard finite for compatibility fixtures.
-	return radius > 1e-6 ? radius : 1;
+	return cameraRigRadius(cameras);
 }
 
 export function resolveTiledBackwardMode(value = TILED_BACKWARD_MODES.DIRECT_3D) {

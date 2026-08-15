@@ -1,0 +1,113 @@
+{
+  "claims": {
+    "adaptive_material_basis_cpu": true,
+    "native_memory_fit": false,
+    "official_cuda_warp_parity": false,
+    "public_or_native_visibility_advantage": false,
+    "public_quality": false,
+    "state_of_the_art": false,
+    "synthetic_cpu_g0_g3": true
+  },
+  "complete": false,
+  "content_sha256": "aa4e58af60ce26168c228f18fda347bdb49566e7b343677d742291dd054aaf1a",
+  "files": [
+    {
+      "bytes": 893,
+      "path": "README.md",
+      "sha256": "c30458b5dfea44db392d2af8b8e410a38fbd689212f99989051f2e18e0d58b3c"
+    },
+    {
+      "bytes": 365,
+      "path": "adaptive_material_basis_table.md",
+      "sha256": "e8f5d10c249d44a30c3aca8403b302dc5bfa94a4784a226911d7ffaf9bee4736"
+    },
+    {
+      "bytes": 228,
+      "path": "adaptive_material_basis_table.tex",
+      "sha256": "70f8299d390dfb1b9c6daa2412c02541aef67da9a99760d3bd89fa4a0c60e6be"
+    },
+    {
+      "bytes": 7768,
+      "path": "evidence_ledger.json",
+      "sha256": "159732ca178725d3478f2af7f3f7c30a53e76186c406581f63eefd1953278dc3"
+    },
+    {
+      "bytes": 2616,
+      "path": "foundation_error_summary.svg",
+      "sha256": "139dc82362ee95925933189dbc945a997061dbeacd6a8503b5795f6f79faefaf"
+    },
+    {
+      "bytes": 7827,
+      "path": "foundation_rows.json",
+      "sha256": "7a7fc2651882eca13ef0e3b8e7fccad4ad35f53f3c2c3cb5effc84b8149b2dbe"
+    },
+    {
+      "bytes": 4721,
+      "path": "foundation_table.csv",
+      "sha256": "ef075db5efc15d8510a1f99f5c501531e5b786536442826cc0620696496763ff"
+    },
+    {
+      "bytes": 4809,
+      "path": "foundation_table.md",
+      "sha256": "7e8855e923e80ee4ecf248b8fc93c03241ea14ac22cc2ddd318099fc88ece829"
+    },
+    {
+      "bytes": 2304,
+      "path": "foundation_table.tex",
+      "sha256": "85b6238387a1ed60633b29ea57080bc885ceee06c088d10e1007345fe8fc866d"
+    },
+    {
+      "bytes": 1115,
+      "path": "g4_public_quality_placeholder.svg",
+      "sha256": "5804941022d30d7c22571812a446b967a95e43e32df809b83dc61081225e237a"
+    },
+    {
+      "bytes": 1146,
+      "path": "g6_native_memory_placeholder.svg",
+      "sha256": "f87191f6d51b21b387a5a07f993c9d714f723fef37bfaf9f33f456e519c8c825"
+    },
+    {
+      "bytes": 2089,
+      "path": "gate_status.json",
+      "sha256": "c3f122b4c192fb769443a53ba1565163a5a8d7d5276ae4c65c3f9023a60f130b"
+    },
+    {
+      "bytes": 3461,
+      "path": "material_family_loss.svg",
+      "sha256": "b15212f05b345dc8659d4a521a94dbd34ffb6271d56367cec5b7e3863130cf9e"
+    },
+    {
+      "bytes": 905,
+      "path": "synthetic_visibility_table.tex",
+      "sha256": "b9c9ae61c7bd7b5ae862ea12aa71acdd3e36e45738a640ea2d1f729d2275d81b"
+    },
+    {
+      "bytes": 1822,
+      "path": "worldfoam_adaptive_material_basis.svg",
+      "sha256": "4e5b104c7b95b792ebe373e6729ae3c0576704da31254cd107a485d20372ed34"
+    },
+    {
+      "bytes": 3912,
+      "path": "worldfoam_synthetic_adaptive_fallback.svg",
+      "sha256": "fe5ea3198ebd646f9fcb523eb4cc9acb99ddf874184cd2883debb7309d956ab3"
+    },
+    {
+      "bytes": 6061,
+      "path": "worldfoam_synthetic_crossing_flicker.svg",
+      "sha256": "577f98f07ab5e8c4e24aa700f19af01838461afcad29e02925f8f4ed1fac3385"
+    },
+    {
+      "bytes": 4948,
+      "path": "worldfoam_synthetic_depth_convergence.svg",
+      "sha256": "6f79e64b53799fdaee75ff93d1fbf34aa3924115f969135514b820534d4be14d"
+    }
+  ],
+  "generator": "worldfoam_paper_b_foundation_artifacts",
+  "generator_schema_version": 3,
+  "generator_source": {
+    "bytes": 96240,
+    "path": "research_experiments/world_foam_lane2/generate_worldfoam_paper_b_artifacts.py",
+    "sha256": "ec6e4d3f0ee44973d3c707d90b6bd6fd3f2bc67f80718665ffd97d05836818f8"
+  },
+  "schema_version": 3
+}

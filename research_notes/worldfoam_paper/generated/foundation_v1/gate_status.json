@@ -1,0 +1,56 @@
+{
+  "claims": {
+    "adaptive_material_basis_cpu": true,
+    "native_memory_fit": false,
+    "official_cuda_warp_parity": false,
+    "public_or_native_visibility_advantage": false,
+    "public_quality": false,
+    "state_of_the_art": false,
+    "synthetic_cpu_g0_g3": true
+  },
+  "gates": [
+    {
+      "gate": "material_ablation",
+      "reason": "adaptive M3/M5 selection is accepted only for the independently verified float64 CPU synthetic chord gate; P0 replacement, native integration, G4, and G6 remain open",
+      "status": "accepted_cpu_synthetic"
+    },
+    {
+      "gate": "G0",
+      "reason": "the independently verified S1-S8/C1-C7 float64 CPU suite and constant-density transfer fixture establish synthetic correctness only",
+      "status": "accepted_cpu_synthetic"
+    },
+    {
+      "gate": "G1",
+      "reason": "native same-representation speed and end-to-end wall-time evidence are absent",
+      "status": "missing_or_rejected"
+    },
+    {
+      "gate": "G2",
+      "reason": "local material and fixed-word VJPs do not establish the rebuilt native full-geometry training path",
+      "status": "partial_foundation"
+    },
+    {
+      "gate": "G3",
+      "reason": "accepted only for the verified float64 CPU synthetic S1-S8/C1-C7 suite; it is not trained public-data or native-runtime evidence",
+      "status": "accepted_cpu_synthetic"
+    },
+    {
+      "gate": "G4",
+      "reason": "new memory-light WorldFoam on calibrated public dynamic scenes; matched replay/World Tubes/dynamic-3DGS rows; PSNR, SSIM, LPIPS, L1, cost, and seeds",
+      "status": "not_measured"
+    },
+    {
+      "gate": "G5",
+      "reason": "official CUDA/Warp parity is absent; this bundle makes no upstream PowerFoam parity claim",
+      "status": "not_claimed"
+    },
+    {
+      "gate": "G6",
+      "reason": "verified 21-row F=8/64/300 fresh-process artifact with native execution, staged/fused/framewise parity, restart parity, MPS/RSS peaks, and exact work receipts",
+      "status": "not_measured"
+    }
+  ],
+  "iclr_ready": false,
+  "paper_ready": false,
+  "schema_version": 1
+}

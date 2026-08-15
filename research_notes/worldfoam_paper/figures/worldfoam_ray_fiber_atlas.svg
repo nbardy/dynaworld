@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850" role="img" aria-labelledby="figure-title figure-description">
+<title id="figure-title">WorldFoam ray-fiber atlas and shared ordered adjoint</title>
+<desc id="figure-description">A camera gauge maps sensor-time samples to ordered ray-depth fibers. Stable owner words compile into optical-depth measures and exact affine transfers; events split charts or trigger explicit fallback. Sample cotangents reduce to compiler nodes before one ordered-word reverse.</desc>
+<style>.background { fill: #ffffff; }
+.title { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 32px; font-weight: 700; }
+.subtitle { fill: #475569; font-family: Helvetica, Arial, sans-serif; font-size: 20px; font-weight: 400; }
+.lane { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 23px; font-weight: 700; }
+.node { fill: #0f172a; font-family: Helvetica, Arial, sans-serif; font-size: 20px; font-weight: 700; }
+.body { fill: #334155; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 400; }
+.mono { fill: #172554; font-family: Menlo, Consolas, monospace; font-size: 18px; font-weight: 600; }
+.badge { fill: #ffffff; font-family: Helvetica, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+.input { fill: #f8fafc; stroke: #64748b; stroke-width: 2; }
+.tubes { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+.foam { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+.measure { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 2; }
+.event { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; }
+.fallback { fill: #fff1f2; stroke: #e11d48; stroke-width: 2; }
+.boundary { fill: #fffbeb; stroke: #d97706; stroke-width: 2; }
+.ray { fill: none; stroke: #475569; stroke-width: 3; }
+.arrow-blue { fill: none; stroke: #2563eb; stroke-width: 3; }
+.arrow-green { fill: none; stroke: #059669; stroke-width: 3; }
+.arrow-purple { fill: none; stroke: #7c3aed; stroke-width: 3; }
+.dashed { fill: none; stroke: #ea580c; stroke-width: 2.5; stroke-dasharray: 8 6; }</style>
+<rect x="0" y="0" width="1200" height="850" rx="0" class="background"/>
+<text x="42" y="48" text-anchor="start" class="title"><tspan x="42" dy="0">WorldFoam: compile ordered transfer on stable ray-fiber strata</tspan></text>
+<text x="42" y="80" text-anchor="start" class="subtitle"><tspan x="42" dy="0">Gauge covariance preserves physical ray measure; event boundaries preserve order semantics.</tspan></text>
+<rect x="42" y="110" width="470" height="470" rx="18" class="input"/>
+<text x="277" y="145" text-anchor="middle" class="lane"><tspan x="277" dy="0">Sensor-time base b = (u, v, t)</tspan></text>
+<text x="277" y="177" text-anchor="middle" class="body"><tspan x="277" dy="0">each sample lifts to one Ray-depth fiber z</tspan></text>
+<text x="73" y="256" text-anchor="start" class="body"><tspan x="73" dy="0">t &lt; t*</tspan></text>
+<polygon points="158,251.5 475,251.5 475,248.5 158,248.5" fill="#475569"/>
+<polygon points="475,250 464,255 464,245" fill="#475569"/>
+<text x="73" y="351" text-anchor="start" class="body"><tspan x="73" dy="0">t = t*</tspan></text>
+<polygon points="158,346.5 475,346.5 475,343.5 158,343.5" fill="#475569"/>
+<polygon points="475,345 464,350 464,340" fill="#475569"/>
+<text x="73" y="446" text-anchor="start" class="body"><tspan x="73" dy="0">t &gt; t*</tspan></text>
+<polygon points="158,441.5 475,441.5 475,438.5 158,438.5" fill="#475569"/>
+<polygon points="475,440 464,445 464,435" fill="#475569"/>
+<text x="459" y="226" text-anchor="start" class="mono"><tspan x="459" dy="0">z</tspan></text>
+<rect x="205" y="232" width="92" height="36" rx="8" fill="#fecaca" stroke="#475569" stroke-width="1.5"/>
+<rect x="330" y="232" width="92" height="36" rx="8" fill="#bfdbfe" stroke="#475569" stroke-width="1.5"/>
+<rect x="264" y="327" width="78" height="36" rx="8" fill="#fed7aa" stroke="#475569" stroke-width="1.5"/>
+<rect x="205" y="422" width="92" height="36" rx="8" fill="#bfdbfe" stroke="#475569" stroke-width="1.5"/>
+<rect x="330" y="422" width="92" height="36" rx="8" fill="#fecaca" stroke="#475569" stroke-width="1.5"/>
+<polygon points="301.75,205 301.75,213 304.25,213 304.25,205" fill="#ea580c"/>
+<polygon points="301.75,219 301.75,227 304.25,227 304.25,219" fill="#ea580c"/>
+<polygon points="301.75,233 301.75,241 304.25,241 304.25,233" fill="#ea580c"/>
+<polygon points="301.75,247 301.75,255 304.25,255 304.25,247" fill="#ea580c"/>
+<polygon points="301.75,261 301.75,269 304.25,269 304.25,261" fill="#ea580c"/>
+<polygon points="301.75,275 301.75,283 304.25,283 304.25,275" fill="#ea580c"/>
+<polygon points="301.75,289 301.75,297 304.25,297 304.25,289" fill="#ea580c"/>
+<polygon points="301.75,303 301.75,311 304.25,311 304.25,303" fill="#ea580c"/>
+<polygon points="301.75,317 301.75,325 304.25,325 304.25,317" fill="#ea580c"/>
+<polygon points="301.75,331 301.75,339 304.25,339 304.25,331" fill="#ea580c"/>
+<polygon points="301.75,345 301.75,353 304.25,353 304.25,345" fill="#ea580c"/>
+<polygon points="301.75,359 301.75,367 304.25,367 304.25,359" fill="#ea580c"/>
+<polygon points="301.75,373 301.75,381 304.25,381 304.25,373" fill="#ea580c"/>
+<polygon points="301.75,387 301.75,395 304.25,395 304.25,387" fill="#ea580c"/>
+<polygon points="301.75,401 301.75,409 304.25,409 304.25,401" fill="#ea580c"/>
+<polygon points="301.75,415 301.75,423 304.25,423 304.25,415" fill="#ea580c"/>
+<polygon points="301.75,429 301.75,437 304.25,437 304.25,429" fill="#ea580c"/>
+<polygon points="301.75,443 301.75,451 304.25,451 304.25,443" fill="#ea580c"/>
+<polygon points="301.75,457 301.75,465 304.25,465 304.25,457" fill="#ea580c"/>
+<polygon points="301.75,471 301.75,478 304.25,478 304.25,471" fill="#ea580c"/>
+<text x="303" y="510" text-anchor="middle" class="node"><tspan x="303" dy="0">Order event</tspan><tspan x="303" dy="26">split chart at t*</tspan></text>
+<text x="277" y="558" text-anchor="middle" class="mono"><tspan x="277" dy="0">lambda = rho · physical ray-length Jacobian</tspan></text>
+<rect x="548" y="110" width="610" height="470" rx="18" class="foam"/>
+<rect x="572" y="128" width="168" height="34" rx="17" fill="#059669"/>
+<text x="656" y="152" text-anchor="middle" class="badge"><tspan x="656" dy="0">COMPILED ATLAS</tspan></text>
+<rect x="574" y="190" width="250" height="76" rx="12" class="input"/>
+<text x="699" y="219" text-anchor="middle" class="node"><tspan x="699" dy="0">Stable owner word</tspan></text>
+<text x="699" y="246" text-anchor="middle" class="body"><tspan x="699" dy="0">front-to-back cell intervals</tspan></text>
+<rect x="882" y="190" width="250" height="76" rx="12" class="measure"/>
+<text x="1007" y="219" text-anchor="middle" class="node"><tspan x="1007" dy="0">Translated measure (kappa, nu)</tspan></text>
+<text x="1007" y="246" text-anchor="middle" class="body"><tspan x="1007" dy="0">order-explicit proof object</tspan></text>
+<rect x="574" y="302" width="250" height="76" rx="12" class="measure"/>
+<text x="699" y="331" text-anchor="middle" class="node"><tspan x="699" dy="0">Exact quotient (beta, m)</tspan></text>
+<text x="699" y="358" text-anchor="middle" class="body"><tspan x="699" dy="0">rear-radiance action</tspan></text>
+<rect x="882" y="302" width="250" height="76" rx="12" class="input"/>
+<text x="1007" y="331" text-anchor="middle" class="node"><tspan x="1007" dy="0">Decode sensor sample</tspan></text>
+<text x="1007" y="358" text-anchor="middle" class="body"><tspan x="1007" dy="0">I = m + beta I_bg</tspan></text>
+<polygon points="824,229.5 872,229.5 872,226.5 824,226.5" fill="#059669"/>
+<polygon points="872,228 861,233 861,223" fill="#059669"/>
+<polygon points="1005.5,266 1005.5,282 1008.5,282 1008.5,266" fill="#7c3aed"/>
+<polygon points="1007,280.5 699,280.5 699,283.5 1007,283.5" fill="#7c3aed"/>
+<polygon points="697.5,282 697.5,292 700.5,292 700.5,282" fill="#7c3aed"/>
+<polygon points="699,292 694,281 704,281" fill="#7c3aed"/>
+<polygon points="824,341.5 872,341.5 872,338.5 824,338.5" fill="#059669"/>
+<polygon points="872,340 861,345 861,335" fill="#059669"/>
+<rect x="574" y="420" width="250" height="104" rx="12" class="event"/>
+<text x="699" y="450" text-anchor="middle" class="node"><tspan x="699" dy="0">Certificate outcome</tspan></text>
+<text x="699" y="480" text-anchor="middle" class="body"><tspan x="699" dy="0">stable → compile</tspan><tspan x="699" dy="27">event → split chart</tspan></text>
+<rect x="882" y="420" width="250" height="104" rx="12" class="fallback"/>
+<text x="1007" y="450" text-anchor="middle" class="node"><tspan x="1007" dy="0">Unresolved domain</tspan></text>
+<text x="1007" y="480" text-anchor="middle" class="body"><tspan x="1007" dy="0">explicit fallback</tspan><tspan x="1007" dy="27">never extrapolate order</tspan></text>
+<rect x="42" y="610" width="1116" height="142" rx="18" class="measure"/>
+<rect x="66" y="628" width="168" height="34" rx="17" fill="#7c3aed"/>
+<text x="150" y="652" text-anchor="middle" class="badge"><tspan x="150" dy="0">SHARED ADJOINT</tspan></text>
+<text x="600" y="686" text-anchor="middle" class="lane"><tspan x="600" dy="0">Stream sample bars into node bars</tspan></text>
+<polygon points="345,715.5 470,715.5 470,712.5 345,712.5" fill="#7c3aed"/>
+<polygon points="470,714 459,719 459,709" fill="#7c3aed"/>
+<text x="260" y="720" text-anchor="middle" class="body"><tspan x="260" dy="0">sample cotangents</tspan></text>
+<text x="600" y="720" text-anchor="middle" class="body"><tspan x="600" dy="0">compiler-node cotangents</tspan></text>
+<polygon points="730,715.5 850,715.5 850,712.5 730,712.5" fill="#7c3aed"/>
+<polygon points="850,714 839,719 839,709" fill="#7c3aed"/>
+<text x="972" y="714" text-anchor="middle" class="body"><tspan x="972" dy="0">One ordered-word VJP per compiler node</tspan></text>
+<text x="600" y="744" text-anchor="middle" class="mono"><tspan x="600" dy="0">No F x word reverse tape</tspan></text>
+<rect x="42" y="782" width="1116" height="45" rx="11" class="boundary"/>
+<text x="600" y="811" text-anchor="middle" class="node"><tspan x="600" dy="0">Claim boundary: Event, chart, and rank choices are not differentiated</tspan></text>
+</svg>

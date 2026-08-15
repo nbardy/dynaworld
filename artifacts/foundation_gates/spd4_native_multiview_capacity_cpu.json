@@ -1,0 +1,227 @@
+{
+  "checks": {
+    "all_states_finite": true,
+    "camera_design_is_full_rank": true,
+    "initial_losses_are_matched_within_5_percent": true,
+    "legacy_retains_structural_residual": true,
+    "spd4_gains_at_least_20_db": true,
+    "spd4_reaches_near_exact_fit": true,
+    "target_is_outside_legacy_covariance_class": true
+  },
+  "claim_limits": {
+    "alpha_semantics": "legacy_peak_splat",
+    "matched_atom_count": true,
+    "matched_parameter_count": false,
+    "metal_parity": false,
+    "moving_camera": false,
+    "public_scene_quality": false,
+    "systems_speed": false
+  },
+  "comparison": {
+    "final_mse_improvement_ratio": 1785524239.7127295,
+    "initial_loss_ratio_spd4_over_legacy": 0.998516989279897,
+    "parameter_ratio_spd4_over_legacy": 1.2857142857142858,
+    "psnr_gain_db": 83.15207307697476
+  },
+  "created_at_utc": "2026-07-27T07:26:08.414751+00:00",
+  "fits": {
+    "full_spd4": {
+      "elapsed_s": 2.8968044169887435,
+      "final_mse": 1.157288286107843e-13,
+      "final_psnr_db": 120.0,
+      "finite_state": true,
+      "initial_mse": 0.0003528993984218687,
+      "loss_trace": [
+        {
+          "mse": 0.0003528993984218687,
+          "step": 1
+        },
+        {
+          "mse": 0.00010855218715732917,
+          "step": 25
+        },
+        {
+          "mse": 9.33323972276412e-05,
+          "step": 50
+        },
+        {
+          "mse": 8.852514292811975e-05,
+          "step": 75
+        },
+        {
+          "mse": 7.164816634031013e-05,
+          "step": 100
+        },
+        {
+          "mse": 1.0741771802713629e-05,
+          "step": 125
+        },
+        {
+          "mse": 7.963106440911361e-07,
+          "step": 150
+        },
+        {
+          "mse": 3.516854718554896e-08,
+          "step": 175
+        },
+        {
+          "mse": 2.0628776464803877e-09,
+          "step": 200
+        },
+        {
+          "mse": 1.5255550989135003e-10,
+          "step": 225
+        },
+        {
+          "mse": 2.381339049561948e-11,
+          "step": 250
+        },
+        {
+          "mse": 2.166721880039746e-12,
+          "step": 275
+        },
+        {
+          "mse": 1.4942052857600668e-13,
+          "step": 300
+        }
+      ],
+      "per_view_mse": [
+        1.1008854011772609e-13,
+        1.2987961400812154e-13,
+        1.0721833170650522e-13
+      ],
+      "representation": "full_spd4",
+      "trainable_scalars": 18
+    },
+    "legacy_tube": {
+      "elapsed_s": 1.592420208005933,
+      "final_mse": 0.0002066366287181154,
+      "final_psnr_db": 36.84792692302524,
+      "finite_state": true,
+      "initial_mse": 0.000353423529304564,
+      "loss_trace": [
+        {
+          "mse": 0.000353423529304564,
+          "step": 1
+        },
+        {
+          "mse": 0.00025101096252910793,
+          "step": 25
+        },
+        {
+          "mse": 0.00024156850122381002,
+          "step": 50
+        },
+        {
+          "mse": 0.00023697044525761157,
+          "step": 75
+        },
+        {
+          "mse": 0.0002331245195819065,
+          "step": 100
+        },
+        {
+          "mse": 0.00022941315546631813,
+          "step": 125
+        },
+        {
+          "mse": 0.00022581596567761153,
+          "step": 150
+        },
+        {
+          "mse": 0.00022233538038562983,
+          "step": 175
+        },
+        {
+          "mse": 0.00021897403348702937,
+          "step": 200
+        },
+        {
+          "mse": 0.00021573372941929847,
+          "step": 225
+        },
+        {
+          "mse": 0.00021261576330289245,
+          "step": 250
+        },
+        {
+          "mse": 0.0002096207463182509,
+          "step": 275
+        },
+        {
+          "mse": 0.00020674894039984792,
+          "step": 300
+        }
+      ],
+      "per_view_mse": [
+        7.17835791874677e-05,
+        0.00020206165208946913,
+        0.00034606465487740934
+      ],
+      "representation": "legacy_tube",
+      "trainable_scalars": 14
+    }
+  },
+  "fixture": {
+    "atoms_per_candidate": 1,
+    "camera_angles_radians": [
+      -0.65,
+      0.0,
+      0.58
+    ],
+    "frames": 5,
+    "image_size": [
+      32,
+      32
+    ],
+    "learning_rate": 0.015,
+    "seed": 17,
+    "spd4_init_precision_z": 2500.0,
+    "steps": 300,
+    "target_space_time_tilt": [
+      0.055,
+      -0.03,
+      0.045
+    ]
+  },
+  "mathematical_certificate": {
+    "best_legacy_diagonal_xy_variances": [
+      0.06359526461332098,
+      0.019300001186132454
+    ],
+    "best_legacy_observation_rmse": 4.202639270924087,
+    "camera_count": 3,
+    "design_rank": 6,
+    "design_singular_values": [
+      339.48194479369977,
+      299.421477484097,
+      277.30964713158664,
+      260.94896720779974,
+      159.98366138123987,
+      65.0492784050833
+    ],
+    "full_spd_observation_rmse": 1.2582527612418441e-15,
+    "interpretation": "rank six identifies the full symmetric conditional spatial covariance; the legacy model is restricted to the xx/yy columns with zero depth width and zero spatial cross-covariances",
+    "symmetric_spatial_dof": 6,
+    "target_conditional_spatial_covariance": [
+      [
+        0.02890000060796738,
+        0.011900000175833703,
+        0.034000000864267355
+      ],
+      [
+        0.011900000175833703,
+        0.019300001186132454,
+        0.006800000143051155
+      ],
+      [
+        0.034000000864267355,
+        0.006800000143051155,
+        0.14599999645352368
+      ]
+    ]
+  },
+  "schema_version": 1,
+  "scope": "synthetic_cpu_representation_capacity",
+  "status": "pass"
+}

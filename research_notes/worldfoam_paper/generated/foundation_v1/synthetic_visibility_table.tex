@@ -1,0 +1,17 @@
+\begin{table*}[t]
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}p{0.27\linewidth}p{0.43\linewidth}p{0.22\linewidth}@{}}
+\toprule
+Check & Metric & Verified result \\
+\midrule
+Retained depth, 128 layers & fifth-percentile RGB PSNR & 37.9252 dB \\
+Crossings vs. representative sort & RGB-MSE reduction & 82.2477$\times$ \\
+Crossings vs. depth marginal & RGB-MSE reduction & 528.953$\times$ \\
+Gauge reparameterization & max. RGB error, with / without Jacobian & 3.32998e-07 / 0.305335 \\
+Analytic constant sphere & max. RGB / transmittance error & 4.35542e-04 / 5.05269e-04 \\
+\bottomrule
+\end{tabular}
+\caption{Verifier-derived float64 CPU G0/G3 evidence over all eight synthetic scenes and seven camera programs. This table does not report native runtime, native peak memory, kinetic compiler acceptance, or trained public-data quality.}
+\label{tab:worldfoam-synthetic-visibility}
+\end{table*}

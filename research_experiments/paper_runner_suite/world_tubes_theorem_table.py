@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -56,6 +57,14 @@ def _load_verified(name: str, path: Path) -> dict[str, Any]:
     if errors:
         raise ValueError(f"{name} theorem evidence failed:\n- " + "\n- ".join(errors))
     return report
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def build_table(paths: dict[str, Path] = DEFAULT_REPORTS) -> dict[str, Any]:
@@ -127,24 +136,10 @@ def build_table(paths: dict[str, Path] = DEFAULT_REPORTS) -> dict[str, Any]:
             "source": "mixed_fallback_backward",
         },
         {
-            "claim": "Bounded-orbit chart reuses payload across F=4..128",
-            "metric": "final fixed/replay trace ratio",
+            "claim": "Bounded-orbit chart reuses trace state at F=128",
+            "metric": "fixed/per-frame trace-count ratio",
             "value": scaling["last_fixed_vs_per_frame_trace_ratio"],
             "acceptance": "< 0.25",
-            "source": "scaling",
-        },
-        {
-            "claim": "Bounded-orbit compiled forward is faster at F=128",
-            "metric": "final fixed/replay forward ratio",
-            "value": scaling["last_fixed_vs_per_frame_forward_ms_ratio"],
-            "acceptance": "< 0.5",
-            "source": "scaling",
-        },
-        {
-            "claim": "Bounded-orbit compiled backward is faster at F=128",
-            "metric": "final fixed/replay backward ratio",
-            "value": scaling["last_fixed_vs_per_frame_backward_ms_ratio"],
-            "acceptance": "< 0.5",
             "source": "scaling",
         },
     ]
@@ -153,11 +148,16 @@ def build_table(paths: dict[str, Path] = DEFAULT_REPORTS) -> dict[str, Any]:
         "scope": "bounded event-certified projective chart segments; no 360/720 multi-chart claim",
         "rows": rows,
         "sources": {name: str(path.relative_to(ROOT)) for name, path in paths.items()},
+        "source_sha256": {
+            name: _sha256_file(path)
+            for name, path in paths.items()
+        },
         "summary": {
             "row_count": len(rows),
             "all_sources_verified": True,
             "frame_counts": reports["scaling"]["frame_counts"],
             "full_orbit_multigauge_claim": False,
+            "timing_claims_excluded": True,
         },
     }
 
@@ -185,6 +185,19 @@ def write_table(report: dict[str, Any], out_dir: Path) -> None:
     (out_dir / "theorem_table.tex").write_text("\n".join(latex) + "\n", encoding="utf-8")
 
 
+def verify_table_report(
+    report: dict[str, Any],
+    paths: dict[str, Path] = DEFAULT_REPORTS,
+) -> None:
+    """Rebuild from verifier-accepted current sources and require exact parity."""
+
+    expected = build_table(paths)
+    if report != expected:
+        raise ValueError(
+            "theorem table report does not match the current verified source reports"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
@@ -192,8 +205,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.verify_report is not None:
         report = json.loads(args.verify_report.read_text(encoding="utf-8"))
-        if report.get("status") != "complete" or report.get("summary", {}).get("all_sources_verified") is not True:
-            raise ValueError("theorem table report is incomplete")
+        verify_table_report(report)
         print(f"verified {args.verify_report}")
         return
     report = build_table()

@@ -1,0 +1,118 @@
+{
+  "arbitrary_selected_pixel_ids": true,
+  "base_g4_v1_sha256": "0dfe148c0c0f8fd3fca9a09fb094d5a526a1a819f40bdd77f19e5b1a857ba8ee",
+  "capability_sha256": "a137a881e4aec568647a505bf2e1e20f428132f39a892c2f5ab4143e1cf18082",
+  "full_pixel_full_temporal_heldout_evaluation": true,
+  "hard_mps_working_set_limit_bytes_per_worker": 2147483648,
+  "host_resource_guard_rechecked_before_every_row": true,
+  "identical_selected_pixel_schedule_all_routes": true,
+  "identical_target_and_loss_budget_all_routes": true,
+  "mps_working_set_limit_receipt_required": true,
+  "parent_process_group_rss_watchdog_required": true,
+  "pilot_receipt_required_before_full_matrix": true,
+  "pre_matrix_host_resource_guard_required": true,
+  "pre_matrix_maximum_load_average": 8.0,
+  "pre_matrix_maximum_swap_used_bytes": 2147483648,
+  "pre_matrix_minimum_available_memory_bytes": 8589934592,
+  "pre_matrix_minimum_free_disk_bytes": 8589934592,
+  "pre_worker_host_resource_guard_evidence_required": true,
+  "proxy_or_smoke_evidence_permitted": false,
+  "real_native_only": true,
+  "route_specific_rasterized_work_receipt": true,
+  "row_kind": "worldfoam-native4d-public-quality-selected-ray-row-v2",
+  "runtime_or_memory_measured": false,
+  "sampled_mps_peaks_must_not_exceed_hard_cap": true,
+  "schema_version": 2,
+  "selected_ray_training": true,
+  "source_identities": {
+    "research_experiments/world_foam_lane2/run_worldfoam_g4_v2_pilot.py": {
+      "bytes": 49789,
+      "sha256": "a58647725b2c987b0ee1f059cb719fd0184b5bd8d27d61f18876639083d84491"
+    },
+    "research_experiments/world_foam_lane2/run_worldfoam_memory_scaling_acceptance.py": {
+      "bytes": 61642,
+      "sha256": "81bdad081ce059b2678e100e9ab7149b15cfbfbc31871e259ded6ab34fb987b4"
+    },
+    "research_experiments/world_foam_lane2/run_worldfoam_public_quality_ablation_v2.py": {
+      "bytes": 27666,
+      "sha256": "849e50f976656657900f3e4adf2e85bc6f237297512cbdc2341857eab7040997"
+    },
+    "research_experiments/world_foam_lane2/verify_worldfoam_g4_v2_pilot.py": {
+      "bytes": 30983,
+      "sha256": "8f5dac8632dd71bfdf598ce7645a7b4d0731983a5eec8788da4fad45ca5f79fa"
+    },
+    "research_experiments/world_foam_lane2/verify_worldfoam_public_quality_ablation_v2.py": {
+      "bytes": 47185,
+      "sha256": "c83c8252b9e5869f6db1224702c4b21a772b211175644a210d37a3cce97e7a55"
+    },
+    "src/train/dynamic_3dgs_public_quality_executor.py": {
+      "bytes": 14387,
+      "sha256": "08a70a779a1ffed03e82e6fe98d404654581e8aa2f5688f981ea5d626b0500ec"
+    },
+    "src/train/gaussian_public_quality_executor.py": {
+      "bytes": 43247,
+      "sha256": "f4aae878822f5b605a9434f49d63542aa63cd05098bad7695ad14b86c6dbd052"
+    },
+    "src/train/train_worldfoam_native4d_public_quality_row_v2.py": {
+      "bytes": 2591,
+      "sha256": "318379ab28490e7e85399e3a91b6cadd86a0bb3f74718fc46d3b815ee92de060"
+    },
+    "src/train/world_tubes_public_quality_executor.py": {
+      "bytes": 19535,
+      "sha256": "b3a6ffc0b059878c1747ce4b42b56d90c5910d80e71385b2d0381f67c84cac6d"
+    },
+    "src/train/worldfoam_g4_selected_ray_contract.py": {
+      "bytes": 36785,
+      "sha256": "7db6b82e6725e0a9514ac5262a70f464f0aa16629ab77f4fd7caf5bb64e2a84d"
+    },
+    "src/train/worldfoam_g4_selected_ray_work_plan.py": {
+      "bytes": 8300,
+      "sha256": "4288cc54a2dfb903c8933c2a52bff5e1d555a76f050ab47842a5c23e9e0d7c1d"
+    },
+    "src/train/worldfoam_g4_v2_capability.py": {
+      "bytes": 6262,
+      "sha256": "c500ad7b89dc3328df04e59914fb310d706b852b9429982ca7d0c509c1d4999f"
+    },
+    "src/train/worldfoam_native4d_public_quality_executor.py": {
+      "bytes": 104825,
+      "sha256": "91183c1fbca823094406a8e3fcc16567c45a4a76d01bf4820e93fa8cbf5cd731"
+    },
+    "src/train/worldfoam_native4d_public_quality_row.py": {
+      "bytes": 96504,
+      "sha256": "b4f354ecf494c38f9c65b9ac545f273700eb756aa6ed5a3fe5759eccd53c13aa"
+    },
+    "src/train/worldfoam_native4d_public_quality_row_v2.py": {
+      "bytes": 27502,
+      "sha256": "20b82c1bd6395277dc434811d818c1f29c473eb43bd1b2b1c49014693d286f06"
+    },
+    "src/train/worldfoam_native_heldout_prediction.py": {
+      "bytes": 51402,
+      "sha256": "c085e26f613db6303f8513250c2767dff9ee3219499711d1cfe9915f23a6235b"
+    },
+    "src/train/worldfoam_public_quality_dataset_provider.py": {
+      "bytes": 29652,
+      "sha256": "9ebe440b60007cb8c95d930d1bcc26aedf642c9b83c995f52e377cf3d9762d30"
+    },
+    "src/train/worldfoam_public_quality_inputs.py": {
+      "bytes": 21754,
+      "sha256": "75ade07cfdc051258dac08b4f21680f669e8f5ad77cd2db44c30822a4ba45fc1"
+    },
+    "src/train/worldfoam_spatial_major_heldout_evaluator.py": {
+      "bytes": 41227,
+      "sha256": "9e55feda0cec2e6e5955ead50997c69bf1ff3857c84cfe80ed346787fccf0865"
+    }
+  },
+  "spatial_major_cross_time_worldfoam_heldout_required": true,
+  "spatial_major_cross_time_worldfoam_heldout_source_complete": true,
+  "status": "source_complete_runtime_unmeasured",
+  "supported_routes": [
+    "worldfoam_native4d",
+    "worldfoam_framewise_replay",
+    "world_tubes",
+    "dynamic_3dgs"
+  ],
+  "training_loss_contract_sha256": "230d13c1a00adfb1d25975600f548fdc85cc423204e93eeeba5fba207405b0cb",
+  "training_loss_identifier": "rgb_mse_mean_v1",
+  "v1_all_pixel_contract_mutated": false,
+  "v2_config_sha256": "c8d0a2719976ba435b990bdc17aaf4d15581af8fdfec20bbe62f40d5b0cb7e2d"
+}

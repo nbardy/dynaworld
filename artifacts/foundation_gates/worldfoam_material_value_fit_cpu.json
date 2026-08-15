@@ -1,0 +1,262 @@
+{
+  "checks": {
+    "all_fits_finite": true,
+    "m3_beats_m0_by_1000x": true,
+    "m3_beats_m1_by_1000x": true,
+    "m3_challenges_m5": true,
+    "m3_reaches_near_exact_fit": true,
+    "optimized_and_production_evaluators_agree": true
+  },
+  "claim_limits": {
+    "cell_geometry_training": false,
+    "metal_throughput": false,
+    "public_scene_quality": false,
+    "purpose": "material-law identifiability and optimizer plumbing on one fixed synthetic tape"
+  },
+  "comparisons": {
+    "m0_over_m3_loss": 853840081071.2816,
+    "m1_over_m3_loss": 847867029796.9689,
+    "m5_over_m3_loss": 6001240134.394564
+  },
+  "created_at_utc": "2026-07-27T07:36:18.839321+00:00",
+  "fits": {
+    "M0_P0_CONSTANT": {
+      "color_parameters": [
+        0.7204318943826178,
+        0.18010797359565442,
+        0.460275932522228
+      ],
+      "density_parameters": [
+        0.8323776778518214
+      ],
+      "final_loss": 0.0012838994426727355,
+      "finite": true,
+      "loss_trace": [
+        {
+          "loss": 0.005772851774823031,
+          "step": 1
+        },
+        {
+          "loss": 0.001283960869277977,
+          "step": 100
+        },
+        {
+          "loss": 0.00128389944362833,
+          "step": 200
+        },
+        {
+          "loss": 0.0012838994426727889,
+          "step": 300
+        },
+        {
+          "loss": 0.0012838994426727357,
+          "step": 400
+        },
+        {
+          "loss": 0.001283899442672736,
+          "step": 500
+        },
+        {
+          "loss": 0.0012838994426727355,
+          "step": 600
+        },
+        {
+          "loss": 0.0012838994426727355,
+          "step": 700
+        }
+      ],
+      "max_abs_beta_error": 0.0672007690813915,
+      "max_abs_m_error": 0.0484656935841597,
+      "mode": "M0_P0_CONSTANT",
+      "production_evaluator_max_abs_error": 5.551115123125783e-17,
+      "steps": 700,
+      "trainable_scalars": 4
+    },
+    "M1_P0_AFFINE_RGB": {
+      "color_parameters": [
+        0.6749251956874962,
+        0.16873129892187402,
+        0.43120220835590034,
+        0.7728771008395481,
+        0.19321927520988705,
+        0.49378259220304455
+      ],
+      "density_parameters": [
+        0.8322762074352258
+      ],
+      "final_loss": 0.0012749179045930003,
+      "finite": true,
+      "loss_trace": [
+        {
+          "loss": 0.0033896967889865235,
+          "step": 1
+        },
+        {
+          "loss": 0.0012749876712393454,
+          "step": 100
+        },
+        {
+          "loss": 0.0012749179068167406,
+          "step": 200
+        },
+        {
+          "loss": 0.001274917904593028,
+          "step": 300
+        },
+        {
+          "loss": 0.0012749179045930007,
+          "step": 400
+        },
+        {
+          "loss": 0.0012749179045929999,
+          "step": 500
+        },
+        {
+          "loss": 0.0012749179045929999,
+          "step": 600
+        },
+        {
+          "loss": 0.0012749179045930003,
+          "step": 700
+        }
+      ],
+      "max_abs_beta_error": 0.0671801670187887,
+      "max_abs_m_error": 0.042122779708031605,
+      "mode": "M1_P0_AFFINE_RGB",
+      "production_evaluator_max_abs_error": 3.469446951953614e-17,
+      "steps": 700,
+      "trainable_scalars": 7
+    },
+    "M3_POSITIVE_BERNSTEIN_P2": {
+      "color_parameters": [
+        0.7200000025902856,
+        0.18000000079495132,
+        0.4600000028807756
+      ],
+      "density_parameters": [
+        0.12000015056662423,
+        2.000000378207112,
+        0.24999941692471594
+      ],
+      "final_loss": 1.503676708479033e-15,
+      "finite": true,
+      "loss_trace": [
+        {
+          "loss": 0.002650114531053693,
+          "step": 1
+        },
+        {
+          "loss": 0.00011825981039179172,
+          "step": 100
+        },
+        {
+          "loss": 1.2184719666815113e-05,
+          "step": 200
+        },
+        {
+          "loss": 2.2172623630018197e-06,
+          "step": 300
+        },
+        {
+          "loss": 4.6123731323491015e-07,
+          "step": 400
+        },
+        {
+          "loss": 9.383051044755332e-08,
+          "step": 500
+        },
+        {
+          "loss": 1.725386718996027e-08,
+          "step": 600
+        },
+        {
+          "loss": 2.733971036459308e-09,
+          "step": 700
+        }
+      ],
+      "max_abs_beta_error": 7.884826558335334e-08,
+      "max_abs_m_error": 5.640333634870931e-08,
+      "mode": "M3_POSITIVE_BERNSTEIN_P2",
+      "production_evaluator_max_abs_error": 1.1102230246251565e-16,
+      "steps": 700,
+      "trainable_scalars": 6
+    },
+    "M5_CONVEX_LOG_P2": {
+      "color_parameters": [
+        0.7199637216420229,
+        0.1799913707629364,
+        0.4599766198166187
+      ],
+      "density_parameters": [
+        5.019856138800402,
+        -5.23340610396324,
+        1.2443843899741354
+      ],
+      "final_loss": 9.023925012078687e-06,
+      "finite": true,
+      "loss_trace": [
+        {
+          "loss": 0.0023890233933987187,
+          "step": 1
+        },
+        {
+          "loss": 0.000850577736966313,
+          "step": 100
+        },
+        {
+          "loss": 0.0005003873719348487,
+          "step": 200
+        },
+        {
+          "loss": 0.00024353467720648707,
+          "step": 300
+        },
+        {
+          "loss": 0.0001115928557859718,
+          "step": 400
+        },
+        {
+          "loss": 5.136108876479681e-05,
+          "step": 500
+        },
+        {
+          "loss": 2.553125861083083e-05,
+          "step": 600
+        },
+        {
+          "loss": 1.505965051750626e-05,
+          "step": 700
+        }
+      ],
+      "max_abs_beta_error": 0.0073135410195589445,
+      "max_abs_m_error": 0.005264426460798877,
+      "mode": "M5_CONVEX_LOG_P2",
+      "production_evaluator_max_abs_error": 8.881784197001252e-16,
+      "steps": 700,
+      "trainable_scalars": 6
+    }
+  },
+  "fixture": {
+    "adam_steps": 700,
+    "interval_count": 20,
+    "observed_transfer": [
+      "beta",
+      "m"
+    ],
+    "seed": 17,
+    "target_color": [
+      0.72,
+      0.18,
+      0.46
+    ],
+    "target_controls": [
+      0.12,
+      2.0,
+      0.25
+    ],
+    "target_density": "positive_bernstein_p2"
+  },
+  "schema_version": 1,
+  "scope": "synthetic_cpu_fixed_tape_material_capacity",
+  "status": "pass"
+}

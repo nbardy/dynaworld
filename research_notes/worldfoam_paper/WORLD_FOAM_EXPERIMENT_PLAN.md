@@ -1,25 +1,50 @@
-# WorldFoam Paper: Ablations, Charts, Baselines, and Acceptance Gates
+# WorldFoam Paper: Gauge-Invariant Ordered Ray Transfer — Ablations, Charts, Baselines, and Acceptance Gates
 
-Draft date: 2026-07-05
+Draft date: 2026-08-03
 
 This is the execution plan for the second paper lane:
 
 ```text
 WorldFoam in Gauged Camera Space:
-Ray-Fiber Transmittance Fields for Dynamic Rendering
+Gauge-Invariant Ordered Ray Transfer for Moving Cameras
 ```
 
 It is intentionally stricter than the theory draft. It says what must be run
 before we can claim anything beyond "promising theory and prototype."
+
+Current measured-row ledger (2026-08-15): G6 native training-memory `0/21`;
+G4 public heldout quality `0/36`.  Source/unit/runtime gates are preflight and
+do not count toward either matrix.  The G6 analytic state bound is
+frame-invariant but allocator/RSS evidence is absent.  The G4-v1 full-pixel
+schedule remains the exact correctness reference but currently requires about
+`113--115` million cold `(view,pixel)` compiles per seed; it must remain
+fail-closed as the correctness reference.  The separately versioned G4-v2 is
+now source-implemented: it freezes identical selected rays, targets, optimizer
+steps, RGB-MSE, and full heldout evaluation for all four routes.  Each row uses
+`1,228,800` target pixels; WorldFoam directly rasterizes that count while the
+Gaussian controls full-rasterize `235,929,600`, so target budget is matched and
+raster work is explicitly not claimed equal.  WorldFoam's full-temporal
+heldout path is spatial-major (`196,608` cold tracks, `1,536` host calls,
+`15,360` bounded native bundles per camera) and uses `843.75 MiB` of temporary
+dual-spool disk rather than a resident dense video.  A bounded real-native
+pilot and all 36 measured rows remain absent.
 
 ## 0. Claim Boundary
 
 Current strongest claim:
 
 ```text
-WorldFoam is a camera-gauged lifted opacity/transmittance formulation with a
-Metal prototype. Focused local microgates show favorable speed/frame-count
-scaling against matched STAR UVT comparators, but real public quality and full
+WorldFoam's ordered ray-transfer formulation is gauge invariant when the fiber
+measure is included. The bounded CPU reference currently verifies ordinary-
+depth affine rescaling; general log/nonlinear chart parity remains open. A new
+P0 Metal path is source-complete but unbuilt, while historical tiny paired
+microgates show a temporal-reuse signal rather than matched systems evidence.
+The CPU direct-kinetic path now includes active owner-chart compilation, exact
+multi-chart dispatch, continuous primal/referenced-material-action
+certification, and a frozen-program sparse geometry/material VJP. Prepared
+native tokens own no global/chart-local time clone and receive only live `K`
+times. Native kinetic lowering, continuous geometry-Jacobian approximation
+certification, structural recertification, real public quality, and full
 official parity are not yet proven.
 ```
 
@@ -69,7 +94,7 @@ research_notes/worldfoam_paper/experiment_designs/cell_path_optical_transfer_fix
 | Alpha equivalence | sorted splat compositing equals monoid scan of atomic `(1-alpha, alpha c)` events | optical-transfer algebra is not wired to baseline alpha semantics |
 | Non-commutation slab | two matched-UVT translucent scenes differ by the predicted order term | pure UVT marginal is being overclaimed |
 | Commutator prediction | measured swap/order error is predicted by opacity overlap times color contrast | commutator theorem is only decorative |
-| Cell-path replay equivalence | compiled atlas emits the same certified cell/event word and image as per-frame WorldFoam replay | compiler changes semantics instead of amortizing structure |
+| Cell-path replay equivalence | compiled atlas emits the same independently validated cell/event word and image as per-frame WorldFoam replay | compiler changes semantics instead of amortizing structure |
 | Cell-path VJP | beta/m/DeltaTau/sigma/color/run-length finite differences match direct monoid-scan VJP | backward tape/recompute contract is wrong |
 | Boundary flux VJP | moving face and sphere endpoints match finite differences under fixed topology | boundary-gradient theory is not ready for paper claims |
 | Flux witness diagnostic | interface-flux witness score predicts heldout-free residuals, source leave-one-camera-out error, or topology churn | topology math is decorative |
@@ -90,6 +115,136 @@ face-crossing, center/radius, and support-sphere perturbation for boundary flux
 heldout-free residual / source leave-one-camera-out splits for witness scores
 ```
 
+## 0.6 Pass-4 Fixed-Tape Material Gate
+
+Before another renderer fork, compare all segment laws behind one shared
+interface:
+
+```text
+identical owner/event word
+identical segment endpoints and physical lengths
+identical camera gauge and Jacobian
+identical front-to-back (beta,m) scan
+identical output samples and loss
+```
+
+| ID | Extinction | Appearance | Required reason |
+| --- | --- | --- | --- |
+| M0 | P0 constant | constant RGB | Existing material reference |
+| M1 | P0 constant | affine RGB | Appearance-only counterbaseline |
+| M2 | positive Bernstein P1 | constant RGB | Cheap density-capacity step |
+| M3 | positive Bernstein P2 | constant RGB | Mandatory polynomial counterbaseline |
+| M4 | log-P1 | constant RGB | Exponential-linear control |
+| M5 | convex log-P2 | constant RGB | Gaussian-like `erf` control |
+
+M3 and M5 use the same three scalar segment-control slots. M3 must not be
+replaced by nonnegative P2 Lagrange samples, because those do not guarantee
+positive density between nodes. M5 initially rejects/falls back on negative
+quadratic curvature rather than silently relying on an unstable `erfi` path.
+
+The implementation ladder for this gate is:
+
+1. [x] **Float64 reference:** analytic optical depth and coefficient/length VJP
+   against independent quadrature, autograd, and central differences.
+2. [x] **Fixed-tape Metal microkernel:** tiny forward/VJP parity for M0--M5 using
+   precomputed records. This forks the material evaluator, not the renderer.
+3. [x] **Material-value test:** fit controlled synthetic density on shared
+   partial chords, evaluate on disjoint held-out chords, and compare
+   M2/M3/M4/M5 against both M0 and M1.
+4. [ ] **Native-4D P0 geometry compiler:** advance constant material first so
+   geometry, events, gauge measure, memory, and adjoints are tested without
+   conflating material selection.
+5. [x] **CPU adaptive M3/M5 selection gate:** select a per-cell basis on
+   disjoint validation chords and evaluate it on disjoint heldout chords at
+   matched 24-byte payloads plus one basis-tag bit. This clears the synthetic
+   basis-selection ablation only; it does not promote a rich material into the
+   native-4D path or replace the P0 systems oracle.
+
+As of 2026-08-03, the CPU portion of step 4 includes the ordinary-depth fiber
+Jacobian, exact constant-state chunked replay, active owner-chart compilation,
+exact multi-chart dispatch, sparse boundary/ray/site/velocity/weight/material
+VJPs, track/time-blocked scratch, and continuous certification for the primal
+and referenced-material actions. A suffixed source-only Metal bridge exists
+but is not built or runtime verified. Step 4 remains unchecked because the
+direct-kinetic multi-chart program/VJP is only source-lowered and has not passed
+rebuilt-native parity, while bounded-cell
+sphere/vacuum events and continuous geometry-Jacobian approximation
+certification are open. A narrow event-free directional trust-region
+certificate exists, but there is no general or trainer-integrated geometry
+recertification/update path,
+production trainer/evaluator, or public evidence. See
+`../../TODO/worldfoam_memory_light_native4d.md`.
+
+The checked boxes are supported only by the bounded fixed-segment artifact:
+
+```text
+artifacts/foundation_gates/worldfoam_material_m0_m5_cpu_metal_20260727.json
+artifacts/foundation_gates/worldfoam_material_m0_m5_cpu_12record_20260727.json
+artifacts/foundation_gates/worldfoam_material_value_fit_cpu_20260727.json
+outputs/benchmarks/2026-08-15_worldfoam_adaptive_material_basis_cpu/summary.json
+```
+
+The first establishes reference/shader forward and explicit-VJP parity on the
+shared tape. The second expands CPU evidence to twelve records, all-mode
+central differences, and the tiny-tau series branch. The third is a
+three-seed, float64 CPU capacity gate with an
+independent target oracle, disjoint train/held-out partial chords, and matched
+24-byte M3/M5 material payloads. On held-out chords, M3 reaches
+`5.26e-17` loss on the positive-P2 target while M5 reaches `8.80e-5`; on the
+convex-log-P2 target, M5 reaches `6.19e-15` while M3 reaches `1.33e-3`.
+Therefore step 3 finds **no universal material winner**: each basis wins its
+own generating family. It clears the controlled capacity comparison, but not
+end-to-end replay, native-4D, trained image quality, or systems gates. Rich-
+material native integration remains blocked pending a separate real-data and
+native promotion gate; P0 geometry integration is not blocked on a universal
+material winner.
+
+The fourth artifact clears the CPU synthetic portion of step 5. Its strict
+verifier recomputes `72` candidate rows and `36` selection rows across seeds
+`17/29/43` and twelve target cells with disjoint train, selection, and heldout
+chords. Pure-family basis-selection accuracy and heldout-oracle agreement are
+both `1.0`; adaptive mean heldout loss is `0.313405` times the best fixed-basis
+mean and exactly matches the heldout oracle (`1.0` ratio). This supports an
+explicit per-cell M3/M5 basis tag as a controlled Paper-B ablation. It is not
+real-scene evidence and makes no native integration, public-quality,
+renderer-speed, or memory claim. Rich-material native promotion therefore
+still requires real heldout material/image evidence after the P0 systems path
+is sound.
+
+Acceptance thresholds for steps 1--2:
+
+```text
+float64 analytic vs independent quadrature max error <= 1e-10
+reference VJP relative error <= 1e-5
+tiny Metal forward max absolute error <= 1e-5
+tiny Metal VJP normalized error <= 1e-4
+zero NaN/Inf on accepted inputs
+all series/erf/scaled-tail/reject branches counted
+M0 regression reported on the identical tape
+```
+
+Every JSON artifact must record material mode, coefficient convention, gauge
+and length convention, dtype/device, branch counts, tolerances, seed, source
+revision, tape dimensions, and whether timings were synchronized.
+
+Claim boundary:
+
+```text
+Passing the fixed-tape gate proves local material parity only.
+It is not trained-quality evidence, a systems-speed result, or proof of
+sublinear parameter/tape scaling across frames.
+```
+
+In particular, shader-only work cannot fix a model whose parameters or cell
+tape are duplicated per frame. That scaling claim requires the native-4D
+compiler in step 4 and explicit reporting of parameter bytes, owner/event
+records, and fallback growth versus `T`.
+
+The local workstation remains under the post-incident MPS guard. CPU reference
+tests and tightly bounded mechanical Metal parity are allowed; publication
+training, the full 300-frame matrix, and broad MPS sweeps require a separately
+approved execution host/run.
+
 ## 1. Baselines
 
 ### 1.1 Same-representation baselines
@@ -99,12 +254,12 @@ These isolate the compiler.
 | ID | Baseline | Purpose |
 | --- | --- | --- |
 | F0 | Dense raymarch / analytic reference | Ground truth for synthetic density scenes. |
-| F1 | Per-frame WorldFoam replay | Main same-representation baseline. |
+| F1 | Sequential per-frame WorldFoam replay | Main same-representation baseline: one exact frame forward/reverse, accumulate global bars, release frame scratch, then continue. Peak may be `F`-invariant; world work is `O(F)`. |
 | F2 | Per-frame replay with cached camera constants | Separates trivial camera caching. |
 | F3 | Cached cell active sets, live ray/cell intersections | Tests active-set caching alone. |
 | F4 | Compiled cell intersections, live transmittance prefix | Tests geometry compilation. |
 | F5 | Compiled intersections + depth-layer prefix | Proposed core foam atlas. |
-| F6 | Full compiled atlas + backward prefix/suffix reuse | Training-speed target. |
+| F6 | Full compiled atlas + constant-state recomputed VJP | Training-speed target. |
 | F7 | Full atlas with fallback/reference cells | Robustness target. |
 
 Required measurements:
@@ -115,7 +270,18 @@ speed: compile ms, forward ms, backward ms, optimizer step ms
 memory: atlas bytes, prefix bytes, peak GPU memory
 structure: active cells, intersection records, depth layers, fallback fraction
 gradients: max/mean gradient error vs reference, optimizer loss decrease
+work split: world/intersection/prefix/reverse interactions vs selected-pixel/ray/sample interactions
 ```
+
+The required memory/work ablation must not turn F1 into a dense retained-tape
+straw man.  Run F1 sequentially at the same `S`, selected pixels, frames,
+material, geometry, camera, optimizer, and native kernels as the compiled
+route.  Measure its peak memory and its repeated world-side work at
+`F=8/64/300`.  Compare that against staged compiled replay at `F=8` for parity
+and fused union-local replay at `F=8/64/300` for the primary scaling curve.
+An all-frame retained active tape may appear as a separately named optional
+ablation only when its exact allocated tensors are implemented and measured;
+an all-site dense tape is a stress control, not F1.
 
 ### 1.2 Gaussian and tube baselines
 
@@ -225,7 +391,8 @@ Required:
 scene subset with public camera calibration
 same train/eval split for all methods
 frame-count scaling sweep
-compile amortization point
+training step time including per-step transfer rebuild
+inference-only topology/transfer amortization point reported separately
 ```
 
 ### 2.4 D-NeRF synthetic dynamic scenes
@@ -272,7 +439,15 @@ Pass:
 
 ```text
 compiled WorldFoam grows slower than per-frame replay in intersection/prefix/
-backward-replay components, and total step improves once compile is amortized.
+backward-replay components. Training timing includes the mandatory `J`-node
+transfer rebuild after every world update; only topology/camera structure may
+be reused while its validity token holds. Report frozen-world inference
+amortization separately.
+
+Sequential replay and compiled replay both remain under the declared absolute
+accelerator/RSS peak limits.  No pass condition requires the sequential route
+to have an `O(F)` memory peak: its expected failure is repeated world-side
+work and bandwidth, not inability to stream frames.
 ```
 
 ### A2. Depth-layer / prefix representation
@@ -302,7 +477,7 @@ backward gradient error
 Compare:
 
 ```text
-no tape, recompute prefix/suffix
+no per-run reverse tape; recompute with constant prefix state
 scalar prefix tape
 scalar contribution/weight tape
 per-layer compact tape
@@ -318,7 +493,7 @@ per-channel tapes that grow linearly in feature dimension and frame count.
 Expected sweet spot:
 
 ```text
-compact scalar prefix/weight tape or fused recompute.
+exact constant-state two-pass P0 replay; no per-run suffix/reverse tape.
 ```
 
 ### A4. Cell support graph
@@ -621,8 +796,9 @@ on S1-S5, with bounded fallback.
 Pass if:
 
 ```text
-compiled WorldFoam beats per-frame WorldFoam replay after amortization for
-F >= 8 or F >= 16, at equal quality.
+compiled WorldFoam beats per-frame WorldFoam replay for F >= 8 or F >= 16 at
+equal quality when the training comparison includes every per-step transfer
+rebuild. Frozen-world inference may report a separate amortized threshold.
 ```
 
 ### Gate G2: Backward correctness
@@ -665,32 +841,81 @@ or the paper clearly scopes itself to the Metal prototype and avoids official
 PowerFoam reproduction claims.
 ```
 
+### Gate G6: Memory and temporal-sharing contract
+
+Pass on fixed-duration unique-frame sweeps only if:
+
+```text
+world parameters are invariant in F
+reverse interaction bytes F=256 / F=16 <= 1.10
+per-step transfer/scratch peak scales with spatial block B_p and temporal block K
+loss and world gradients are invariant across B_p/K schedules
+production training retains no full O(PF) target/ray tensor or Python O(PR) word graph
+event/topology records track physical complexity rather than sampling density
+```
+
+Report logical tensor payload separately from measured allocator, driver,
+process-resident, host-I/O, optimizer, and media-retention peaks.
+
 ## 7. Work Queue
 
 Immediate:
 
-1. Implement
-   `research_experiments/world_foam_lane2/cell_path_optical_transfer_fixture.py`
-   and
-   `research_experiments/world_foam_lane2/test_cell_path_optical_transfer_fixture.py`
-   from `experiment_designs/cell_path_optical_transfer_fixture.md`.
-2. Build a synthetic transmittance correctness suite with analytic/dense
-   references.
-3. Add crossing translucent slab/Gaussian-sheet visibility stress.
-4. Convert current Gate4 results into a reproducible clean rerun script with
-   saved JSON/Markdown summary.
-5. Add per-frame WorldFoam replay baseline if missing, so compiler speed is
-   isolated from representation differences.
-6. Add gradient correctness test for lifted prefix/suffix transmittance beyond
-   the constant-density cell-path fixture.
+1. [x] Complete the float64 M0--M5 fixed-segment reference, including
+   independent quadrature, explicit/autograd/finite-difference VJPs, density
+   bounds, and numerical branch codes.
+2. [x] Complete one parameterized Metal fixed-tape segment-material
+   microkernel and fail-loud wrapper; the owner-run renderer remains unchanged.
+3. [x] Run the bounded CPU/Metal forward and explicit-VJP parity fixture and
+   save its schema-rich artifact. This is numerical validation infrastructure,
+   not a paper-quality or speed result.
+
+Existing support fixture (not counted here as a newly cleared paper gate):
+keep
+`research_experiments/world_foam_lane2/cell_path_optical_transfer_fixture.py`
+and its tests as the constant-density scan/replay baseline; the M0--M5
+evaluator lowers to the same `(beta,m)` contract.
+
+4. [x] Run the matched material-value fitting gate on controlled partial-chord
+   observations, including disjoint held-out chords and an independent target
+   oracle. The three-seed result finds no universal M3/M5 winner, so do not
+   promote either law from its own-family exactness.
+5. [x] Run adaptive per-cell M3/M5 basis selection at matched 24-byte material
+   payloads plus one basis-tag bit. The verified CPU synthetic gate achieves
+   `1.0` pure-family selection accuracy and oracle agreement and reduces mean
+   heldout loss to `0.313405` of the best fixed basis. Keep P0 in the native
+   systems path until a separate real-data/native promotion gate passes.
+6. [x] Build crossing translucent slab/Gaussian-sheet fixtures beyond the
+   constant-density and fixed-segment numerical gates. The accepted float64
+   CPU ray-section suite at
+   `outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/summary.json`
+   expands this to all `S1--S8 x C1--C7` contexts, depth-layer convergence,
+   adaptive fallback, sorted and depth-marginal comparators, temporal error,
+   and an independent gauge-Jacobian gate. It closes representation-level
+   G0/G3 only; it is not native speed/memory, full kinetic compilation, or
+   public-quality evidence.
+7. [ ] Select and register one existing per-frame WorldFoam replay as the F1
+   baseline so compiler speed is isolated from representation differences.
+8. [ ] Convert existing Gate4 results into a reproducible clean rerun script with
+   saved JSON/Markdown summary, without treating those historical shader rows
+   as native finite-element evidence.
 
 Near term:
 
-1. Run clean real `2/4/8/16/32f` loaded-frame sweeps without repeated frames.
-2. Build a public DeepView/Neural3D subset config and matched STAR/GS
-   comparators.
-3. Log Cech/AABB/witness/holonomy diagnostics on existing foam checkpoints.
-4. Decide whether WorldFoam is a theory+prototype paper now or waits for the
+1. Do not promote a universal material law from the synthetic gates: M3 and M5
+   have identical six-scalar payloads and complementary exact-family wins.
+   CPU adaptive validation selection is now green; test real heldout material
+   or image observations before any native rich-material promotion.
+2. Native-lower the landed direct-kinetic multi-chart program and frozen-
+   program VJP, then rebuild and measure parameter bytes, allocator peak,
+   bandwidth, and event/atlas growth versus frame count. Promote a richer
+   material law separately after its own gate.
+3. Only after native same-representation parity, run clean real
+   `2/4/8/16/32f` loaded-frame sweeps without repeated frames.
+4. Build a public DeepView/Neural3D subset config and matched STAR/GS
+   comparators on an approved host.
+5. Log Cech/AABB/witness/holonomy diagnostics on existing foam checkpoints.
+6. Decide whether WorldFoam is a theory+prototype paper now or waits for the
    quality gate.
 
 Do not do yet:

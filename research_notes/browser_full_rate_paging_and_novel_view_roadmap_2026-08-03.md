@@ -507,3 +507,81 @@ proceed to A3 rather than adding unrelated losses. If zoom instability dominates
 with fixed parameters, prioritize A4. A native 4DGS or World Tubes browser lane
 should remain a separate model experiment sharing the canonical data/evaluation
 adapter, not a dropdown label over this trajectory 3DGS shader.
+
+## 2026-08-14 Camera-Stress Follow-up
+
+The prior roadmap asked for deterministic zoom and bounded-pose diagnostics.
+That gate now exists in the browser validation worker.
+
+### What is measured honestly
+
+Optical focal and principal-point perturbations have an exact target: a
+crop/resample of the captured RGB frame. The gate reports worst PSNR over
+`1.05x`, `1/1.05x`, and `+/-1.5%` principal-point shifts. Physical dolly,
+lateral, and orbit perturbations do not have captured RGB targets, so they
+report only learned-geometry risk: near-camera alpha, alpha from splats whose
+opacity-aware support rectangle covers at least 25% of the image, normalized
+ray-depth spread, and coverage drift. No model depth prior is used, and
+physical-pose PSNR is intentionally undefined.
+
+### Shader audit behind the next hypothesis
+
+The current density pass accumulates raw integrated alpha as a utility term.
+Parent ranking is approximately:
+
+```text
+screen_gradient + 4 * mean_alpha + motion_gradient
+```
+
+The Pixel-GS near-camera factor scales the screen-gradient term but not the
+`4 * mean_alpha` term. A broad near-camera splat can therefore still become a
+high-ranked parent. The topology grows from 4,096 to 8,192 active slots and
+then becomes fixed: there is no periodic prune, recycle, or relocation pass to
+repair unsupported geometry. The new diagnostic measures the consequence; it
+does not yet alter this behavior.
+
+This makes the next narrow ablation more specific than "add regularization":
+
+1. accumulate transmittance-aware, footprint-normalized contribution per
+   splat and per training view;
+2. identify persistently low-contribution or single-view-supported victims;
+3. relocate a fixed budget of victims to high-residual parents supported by at
+   least three train cameras;
+4. reset optimizer moments only for relocated slots;
+5. compare exact-view quality, optical stress, bounded-pose risk, tile load,
+   and completed steps/s at fixed capacity.
+
+This follows the contribution-aware pruning motivation of
+[TrimGS](https://arxiv.org/abs/2406.07499) and the fixed-budget relocation
+motivation of [3DGS-MCMC](https://arxiv.org/abs/2404.09591), while keeping the
+browser's bounded memory contract. It is not yet an implementation claim.
+
+### Prior-free paper lanes, ordered
+
+1. Complete [Mip-Splatting](https://openaccess.thecvf.com/content/CVPR2024/html/Yu_Mip-Splatting_Alias-free_3D_Gaussian_Splatting_CVPR_2024_paper.html)
+   filtering for true scale aliasing, with forward and backward parity.
+2. Contribution/support-qualified pruning or relocation for physical-pose
+   floaters; this addresses geometry that filtering cannot repair.
+3. [2DGS](https://arxiv.org/abs/2403.17888) self-rendered ray-depth distortion
+   as a stronger geometry regularizer without external depth.
+4. Gaussian dropout as a cheap sparse-support ablation, using
+   [DropoutGS](https://openaccess.thecvf.com/content/CVPR2025/html/Xu_DropoutGS_Dropping_Out_Gaussians_for_Better_Sparse-view_Rendering_CVPR_2025_paper.html)
+   as the reference rather than making it a default unmeasured.
+5. Co-regularized dual models only as an expensive offline diagnostic, not in
+   the latency-sensitive browser baseline.
+
+Mip filtering is expected to help optical zoom stability. It should not be
+credited with removing wrong-depth translucent sheets unless the bounded-pose
+risk metrics also improve in a matched run.
+
+### Verification
+
+- Browser trainer suite: 175/175 tests pass.
+- Live Apple WebGPU smoke reached step 4,352 in five seconds at 96x72, crossed
+  the progressive 384x288 transition, and was paused at step 14,096.
+- The initial and trained camera-stress metrics both populated. Optical PSNR
+  rose from `6.8/7.0 dB` to `22.1/24.1 dB` (train/heldout); near-alpha and
+  giant-footprint contribution fell on both roles.
+- The 8K/384 full validation took 56.2 seconds in this live run. It remained
+  asynchronous: optimizer progress continued while the CPU worker evaluated
+  the snapshot.

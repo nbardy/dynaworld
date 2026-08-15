@@ -536,15 +536,21 @@ proof scaffold adds visibility monoid / atomic alpha case and commutator
 criterion
 ```
 
-Next implementation-facing work:
+Historical implementation-facing work, now completed:
 
 ```text
 Spec: research_notes/worldfoam_paper/experiment_designs/cell_path_optical_transfer_fixture.md
 
-1. Build the alpha-equivalence fixture.
-2. Build the cell-path owner-run fixture and replay equivalence check.
-3. Build the monoid/cell-path VJP finite-difference fixture.
-4. Build the two-layer commutator prediction fixture.
-5. Only after those pass, test boundary flux, flux witness scores, and
-   Magnus/commutator compression.
+1. [x] Build the alpha-equivalence fixture.
+2. [x] Build the cell-path owner-run fixture and replay equivalence check.
+3. [x] Build the monoid/cell-path VJP finite-difference fixture.
+4. [x] Build the two-layer commutator prediction fixture.
+5. [ ] Keep boundary flux, flux witness scores, and Magnus/commutator
+   compression diagnostic-only unless the simpler kinetic compiled route
+   fails.
 ```
+
+The current implementation-facing work is native lowering of the landed
+active kinetic multi-chart program and frozen-program VJP, followed by rebuild/
+runtime parity, structural recertification, trainer/evaluator integration, and
+measured public-scene scaling.

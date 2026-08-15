@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "source_root": "../..",
+  "output_root": "../../output/paper_assets",
+  "record": "export_record.json",
+  "assets": [
+    {
+      "id": "world_tubes_system_overview",
+      "source": "research_notes/gauged_uvt_trace_atlas/paper/figures/world_tubes_system_overview.svg",
+      "output": "world_tubes/world_tubes_system_overview.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 1050,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "world_tubes_projective_compiler",
+      "source": "research_notes/gauged_uvt_trace_atlas/paper/figures/world_tubes_projective_compiler.svg",
+      "output": "world_tubes/world_tubes_projective_compiler.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 1140,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "world_tubes_variable_camera_closure_death",
+      "source": "research_notes/gauged_uvt_trace_atlas/paper/figures/world_tubes_variable_camera_closure_death_publication.svg",
+      "output": "world_tubes/world_tubes_variable_camera_closure_death.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 920,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "worldfoam_representation_split",
+      "source": "research_notes/worldfoam_paper/figures/worldfoam_representation_split.svg",
+      "output": "worldfoam/worldfoam_representation_split.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 1140,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "worldfoam_ray_fiber_atlas",
+      "source": "research_notes/worldfoam_paper/figures/worldfoam_ray_fiber_atlas.svg",
+      "output": "worldfoam/worldfoam_ray_fiber_atlas.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 1275,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "worldfoam_synthetic_depth_convergence",
+      "source": "outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/figures/worldfoam_synthetic_depth_convergence.svg",
+      "output": "worldfoam/worldfoam_synthetic_depth_convergence.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 1080,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "worldfoam_synthetic_adaptive_fallback",
+      "source": "outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/figures/worldfoam_synthetic_adaptive_fallback.svg",
+      "output": "worldfoam/worldfoam_synthetic_adaptive_fallback.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 1080,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "worldfoam_synthetic_crossing_flicker",
+      "source": "outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/figures/worldfoam_synthetic_crossing_flicker.svg",
+      "output": "worldfoam/worldfoam_synthetic_crossing_flicker.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 1080,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "worldfoam_material_family_loss",
+      "source": "research_notes/worldfoam_paper/generated/foundation_v1/material_family_loss.svg",
+      "output": "worldfoam/worldfoam_material_family_loss.png",
+      "format": "png",
+      "width_px": 1800,
+      "height_px": 1040,
+      "dpi": 300,
+      "background": "#ffffff"
+    },
+    {
+      "id": "worldfoam_foundation_error_summary",
+      "source": "research_notes/worldfoam_paper/generated/foundation_v1/foundation_error_summary.svg",
+      "output": "worldfoam/worldfoam_foundation_error_summary.png",
+      "format": "png",
+      "width_px": 2000,
+      "height_px": 782,
+      "dpi": 300,
+      "background": "#ffffff"
+    }
+  ]
+}

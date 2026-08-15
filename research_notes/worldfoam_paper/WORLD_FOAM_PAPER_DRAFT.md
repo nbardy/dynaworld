@@ -1,12 +1,117 @@
 # WorldFoam in Gauged Camera Space:
-# Ray-Fiber Transmittance Fields for Dynamic Rendering
+# Gauge-Invariant Ordered Ray Transfer for Moving Cameras
 
-Draft date: 2026-07-05
+Draft date: 2026-08-03
 
 Status: second-paper working draft. This is a theory/prototype manuscript
 skeleton, not a final quality claim. It should be read after the World Tubes
 paper draft because it deliberately branches away from baseline-compatible
 Gaussian-splat compositing into a lifted opacity/transmittance representation.
+
+**Evidence status as of 2026-08-15.** The native training-memory ablation has
+`0/21` measured rows and the public heldout-quality ablation has `0/36`
+measured rows. Consequently `native_memory_fit=false` and
+`public_quality=false` currently mean *not yet measured*, not measured
+failure. The fixed representation state is analytically small at `S=1024`
+(`114,688 B` live, `81,920 B` checkpoint, `278,528 B` for the conservative
+live-plus-checkpoint-clone bound), but this excludes allocator, driver, native
+scratch, compiler, decoder, and process RSS. The frozen full-pixel public
+schedule is also compute-intractable in its present exact implementation: it
+would cold-compile roughly `113--115` million `(view,pixel)` tracks per seed.
+That schedule remains the correctness reference; publication training must
+not silently relabel it.  A separately versioned matched selected-ray G4-v2 is
+now source-implemented for all four comparison routes: 300 steps, four
+spacetime samples per step, 1024 shared selected pixels per sample, and one
+RGB-MSE contract (`1,228,800` target pixels per row), followed by the unchanged
+full 300-frame heldout camera.  WorldFoam and Gaussian rasterized-pixel work is
+reported separately rather than claimed equal.  The WorldFoam heldout route
+compiles each spatial track across time once and uses bounded dual raw spools;
+this removes the old frame-major compile explosion without turning temporary
+disk into a model-memory claim.  Its bounded native pilot and all 36 measured
+rows remain absent. Unit and source gates below are preflight only and must not
+be reported as ablation rows.
+
+The Pass-4 finite-element reference and fixed-tape Metal material microkernel
+now pass their bounded CPU and tiny-Metal parity gates. They validate local
+segment algebra and its VJP only, not native-4D model scaling, trained quality,
+or a paper result. A newer fixed-word P0 CPU reference adds the physical fiber
+Jacobian, constant-state recomputed VJP, sparse geometry lowering, and bounded
+track/time scratch; a matching suffixed Metal source bridge exists but has not
+been rebuilt or executed. The CPU systems path now also includes an exact
+active kinetic owner-chart compiler, multi-chart right-continuous dispatch,
+continuous primal/referenced-material-action certification, and a
+frozen-program stable-stratum VJP for positions, velocities, quadratic weights,
+affine rays, density, and RGB. A bounded frame-free CPU artifact store,
+dense-observation replay source, executor-sealed full word VJP, and fenced
+node-length geometry reduction now meet in one source-level request/step
+candidate. A subsequent static lifecycle audit made the generic/full-geometry
+compatibility path keep any full-frame decode in CPU-only scratch and transfer
+only bounded selected-pixel chunks. The material-only schema-v3 procedural
+driver is narrower and stronger: it directly generates the requested pixels,
+preserves request order and duplicates, enforces its source budget before
+allocation, and reports zero full-frame materializations. A source-only public
+candidate now stores per-camera uint8 RGB in pixel-time `[H,W,F,3]` order,
+maps at most one payload at a time during a selected-pixel read, explicitly
+closes it, content-hashes strict cache metadata at construction, and delegates
+ordinary full-frame evaluation to the existing decoder. The construction scan
+and OS page-cache pressure are not accelerator-tensor measurements. No cache,
+populated dataset binding, or runtime evidence exists yet; a strict source-only
+binding validator is implemented but unrun. The procedural row therefore remains
+a mechanical memory gate rather than public-data evidence. The audited
+5.41-TiB decode amplification is an avoided source-level counterfactual, not a
+measured allocation result. Completion fences are
+required at sample, active-block, and request-delta release boundaries. Error
+paths are also explicit: poison alone retains executor-owned state, abort
+releases it only after a successful completion fence, and failed
+construction/abort/release fences quarantine the live roots on the poisoned
+step until process restart. The older standalone full-geometry assembly is
+CPU/fake-native-only and rejects accelerator tensors. The schema-v3 producer
+now hash-binds the transitive Python/native source manifest, direct-pixel
+capability, raw MPS-limit receipt, and per-trial sampled parent-watchdog receipt.
+Those latest transaction, backpressure, evidence, native, and test edits have
+not been run or rebuilt and are not native-runtime evidence; decoder internals,
+real fence semantics, and allocator peak remain unmeasured. The current safe
+update policy reuses structure for material-only changes and fully recompiles
+after geometry or camera-ray changes. Native kinetic execution, bounded-cell
+events, and derivatives through event/chart/rank choices remain open.
+
+The checked-in procedural `F=8/64/300` configuration contains two sites at
+`384x384`. It is intentionally only a retention/mechanical scaling fixture.
+It cannot support a claim that the paper trainer fits in memory. That stronger
+claim requires the spatial-block route with `1024` global sites at `384x512`,
+a fenced device VJP, an actual CPU optimizer mutation, and measured bridge,
+allocator, and process-RSS peaks.
+
+The fixed-size state itself is already small by construction, but this is an
+analytic/source accounting result rather than the missing allocator result. For
+the current P0 material plus affine kinetic geometry with two weight
+coefficients, the combined CPU training state is `112 B/site` and the raw
+restart checkpoint is `80 B/site`: respectively `112 KiB` and `80 KiB` at
+`S=1024`. During a fenced material update, the bridge-owned device material
+snapshot and copied CPU material-gradient receipt total `32 B/site` plus a
+three-float background and one-float copied loss. The separately owned single
+global device material bar adds another `16 B/site`; thus the dominant
+site-proportional terms are about `48 KiB` at `S=1024`, before the coordinator's
+loss, diagnostics, and geometry scratch. None of these terms contains `F`.
+Active compiled-lane state,
+full-geometry reduction scratch, target/ray streaming, framework allocation,
+and command-buffer lifetime can still dominate the real peak; the distinct
+training-memory ablation must measure them rather than extrapolating from these
+byte formulas.
+
+Constant peak memory is not, by itself, a differentiator against a fair
+per-frame baseline.  The same WorldFoam representation can replay one frame at
+a time, accumulate one global material/geometry bar, release that frame's
+scratch, and thereby keep peak memory independent of `F`.  That sequential
+control repeats owner/run evaluation, prefix transfer, and reverse lowering for
+every frame, however.  The compiled shared-adjoint claim is therefore narrower
+and stronger: both routes must fit under the same measured peak budget, while
+the compiled route should keep certified world-side structure and reverse work
+sublinear in `F`; selected-pixel target reads, ray/sample evaluation, and the
+corresponding camera slice remain linear.  The paper must report peak memory,
+world-side work counters, sample-side work counters, memory traffic or its
+closest measured proxy, and wall time together.  A dense all-site/all-frame
+retained tape is only an optional stress ablation, not the per-frame baseline.
 
 ## Abstract
 
@@ -18,17 +123,27 @@ changes cause discontinuities, and repeated renders from a known camera path
 repeat cell/projection/intersection work that is coherent across time.
 
 We introduce **WorldFoam in Gauged Camera Space**, a camera-compiled
-ray-fiber transmittance representation for dynamic rendering. Instead of
-rendering a frame as a sorted list of splats, we represent world matter as a
-bounded cell complex with local opacity and radiance fields. A camera program
-pulls each world cell back to a ray bundle, producing a lifted foam density
-over sensor time and ray depth. Rendering evaluates a Beer-Lambert
-transmittance integral along the ray fiber:
+ordered ray-transfer representation for dynamic rendering. Instead of rendering
+a frame as a sorted list of splats, we represent world matter as a bounded
+spacetime cell complex with local extinction and radiance fields. A camera
+program defines a moving family of ray fibers; local gauges choose depth
+coordinates on those fibers. Pulling world matter through the camera program
+produces a lifted optical generator over sensor time and ray depth. Rendering
+is its path-ordered product integral:
 
 ```text
-I(y) = integral T(y,z) sigma(y,z) c(y,z) dz,
-T(y,z) = exp(- integral_{z_front}^{z} sigma(y,s) ds).
+A_y(z) =
+  [ -lambda_y(z) I_C    eta_y(z) ]
+  [ 0                   0        ]
+
+M_y = P exp integral A_y(z) dz
+I(y) = decode(M_y, I_bg).
 ```
+
+For scalar extinction with `eta=lambda c`, this is exactly the familiar
+Beer--Lambert transmittance integral. Under an orientation-preserving depth
+change, `A(z) dz` transforms as a matrix-valued one-form, so `M_y` is invariant
+when the physical ray-length Jacobian is included.
 
 The core computational object is not a video and not a per-frame splat list. It
 is a **camera-gauged world foam atlas**: a collection of local domains storing
@@ -43,18 +158,46 @@ the rendered color is the decoded monoid product.
 WorldFoam is related to, but distinct from, World Tubes. World Tubes keeps
 Gaussian-splat semantics and compiles primitive footprints plus certified
 order. WorldFoam instead lifts visibility into a volumetric opacity field where
-depth order is replaced by cumulative optical depth. This makes it attractive
+depth order is encoded by the placement of color mass along cumulative optical
+depth rather than erased by a depth marginal. This makes it attractive
 for translucent ambiguity, finite exposure, rolling shutter, and fast camera
 paths, but also makes it a more radical model requiring its own quality and
 parity evidence.
 
 Our current implementation evidence supports the prototype direction rather
-than a completed SOTA claim: Metal Gate4/native-cutwalk microgates show
-favorable frame-count scaling and speed against matched STAR UVT comparators,
-and real32 loader smokes show trainability, but public benchmark quality,
-official CUDA/Warp parity, and clean heldout acceptance remain open. This paper
-therefore proposes the mathematical and experimental program for WorldFoam and
-separates it from the stronger baseline-compatible World Tubes paper.
+than a completed SOTA claim. Metal Gate4/native-cutwalk microgates show
+favorable requested-density scaling against matched STAR UVT comparators on
+their tested fixed programs. A separate
+parameterized M0--M5 segment-material shader now matches its float64 reference
+and explicit VJP on a bounded 12-record gate, but it is intentionally not a
+renderer fork or throughput benchmark. Public benchmark quality, compact
+native kinetic execution, official CUDA/Warp parity, and clean heldout
+acceptance remain open. The memory-light CPU/source contract is stronger:
+prepared native tokens own no global or chart-local time clone, requested
+samples reduce into `O(sum J_c)` node cotangents, and the verified block-major
+material path performs one material-word VJP per active compiled block in
+`O(sum J_c R_c)` rather than per-frame replay. The integrated source-only
+full-geometry path still fences and immediately reduces one bounded
+`[J,R_run]`
+physical-length cotangent per active block. A newer unselected fused
+fixed-camera VJP removes that cotangent entirely by lowering adjacent word bars
+directly into material and kinetic-world bars; it is source-written but remains
+unbuilt, runtime-unverified, and gated on global validation and staged-oracle
+parity. The executor receipt
+proves only `fenced_and_reduced_not_globally_committed`; the request and step
+receipts separately prove their scatter and commit boundaries. It remains
+unrun after integration, and the installed native extension predates the
+required compiled schemas. The fused entry still consumes the frame-independent
+compiled primal `[J,R_run]` length table, exposes no ray cotangent, and is excluded
+from selected renderer routing and the integrated coordinator. Its source now
+has a dry-run numerical validation kernel, one four-byte reason mask, and
+status-gated accumulation; shared-status phases are intended to validate every
+active block before the first write. Native build/parity, high-level
+all-block integration, and a bound preventing an adversarial sum of individually
+finite atomics from overflowing one destination remain open. This paper
+therefore separates the ordered-transfer method from the stronger
+baseline-compatible World Tubes paper and keeps its systems claims conditional
+on native and end-to-end gates.
 
 ## 1. Introduction
 
@@ -98,6 +241,13 @@ the prefix integral `tau`. A discrete sorted splat renderer can be seen as a
 quadrature/atomization of this integral. WorldFoam chooses to make the lifted
 opacity field the primary representation.
 
+We use **ordered ray transfer**, **vertical parallel transport**, and
+**ray-fiber product integral** as the precise terms for this open-ray operator.
+The memorable phrase "ray holonomy" describes the same geometric intuition,
+but holonomy conventionally denotes transport around a closed loop. We reserve
+unqualified **holonomy** below for cell-complex loop diagnostics, avoiding a
+collision between two mathematically different objects.
+
 The paper's goal is not to claim that output pixels vanish. The output still
 has `O(F H W)` samples if we render `F` frames. The goal is to make the
 dominant world-side work scale with **cell/intersection/event complexity** over
@@ -108,7 +258,7 @@ per-frame replay:
     F * (cell/ray intersection + active set + prefix/order + backward replay)
 
 camera-compiled foam:
-    compile(cell/ray events over B x Z) + FHW * local eval
+    reusable topology/camera compile + per-step transfer rebuild + FHW local eval
 ```
 
 This is the same amortization idea as World Tubes, but the visibility object is
@@ -116,24 +266,31 @@ different: a lifted transmittance field instead of a piecewise-stable sort.
 
 ### Contributions
 
-1. **Ray-fiber WorldFoam formulation.** We define dynamic matter as a bounded
-   cell complex in world spacetime and render by pulling cell densities through
-   a camera-ray bundle into a lifted `(u,v,t,z)` opacity field.
+1. **Gauge-invariant ordered ray transfer.** We distinguish the camera program,
+   which defines the measurement bundle, from a gauge, which selects a local
+   depth coordinate. Dynamic matter is pulled into a lifted `(u,v,t,z)`
+   extinction/emission generator whose ordered product integral is invariant
+   to valid depth reparameterization.
 
 2. **Camera-gauged foam atlas.** We define local gauge domains storing
    cell-ray intersection structure, lifted opacity/radiance bases,
    transmittance prefix summaries, and fallback metadata.
 
-3. **Optical-transfer event algebra.** We formulate rendering as a
-   depth-ordered product in the associative visibility monoid
-   `(beta,m) otimes (beta',m') = (beta beta', m + beta m')`. This makes
-   alpha compositing the atomic-measure case, continuous foam the dense case,
-   and owner-run event intervals the sparse camera-compiled case.
+3. **Translated optical-depth measure and compact transfer quotient.** We lift
+   each ordered word to the semidirect measure object `(kappa,nu)`, where rear
+   color measure is translated by the front optical depth under concatenation.
+   Its Laplace image is the associative four-scalar visibility monoid
+   `(beta,m) otimes (beta',m') = (beta beta', m + beta m')`. This explains
+   noncommutativity, boundary tangent masses, and why the runtime can remain
+   compact without marginalizing away depth order. Alpha compositing is the
+   atomic-measure case, continuous foam the dense case, and owner-run event
+   intervals the sparse camera-compiled case. This formulation was derived in
+   this project; external literature novelty remains unestablished.
 
 4. **Cell-path atlas correctness.** We define the implementation-facing
    renderer as a compiled cell/event word evaluated in the visibility monoid.
    The same-representation replay theorem states that if the compiled atlas and
-   per-frame replay emit the same certified word and run lengths, then they
+   per-frame replay emit the same independently validated word and run lengths, then they
    emit the same image.
 
 5. **Commutator visibility criterion.** The optical-transfer commutator shows
@@ -147,10 +304,16 @@ different: a lifted transmittance field instead of a piecewise-stable sort.
    matter rather than camera-glued paint.
 
 7. **Prototype evidence and acceptance gates.** We record the current Metal
-   Gate4/native-cutwalk speed evidence, but keep quality/parity acceptance
-   explicit: real public datasets, matched STAR/GS baselines, official
-   CUDA/Warp parity, and clean heldout metrics are still required before a
-   full rendering claim.
+   Gate4/native-cutwalk speed evidence and the fixed-tape material parity
+   result, but keep quality acceptance explicit: compact native-4D state, real
+   public datasets, matched STAR/GS baselines, official CUDA/Warp parity, and
+   clean heldout metrics are still required before a full rendering claim.
+
+The parameterized M0--M5 Metal forward/VJP microkernel is **validation
+infrastructure, not a scientific contribution**. It keeps constant,
+affine-color, polynomial, and log-polynomial segment laws on one fixed tape
+and one `(beta,m)` ABI so their later material-value comparison is not
+confounded by different geometry, dispatch, or adjoint implementations.
 
 ### Proof Spine
 
@@ -184,16 +347,17 @@ The paper should promote these claims in this order:
 6. Alpha compositing as atomic optical transfer: sorted splat compositing is
    the monoid scan of atomic opacity events.
 
-7. Cell-path word rasterization: a camera ray induces a certified front-to-back
-   cell/event word; WorldFoam evaluates that word in the visibility monoid.
+7. Cell-path word rasterization: a camera ray induces a compiler-validated
+   front-to-back cell/event word; WorldFoam evaluates that word in the
+   visibility monoid.
 
 8. Same-representation replay equivalence: on certified domains, compiled
    WorldFoam matches per-frame WorldFoam replay when the emitted word and run
    lengths match, up to declared basis/quadrature/support/fallback error.
 
-9. Monoid-scan VJP: direct backward over `(beta,m)` elements gives prefix/suffix
-   adjoints, and constant owner-run elements give closed-form `DeltaTau`,
-   length, density, and color gradients.
+9. Monoid-scan VJP: a prefix-only second replay over `(beta,m)` elements gives
+   a constant-state exact adjoint, and constant owner-run elements give closed-
+   form `DeltaTau`, physical length, density, and color gradients.
 
 10. Commutator theorem: visibility/order error is controlled by opacity overlap
    times color contrast; this becomes the interval split/compression signal.
@@ -202,13 +366,19 @@ The paper should promote these claims in this order:
    topology; endpoint/topology changes require refresh, split, smoothing,
    fallback, or future boundary calculus.
 
-12. Event closure versus Schur closure: World Tubes gets Gaussian Schur
-    marginalization; WorldFoam gets sparse event intervals plus optical-transfer
-    composition.
+12. Retained depth versus Schur closure: World Tubes gets Gaussian Schur
+    marginalization. WorldFoam cannot eliminate depth without erasing the
+    ordered-overlap phenomenon; its mathematical core is the translated
+    optical-depth measure, whose sufficient runtime quotient is affine
+    transfer `(beta,m)`. No new Schur-like foam formulation is required.
 
-13. Event-complexity scaling: structural work scales with camera-path event
-   records rather than with sampled frame count when event complexity is
-   sublinear.
+13. Fixed-program requested-density scaling: for one fixed world, camera,
+    physical interval, chart partition, owner-word set, and temporal ranks,
+    node forward and ordered-word reverse state/work are independent of the
+    number of requested temporal samples. Camera evaluation, target access,
+    sample-to-node reduction, and full output remain linear in the requested
+    observations. Longer-duration sequences may grow event, chart, word, or
+    rank complexity and are not covered by this claim.
 ```
 
 ### Math Appendix Summary
@@ -272,16 +442,39 @@ field and camera-path compiler the central object.
 
 **Volumetric rendering.** NeRF-style emission-absorption rendering already
 uses the Beer-Lambert equation. WorldFoam should not pretend this equation is
-new. The novelty is the compiled bounded-cell representation and GPU raster
-strategy: reuse cell/ray event structure across sensor time while retaining a
-compact differentiable primitive family.
+new. The proposed contribution is the compiled bounded-cell representation and
+GPU raster strategy: reuse cell/ray event structure across sensor time while
+retaining a compact differentiable primitive family. Its literature novelty
+still requires a formal comparison against prior ordered-transfer and compiled
+volume-rendering work.
 
-**Cell complexes and power diagrams.** PowerFoam-like methods use bounded
-cells, adjacency graphs, and cell-local material state. Cech/AABB graphs,
-regular triangulations, witnessed complexes, and uncertainty-weighted power
-distances are natural tools for making these cells coherent under novel
-views. In WorldFoam they become part of the representation and its diagnostics,
-not just implementation scaffolding.
+**Tetrahedral radiance fields and differentiable volume meshes.** Tetra-NeRF
+uses a Delaunay tetrahedralization as an adaptive NeRF representation around
+sparse scene points. Radiance Meshes use constant-density tetrahedral cells for
+exact volume rendering through rasterization and ray tracing, while explicitly
+handling learned-position topology flips. DiffTetVR differentiates
+tetrahedral volume rendering with respect to material and vertex positions and
+supports local subdivision. These methods establish that tetrahedral
+parameterization, analytic cell integration, differentiable cell geometry, and
+adaptive refinement are prior art. Radiance Meshes' constant-density cells are
+also a direct reason M0/M1 must remain in every WorldFoam material comparison.
+
+**Voronoi and power foams.** Radiant Foam represents a scene as a
+non-overlapping Voronoi volumetric mesh and traverses it through cell
+adjacency for differentiable ray tracing. Power Foam replaces the unbounded
+Voronoi cells with bounded power cells and adds rasterization-oriented
+locality, surface modeling, and decoupled appearance. WorldFoam therefore does
+not claim cell foams, neighbor traversal, bounded power diagrams, or their
+rasterization as new. Its narrower proposed delta is the gauge-invariant
+ordered-transfer formulation and amortized cell/event compilation over a
+known moving-camera program. That delta remains provisional until the
+same-representation replay and native-4D scaling gates pass.
+
+**Cell-complex diagnostics.** Cech/AABB graphs, regular triangulations,
+witnessed complexes, and uncertainty-weighted power distances are natural
+tools for making cells coherent under novel views. In WorldFoam they are
+candidate representation diagnostics, not established contributions, until
+their residual/topology-churn correlation tests pass.
 
 ## 3. Method
 
@@ -442,6 +635,185 @@ front-to-back alpha compositor is recovered by approximating `sigma_l` with
 depth-localized atoms and applying a quadrature rule. WorldFoam keeps the
 continuous/layered optical-depth object as primary.
 
+**Theorem (translated optical-depth-measure quotient).** Let a finite
+front-to-back P0 word have optical depths `tau_r >= 0` and colors
+`c_r in R^d` with `||c_r|| <= C < infinity`. Define
+
+```text
+K_0 = 0,
+K_r = sum_(q<=r) tau_q,
+kappa = K_R,
+d nu(u) = c_r du,  u in [K_{r-1}, K_r).
+```
+
+For two such objects, let `shift(a)(u)=u+a` and define
+
+```text
+(kappa_A, nu_A) odot (kappa_B, nu_B)
+  = (kappa_A + kappa_B,
+     nu_A + shift(kappa_A)_# nu_B).
+```
+
+Then these objects form a monoid with identity `(0,0)`. The map
+
+```text
+L(kappa,nu) = (beta,m),
+beta = exp(-kappa),
+m = integral_[0,infinity) exp(-u) d nu(u)
+```
+
+is a monoid homomorphism into affine optical transfer:
+
+```text
+L(A odot B)
+  = (beta_A beta_B, m_A + beta_A m_B)
+  = L(A) compose L(B).
+```
+
+For any differentiable parameter path that keeps the finite owner-word
+combinatorics fixed, the distributional tangent is
+
+```text
+dot nu =
+    sum_r dot(c_r) 1_[K_{r-1},K_r) du
+  + sum_{r<R} (c_r-c_{r+1}) dot(K_r) delta_{K_r}
+  + c_R dot(kappa) delta_kappa,
+
+dot beta = -beta dot(kappa),
+dot m = integral exp(-u) d(dot nu)(u).
+```
+
+*Proof.* The identity law is immediate. Both parenthesizations of three words
+produce
+
+```text
+nu_A
+  + shift(kappa_A)_# nu_B
+  + shift(kappa_A+kappa_B)_# nu_C,
+```
+
+so `odot` is associative. A change of variables in the shifted rear integral
+gives
+
+```text
+integral exp(-u) d(shift(kappa_A)_# nu_B)(u)
+  = exp(-kappa_A) m_B,
+```
+
+which proves the homomorphism. Differentiating each moving interval contributes
+its interior color derivative, a positive atom at its moving right endpoint,
+and a negative atom at its moving left endpoint. Adjacent endpoint terms
+combine into `(c_r-c_{r+1}) dot(K_r) delta_{K_r}`, leaving the terminal atom
+shown above. Applying the Laplace functional yields the final two tangent
+identities. QED.
+
+**Corollary (zero-width seam).** Inserting or deleting a segment of optical
+depth `tau=0` leaves `L` unchanged. As `tau -> 0+`, its local transfer obeys
+
+```text
+|1-beta| <= tau,
+||m|| <= C tau,
+```
+
+so the primal transfer glues continuously to the word with that segment
+removed. Its one-sided tangent can remain nonzero through the boundary atoms;
+there is no general `C^1` seam and no claimed classical derivative through a
+topology change.
+
+The map `L` is intentionally not injective: different ordered color profiles
+can share the same final `(beta,m)`. Thus `(kappa,nu)` is the order-explicit
+proof object, while `(beta,m)` is the sufficient runtime quotient for the
+declared rendered action.
+
+**Proposition (weighted-total-variation certificate).** Let `kappa` and
+`kappa_tilde` be nonnegative and extend two finite vector Radon measures with
+finite exponentially weighted variation by zero to `[0,infinity)`. Define
+
+```text
+||mu||_(e,TV) = integral exp(-u) d|mu|(u).
+```
+
+Then, under any fixed vector norm and its induced vector-measure variation,
+
+```text
+||m - m_tilde|| <= ||nu - nu_tilde||_(e,TV),
+
+|beta - beta_tilde|
+  <= exp(-min(kappa,kappa_tilde)) |kappa-kappa_tilde|.
+```
+
+For a common background `b`, rendered color `I=m+beta b` therefore satisfies
+
+```text
+||I-I_tilde||
+  <= ||nu-nu_tilde||_(e,TV)
+     + ||b|| exp(-min(kappa,kappa_tilde))
+       |kappa-kappa_tilde|.
+```
+
+The same first inequality applied to the signed tangent measures bounds
+`||dot(m)-dot(m_tilde)||`. This is a proof/certification norm, not a proposed
+native payload.
+
+**Corollary (opacity-tail truncation).** Let `A` be a retained prefix, `B` a
+discarded rear word with `||c_r|| <= C_B`, and `b` the background. For the
+tangent statement, assume this prefix/tail split and its primitive order stay
+fixed under the admitted perturbation. Since
+
+```text
+I(A odot B;b) - I(A;b)
+  = beta_A (m_B + (beta_B-1)b),
+```
+
+the primal tail error is bounded by
+
+```text
+||I(A odot B;b)-I(A;b)||
+  <= beta_A (1-beta_B) (C_B+||b||)
+  <= exp(-kappa_A) (C_B+||b||).
+```
+
+Primal opacity alone is not a training-safe truncation rule. For a parameter
+direction, let `||dot(nu_B)||_(e,TV)` bound the rear tangent measure and permit
+a background tangent `dot(b)`. Differentiating the exact tail difference gives
+the sufficient directional bound
+
+```text
+||dot(I_full-I_prefix)|| <= beta_A [
+    ||dot(nu_B)||_(e,TV)
+  + beta_B |dot(kappa_B)| ||b||
+  + (1-beta_B) ||dot(b)||
+  + |dot(kappa_A)| (1-beta_B) (C_B+||b||)
+].
+```
+
+A runtime may truncate a tail during training only after choosing a parameter
+norm and bounding this quantity uniformly over its admitted unit directions,
+not merely after observing large prefix opacity. Converting the rendered-color
+JVP bound into a loss-gradient/VJP certificate additionally requires a bounded
+and Lipschitz output cotangent. A finite optimizer-step guarantee must keep the
+split fixed and control `C_B`, tangent variation, and these loss constants
+uniformly over the admitted neighborhood. The current executor does not enable
+this optimization. Proof-oracle regressions comparing both bounds with exact
+P0 transfer and tangent differences are source-written but unrun.
+
+Density and geometry changes therefore appear as boundary masses in cumulative
+optical depth. This explains why a low-rank primal transfer can still require a
+higher-rank tangent certificate.
+
+This measure view is used for ordering, tangent, and error arguments; the
+executor still stores only `(beta,m)` at each compiled node. It therefore
+strengthens the proof contract without expanding the native runtime state.
+The proof-only CPU oracle checks associativity, the Laplace homomorphism,
+commutators, distributional tangents, and P0 VJP parity; it is validation
+machinery rather than a new executor.
+
+This is the selected mathematical formulation, not another public method
+name. The measure makes order and moving optical-depth boundaries explicit for
+proofs and error analysis. Native execution should continue to store compact
+owner words and affine transfers, not a discretized measure or an expanded
+per-frame depth object.
+
 ### 3.5 Foam atlas
 
 A compiled WorldFoam atlas is:
@@ -514,6 +886,100 @@ tau_{j,l}(y) = integral_{z^-}^{z^+}
 For constant density inside the cell, this is density times chord length in
 the physical measure. For low-order local density, it is a low-order
 quadrature or analytic moment.
+
+#### 3.6.1 Shared segment-material ABI
+
+Material comparisons must reuse one cell word, one endpoint tape, one camera
+gauge, and one front-to-back scan. A material evaluator receives a normalized
+segment coordinate `xi in [0,1]`, physical segment length `L`, a material mode,
+three fixed coefficient slots, and appearance coefficients. It emits:
+
+```text
+SegmentMaterial -> (tau, beta, m, density_bounds, branch_code)
+
+beta = exp(-tau)
+g = (beta,m)
+```
+
+The scan sees only the optical-transfer element `g`; material-specific
+quadrature, series, or special-function code stays behind this ABI. Its VJP
+returns coefficient, appearance, and length gradients. A physical `L` is used
+after the gauge Jacobian has been applied; a parameter-coordinate length
+without that measure correction is invalid.
+
+The frozen material matrix is:
+
+| ID | Extinction on one segment | Appearance | Role |
+| --- | --- | --- | --- |
+| M0 | P0 constant | constant RGB | Current constant-material reference |
+| M1 | P0 constant | affine RGB | Appearance-only counterbaseline |
+| M2 | positive Bernstein P1 | constant RGB | Cheapest richer density |
+| M3 | positive Bernstein P2 | constant RGB | Mandatory polynomial counterbaseline |
+| M4 | log-P1 | constant RGB | Positive exponential-linear density |
+| M5 | convex log-P2 | constant RGB | Gaussian-like `erf` branch |
+
+M3 is mandatory, not a weak ablation. On a normalized ray segment with
+nonnegative Bernstein controls:
+
+```text
+sigma_P1(xi) = d0 (1-xi) + d1 xi
+tau_P1 = L (d0+d1) / 2
+
+sigma_P2(xi) =
+    d0 (1-xi)^2 + 2 d1 xi(1-xi) + d2 xi^2
+tau_P2 = L (d0+d1+d2) / 3.
+```
+
+Thus positive P2 and log-P2 both use three scalar segment controls, while
+positive P2 has a cheaper exact optical-depth integral. Nonnegative quadratic
+Lagrange samples are not an acceptable substitute: they do not guarantee
+nonnegativity between samples.
+
+For constant source color:
+
+```text
+m = (1-beta)c.
+```
+
+M1 still returns the same `(beta,m)` ABI, but its affine color requires the
+exact emission moment. The implementation stores endpoint colors
+`c_front,c_back`. If `tau=sigma L`, then:
+
+```text
+m =
+  [(1-exp(-tau))-h1(tau)] c_front
+  + h1(tau) c_back,
+
+h1(tau) = [1-(1+tau)exp(-tau)]/tau,
+```
+
+with `h1` evaluated by its small-`tau` series. In the equivalent slope
+notation `c(xi)=c0+c1 xi`, the same formula is
+`m=(1-exp(-tau))c0+h1(tau)c1`.
+
+For M5 write the negative log extinction as:
+
+```text
+q(xi) = a xi^2 + b xi + c,    a >= 0
+sigma(xi) = sigma_star exp(-q(xi)).
+```
+
+The three-slot implementation fixes `sigma_star=1`; a positive reference scale
+is absorbed into `c <- c-log(sigma_star)`.
+
+The fixed-tape implementation must report which numerical branch was used:
+
+```text
+near-zero curvature   -> constant/linear moment series
+regular a > 0         -> completed-square erf difference
+large same-sign tails -> scaled erfcx difference using endpoint densities
+a < 0                 -> rejected/fallback in M5; no implicit erfi path
+nonfinite/overflow    -> rejected/fallback
+```
+
+Branch thresholds are selected by float64/Metal parity sweeps. A shader
+constant chosen without that sweep is not part of the method. Fixed GL16 is not
+an accepted fallback because it misses sufficiently narrow legal peaks.
 
 ### 3.7 Cell-complex gauge connection
 
@@ -627,11 +1093,11 @@ This is the continuous analog of the front-to-back alpha-gradient identity:
 dI/d alpha_i = T_i (c_i - I_behind_i).
 ```
 
-A compiled backward pass stores or recomputes:
+A general continuous backward may evaluate:
 
 ```text
 front transmittance prefix
-behind radiance suffix
+behind radiance action
 local basis derivatives
 cell-parameter Jacobians
 ```
@@ -647,8 +1113,72 @@ dL/d theta_j =
         ] dy dz.
 ```
 
-This is one of the strongest reasons to keep the lifted foam explicit: forward
-and backward share the same prefix/suffix transmittance structure across time.
+For the landed finite-P0 word, no per-run suffix or reverse tape is required.
+One exact forward obtains the final affine transfer; a second front-to-back
+scan keeps only the current prefix and derives each local cotangent from the
+final output. This is one of the strongest reasons to keep the lifted foam
+explicit: forward and backward share an associative transfer structure across
+time without an `F x R` interaction tape.
+
+### 3.10 Fixed-surrogate frame-density factorization
+
+For one certified track-local chart, let `g_j` be the exact affine-Lie transfer
+at compiler node `t_j`, let `w_j(t)` be the fixed interpolation weights, and
+let `G_J(t)` be the decoded interpolant. Let `R_run,p,c` denote the stored
+owner-run/word-incidence count for track `p`, chart `c`; it is distinct from a
+rotation matrix and from compiler root-discovery counters. Streaming sample
+cotangents gives
+
+```text
+bar_g_j = sum_f w_j(t_f)
+          D decode(g_J(t_f))^T bar_y_f.
+```
+
+After that reduction, one exact ordered-word reverse at each node gives
+
+```text
+bar_theta = sum_j D_theta g_j^T bar_g_j.
+```
+
+This proves the desired separation for the **fixed compiled surrogate**:
+expensive ordered-word forward/reverse work is
+`Theta(sum_(p,c) J_(p,c) R_run,p,c)`, independent of requested temporal sample
+density. The sample slice is not rank-free. Its honest common-path cost is
+
+```text
+Theta(sum_(p,c) F_(p,c) J_(p,c)
+      + sum_(p,c) N_fb,p,c J_(p,c)^2
+      + PF),
+```
+
+plus chart lookup and bounded target/output traffic. Calling this `O(PF)` is
+valid only when the world, camera program, physical interval, tolerance,
+charts, ranks, interpolation rules, and fallback behavior are fixed while
+only `F` changes.
+
+The current continuous direct-kinetic certificate bounds the primal transfer
+and referenced-material derivative actions. The exact node-length VJP also
+differentiates the fixed surrogate with respect to site trajectories, weights,
+and affine rays. What is still missing for a physical full-world gradient
+claim is a uniform geometry/ray tangent interpolation bound. The theorem
+ledger now proves the conditional sparse composition lemma: local primal and
+tangent errors bound the global normalized-loss VJP by adding both the direct
+Jacobian-action error and the loss-cotangent change caused by primal error,
+without a dense global dual or an artificial frame-count factor. The
+translated-measure tangent supplies the correct local boundary-mass formula;
+it does not by itself supply the remaining temporal tangent bound.
+
+Arbitrary frame densification also needs exact comparison of rational sample
+times with algebraic event roots. Until native dispatch closes that seam, the
+claim must assume requested samples avoid unresolved isolator neighborhoods.
+Query-dependent root refinement would make compilation depend on `F` and is
+not evidence for the strong scaling theorem.
+
+Structural reuse remains separate from this factorization. The current
+simple-root routine certifies a restricted continuation after reconstructing
+the full predicate registry; it does not repair charts, ranks, payloads, or
+dispatch. Output-sensitive local repair is open, so geometry and camera-ray
+updates safely trigger full structural recompilation and recertification.
 
 ## 4. Implementation Sketch
 
@@ -717,10 +1247,10 @@ or cell-intersection structure.
 
 ```text
 for each output sample y:
-    replay/evaluate layer sigma, color, alpha
-    compute front transmittance prefix
-    compute behind-radiance suffix
-    accumulate gradients into layer/cell basis parameters
+    forward scan to final affine transfer
+    second front-to-back scan with one current prefix state
+    accumulate local transfer cotangents
+    reduce them into sparse cell/face parameters
 ```
 
 The important implementation question is tape versus recompute:
@@ -729,16 +1259,38 @@ The important implementation question is tape versus recompute:
 large tape:
     faster backward, bad memory scaling
 
-recompute prefix/suffix:
-    lower memory, more ALU
-
-compact scalar prefix/weight tape:
-    likely sweet spot if it avoids per-channel storage
+constant-state two-pass P0 replay:
+    current exact memory-light route; no per-run suffix/reverse array
 ```
 
-Current local lessons from STAR/WorldFoam suggest avoiding per-channel tapes
-and avoiding duplicate traversal unless the fused loss makes the recompute
-floor acceptable.
+Current local lessons from STAR/WorldFoam favor the exact two-pass P0 replay
+over per-channel or per-run reverse tapes. Native promotion still requires the
+second scan to beat the avoided memory traffic on realistic words.
+
+The first Metal stage is deliberately a **fixed-tape material microkernel**.
+It forks the segment evaluator, not the renderer: M0--M5 receive identical
+precomputed owner words and endpoints and lower to the same `(beta,m)` scan.
+Passing it does not show that a WorldFoam model is compact across time. Shader
+arithmetic cannot repair a representation whose parameters or owner tape are
+still duplicated per frame. The CPU direct-kinetic compiler now proves the
+shared chart/transfer/reverse contract without a frame tape. The sealed
+multi-chart program now reaches a source-only native-shaped request/step path;
+the missing step is to run its focused CPU/fake-native gates, rebuild and attest
+the native extension, then measure coefficient/topology/allocator growth
+against requested time density.
+
+The fork is intentionally isolated at:
+
+```text
+research_experiments/world_foam_lane2/finite_element_material_transfer.metal
+research_experiments/world_foam_lane2/finite_element_material_metal.py
+```
+
+It exports one parameterized forward kernel and one VJP kernel. Selected and
+attested `world_foam_lane2_fused_slab_v0` renderer routing remains unchanged;
+an unselected suffixed fixed-camera fused-v1 source entry point has been added.
+Only a material law and full-geometry route that clear matched parity,
+quality, byte, and allocator gates should be promoted into its owner-run tape.
 
 ## 5. Current Evidence
 
@@ -798,6 +1350,91 @@ parameter update
 
 It is not a quality benchmark.
 
+The bounded Pass-4 segment-material gate is also green. One shared evaluator
+covers M0 constant, M1 affine-color P0, positive Bernstein P1/P2, log-P1, and
+convex log-P2, returning:
+
+```text
+(tau, beta, m, density_bounds, branch_status)
+```
+
+with an explicit coefficient/color/length VJP. The accepted 12-record artifact
+reports:
+
+```text
+CPU independent-quadrature max abs error:  5.96e-15
+CPU explicit-VJP normalized error:         5.55e-17
+Metal forward normalized error:            7.51e-8
+Metal VJP normalized error:                5.96e-8
+invalid rows:                              0
+current MPS allocation:                    4,608 bytes
+sampled MPS driver allocation:             28,016,640 bytes
+```
+
+Artifact:
+
+```text
+artifacts/foundation_gates/worldfoam_material_m0_m5_cpu_metal_20260727.json
+```
+
+This proves fixed-segment numerical parity, including the sharp convex
+log-quadratic regression that invalidated the earlier fixed-GL16 fallback. It
+does not prove training quality, material superiority, event reuse, throughput,
+or compact native-4D model scaling.
+
+The next controlled material-value gate is also complete, but it gives a
+selection result rather than a universal promotion. A single complete
+constant-color segment observes only total optical depth, so the gate shares
+one material field across partial chords and evaluates on a disjoint held-out
+chord set. Targets are integrated by an oracle independent of the fitted
+segment evaluator. Across seeds `17/29/43`, the matched six-scalar M3 and M5
+laws separate by generating family:
+
+```text
+held-out positive-P2 target:
+    M3 loss 5.26e-17
+    M5 loss 8.80e-5
+
+held-out convex-log-P2 target:
+    M3 loss 1.33e-3
+    M5 loss 6.19e-15
+```
+
+M3 and M5 both beat the M0/M1 controls by more than `100x` on their own
+families, and each beats the other by more than `100x` there. The scientifically
+relevant conclusion is therefore **basis complementarity**, not “P2 wins” or
+“log-P2 wins.” The saved 36-row CPU artifact is independently verified and
+explicitly marks both `winner=null` and
+`eligible_for_native_4d_integration=false`:
+
+```text
+artifacts/foundation_gates/worldfoam_material_value_fit_cpu_20260727.json
+```
+
+This is synthetic held-out material-capacity evidence. It is not image
+training, camera-program compilation, Metal throughput, or real-scene quality
+evidence.
+
+The follow-on adaptive M3/M5 CPU ablation is now also complete. It fits both
+matched six-scalar bases per cell, selects the one with lower loss on a
+disjoint selection split, and evaluates that frozen choice on a disjoint
+heldout split. Its independent verifier recomputes `72` candidate rows and
+`36` selection rows across seeds `17/29/43` and twelve target cells. The
+result has `1.0` pure-family selection accuracy, `1.0` heldout-oracle
+agreement, adaptive/best-fixed mean loss ratio `0.313405`, and
+adaptive/oracle ratio `1.0`:
+
+```text
+outputs/benchmarks/2026-08-15_worldfoam_adaptive_material_basis_cpu/summary.json
+```
+
+This supports a one-bit per-cell M3/M5 basis tag as the controlled Paper-B
+material-selection ablation. It does **not** authorize replacement of P0 in
+the native systems path: it is float64 synthetic chord evidence, not native
+integration, trained public-image quality, renderer speed, or memory evidence.
+The next material promotion decision must use real heldout material or image
+observations after the P0 native path is sound.
+
 ### 5.2 Current weak points
 
 The quality bridge is not solved:
@@ -820,6 +1457,15 @@ acceptance target roughly PSNR >= 13 and SSIM >= 0.15
 Official CUDA/Warp parity and fixture acceptance remain incomplete. Therefore
 the current paper should not claim full replacement of Gaussian splatting or
 state-of-the-art dynamic novel-view quality.
+
+The Pass-4 parity, material-capacity, and adaptive-selection results therefore
+belong in the numerical-foundation row, not the quality or systems rows. The
+production retained-fiber shader and CPU direct-kinetic compiler exist, while
+real-data/native adaptive-material promotion, built native kinetic multi-chart
+parity, structural recertification, allocator evidence, production trainer
+routing, checkpoint restore, and dataset-scale evidence remain missing. Staged
+source coordinators, the CPU combined transaction, and the unselected fused-v1
+source exist, but are not evidence for any of those runtime claims.
 
 ## 6. Experiments Required for a Paper
 
@@ -858,13 +1504,31 @@ cell-intersection false positive / false negative rate
 fallback fraction
 ```
 
-### E2. Frame-count scaling
+### E2. Requested-density scaling on one fixed compiled program
 
 Sweep:
 
 ```text
-F = 2, 4, 8, 16, 32, 64
+F = 8, 64, 300
+P = 512 fixed pixel tracks
+N_observation = P F
 ```
+
+The three rows reuse the exact same 300-frame physical grid, 512 pixel ids,
+camera program, target provider, 1024-site world, all-competitor owner
+certificates, charts, and active-word lowering. Only the endpoint-including
+requested-time subset changes. Cold CPU compilation may inspect all 1024
+competitors and is charged separately; compact device blocks may contain only
+post-certification active sites, never a heuristic spatial crop.
+
+Run the full-geometry reverse ablation in two layers. First, at `F=8`, compare
+the staged sparse `[J,R_run]` reduction against the fused union-local reverse
+on identical inputs and report loss, material-gradient, geometry-gradient, and
+post-update parameter parity over three fresh-process repeats. Then run the
+accepted fused route alone at `F=8/64/300`. Include a per-frame replay control
+where it remains inside the incident guard; a guard-triggered or allocator OOM
+is recorded as a censored resource result rather than silently dropping the
+row.
 
 Measure:
 
@@ -875,16 +1539,32 @@ backward time
 total optimizer step
 cell intersection records
 prefix records
-GPU memory
+fresh-process RSS peak and delta
+sampled MPS current/driver allocation high-water and hard working-set ceiling
+bridge-visible, active-lane, and combined-state logical bytes
 quality delta vs per-frame reference
+streamed observation/sample interactions
+target bytes read and transferred
+provider/replay metadata bytes
+the complete structural fingerprint `(E,J,R_run,active blocks)`
 ```
 
 Pass condition:
 
 ```text
-world-side cell/intersection/prefix work grows sublinearly with F,
-while output quality stays within tolerance.
+the dataset grid, physical interval, world, charts, ranks, owner words, and
+active blocks are identical across rows; node-forward and ordered-word-reverse
+launch/interaction counts are exactly invariant; no retained tensor scales as
+`F x N`, `F x R_run`, or `F x J x R_run`; measured peak follows the bounded streamed
+envelope; and output quality stays within tolerance. Observation count,
+selected-target traffic, and sample-to-node work must be reported as the
+expected linear terms rather than folded into the invariant claim.
 ```
+
+Run streamed static PowerFoam (`batch=1`) as a memory control in addition to
+the repository's per-frame-parameter `MetalPowerFoamVideo` baseline. The former
+can also have frame-independent peak memory; the latter exposes the `F x N`
+dynamic-state table that WorldFoam is designed to remove.
 
 ### E3. Sort pathology benchmark
 
@@ -955,10 +1635,13 @@ thresholds.
 A safe near-term claim:
 
 ```text
-WorldFoam provides a camera-gauged ray-fiber transmittance formulation and a
-Metal prototype whose cell/intersection work can be reused across time. Focused
-microgates show favorable frame-count scaling, while synthetic experiments
-show reduced sorting pathologies under translucent crossings.
+WorldFoam provides gauge-invariant ordered ray transfer factored through a
+camera-compiled cell-path atlas. Its visibility monoid, replay theorem,
+exact constant-state P0 VJP, active kinetic CPU chart compiler, multi-chart
+transfer, frozen-program stable-stratum VJP, and M0--M5 fixed-segment Metal
+microkernel are executable; focused Gate4/native-cutwalk microgates show a
+promising temporal-reuse signal. This does not include derivatives through
+event, chart, rank, node-time, or recompilation choices.
 ```
 
 An unsafe current claim:
@@ -972,9 +1655,11 @@ A future full-paper claim after gates clear:
 
 ```text
 WorldFoam matches or improves dynamic Gaussian rendering quality while replacing
-per-frame primitive sorting with compiled ray-fiber transmittance, achieving
-lower frame-count scaling for known camera programs and better behavior under
-finite exposure, rolling shutter, and translucent ambiguity.
+per-frame primitive sorting with compiled ray-fiber transmittance. For denser
+sampling of a fixed known camera program, its expensive node/ordered-world
+forward and reverse are frame-density invariant while sample/target work is
+streamed and linear; it also improves behavior under finite exposure, rolling
+shutter, and translucent ambiguity.
 ```
 
 ## 8. Discussion
@@ -993,7 +1678,7 @@ Paper 1: World Tubes
     camera-path compiler
     visibility gauge atlas
     compiled adjoints
-    sublinear dominant world-side scaling
+    fixed-program requested-density-invariant compiled world-side work
 
 Paper 2: WorldFoam
     lifted opacity/transmittance semantics
@@ -1019,5 +1704,16 @@ better renderer/model family.
 - Hou et al., "Sort-free Gaussian Splatting via Weighted Sum Rendering."
 - Koo et al., "Gaussian Blending: Rethinking Alpha Blending in 3D Gaussian
   Splatting."
-- PowerFoam upstream paper/implementation notes already collected under
-  `research_notes/foam_papers/`.
+- Kulhanek and Sattler,
+  ["Tetra-NeRF: Representing Neural Radiance Fields Using Tetrahedra"](https://arxiv.org/abs/2304.09987).
+- Govindarajan et al.,
+  ["Radiant Foam: Real-Time Differentiable Ray Tracing"](https://arxiv.org/abs/2502.01157).
+- Govindarajan et al.,
+  ["Power Foam: Unifying Real-Time Differentiable Ray Tracing and Rasterization"](https://arxiv.org/abs/2604.24994).
+- Mai et al.,
+  ["Radiance Meshes for Volumetric Reconstruction"](https://arxiv.org/abs/2512.04076).
+- Neuhauser,
+  ["DiffTetVR: Differentiable Tetrahedral Volume Rendering"](https://arxiv.org/abs/2601.00114).
+- Power Foam implementation/reproduction notes collected under
+  `research_notes/foam_papers/`; these local notes do not substitute for the
+  upstream method citation.

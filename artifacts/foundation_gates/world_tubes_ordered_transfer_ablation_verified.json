@@ -1,0 +1,114 @@
+{
+  "checks": {
+    "dense_fixture_is_negative_selectivity_control": true,
+    "fixed_quadrature_matches_dense_reference": true,
+    "hybrid_matches_all_retained_metrics": true,
+    "native_all_source_vjps_match_cpu": true,
+    "native_driver_memory_below_bound": true,
+    "native_forward_matches_cpu": true,
+    "small_fixture_hybrid_is_selective": true
+  },
+  "claim_limits": {
+    "accepted_claim": "bounded native forward/VJP correctness, small-fixture selectivity with oracle metric parity, and a retained dense-scene negative selectivity control",
+    "adaptive_error_certified_quadrature": false,
+    "dense_scene_hybrid_selective": false,
+    "projective_retained_fiber_supported": false,
+    "public_quality_or_speed_ablation_complete": false
+  },
+  "paper_label": "World Tubes + Ordered Ray Transfer",
+  "results": {
+    "dense_199_atom_negative_control": {
+      "ambiguous_tile_count": 64,
+      "certificate_overflow_tile_count": 0,
+      "fallback_fraction": 1.0,
+      "fallback_tile_count": 64,
+      "invalid_tile_count": 0,
+      "quality_metrics": {
+        "heldout_eval_l1": 0.41299458344777423,
+        "heldout_eval_lpips": 0.2849559187889099,
+        "heldout_eval_psnr": 6.516044102674795,
+        "heldout_eval_ssim": -0.02217007987201214
+      },
+      "tile_count": 64
+    },
+    "native": {
+      "driver_memory_bytes": 27754496,
+      "fixed_quadrature_reference_max_abs_error": 0.0002459585666656494,
+      "forward_max_abs_error": 2.682209014892578e-07,
+      "worst_normalized_vjp_error": 1.2665987014770508e-07
+    },
+    "physical_fast_199_atom_reference": {
+      "quality_metrics": {
+        "heldout_eval_l1": 0.4124566316604614,
+        "heldout_eval_lpips": 0.29055099189281464,
+        "heldout_eval_psnr": 6.525056129414017,
+        "heldout_eval_ssim": -0.022262685000896454
+      }
+    },
+    "selective_16_atom_smoke": {
+      "all_retained_quality_metrics": {
+        "heldout_eval_l1": 0.4648364583651225,
+        "heldout_eval_lpips": 0.5062202513217926,
+        "heldout_eval_psnr": 5.868593065706042,
+        "heldout_eval_ssim": -0.016355404630303383
+      },
+      "ambiguous_tile_count": 10,
+      "certificate_overflow_tile_count": 0,
+      "fallback_fraction": 0.15625,
+      "fallback_tile_count": 10,
+      "invalid_tile_count": 0,
+      "max_quality_metric_absolute_delta": 5.960464477539063e-08,
+      "quality_metric_absolute_deltas": {
+        "heldout_eval_l1": 0.0,
+        "heldout_eval_lpips": 5.960464477539063e-08,
+        "heldout_eval_psnr": 0.0,
+        "heldout_eval_ssim": 6.51925802230835e-09
+      },
+      "quality_metrics": {
+        "heldout_eval_l1": 0.4648364583651225,
+        "heldout_eval_lpips": 0.5062203109264374,
+        "heldout_eval_psnr": 5.868593065706042,
+        "heldout_eval_ssim": -0.01635539811104536
+      },
+      "tile_count": 64
+    }
+  },
+  "schema_version": 1,
+  "scope": "bounded_static_world_tubes_ordered_ray_transfer",
+  "source_artifacts": {
+    "all_retained_16": {
+      "bytes": 12036,
+      "path": "artifacts/spd4_retained_hybrid_smoke/retained_16x4f_2step/comparison_report.json",
+      "sha256": "5ebd3cfdd6ac67d9e47f1e74d8825cc4b5e0f698099818e5fbd9bee6ef505234"
+    },
+    "hybrid_16": {
+      "bytes": 12414,
+      "path": "artifacts/spd4_retained_hybrid_smoke/hybrid_16x4f_2step/comparison_report.json",
+      "sha256": "0cf226ac4827b454976449dd9dedbcb9586708fdf60321a5e676ca10fea3d4f8"
+    },
+    "hybrid_199": {
+      "bytes": 12418,
+      "path": "artifacts/spd4_retained_hybrid_smoke/hybrid_199x4f_2step/comparison_report.json",
+      "sha256": "c8fd5946c1c929eb2cfd18a42caf3ad0c43edeb03e95bddad7cd4d1366f4136e"
+    },
+    "native_gate": {
+      "bytes": 1648,
+      "path": "artifacts/foundation_gates/spd4_retained_fiber_cpu_metal.json",
+      "sha256": "54b9b139800dea4d2bf485e03572265741a443e55d06ba558db8bb327911747f"
+    },
+    "physical_fast_199": {
+      "bytes": 14437,
+      "path": "artifacts/spd4_retained_hybrid_smoke/metal_199x4f_2step_optimized/comparison_report.json",
+      "sha256": "4ef21ba6be69f7055bf20998c6184e0b28ae1085125054f6324f42bb358f0c4c"
+    }
+  },
+  "status": "pass",
+  "thresholds": {
+    "fixed_quadrature_reference_error": 0.0005,
+    "hybrid_oracle_metric_max_abs_delta": 1e-06,
+    "native_driver_memory_bytes": 100000000,
+    "native_forward_max_abs_error": 5e-06,
+    "native_vjp_normalized_error": 5e-06,
+    "selective_fallback_fraction_max": 0.2
+  }
+}

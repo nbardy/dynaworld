@@ -3,14 +3,14 @@ import {
 	loadPresetDataset,
 	loadTemporalPageDataset,
 } from "./dataset.js?v=20260803-fullfps-pixelgs-1";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260803-fullfps-pixelgs-1";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260814-camera-stress-1";
 import {
 	createOrbitCameraState,
 	orbitPreviewCamera,
 	panOrbitCamera,
 	rotateOrbitCamera,
 	zoomOrbitCamera,
-} from "./orbitCamera.js?v=20260803-fullfps-pixelgs-1";
+} from "./orbitCamera.js?v=20260814-camera-stress-1";
 import { learningRateMultipliers } from "./trainingSchedule.js?v=20260803-fullfps-pixelgs-1";
 import { DynamicSplatWebGpuTrainer } from "./trainerWebGpu.js?v=20260803-fullfps-pixelgs-1";
 import { StatusFlag, WorkerEvent } from "./workerProtocol.js?v=20260803-fullfps-pixelgs-1";
@@ -61,7 +61,9 @@ const values = {
 	metricPair: $("metricPairValue"), visibleSplats: $("visibleSplatValue"),
 	tilePairs: $("tilePairValue"), tileLoad: $("tileLoadValue"),
 	detailMae: $("detailMaeValue"), lowPassPsnr: $("lowPassPsnrValue"),
-	cameraPsnr: $("cameraPsnrValue"), gpuMemory: $("gpuMemoryValue"),
+	cameraPsnr: $("cameraPsnrValue"), cameraOpticalPsnr: $("cameraOpticalPsnrValue"),
+	cameraNearAlpha: $("cameraNearAlphaValue"), cameraGiantAlpha: $("cameraGiantAlphaValue"),
+	cameraDepthSpread: $("cameraDepthSpreadValue"), gpuMemory: $("gpuMemoryValue"),
 	representation: $("representationValue"), dynamicSplats: $("dynamicSplatValue"),
 	persistentSplats: $("persistentSplatValue"), staticMixP50: $("staticMixP50Value"),
 	edgeSupport: $("edgeSupportValue"), aspectP90: $("aspectP90Value"),
@@ -392,6 +394,8 @@ function resetMetrics() {
 		values.edgeSupport, values.aspectP90, values.rasterDead, values.tileOverflow,
 		values.metricPair, values.visibleSplats, values.tilePairs, values.tileLoad,
 		values.detailMae, values.lowPassPsnr, values.cameraPsnr, values.gpuMemory,
+		values.cameraOpticalPsnr, values.cameraNearAlpha, values.cameraGiantAlpha,
+		values.cameraDepthSpread,
 		values.parameterDelta, values.centerUpdate,
 		values.motionUpdate, values.scaleUpdate, values.rotationUpdate, values.colorUpdate,
 		values.opacityUpdate]) {
@@ -456,6 +460,12 @@ function setMetricText(element, value, format) {
 	if (Number.isFinite(value)) element.textContent = format(value);
 }
 
+function setStressPair(element, train, heldout, format) {
+	if (Number.isFinite(train) && Number.isFinite(heldout)) {
+		element.textContent = `${format(train)} / ${format(heldout)}`;
+	}
+}
+
 function consumeValidation({ step, metrics }) {
 	globalThis.__dynaworldValidationMetrics = { step, ...metrics };
 	setMetricText(values.gridLoss, metrics.gridLoss, (value) => value.toFixed(6));
@@ -480,6 +490,20 @@ function consumeValidation({ step, metrics }) {
 		values.cameraPsnr.textContent = `${metrics.weakestTrainCamera ?? "worst"} `
 			+ `${metrics.weakestTrainCameraPsnr.toFixed(1)}–${metrics.strongestTrainCameraPsnr.toFixed(1)}`;
 	}
+	const trainStress = metrics.cameraStress?.train;
+	const heldoutStress = metrics.cameraStress?.heldout;
+	setStressPair(values.cameraOpticalPsnr,
+		trainStress?.opticalWorstPsnr, heldoutStress?.opticalWorstPsnr,
+		(value) => `${value.toFixed(1)} dB`);
+	setStressPair(values.cameraNearAlpha,
+		trainStress?.poseNearContribution, heldoutStress?.poseNearContribution,
+		(value) => `${(value * 100).toFixed(1)}%`);
+	setStressPair(values.cameraGiantAlpha,
+		trainStress?.poseLargeFootprintContribution, heldoutStress?.poseLargeFootprintContribution,
+		(value) => `${(value * 100).toFixed(1)}%`);
+	setStressPair(values.cameraDepthSpread,
+		trainStress?.poseNormalizedDepthSpread, heldoutStress?.poseNormalizedDepthSpread,
+		(value) => value.toFixed(3));
 	setMetricText(values.motionLoss, metrics.motionLoss, (value) => value.toFixed(6));
 	setMetricText(values.motionCoverage, metrics.motionCoverage, (value) => `${(value * 100).toFixed(1)}%`);
 	setMetricText(values.staticCoverage, metrics.staticCoverage, (value) => `${(value * 100).toFixed(1)}%`);

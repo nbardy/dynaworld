@@ -1,0 +1,319 @@
+{
+  "claim_scope": [
+    "local fixed-segment material correctness only",
+    "not trained image quality",
+    "not renderer throughput",
+    "not native-4D parameter or event scaling"
+  ],
+  "coefficient_convention": "normalized xi in [0,1]; direct modes use Bernstein controls; log modes use negative-log power coefficients",
+  "cpu": {
+    "branch_counts": {
+      "direct": 6,
+      "invalid_input": 0,
+      "log_linear_series": 2,
+      "log_quadratic_erf": 2,
+      "log_quadratic_series": 1,
+      "log_quadratic_tail": 1,
+      "small_tau_series": 1,
+      "total": 12
+    },
+    "device": "cpu",
+    "dtype": "float64",
+    "evaluation_seconds": 0.09631649999937508,
+    "gate": {
+      "finite_difference_vjp_tolerance": 1e-07,
+      "integral_tolerance": 1e-10,
+      "passed": true,
+      "vjp_tolerance": 1e-05
+    },
+    "max_density_bound_violation": 0.0,
+    "max_finite_difference_vjp_normalized_error": 6.859349373222745e-10,
+    "max_integral_abs_error": 5.9570404165043556e-15,
+    "max_vjp_normalized_error": 5.551115123125783e-17,
+    "quadrature": {
+      "order": 128,
+      "rule": "independent_numpy_gauss_legendre"
+    },
+    "records": [
+      {
+        "branch_fixture": "direct",
+        "branch_status": 0,
+        "controls": [
+          0.7,
+          0.0,
+          0.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          0.7,
+          0.7
+        ],
+        "finite_difference_vjp_normalized_error": 3.650768576335395e-11,
+        "mode": "M0_P0_CONSTANT",
+        "quadrature_max_abs_error": 2.220446049250313e-16,
+        "tau": 0.9099999999999999,
+        "vjp_normalized_error": 0.0
+      },
+      {
+        "branch_fixture": "tiny_tau",
+        "branch_status": 1,
+        "controls": [
+          2e-05,
+          0.0,
+          0.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          2e-05,
+          2e-05
+        ],
+        "finite_difference_vjp_normalized_error": 2.4980018054066022e-11,
+        "mode": "M0_P0_CONSTANT",
+        "quadrature_max_abs_error": 2.3517022747568395e-17,
+        "tau": 2.6000000000000002e-05,
+        "vjp_normalized_error": 0.0
+      },
+      {
+        "branch_fixture": "direct",
+        "branch_status": 0,
+        "controls": [
+          0.7,
+          0.0,
+          0.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          0.7,
+          0.7
+        ],
+        "finite_difference_vjp_normalized_error": 4.388023278067976e-11,
+        "mode": "M1_P0_AFFINE_RGB",
+        "quadrature_max_abs_error": 7.216449660063518e-16,
+        "tau": 0.9099999999999999,
+        "vjp_normalized_error": 0.0
+      },
+      {
+        "branch_fixture": "direct",
+        "branch_status": 0,
+        "controls": [
+          0.25,
+          1.1,
+          0.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          0.25,
+          1.1
+        ],
+        "finite_difference_vjp_normalized_error": 4.3093084656220526e-11,
+        "mode": "M2_POSITIVE_BERNSTEIN_P1",
+        "quadrature_max_abs_error": 2.220446049250313e-16,
+        "tau": 0.8775000000000001,
+        "vjp_normalized_error": 0.0
+      },
+      {
+        "branch_fixture": "direct",
+        "branch_status": 0,
+        "controls": [
+          0.2,
+          1.4,
+          0.5
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          0.2,
+          1.4
+        ],
+        "finite_difference_vjp_normalized_error": 1.1547623968155563e-11,
+        "mode": "M3_POSITIVE_BERNSTEIN_P2",
+        "quadrature_max_abs_error": 4.773959005888173e-15,
+        "tau": 0.9099999999999998,
+        "vjp_normalized_error": 0.0
+      },
+      {
+        "branch_fixture": "series",
+        "branch_status": 2,
+        "controls": [
+          1e-07,
+          -0.2,
+          0.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          1.2214026360199002,
+          1.2214027581601699
+        ],
+        "finite_difference_vjp_normalized_error": 5.0211612645512105e-11,
+        "mode": "M4_LOG_P1",
+        "quadrature_max_abs_error": 6.661338147750939e-16,
+        "tau": 1.5878235062170443,
+        "vjp_normalized_error": 5.551115123125783e-17
+      },
+      {
+        "branch_fixture": "ordinary",
+        "branch_status": 0,
+        "controls": [
+          0.9,
+          -0.2,
+          0.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          0.4965853037914095,
+          1.2214027581601699
+        ],
+        "finite_difference_vjp_normalized_error": 4.117794993874213e-11,
+        "mode": "M4_LOG_P1",
+        "quadrature_max_abs_error": 2.220446049250313e-16,
+        "tau": 1.0469585451993206,
+        "vjp_normalized_error": 5.551115123125783e-17
+      },
+      {
+        "branch_fixture": "scaled_endpoints",
+        "branch_status": 0,
+        "controls": [
+          -100.0,
+          100.0,
+          0.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          3.720075976020836e-44,
+          1.0
+        ],
+        "finite_difference_vjp_normalized_error": 1.0785811480062968e-11,
+        "mode": "M4_LOG_P1",
+        "quadrature_max_abs_error": 5.9570404165043556e-15,
+        "tau": 0.013000000000000001,
+        "vjp_normalized_error": 1.734723475976807e-18
+      },
+      {
+        "branch_fixture": "series",
+        "branch_status": 6,
+        "controls": [
+          0.0001,
+          0.3,
+          -0.1
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          0.8186488840961914,
+          1.1051709180756477
+        ],
+        "finite_difference_vjp_normalized_error": 8.929909589561191e-11,
+        "mode": "M5_CONVEX_LOG_P2",
+        "quadrature_max_abs_error": 2.220446049250313e-16,
+        "tau": 1.2412024089117104,
+        "vjp_normalized_error": 2.7755575615628914e-17
+      },
+      {
+        "branch_fixture": "erf",
+        "branch_status": 8,
+        "controls": [
+          0.8,
+          -0.35,
+          0.1
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          0.5769498103804866,
+          0.9401472660295866
+        ],
+        "finite_difference_vjp_normalized_error": 4.739342251980361e-11,
+        "mode": "M5_CONVEX_LOG_P2",
+        "quadrature_max_abs_error": 1.3322676295501878e-15,
+        "tau": 1.08376002204587,
+        "vjp_normalized_error": 5.551115123125783e-17
+      },
+      {
+        "branch_fixture": "tail",
+        "branch_status": 16,
+        "controls": [
+          3.0,
+          28.0,
+          1.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          1.2664165549094176e-14,
+          0.36787944117144233
+        ],
+        "finite_difference_vjp_normalized_error": 1.2406733626568744e-11,
+        "mode": "M5_CONVEX_LOG_P2",
+        "quadrature_max_abs_error": 2.2239154962022667e-15,
+        "tau": 0.016952293767191925,
+        "vjp_normalized_error": 9.229270993282856e-18
+      },
+      {
+        "branch_fixture": "sharp_interior",
+        "branch_status": 8,
+        "controls": [
+          1000.0,
+          -1000.0,
+          250.0
+        ],
+        "density_bound_violation": 0.0,
+        "density_bounds": [
+          2.6691902155412764e-109,
+          1.0
+        ],
+        "finite_difference_vjp_normalized_error": 6.859349373222745e-10,
+        "mode": "M5_CONVEX_LOG_P2",
+        "quadrature_max_abs_error": 1.2351231148954867e-15,
+        "tau": 0.07286488581317307,
+        "vjp_normalized_error": 1.3877787807814457e-17
+      }
+    ],
+    "segment_count": 12
+  },
+  "created_utc": "2026-07-27T07:51:27.888518+00:00",
+  "gauge_length_convention": "L is physical ray length after gauge Jacobian",
+  "git": {
+    "commit": "281471d0abc03044a03fc265c32e569cf7592368",
+    "dirty": true
+  },
+  "material_modes": [
+    "M0_P0_CONSTANT",
+    "M1_P0_AFFINE_RGB",
+    "M2_POSITIVE_BERNSTEIN_P1",
+    "M3_POSITIVE_BERNSTEIN_P2",
+    "M4_LOG_P1",
+    "M5_CONVEX_LOG_P2"
+  ],
+  "metal": {
+    "branch_counts": {
+      "direct": 6,
+      "invalid_input": 0,
+      "log_linear_series": 2,
+      "log_quadratic_erf": 2,
+      "log_quadratic_series": 1,
+      "log_quadratic_tail": 1,
+      "small_tau_series": 1,
+      "total": 12
+    },
+    "compile_forward_vjp_seconds": 0.0582477080024546,
+    "current_allocated_bytes": 4608,
+    "device": "mps",
+    "driver_allocated_bytes": 28016640,
+    "dtype": "float32",
+    "gate": {
+      "forward_tolerance": 1e-05,
+      "passed": true,
+      "vjp_tolerance": 0.0001
+    },
+    "max_forward_normalized_error": 7.507716759391769e-08,
+    "max_vjp_normalized_error": 5.960464477539063e-08,
+    "segment_count": 12,
+    "status_matches_vjp": true
+  },
+  "passed": true,
+  "schema_version": "worldfoam.material_foundation_gate.v1",
+  "seed": 0,
+  "source_sha256": "8564e2258fb313cf6fb1fe75a5b13cec342e051f05880146b304833c3e4bcf07",
+  "synchronized_timing": true,
+  "tape_dimensions": {
+    "density_slots": 3,
+    "rgb": 3,
+    "segments": 12
+  }
+}

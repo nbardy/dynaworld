@@ -7,33 +7,29 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from torch import nn
-from torch.nn import functional as F
-from tqdm import trange
-
-from external_paths import ensure_third_party_path
 from device_memory import DeviceMemorySampler
+from external_paths import ensure_third_party_path
+from paper_training_protocol import (
+    PaperCostTracker,
+    PaperPhaseTimer,
+    PaperSampleScheduleDigest,
+    SpacetimeEpochSampler,
+    normalize_image_size,
+    normalize_paper_stages,
+    paper_evaluator_contract,
+    paper_native_module_identity,
+    paper_runtime_identity,
+    paper_stage_for_step,
+    resize_ray_grids,
+    resize_video_frames,
+)
+from paper_training_types import ImageSize, MetalKernelSpec
 from powerfoam_adjacency import build_csr_adjacency, csr_adjacency_stats
 from powerfoam_checkpoints import (
     maybe_save_best_powerfoam_checkpoint,
     save_powerfoam_checkpoint,
-    select_best_metric,
 )
-from powerfoam_metal_config import (
-    DATA_DEFAULTS,
-    HEIGHT_TEXEL_SURFACE_MODES,
-    LOGGING_DEFAULTS,
-    LOSS_DEFAULTS,
-    MODEL_DEFAULTS,
-    ORIENTED_TEXEL_SURFACE_MODES,
-    QUATERNION_TEXEL_SURFACE_MODES,
-    RENDER_DEFAULTS,
-    SV_TEXEL_SURFACE_MODES,
-    TEXEL_SURFACE_MODES,
-    TRAIN_DEFAULTS,
-    resolve_config,
-)
-from powerfoam_raster_config import make_powerfoam_metal_raster_config as make_raster_config
+from powerfoam_diagnostics import powerfoam_parameter_delta_metrics
 from powerfoam_direct import (
     POWERFOAM_SOFTPLUS_BETA,
     camera_facing_quaternion,
@@ -44,30 +40,21 @@ from powerfoam_direct import (
     logit_clamped,
 )
 from powerfoam_eval_artifacts import log_powerfoam_artifacts as log_artifacts
-from powerfoam_diagnostics import powerfoam_parameter_delta_metrics
-from powerfoam_eval_render import render_powerfoam_samples as render_samples
 from powerfoam_geometry import (
     make_pinhole_rays,
     orthonormal_surface_frame,
-    powerfoam_rays_from_camera,
     stable_tangent_from_normals,
 )
-from powerfoam_point_cloud import (
-    PointCloudInitialization,
-    load_point_cloud_xyz_rgb,
-    load_powerfoam_point_cloud_initialization,
-)
-from powerfoam_optim import (
-    cosine_scheduled_lr,
-    powerfoam_group_final_lr,
-    powerfoam_group_initial_lr,
-    powerfoam_group_lr_metadata,
-    powerfoam_group_warmup_steps,
-    update_powerfoam_learning_rates,
+from powerfoam_metal_config import (
+    HEIGHT_TEXEL_SURFACE_MODES,
+    ORIENTED_TEXEL_SURFACE_MODES,
+    QUATERNION_TEXEL_SURFACE_MODES,
+    SV_TEXEL_SURFACE_MODES,
+    TEXEL_SURFACE_MODES,
+    resolve_config,
 )
 from powerfoam_objectives import (
     composite_powerfoam_background,
-    fixed_background_tensor,
     normals_from_ray_depth,
     powerfoam_contribution_loss,
     powerfoam_normal_distance_loss,
@@ -76,20 +63,23 @@ from powerfoam_objectives import (
     scheduled_loss_weights,
     training_background_tensor,
 )
-from paper_training_protocol import (
-    PaperCostTracker,
-    PaperPhaseTimer,
-    SpacetimeEpochSampler,
-    normalize_image_size,
-    normalize_paper_stages,
-    paper_stage_for_step,
-    resize_ray_grids,
-    resize_video_frames,
+from powerfoam_optim import (
+    powerfoam_group_lr_metadata,
+    update_powerfoam_learning_rates,
 )
-from paper_training_types import MetalKernelSpec
+from powerfoam_point_cloud import (
+    load_powerfoam_point_cloud_initialization,
+)
+from powerfoam_raster_config import make_powerfoam_metal_raster_config as make_raster_config
 from powerfoam_resampling import scheduled_resample_target_cells, should_resample_powerfoam_step
 from powerfoam_training import powerfoam_train_batch_indices
-from powerfoam_training_data import load_powerfoam_training_data
+from powerfoam_training_data import (
+    load_powerfoam_training_data,
+    resolve_powerfoam_paper_dataset_bundle,
+)
+from torch import nn
+from torch.nn import functional as F
+from tqdm import trange
 from train_artifacts import append_jsonl, write_json, write_resolved_config
 from train_devices import resolve_torch_device
 from train_logging import (
@@ -97,7 +87,6 @@ from train_logging import (
     mapped_metric_payload,
     should_log_image,
     should_log_scalar,
-    should_log_video,
     wandb_run_lifecycle,
 )
 
@@ -106,7 +95,6 @@ POWERFOAM_METAL_ROOT = ensure_third_party_path("powerfoam-metal")
 from torch_powerfoam_metal import (  # noqa: E402
     FoamRasterConfig,
     quaternion_frames,
-    raytrace_power_foam_oriented_height_sv_texel_surface,
     rasterize_power_foam,
     rasterize_power_foam_linear,
     rasterize_power_foam_oriented_height_sv_texel_surface,
@@ -119,7 +107,78 @@ from torch_powerfoam_metal import (  # noqa: E402
     rasterize_power_foam_quaternion_height_texel_surface,
     rasterize_power_foam_quaternion_texel_surface,
     rasterize_power_foam_surface_linear,
+    raytrace_power_foam_oriented_height_sv_texel_surface,
 )
+
+
+def powerfoam_target_dataset_shape(
+    targets: torch.Tensor | None,
+    target_provider: Any | None,
+) -> tuple[int, ImageSize]:
+    if targets is not None and target_provider is not None:
+        raise ValueError("provide materialized PowerFoam targets or a target provider, not both")
+    if target_provider is not None:
+        return (
+            int(target_provider.sample_count),
+            normalize_image_size((int(target_provider.height), int(target_provider.width))),
+        )
+    if targets is None or targets.ndim != 4 or int(targets.shape[1]) != 3:
+        shape = None if targets is None else tuple(targets.shape)
+        raise ValueError(f"PowerFoam targets require RGB [sample,3,height,width], got {shape}")
+    return int(targets.size(0)), normalize_image_size(targets.shape[-2:])
+
+
+def select_powerfoam_training_targets(
+    targets: torch.Tensor | None,
+    target_provider: Any | None,
+    sample_indices: torch.Tensor,
+    *,
+    image_size: ImageSize,
+    loaded_image_size: ImageSize,
+    device: torch.device,
+) -> torch.Tensor:
+    if target_provider is not None:
+        if targets is not None:
+            raise ValueError("provide materialized PowerFoam targets or a target provider, not both")
+        return target_provider.select(
+            sample_indices,
+            height=image_size.height,
+            width=image_size.width,
+            device=device,
+        )
+    if targets is None:
+        raise ValueError("PowerFoam training requires materialized targets or a target provider")
+    selected = targets.index_select(
+        0,
+        sample_indices.to(device=targets.device, dtype=torch.long),
+    )
+    if image_size != loaded_image_size:
+        selected = resize_video_frames(selected, image_size)
+    return selected.to(device=device, dtype=torch.float32)
+
+
+def powerfoam_memory_policy(
+    training_data: dict[str, Any],
+    cfg: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "targets": (
+            "selected_target_provider"
+            if training_data.get("sample_target_provider") is not None
+            else "device_eager"
+        ),
+        "rays": (
+            "sampled_on_demand"
+            if training_data.get("sample_ray_provider") is not None
+            else "materialized"
+        ),
+        "evaluation": "chunked",
+        "evaluation_chunk_frames": int(cfg["train"]["frames_per_step"]),
+        "evaluation_media_max_frames": cfg["logging"]["eval_media_max_frames"],
+        "target_residency": training_data.get("target_residency"),
+        "init_frames_resident_bytes": training_data.get("init_frames_resident_bytes"),
+        "init_frames_residency": training_data.get("init_frames_residency"),
+    }
 
 
 @dataclass(frozen=True)
@@ -1317,22 +1376,41 @@ def run_training(config: dict[str, Any]) -> None:
     device = resolve_torch_device(str(cfg["train"]["device"]), auto_cuda=False)
     if device.type != "mps" or not torch.backends.mps.is_available():
         raise RuntimeError("powerfoam_metal requires torch MPS")
+    paper_enabled = bool(cfg["paper_protocol"]["enabled"])
+    if paper_enabled and (
+        str(cfg["render"]["background_mode"]) != "fixed"
+        or [float(value) for value in cfg["render"]["background"]]
+        != [0.0, 0.0, 0.0]
+        or str(cfg["render"]["eval_color_calibration"]) != "none"
+    ):
+        raise ValueError(
+            "paper WorldFoam evaluation requires fixed black background and "
+            "render.eval_color_calibration='none'"
+        )
 
     output_dir: Path = cfg["logging"]["output_dir"]
     write_resolved_config(output_dir, cfg)
 
     training_data = load_powerfoam_training_data(cfg, device)
     targets = training_data["targets"]
+    sample_target_provider = training_data.get("sample_target_provider")
+    if sample_target_provider is not None:
+        targets = None
     sample_frame_indices = training_data["sample_frame_indices"]
     sample_rays = training_data["sample_rays"]
     sample_ray_provider = training_data["sample_ray_provider"]
     heldout_targets = training_data["heldout_targets"]
+    heldout_target_provider = training_data.get("heldout_target_provider")
+    if heldout_target_provider is not None:
+        heldout_targets = None
     heldout_frame_indices = training_data["heldout_frame_indices"]
     heldout_rays = training_data["heldout_rays"]
     heldout_ray_provider = training_data["heldout_ray_provider"]
     cfg["video_fps"] = float(training_data["video_fps"])
-    loaded_image_size = normalize_image_size(targets.shape[-2:])
-    paper_enabled = bool(cfg["paper_protocol"]["enabled"])
+    target_sample_count, loaded_image_size = powerfoam_target_dataset_shape(
+        targets,
+        sample_target_provider,
+    )
     paper_stages = normalize_paper_stages(
         cfg["paper_protocol"]["stages"] if paper_enabled else None,
         total_steps=int(cfg["train"]["steps"]),
@@ -1420,7 +1498,7 @@ def run_training(config: dict[str, Any]) -> None:
                 "source": str(training_data["source_label"]),
                 "frame_source": str(cfg["data"]["frame_source"]),
                 "frames": int(training_data["frame_count"]),
-                "samples": int(targets.size(0)),
+                "samples": target_sample_count,
                 "train_views": training_data["train_views"],
                 "heldout_views": training_data["heldout_views"],
                 "pose_source": training_data["pose_source"],
@@ -1471,10 +1549,12 @@ def run_training(config: dict[str, Any]) -> None:
             frame_indices=sample_frame_indices,
             rays=sample_rays,
             ray_provider=sample_ray_provider,
+            target_provider=sample_target_provider,
             heldout_targets=heldout_targets,
             heldout_frame_indices=heldout_frame_indices,
             heldout_rays=heldout_rays,
             heldout_ray_provider=heldout_ray_provider,
+            heldout_target_provider=heldout_target_provider,
         )
         best_metric_value: float | None = maybe_save_best_powerfoam_checkpoint(
             model,
@@ -1490,6 +1570,9 @@ def run_training(config: dict[str, Any]) -> None:
         print({"step": 0, **initial_metrics})
 
         start_time = time.perf_counter()
+        paper_sampler_seed = int(cfg["train"]["seed"]) + int(
+            cfg["paper_protocol"]["sampler_seed_offset"]
+        )
         paper_sampler = (
             SpacetimeEpochSampler(
                 view_count=int(training_data["train_view_count"]),
@@ -1498,8 +1581,13 @@ def run_training(config: dict[str, Any]) -> None:
                 same_time_count=int(cfg["paper_protocol"]["same_time_count"]),
                 local_time_count=int(cfg["paper_protocol"]["local_time_count"]),
                 local_time_radius=int(cfg["paper_protocol"]["local_time_radius"]),
-                seed=int(cfg["train"]["seed"]) + int(cfg["paper_protocol"]["sampler_seed_offset"]),
+                seed=paper_sampler_seed,
             )
+            if paper_enabled
+            else None
+        )
+        paper_sample_schedule = (
+            PaperSampleScheduleDigest(sampler_seed=paper_sampler_seed)
             if paper_enabled
             else None
         )
@@ -1530,27 +1618,49 @@ def run_training(config: dict[str, Any]) -> None:
             )
             if paper_enabled:
                 paper_batch = paper_sampler.next_batch(paper_stage.frames_per_step)
+                paper_sample_schedule.record(
+                    step=step - 1,
+                    stage=paper_stage,
+                    batch=paper_batch,
+                )
                 sample_indices = paper_batch.flat_indices(int(training_data["frame_count"]), device=device)
             else:
                 paper_batch = None
-                sample_indices = powerfoam_train_batch_indices(targets.size(0), cfg, device=device)
+                sample_indices = powerfoam_train_batch_indices(
+                    target_sample_count,
+                    cfg,
+                    device=device,
+                )
             if paper_stage.lr_multiplier != 1.0:
                 for param_group in optimizer.param_groups:
                     param_group["lr"] *= paper_stage.lr_multiplier
                 lr_by_group = {name: value * paper_stage.lr_multiplier for name, value in lr_by_group.items()}
             frame_indices = sample_frame_indices[sample_indices]
-            target = targets.index_select(0, sample_indices.to(device=targets.device, dtype=torch.long))
+            target = select_powerfoam_training_targets(
+                targets,
+                sample_target_provider,
+                sample_indices,
+                image_size=paper_stage.image_size,
+                loaded_image_size=loaded_image_size,
+                device=device,
+            )
             batch_rays = (
-                sample_ray_provider.select(sample_indices)
+                sample_ray_provider.select(
+                    sample_indices,
+                    height=paper_stage.image_size.height,
+                    width=paper_stage.image_size.width,
+                )
                 if sample_ray_provider is not None
                 else (None if sample_rays is None else sample_rays[sample_indices])
             )
             if paper_stage.image_size != loaded_image_size:
-                target = resize_video_frames(target, paper_stage.image_size)
                 if batch_rays is None:
                     raise RuntimeError("progressive PowerFoam stages require calibrated per-sample rays")
-                batch_rays = resize_ray_grids(batch_rays, paper_stage.image_size)
-            target = target.to(device=device, dtype=torch.float32)
+                if sample_ray_provider is None:
+                    batch_rays = resize_ray_grids(
+                        batch_rays,
+                        paper_stage.image_size,
+                    )
             loss_weights = scheduled_loss_weights(cfg["losses"], step - 1, int(cfg["train"]["steps"]))
             need_normal_distance = loss_weights["normal_weight"] > 0.0
             need_normal_map = loss_weights["normal_map_weight"] > 0.0
@@ -1702,10 +1812,12 @@ def run_training(config: dict[str, Any]) -> None:
                     frame_indices=sample_frame_indices,
                     rays=sample_rays,
                     ray_provider=sample_ray_provider,
+                    target_provider=sample_target_provider,
                     heldout_targets=heldout_targets,
                     heldout_frame_indices=heldout_frame_indices,
                     heldout_rays=heldout_rays,
                     heldout_ray_provider=heldout_ray_provider,
+                    heldout_target_provider=heldout_target_provider,
                 )
                 best_metric_value = maybe_save_best_powerfoam_checkpoint(
                     model,
@@ -1755,6 +1867,26 @@ def run_training(config: dict[str, Any]) -> None:
         paper_summary = {
             "enabled": paper_enabled,
             "representation": "worldfoam",
+            "paper_dataset_bundle": resolve_powerfoam_paper_dataset_bundle(training_data),
+            "paper_evaluator": (
+                paper_evaluator_contract(
+                    ssim_window_size=int(cfg["losses"]["ssim_window_size"]),
+                    ssim_c1=float(cfg["losses"]["ssim_c1"]),
+                    ssim_c2=float(cfg["losses"]["ssim_c2"]),
+                    background=cfg["render"]["background"],
+                )
+                if paper_enabled
+                else None
+            ),
+            "paper_runtime": paper_runtime_identity() if paper_enabled else None,
+            "route_native_extension": (
+                paper_native_module_identity(
+                    "torch_powerfoam_metal._C",
+                    runtime_source_root=POWERFOAM_METAL_ROOT / "csrc" / "metal",
+                )
+                if paper_enabled
+                else None
+            ),
             "kernel": MetalKernelSpec(
                 representation="worldfoam",
                 family="powerfoam_metal",
@@ -1769,13 +1901,12 @@ def run_training(config: dict[str, Any]) -> None:
                 "local_time_count": int(cfg["paper_protocol"]["local_time_count"]),
                 "local_time_radius": int(cfg["paper_protocol"]["local_time_radius"]),
             },
-            "memory_policy": {
-                "targets": "host_eager_sampled_to_device" if sample_ray_provider is not None else "device_eager",
-                "rays": "sampled_on_demand" if sample_ray_provider is not None else "materialized",
-                "evaluation": "chunked",
-                "evaluation_chunk_frames": int(cfg["train"]["frames_per_step"]),
-                "evaluation_media_max_frames": cfg["logging"]["eval_media_max_frames"],
-            },
+            "sample_schedule": (
+                paper_sample_schedule.snapshot()
+                if paper_sample_schedule is not None
+                else None
+            ),
+            "memory_policy": powerfoam_memory_policy(training_data, cfg),
             "stages": [stage.as_dict() for stage in paper_stages],
             "cost": paper_costs.snapshot(
                 model=model,
@@ -1788,11 +1919,31 @@ def run_training(config: dict[str, Any]) -> None:
             "wall_loop_elapsed_s": time.perf_counter() - start_time,
         }
         write_json(output_dir / "paper_protocol_summary.json", paper_summary)
+        if paper_enabled:
+            if wandb_run is None:
+                raise RuntimeError(
+                    "paper WorldFoam execution requires an actual W&B run"
+                )
+            write_json(
+                output_dir / "wandb_identity.json",
+                {
+                    "schema_version": 1,
+                    "project": str(cfg["logging"]["wandb_project"]),
+                    "name": str(cfg["logging"]["wandb_run_name"]),
+                    "mode": str(cfg["logging"]["wandb_mode"]),
+                    "run_id": str(wandb_run.id),
+                    "run_dir": str(wandb_run.dir),
+                    "finalized": False,
+                },
+            )
 
 
 __all__ = [
     "MetalPowerFoamVideo",
     "PowerFoamAuxBatch",
+    "powerfoam_memory_policy",
+    "powerfoam_target_dataset_shape",
     "rays_for_sample_batch",
     "run_training",
+    "select_powerfoam_training_targets",
 ]
