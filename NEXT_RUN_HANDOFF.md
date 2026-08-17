@@ -44,16 +44,14 @@ ffmpeg -framerate 30 -pattern_type glob -i 'artifacts/frames/*_step*.png' -c:v l
 
 Page shows 3 lanes side-by-side with synchronized training video + speed/quality scatter.
 
-## 5) Paper
+## 5) Paper (two venue files, collapse later)
 
-Edit `research_notes/worldfoam_paper/PAPER_NEXT.md` (md → tex):
-* Theory: gauged camera-ray math
-* Method: STAR UVT sub-linear raster
-* Systems: per-frame STAR vs compiled F-scaling
-* Ablations: lane vs lane, retained-depth
-* One repro command + locked manifests → `BASELINES.md` append rows.
+Edit the existing venue sources (do not create PAPER_NEXT.md):
+* Paper A: `research_notes/gauged_uvt_trace_atlas/paper/WORLD_TUBES_ICLR_MAIN_DRAFT.md` → `WORLD_TUBES_PAPER.tex`
+* Paper B: `research_notes/worldfoam_paper/WORLD_FOAM_ICLR_MAIN_DRAFT.md` → `WORLD_FOAM_PAPER.tex`
+Long dossiers `WORLD_*_PAPER_DRAFT.md` stay as math source. Collapse to one `PAPER.md` only if both ledgers flip to accepted.
 
-Convert: `pandoc PAPER_NEXT.md -o WORLD_TUBES_PAPER.pdf` (or `latexmk` from tex).
+Convert: `pandoc WORLD_TUBES_ICLR_MAIN_DRAFT.md -o WORLD_TUBES_PAPER.pdf` (or `latexmk` from tex); same for WorldFoam.
 
 ## Wandb + SNR + wall-clock
 

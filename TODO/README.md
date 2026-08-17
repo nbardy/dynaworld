@@ -1,7 +1,8 @@
 # DynaWorld TODO Index
 
 This folder is the active backlog. Use this index to route work before opening
-individual TODO files.
+individual TODO files. The execution handoff for the next quota run is
+[`../GOAL.md`](../GOAL.md) (thin pointer — read it first, then the plans below).
 
 ## World Tubes Submission Critical Path
 
@@ -9,7 +10,12 @@ The canonical, detailed Paper A finish checklist is
 [`world_tubes_paper_finish_master_plan_2026-08-13.md`](world_tubes_paper_finish_master_plan_2026-08-13.md).
 It separates mandatory source preservation, nine required runtime jobs,
 manuscript/venue work, contingent fixes, optional breadth, and research lanes
-that must remain out of scope.
+that must remain out of scope. `GOAL.md` does not duplicate it — it just orders the 3-lane shared harness (`sol 5.6 high → sol medium/luna high, 200M cap`) that runs it.
+
+## WorldFoam Second Paper
+
+The Paper B plan is [`worldfoam_memory_light_native4d.md`](worldfoam_memory_light_native4d.md)
+(`G6 0/21 / G4 0/36`). `GOAL.md` executes it via the same `KineticTrainer×MetalKernelSpec` harness; venue draft is `../research_notes/worldfoam_paper/WORLD_FOAM_ICLR_MAIN_DRAFT.md`.
 
 ## Current Project State
 

@@ -1,56 +1,37 @@
-# GOAL — Next Quota Run: Three-Lane Paper with Metal Kernels
+# GOAL — Next Quota Run
 
-**Status:** queued (quota 0% until reset ~2026-08-23) — do not start until `codex_report` shows <30% weekly.
-**Lead effort:** `sol 5.6 high`  (not ultra)
-**Sub-agents:** `sol medium` (code/kernels), `luna high` (docs/charts/project page), `luna medium` (wandb/video)
-**Token cap:** 200M total (50M per lane) — abort if `rate >120 out/s` or `gross>3×net`.
+**Status:** queued until `codex_report --days 5` shows weekly <30% (quota resets ~08-23). Do not start before.
+**Lead:** `sol 5.6 high` (not ultra) → subs `sol medium` (code/kernels), `luna high` (docs/charts)
+**Token cap:** 200M — abort if `rate >120 out/s` or `gross>3×net`.
 
-## Objective (one sentence)
+## One paper (three lanes, one trainer)
 
-Ship **World Tubes (sub-linear raster)** vs **World Foam (retained-depth)** vs **Dynamic 3DGS baseline** — all via **Metal kernels** — trained, ablated, charted, wandb-logged, side-by-side project page + training videos, and a full `PAPER.md` ready for pdf/ICLR.
+This GOAL does **not** re-define the paper. It executes the existing two-paper dossiers via one Metal runner.
 
-## Three Metal lanes (one trainer, many kernels)
+*Canonical sources — read them, do not copy them:*
+- Paper A plan: `TODO/world_tubes_paper_finish_master_plan_2026-08-13.md` — 9 runtime jobs (frozen F-sweep, variable-camera curve, 7 public contexts), gate `0/21 → 21`.
+- Paper B plan: `TODO/worldfoam_memory_light_native4d.md` — `G6 0/21 / G4 0/36`, 133 schemas, pilot `F=8/64/300` then `F=8/64/300` matrix.
+- Venue drafts: `research_notes/gauged_uvt_trace_atlas/paper/WORLD_TUBES_ICLR_MAIN_DRAFT.md` and `research_notes/worldfoam_paper/WORLD_FOAM_ICLR_MAIN_DRAFT.md` (long dossiers `WORLD_*_PAPER_DRAFT.md` stay as math source).
 
-All lanes use `KineticTrainer(strategy: MetalKernelSpec)` under `src/train/kinetic_core/` — no new `world_foam_lane2/*.py` files.
+*What this GOAL adds:* the **shared execution harness** that both papers now use (introduced after those plans):
 
-1. **Baseline — Dynamic 3DGS** (`MetalKernelSpec: dynamic_gs`)
-   - Existing `train_splat_baseline.py` + `FasterGS4D` staged path, wall-clock timed, `apply_paper_dataset_contract` same as others.
-2. **World Foam — retained-depth / visibility ablation** (`worldfoam_g4_v2`)
-   - `paper_kinetic_*` bounded `1,228,800` selected pixels, `196,608` heldout compiles, `PaperCostTracker` for mem/time.
-3. **World Tubes — sub-linear rasterization cost** (`world_tubes_star_uvt`)
-   - `projective STAR UVT` compiled, `F = 4,8,16,32,64,128` scaling suite, per-frame STAR replay as causal baseline. This is the paper's core claim.
+- One `KineticTrainer(strategy: MetalKernelSpec)` under `src/train/kinetic_core/` (to be created, ≤300 l per strategy) — no new `world_foam_lane2/*.py`. Existing shared types: `paper_training_types.py:MetalKernelSpec`, `paper_training_protocol.py:PaperCostTracker/PaperPhaseTimer`.
+- Three lane specs: `dynamic_gs` (baseline `train_splat_baseline.py` + FasterGS4D), `worldfoam_g4_v2` (1.2M selected pix, 196k heldout compiles), `world_tubes_star_uvt` (`F=4,8,16,32,64,128` vs per-frame STAR replay).
 
-Each lane emits **one** `MetalKernelSpec` + `compiled_artifact` + `checkpoint` + `timing` receipt.
+## What to actually run (points to the plans, not re-states them)
 
-## Evidence to produce (fail-closed)
+1. **Pilot `Coffee Martini seed-17` for all 3 lanes** — `run_unified_paper_matrix.py --matrix world_tubes_full_public_matrix_v1.jsonc --filter scene=CoffeeMartini,seed=17 --pilot_only --verify --wandb dynaworld-paper-a` → `pilot_only=true` + wall/mem receipts. This is the gate both Paper A `0/7` and Paper B `0/36` plans call “pilot”.
 
-* **Matrix:** `protocol × seed × scene × camera` via `run_unified_paper_matrix.py` + `world_tubes_full_public_matrix_v1.jsonc`
-  - Scenes: Coffee Martini progressive 512 seeds 17/29/43 + pixel-matched fixed 512 + global shuffle (seed 17 pilot first), + 2 Neural3D scenes + 1 D-NeRF
-  - Per row: 300 optimizer steps @ 4 samples/step, 1024 pixels/sample (=1,228,800/3,686,400 scalars), heldout `384x512` spatial-major
-* **Metrics per row (wandb):** PSNR/SSIM/LPIPS, SNR proxy, wall-clock train/heldout, peak device mem, compile/forward/backward ms, `PaperCostTracker` bytes, trace/fallback counts. All logged to wandb project `dynaworld-paper-a` with `run=scene/seed/lane` grouping and `PaperPhaseTimer` wall bars.
-* **Ablations & charts:** Lane vs lane (PSNR vs wall time), F-scaling (World Tubes 6 pts + per-frame replay), retained-depth (World Foam vs 3DGS). CSV + `matplotlib` plots + LaTeX tables via `generate_world_tubes_paper_artifacts.py`.
-* **Project page:** `web/dynaworld_browser_trainer/` + `research_notes/.../paper/` — three models side-by-side, training-over-time videos (side-by-side renders every N steps), speed-vs-quality scatter, all derived from verified `artifacts/*.json`.
-* **Paper:** Single `PAPER.md` (`research_notes/worldfoam_paper/PAPER_NEXT.md` → `WORLD_TUBES_PAPER.tex`) covering theory (gauged ray), implementation (STAR UVT), baselines, systems comparison, ablation tables, and one `python run_unified_paper_matrix.py --seed 17` repro command. No new gauge terminology.
+2. **Full matrix** — same command `--full --verify` over `research_notes/data_contract.md` scenes (Coffee triplets + 2 Neural3D + 1 D-NeRF). Paper A needs 7 rows min, Paper B needs 36. Run fresh MPS processes, verifier accepts `artifacts/*.json`.
 
-## Gates (in order, do not skip)
+3. **Charts + project page + video** — `generate_world_tubes_paper_artifacts.py --from artifacts/` (CSV/plots/LaTeX) + `web/dynaworld_browser_trainer/` side-by-side + `ffmpeg` timelapse (every N steps). Wandb `run=scene/seed/lane` with `PSNR/SNR vs wall`.
 
-1. Pilot `Coffee Martini seed-17` for all 3 lanes — verify bitwise parity on bounded track set, wall/mem receipts, `pilot_only=true`.
-2. Full 36-row G4-v2 + 6-pt F-scaling — fresh MPS processes, independent verifier accepts `artifacts/*.json`.
-3. Charts + project page + wandb dashboards pass `codex_report --audit gross≤3×net`.
-4. `PAPER.md` with locked manifests, `BASELINES.md` rows appended.
+4. **Paper** — edit the *existing* venue sources above, not a new `PAPER_NEXT.md`. Start as two venue files; collapse to one `PAPER.md→WORLD_TUBES_PAPER.tex` only if both ledgers flip to accepted. One repro command + `BASELINES.md` rows.
 
-## File ownership (claim in EXPERIMENTS.md#active-lanes before patch)
+## Gates (from the plans)
 
-* `sol medium`: `src/train/kinetic_core/**`, `research_experiments/paper_runner_suite/run_unified_paper_matrix.py`
-* `luna high`: `research_notes/worldfoam_paper/PAPER_NEXT.md`, `PAPER.md`, `WORLD_TUBES_PAPER.tex`
-* `luna medium`: `artifacts/**`, wandb run configs, `web/dynaworld_browser_trainer/**`
+Gates are defined in those TODOs — this GOAL just orders them: pilot → full (21+36 rows) → `codex_report --audit gross≤3×net` → venue PDF. See `TODO/README.md:Current Project State` for `0/21`/`0/36` reset reason.
 
-## Blocked
+## Ownership (claim in EXPERIMENTS.md#active-lanes)
 
-* No new `world_foam_lane2/*.py` — add `KernelStrategy` instead.
-* No `TODO/*.md >50` lines — use `TODO/worldfoam_status.json` + `agent_notes/loose_notes/` append.
-* No parallel same-file patches; `ultra` forbidden without `BUDGET.md`.
-
-## Success snippet for prompt
-
-> Use sol 5.6 high + sol medium/luna high subs, KineticTrainer+MetalKernelSpec, 200M cap, commit every 500 net lines with `codex_report --audit` and wandb link.
+`sol medium`: `src/train/kinetic_core/**`, `run_unified_paper_matrix.py`; `luna high`: the two `*_ICLR_MAIN_DRAFT.md` + tex; `luna medium`: `artifacts/**`, wandb, `web/**`. No new `world_foam_lane2/*.py`, no `TODO/*.md>50` (use `worldfoam_status.json`), no parallel same-file patches, no `ultra` without `BUDGET.md`.
