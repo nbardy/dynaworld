@@ -34,8 +34,9 @@ after accepted evidence exists and do not create another paper draft.
 
 ## Starting Truth
 
-- Paper A: theorem accepted; public contexts `0/7`, lane records `0/21`, frozen
-  same-world sweep absent, bounded variable-camera curve absent.
+- Paper A: theorem and bounded variable-camera curve accepted; public contexts
+  `0/7`, lane records `0/21`, frozen same-world sweep and moving-camera density
+  absent.
 - Paper B: accepted synthetic G0/G3 evidence; G6 memory rows `0/21`, G4-v2
   public-quality rows `0/36`; installed native extension is stale.
 - Tests, dry plans, source completeness, and old schema-v1 runs count as zero
@@ -66,9 +67,12 @@ validation while another lane runs.
 1. Record clean main/submodule commits and current accepted evidence counts.
 2. Run allocation-free/dry preflights. Do not import Torch or sample the host
    in source-only dry plans where the existing contract forbids it.
-3. Check live host guards immediately before any build or accelerator process:
-   at least 8 GiB free disk, at least 8 GiB available RAM, swap at most 2 GiB,
-   load average at most 8. A failed guard ends that runtime lane for the night.
+3. Check live host guards immediately before any build or accelerator process.
+   The stricter lane-specific runner gate always wins: Paper B currently needs
+   at least 8 GiB free disk and available RAM, swap at most 2 GiB, and load at
+   most 8; Paper A's current matrix additionally requires at least 32 GiB free
+   disk and 10 GiB available RAM. A failed guard ends that runtime lane for the
+   night.
 4. Paper A: focused behavioral gate → schema-v2 evidence smoke → frozen
    same-world sweep → bounded variable-camera curve → seven public contexts.
 5. Paper B: G4/G6 dry plans → one guarded native rebuild if required → G4

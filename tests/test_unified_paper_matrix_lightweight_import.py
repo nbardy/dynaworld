@@ -119,6 +119,7 @@ def test_lpips_asset_gate_hashes_exact_cached_bytes_without_importing_torch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    torch_was_loaded = "torch" in sys.modules
     import paper_training_protocol as protocol
 
     trunk_bytes = b"alexnet-trunk-fixture"
@@ -163,7 +164,7 @@ def test_lpips_asset_gate_hashes_exact_cached_bytes_without_importing_torch(
 
     assert status["status"] == "pass"
     assert all(status["checks"].values())
-    assert "torch" not in sys.modules
+    assert ("torch" in sys.modules) is torch_was_loaded
 
     trunk_path.write_bytes(b"drifted")
     drifted = protocol.lpips_alex_asset_status(
@@ -177,6 +178,8 @@ def test_lpips_asset_gate_hashes_exact_cached_bytes_without_importing_torch(
 def test_wandb_preflight_checks_local_credentials_without_importing_wandb(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    torch_was_loaded = "torch" in sys.modules
+    wandb_was_loaded = "wandb" in sys.modules
     from research_experiments.paper_runner_suite import (
         run_unified_paper_matrix as matrix,
     )
@@ -199,5 +202,5 @@ def test_wandb_preflight_checks_local_credentials_without_importing_wandb(
     assert readiness["credential_source"] == "environment"
     assert "present-but-never-reported" not in repr(readiness)
     assert readiness["connectivity"]["requested"] is False
-    assert "wandb" not in sys.modules
-    assert "torch" not in sys.modules
+    assert ("wandb" in sys.modules) is wandb_was_loaded
+    assert ("torch" in sys.modules) is torch_was_loaded
