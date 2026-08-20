@@ -4,18 +4,26 @@ This folder is the active backlog. Use this index to route work before opening
 individual TODO files. The execution handoff for the next quota run is
 [`../GOAL.md`](../GOAL.md) (thin pointer — read it first, then the plans below).
 
+“ICLR-level” in prior prompts means conference-level scientific quality. It
+does not select ICLR as the venue and does not require ICLR-specific scaffolds,
+filenames, templates, or duplicate manuscripts. The current priority is
+accepted evidence, followed by one canonical draft per paper.
+
 ## World Tubes Submission Critical Path
 
 The canonical, detailed Paper A finish checklist is
 [`world_tubes_paper_finish_master_plan_2026-08-13.md`](world_tubes_paper_finish_master_plan_2026-08-13.md).
 It separates mandatory source preservation, nine required runtime jobs,
 manuscript/venue work, contingent fixes, optional breadth, and research lanes
-that must remain out of scope. `GOAL.md` does not duplicate it — it just orders the 3-lane shared harness (`sol 5.6 high → sol medium/luna high, 200M cap`) that runs it.
+that must remain out of scope. `GOAL.md` supplies the bounded delegation,
+resource, token, and stop contract for executing it.
 
 ## WorldFoam Second Paper
 
 The Paper B plan is [`worldfoam_memory_light_native4d.md`](worldfoam_memory_light_native4d.md)
-(`G6 0/21 / G4 0/36`). `GOAL.md` executes it via the same `KineticTrainer×MetalKernelSpec` harness; venue draft is `../research_notes/worldfoam_paper/WORLD_FOAM_ICLR_MAIN_DRAFT.md`.
+(`G6 0/21 / G4 0/36`). The historically named
+`../research_notes/worldfoam_paper/WORLD_FOAM_ICLR_MAIN_DRAFT.md` is a working
+submission-shaped draft, not evidence that ICLR has been selected.
 
 ## Current Project State
 

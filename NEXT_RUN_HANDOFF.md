@@ -1,68 +1,79 @@
-# Next Run Handoff — What to run when quota returns
+# Next Run Handoff — Evidence Execution Only
 
-**Trigger:** `codex_report.py --days 5 --top 5` shows weekly <30% and no `ultra` burst.
+This file is subordinate to `GOAL.md`. Use the exact commands and acceptance
+gates in the Paper A and Paper B master plans. Do not create the previously
+proposed `src/train/kinetic_core/` abstraction as a prerequisite:
+consolidation is a separate cleanup task and must not block evidence.
 
-## 1) Metal kernel check (15 min)
+## 1. Paper A preflight
 
-```bash
-python -c "from paper_training_types import MetalKernelSpec; print(MetalKernelSpec)"
-# expect 3 specs: dynamic_gs, worldfoam_g4_v2, world_tubes_star_uvt
-python src/train/kinetic_core/kernel_registry.py --list
-```
-
-If missing, implement `src/train/kinetic_core/*` adapters (≤300 l each) — do not copy `world_foam_lane2`.
-
-## 2) Pilot (the only gate that may run first)
+Run the focused source/contract gate in
+`TODO/world_tubes_paper_finish_master_plan_2026-08-13.md`, then:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python research_experiments/paper_runner_suite/run_unified_paper_matrix.py \
-  --matrix research_experiments/paper_runner_suite/world_tubes_full_public_matrix_v1.jsonc \
-  --filter "scene=CoffeeMartini seed=17" --lanes dynamic_gs,worldfoam_g4_v2,world_tubes_star_uvt \
-  --pilot_only --verify --wandb_project dynaworld-paper-a
+PYTHONPATH=src/train .venv/bin/python \
+  research_experiments/paper_runner_suite/run_unified_paper_matrix.py \
+  --preflight-only \
+  --matrix src/train_configs/paper_protocols/world_tubes_submission_matrix_v1.jsonc \
+  --out-dir outputs/benchmarks/2026-07-28_world_tubes_submission_matrix_schema2 \
+  --device mps --wandb-mode online --check-wandb-connectivity
 ```
 
-Must emit `pilot_only=true`, wall/mem receipts, and pass `codex_report --audit`.
+If this fails a host or external prerequisite, stop Paper A for the night. If
+it exposes a reproduced correctness defect, fix only that frozen-contract
+defect and rerun the same gate.
 
-## 3) Full evidence (fresh processes)
+## 2. Paper A bounded evidence smoke
+
+On an operator-approved quiet MPS host:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python research_experiments/paper_runner_suite/run_unified_paper_matrix.py \
-  --matrix world_tubes_full_public_matrix_v1.jsonc --full --verify --wandb_project dynaworld-paper-a
-# 36 G4-v2 rows + 6 F-scaling pts (F=4,8,16,32,64,128) + per-frame STAR replay baseline
+PYTHONPATH=src/train .venv/bin/python \
+  research_experiments/paper_runner_suite/run_unified_paper_matrix.py \
+  --execute --require-clean-source \
+  --matrix src/train_configs/paper_protocols/world_tubes_evidence_smoke_matrix.jsonc \
+  --out-dir outputs/benchmarks/2026-08-10_world_tubes_schema2_evidence_smoke \
+  --device mps --wandb-mode offline --allow-local-mps-execution
 ```
 
-Each row: `artifacts/run_*.json` verified by `verify_worldfoam_*` + `ArtifactStream`.
+Only after the smoke verifies should the Paper A operator follow master-plan
+phases P2–P4 for the frozen same-world sweep, bounded variable-camera curve,
+and seven public contexts.
 
-## 4) Charts + project page + videos
+## 3. Paper B dry plan and guarded execution
+
+Start with the allocation-free G6 plan:
 
 ```bash
-python research_experiments/paper_runner_suite/generate_world_tubes_paper_artifacts.py --from artifacts/ --out research_notes/gauged_uvt_trace_atlas/paper/
-# emits CSV, plots (PSNR vs wall time, F-scaling), LaTeX tables
-python web/dynaworld_browser_trainer/generate_project_page.py --artifacts artifacts/ --out web/dynaworld_browser_trainer/
-ffmpeg -framerate 30 -pattern_type glob -i 'artifacts/frames/*_step*.png' -c:v libx264 -pix_fmt yuv420p artifacts/training_timelapse_side_by_side.mp4
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  research_experiments/world_foam_lane2/run_worldfoam_g6_clean_host_bundle.py
 ```
 
-Page shows 3 lanes side-by-side with synchronized training video + speed/quality scatter.
+Run the G4-v2 pilot dry plan separately. If and only if both dry plans have no
+external blockers and the live host guards pass, use the Paper B master-plan
+commands for one guarded rebuild, the real G4 two-route pilot, and then the
+G6/G4 matrices. Never run Paper A and Paper B accelerator jobs concurrently.
 
-## 5) Paper (two venue files, collapse later)
+## 4. Accepted tables and manuscripts
 
-Edit the existing venue sources (do not create PAPER_NEXT.md):
-* Paper A: `research_notes/gauged_uvt_trace_atlas/paper/WORLD_TUBES_ICLR_MAIN_DRAFT.md` → `WORLD_TUBES_PAPER.tex`
-* Paper B: `research_notes/worldfoam_paper/WORLD_FOAM_ICLR_MAIN_DRAFT.md` → `WORLD_FOAM_PAPER.tex`
-Long dossiers `WORLD_*_PAPER_DRAFT.md` stay as math source. Collapse to one `PAPER.md` only if both ledgers flip to accepted.
-
-Convert: `pandoc WORLD_TUBES_ICLR_MAIN_DRAFT.md -o WORLD_TUBES_PAPER.pdf` (or `latexmk` from tex); same for WorldFoam.
-
-## Wandb + SNR + wall-clock
-
-Log per step: `psnr/ssim/lpips`, `snr_proxy = 10*log10(var_signal/var_residual)`, `wall_ms{train,heldout,compile,forward,backward}`, `peak_mem`. Dashboard: `x=wall time, y=PSNR, color=lane, size=F`.
-
-## Quick audit before pushing
+Regenerate the existing Paper A bundle from verified artifacts:
 
 ```bash
-python codex_report/codex_report.py --audit --no-cache  # expect gross≤3×net, rate 10–120 out/s
-git -C dynaworld diff --stat HEAD                         # expect <2000 net per lane
+python3 research_experiments/paper_runner_suite/generate_world_tubes_paper_artifacts.py \
+  --verify-dir research_notes/gauged_uvt_trace_atlas/paper/generated/schema_v2
 ```
 
-Quoted goal for Codex prompt when resuming:
-> Continue GOAL.md with sol 5.6 high + sol medium/luna high subs, 200M cap, KineticTrainer+MetalKernelSpec. Pilot seed-17 first, verify, then full matrix, charts, project page, wandb.
+Update the existing drafts only after newly accepted data exists. The `ICLR`
+substring in historical filenames does not select a venue. Do not build a
+project page, venue template, additional manuscript, new verifier, or another
+status audit overnight.
+
+## Goal invocation
+
+Use:
+
+> Execute `GOAL.md` evidence-first. Use at most two non-recursive
+> medium-reasoning subagents with disjoint Paper A/Paper B artifact ownership;
+> run accelerator work sequentially; stop at the first resource/external
+> blocker; create no new audits, verifiers, plans, methods, venue scaffolds, or
+> cleanup work. Hard token cap 2M; stop new work at 1.6M.

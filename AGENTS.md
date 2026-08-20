@@ -57,6 +57,45 @@ completing or superseding TODOs. Raw session details still belong in
 `agent_notes/loose_notes/`; surprising lessons belong in
 `agent_notes/key_learnings.md`.
 
+## Goal, Delegation, And Resource Safety
+
+The phrase **"ICLR-level" means scientific and empirical quality**, not a
+request for ICLR-specific filenames, templates, packaging, or parallel paper
+drafts. Do venue-specific work only after the user selects a venue.
+
+Long-running goals must define observable acceptance evidence, an explicit
+token budget, maximum agent parallelism, file ownership, host-resource gates,
+and stop conditions. The canonical contract is `GOAL.md`.
+
+- Default to one lead and at most two subagents. Subagents may not spawn more
+  agents. Use medium reasoning for bounded implementation or verification;
+  reserve high reasoning for the lead's integration decisions. Do not use
+  ultra reasoning for unattended work.
+- Give every subagent a disjoint deliverable and disjoint writable files.
+  Never have two agents edit the same runner, verifier, manuscript, ledger, or
+  TODO. The lead alone integrates shared files.
+- Accelerator jobs are sequential. Never run two MPS/CUDA training, native
+  build, or publication-evaluation processes concurrently on one host.
+- If a live resource gate, dataset, binary, credential, or runtime prerequisite
+  blocks execution, record the blocker once and stop that lane. Do not respond
+  by creating another audit, verifier, schema, scaffold, plan, or handoff.
+- Tests and dry plans are preflight, not ablations. Source completeness is not
+  runtime evidence. Only retained verifier-accepted run artifacts may change a
+  paper evidence count or `BASELINES.md`.
+- One scientific contract gets one independent verifier. Extend it only for a
+  new paper-relevant failure mode; do not create `v2`, `strict`, `final`, or
+  `completion_audit` variants merely to restate status.
+- During an evidence run, fix only defects that block the frozen contract. Do
+  not combine publication runs with broad refactors, new mathematics, new
+  renderer families, project pages, venue conversion, or code cleanup.
+- Stop an unattended goal when its acceptance target is met, its budget reaches
+  80%, the same blocker recurs twice, a resource guard trips, or no remaining
+  task can produce accepted paper evidence.
+- Before every continuation, compare accepted evidence counts rather than test
+  counts or files written. If a work chunk does not advance an evidence count,
+  fix a demonstrated blocker, or improve the canonical manuscript from accepted
+  evidence, it is out of scope.
+
 ## Agent Notes
 
 There are two agent memory layers. Use both, but do not blur them.

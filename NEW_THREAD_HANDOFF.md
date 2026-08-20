@@ -12,7 +12,10 @@ Read in order: `GOAL.md` (thin pointer, 1 page) → `TODO/README.md` → `world_
 * Built `codex-report/codex_report.py` (streaming dedup, `resolveModel`, `isValidCodexSession` head+tail 800, `patches/loc/toolSequence`, `activeMs` from `task_started/complete`, `_fix_rate` → 2–10 out/s not 5400) + `codex_scrape.py` (patch LOC per thread) with `--audit` gross vs net bar (`>3×` warn) and `XDG_CACHE_HOME||/tmp` cache. `py_compile` ok.
 * Audited: `AUG_16TH_FOLLOWUP_SWARM_AUDIT.md` (259 l, refined with thread quotes `019f7a66` 26d, Laplace `01a002dd /root/g6_…`, token payload `1.715B/1.682B cached/4.2M out`, commits `026c130/3e698e8/8b9cb19→57a3062`, numstat tops `6918` etc.). Committed as `pre-dedup` baseline.
 * Fixed review nits: cache path, `isValid 5→800` + `token_count` fallback, model filter `gpt-*` only, `locals()` leak in scrape, `head+tail` LOC undercount noted.
-* Queued next run: `GOAL.md` (thin pointer, not re-state) + `NEXT_RUN_HANDOFF.md` (pilot `seed-17` → full matrix → charts/page/video → two venue files `WORLD_TUBES_ICLR_MAIN_DRAFT.md` + `WORLD_FOAM_ICLR_MAIN_DRAFT.md`, collapse to one only if both ledgers flip). `TODO/README.md` updated to point at `GOAL.md` + add Paper B section.
+* Queued next run: `GOAL.md` now uses a 2M-token hard cap, one lead plus at
+  most two non-recursive subagents, sequential accelerator work, pilot-first
+  evidence gates, and fail-stop behavior. “ICLR-level” is explicitly treated
+  as a quality bar rather than a selected venue.
 
 ## Existing 2-paper dossiers (do not rewrite, just execute)
 
@@ -22,15 +25,23 @@ Read in order: `GOAL.md` (thin pointer, 1 page) → `TODO/README.md` → `world_
 
 ## Next run — use when quota <30%
 
-**Lead:** `sol 5.6 high` (not ultra) → subs `sol medium` (code/kernels), `luna high` (docs). **Cap:** 200M, abort if `rate>120` or `gross>3×net`.
+**Lead:** high reasoning; at most two medium-reasoning evidence operators; no
+recursive spawning or ultra reasoning. **Hard cap:** 2M goal-accounted tokens,
+with new work stopped at 1.6M.
 
-1. `python -c "from paper_training_types import MetalKernelSpec"` → expect 3 specs; `src/train/kinetic_core/` to be created (≤300 l per strategy, no new `world_foam_lane2/*.py`).
-2. Pilot: `run_unified_paper_matrix.py --matrix world_tubes_full_public_matrix_v1.jsonc --filter scene=CoffeeMartini,seed=17 --pilot_only --verify --wandb dynaworld-paper-a` → `pilot_only=true` + wall/mem receipts, `codex_report --audit` passes.
-3. Full: same `--full --verify` over `data_contract.md` scenes (Coffee triplets + 2 Neural3D + D-NeRF). Paper A 7 rows min, Paper B 36, fresh MPS, verifier `artifacts/*.json`.
-4. `generate_world_tubes_paper_artifacts.py --from artifacts/` (CSV/plots/LaTeX) + `web/dynaworld_browser_trainer/` side-by-side + `ffmpeg` timelapse. Wandb `run=scene/seed/lane` `PSNR/SNR vs wall`.
-5. Edit existing venue `ICLR_MAIN_DRAFT.md`s → `tex` → `pdf`, `BASELINES.md` rows. Collapse to one `PAPER.md` only if both ledgers accepted.
+1. Use the exact preflight and execution commands in the two canonical master
+   plans; do not invent a shared-harness prerequisite before running evidence.
+2. Paper A first: focused gate → evidence smoke → frozen sweep → bounded
+   variable-camera curve → seven public contexts.
+3. Paper B second: dry plans → guarded rebuild → G4 two-route pilot → G6/G4
+   matrices only after their gates pass.
+4. Regenerate tables and update the existing paper drafts only from accepted
+   artifacts. Project-page and venue-template work are out of scope.
 
-Ownership: `sol medium` owns `src/train/kinetic_core/**`, `run_unified_paper_matrix.py`; `luna high` owns the two venue drafts+tex; `luna medium` owns `artifacts/**`, wandb, `web/**`. No `TODO/*.md>50`, no parallel same-file patches, no `ultra` without `BUDGET.md`. Claim in `EXPERIMENTS.md#active-lanes`.
+Ownership is artifact-based and disjoint: one operator for Paper A runtime
+evidence, one for Paper B runtime evidence, and the lead alone for shared
+status/manuscript files. No new audit, verifier, plan, renderer, or broad
+refactor during the run.
 
 ## Commands to verify before pushing
 
