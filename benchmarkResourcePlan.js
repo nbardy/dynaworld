@@ -3,7 +3,8 @@ const SPLAT_BYTES = 24 * Float32Array.BYTES_PER_ELEMENT;
 const MAX_RENDER_VIEWS = 3;
 const MAX_SAMPLES_PER_STEP = 192;
 const SSIM_STATS_BYTES = 5 * 16;
-const TILED_CONFIG_BYTES = 192;
+const TILED_CONFIG_BYTES = 224;
+const TILED_COUNTER_BYTES = 40;
 const PORTABLE_STORAGE_BUFFER_LIMIT = 128 * MIB;
 
 function positiveInteger(value, label) {
@@ -47,6 +48,10 @@ function variantDefinitions(options) {
 		projectionLayout: options.projectionLayout,
 		projectionVjpPrecision: options.projectionVjpPrecision ?? "f32",
 		ssimLayout: options.ssimLayout,
+		pixelFilterMode: options.pixelFilterMode ?? "legacy-floor",
+		opacityModel: options.opacityModel ?? "coupled",
+		geometryColorWeight: options.geometryColorWeight ?? 0,
+		crossViewDepth: options.crossViewDepth === true || options.crossViewDepth === "true",
 	};
 	const variants = {
 		backward: [
@@ -106,6 +111,22 @@ function variantDefinitions(options) {
 				ssimLayout: "separable",
 			},
 		],
+		geometry: [
+			{
+				id: "fast-baseline",
+				...base,
+				backwardMode: "staged-project3d",
+				pixelFilterMode: "legacy-floor",
+				opacityModel: "coupled",
+				geometryColorWeight: 0,
+				crossViewDepth: false,
+			},
+			{
+				id: "stablegs-inspired",
+				...base,
+				backwardMode: "staged-project3d",
+			},
+		],
 	}[options.experiment];
 	if (!variants) throw new RangeError(`Unknown experiment: ${options.experiment}.`);
 	if (options.variant === "both") return variants;
@@ -131,6 +152,8 @@ export function estimateTiledTrainerBuffers({
 	projectionVjpPrecision = "f32",
 	ssimLayout,
 	backwardMode,
+	geometryColorWeight = 0,
+	crossViewDepth = false,
 	compactTargetFrames = false,
 	storageBufferLimit = PORTABLE_STORAGE_BUFFER_LIMIT,
 }) {
@@ -149,17 +172,27 @@ export function estimateTiledTrainerBuffers({
 	if (!["f32", "packed-f16"].includes(projectionVjpPrecision)) {
 		throw new RangeError("projectionVjpPrecision must be f32 or packed-f16.");
 	}
+	if (!Number.isFinite(geometryColorWeight) || geometryColorWeight < 0) {
+		throw new RangeError("geometryColorWeight must be finite and non-negative.");
+	}
+	const geometryEnabled = geometryColorWeight > 0 || crossViewDepth;
 	const pixelCount = width * height;
 	const tileCount = ceilDiv(width, tileSize) * ceilDiv(height, tileSize);
 	const pairCapacity = tileCount * tileCapacity;
 	const bytesPerCheckpoint = checkpointPrecision === "packed-f16" ? 8 : 16;
-	const checkpoint = resolveCheckpointBytes(
+	const checkpointLayout = resolveCheckpointBytes(
 		pixelCount,
 		tileCapacity,
-		bytesPerCheckpoint,
+		geometryEnabled ? 16 : bytesPerCheckpoint,
 		checkpointStride,
 		storageBufferLimit,
 	);
+	const checkpoint = {
+		...checkpointLayout,
+		byteLength: pixelCount * checkpointLayout.blocksPerTile * bytesPerCheckpoint,
+	};
+	const geometryCheckpointBytes = geometryEnabled
+		? pixelCount * checkpointLayout.blocksPerTile * 16 : 0;
 	const staged = backwardMode === "staged-project3d";
 	const splitProjection = projectionLayout === "split-compact";
 	const gradientFloats = staged ? 12 : 24;
@@ -167,6 +200,14 @@ export function estimateTiledTrainerBuffers({
 	const projectionBytesPerSplat = splitProjection ? 32 + projectionVjpBytesPerSplat : 192;
 	const rasterProjectionBytes = capacity * (splitProjection ? 32 : 192);
 	const projectionVjpBytes = splitProjection ? capacity * projectionVjpBytesPerSplat : 0;
+	const referenceGeometryBytes = crossViewDepth ? (
+		rasterProjectionBytes
+		+ projectionVjpBytes
+		+ tileCount * 4
+		+ pairCapacity * 4
+		+ TILED_COUNTER_BYTES
+		+ pixelCount * 8
+	) : 0;
 	const cycleMetricBytes = trainViewCount * frameCount * 16;
 	const timestampBytes = 11 * 2 * BigUint64Array.BYTES_PER_ELEMENT;
 	const bufferBytes = {
@@ -175,6 +216,7 @@ export function estimateTiledTrainerBuffers({
 		densityStats: capacity * 16,
 		gradientAccumulator: capacity * gradientFloats * 4,
 		projections: capacity * projectionBytesPerSplat,
+		referenceGeometry: referenceGeometryBytes,
 		parameterReadback: capacity * SPLAT_BYTES,
 		previewSort: nextPowerOfTwo(capacity) * 4 * MAX_RENDER_VIEWS * 2,
 		sampleIndices: 4,
@@ -183,16 +225,17 @@ export function estimateTiledTrainerBuffers({
 		packedTargetPage: compactTargetFrames ? pixelCount * 4 : 4,
 		cameraData: (viewCount * 2 + MAX_RENDER_VIEWS) * 20 * 4 + trainViewCount * 4 + 4 + viewCount * 4 * 4,
 		rasterPairs: pairCapacity * 8 + tileCount * 4,
-		transmittanceCheckpoints: checkpoint.byteLength,
+		transmittanceCheckpoints: checkpoint.byteLength + geometryCheckpointBytes,
 		fullImageWorkspace: pixelCount * (
 			16
 			+ 4
 			+ SSIM_STATS_BYTES
 			+ (ssimLayout === "separable" ? SSIM_STATS_BYTES : 0)
 			+ 16
-			+ 16
+			+ (geometryEnabled ? 64 : 16)
 		),
-		configAndTelemetry: 144 + MAX_RENDER_VIEWS * 48 + TILED_CONFIG_BYTES + 40 + 12 + 80
+		configAndTelemetry: 144 + MAX_RENDER_VIEWS * 48 + TILED_CONFIG_BYTES
+			+ (crossViewDepth ? TILED_CONFIG_BYTES : 0) + TILED_COUNTER_BYTES + 12 + 80
 			+ cycleMetricBytes + (80 + cycleMetricBytes) + timestampBytes * 2,
 		previewGeometry: 32,
 	};
@@ -203,7 +246,12 @@ export function estimateTiledTrainerBuffers({
 		projectionVjp: projectionVjpBytes,
 		targetPage: bufferBytes.targetPage,
 		pairData: pairCapacity * 8,
-		transmittanceCheckpoints: bufferBytes.transmittanceCheckpoints,
+		transmittanceCheckpoints: checkpoint.byteLength,
+		geometryCheckpoints: geometryCheckpointBytes,
+		pixelGradientPacket: pixelCount * (geometryEnabled ? 64 : 16),
+		referencePairData: crossViewDepth ? pairCapacity * 4 : 0,
+		referenceProjections: crossViewDepth ? rasterProjectionBytes : 0,
+		referenceProjectionVjp: crossViewDepth ? projectionVjpBytes : 0,
 		fullImageRecord: Math.max(
 			pixelCount * SSIM_STATS_BYTES,
 			ssimLayout === "separable" ? pixelCount * SSIM_STATS_BYTES : 0,
@@ -217,6 +265,9 @@ export function estimateTiledTrainerBuffers({
 		bindingBytes,
 		largestBinding: { label: largestBinding[0], byteLength: largestBinding[1] },
 		checkpoint,
+		geometryCheckpointBytes,
+		geometryEnabled,
+		crossViewDepth,
 		pixelCount,
 		tileCount,
 		pairCapacity,

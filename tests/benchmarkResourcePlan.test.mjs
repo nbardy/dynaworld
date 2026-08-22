@@ -35,10 +35,32 @@ test("resource estimator tracks the saved 30K/96 allocations plus sparse-prefix 
 	assert.deepEqual(
 		report.variants.map(({ id, allocatedBytes }) => ({ id, allocatedBytes })),
 		[
-			{ id: "direct-3d", allocatedBytes: 43_591_652 },
-			{ id: "staged-project3d", allocatedBytes: 39_751_652 },
+			{ id: "direct-3d", allocatedBytes: 43_591_684 },
+			{ id: "staged-project3d", allocatedBytes: 39_751_684 },
 		],
 	);
+});
+
+test("geometry experiment charges only the candidate for auxiliary buffers", () => {
+	const report = estimateTiledBenchmarkResources(metadata, {
+		...baseOptions,
+		experiment: "geometry",
+		projectionVjpPrecision: "packed-f16",
+		pixelFilterMode: "mip-2d-compensated",
+		opacityModel: "dual",
+		geometryColorWeight: 0.1,
+		crossViewDepth: true,
+	});
+	const [baseline, candidate] = report.variants;
+	assert.equal(baseline.id, "fast-baseline");
+	assert.equal(baseline.geometryEnabled, false);
+	assert.equal(baseline.bufferBytes.referenceGeometry, 0);
+	assert.equal(candidate.id, "stablegs-inspired");
+	assert.equal(candidate.geometryEnabled, true);
+	assert.equal(candidate.geometryCheckpointBytes, 28_311_552);
+	assert.equal(candidate.bufferBytes.referenceGeometry, 4_225_240);
+	assert.equal(candidate.bindingBytes.pixelGradientPacket, 96 * 72 * 64);
+	assert.ok(candidate.allocatedBytes > baseline.allocatedBytes);
 });
 
 test("30K/384 packed checkpoints fit the portable 128 MiB binding floor", () => {

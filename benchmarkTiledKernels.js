@@ -13,7 +13,7 @@ import {
 	TILED_PROJECTION_LAYOUTS,
 	TILED_PROJECTION_VJP_PRECISIONS,
 	TILED_SSIM_LAYOUTS,
-} from "./trainerWebGpu3dTiled.js?v=20260731-compactfp16-5";
+} from "./trainerWebGpu3dTiled.js?v=20260821-stablegs-ablation-1";
 const EXPERIMENTS = Object.freeze({
 	backward: Object.freeze([
 		Object.freeze({
@@ -87,6 +87,18 @@ const EXPERIMENTS = Object.freeze({
 			}),
 		}),
 	]),
+	geometry: Object.freeze([
+		Object.freeze({
+			id: "fast-baseline",
+			label: "Fast staged baseline",
+			init: Object.freeze({ backwardMode: TILED_BACKWARD_MODES.STAGED_PROJECT_3D }),
+		}),
+		Object.freeze({
+			id: "stablegs-inspired",
+			label: "Selected StableGS-inspired stack",
+			init: Object.freeze({ backwardMode: TILED_BACKWARD_MODES.STAGED_PROJECT_3D }),
+		}),
+	]),
 });
 
 const TRAIN_OPTIONS = Object.freeze({
@@ -127,6 +139,12 @@ const inputs = {
 	tileSize: document.querySelector("#kernelTileSize"),
 	tileCapacity: document.querySelector("#kernelTileCapacity"),
 	maxRoundCv: document.querySelector("#kernelMaxRoundCv"),
+	pixelFilterMode: document.querySelector("#kernelPixelFilter"),
+	opacityModel: document.querySelector("#kernelOpacityModel"),
+	geometryColorWeight: document.querySelector("#kernelGeometryColorWeight"),
+	crossViewDepth: document.querySelector("#kernelCrossViewDepth"),
+	geometryConsistencyEvery: document.querySelector("#kernelGeometryEvery"),
+	geometryDepthWeight: document.querySelector("#kernelGeometryDepthWeight"),
 };
 
 let running = false;
@@ -170,6 +188,12 @@ function readOptions() {
 		tileSize: Number(inputs.tileSize.value),
 		tileCapacity: Number(inputs.tileCapacity.value),
 		maxRoundCv: numberValue(inputs.maxRoundCv, "Maximum round CV"),
+		pixelFilterMode: inputs.pixelFilterMode.value,
+		opacityModel: inputs.opacityModel.value,
+		geometryColorWeight: numberValue(inputs.geometryColorWeight, "Geometry color weight"),
+		crossViewDepth: inputs.crossViewDepth.value === "true",
+		geometryConsistencyEvery: integerValue(inputs.geometryConsistencyEvery, "Depth cadence"),
+		geometryDepthWeight: numberValue(inputs.geometryDepthWeight, "Depth weight"),
 	};
 	if (options.capacity < options.splats) {
 		throw new RangeError("Model capacity must be at least the active splat count.");
@@ -207,6 +231,12 @@ function readOptions() {
 	if (![8, 16].includes(options.tileSize)) throw new RangeError("Tile size must be 8 or 16.");
 	if (![256, 512, 1024, 2048, 4096].includes(options.tileCapacity)) {
 		throw new RangeError("Tile capacity must be a supported power of two.");
+	}
+	if (!["legacy-floor", "mip-2d-compensated"].includes(options.pixelFilterMode)) {
+		throw new RangeError("Unknown pixel filter mode.");
+	}
+	if (!["coupled", "dual"].includes(options.opacityModel)) {
+		throw new RangeError("Unknown opacity model.");
 	}
 	return options;
 }
@@ -280,6 +310,20 @@ function number(value, digits = 2) {
 
 async function initializeVariant(variant, dataset, options) {
 	const trainer = new DynamicSplatWebGpu3dTiledTrainer(null);
+	const selectedAblations = options.experiment === "geometry" && variant.id === "fast-baseline"
+		? {
+			pixelFilterMode: "legacy-floor", opacityModel: "coupled",
+			geometryColorWeight: 0, crossViewDepth: false,
+			geometryConsistencyEvery: options.geometryConsistencyEvery,
+			geometryDepthWeight: options.geometryDepthWeight,
+		} : {
+			pixelFilterMode: options.pixelFilterMode,
+			opacityModel: options.opacityModel,
+			geometryColorWeight: options.geometryColorWeight,
+			crossViewDepth: options.crossViewDepth,
+			geometryConsistencyEvery: options.geometryConsistencyEvery,
+			geometryDepthWeight: options.geometryDepthWeight,
+		};
 	await trainer.init(dataset, {
 		splatCount: options.splats,
 		growthCapacity: options.capacity,
@@ -295,6 +339,7 @@ async function initializeVariant(variant, dataset, options) {
 		tileCapacity: options.tileCapacity,
 		profileGpu: true,
 		backwardMode: TILED_BACKWARD_MODES.STAGED_PROJECT_3D,
+		...selectedAblations,
 		...variant.init,
 	});
 	await trainer.device.queue.onSubmittedWorkDone();
@@ -554,6 +599,12 @@ function applyQueryOptions() {
 		tile: inputs.tileSize,
 		tileCapacity: inputs.tileCapacity,
 		maxRoundCv: inputs.maxRoundCv,
+		pixelFilterMode: inputs.pixelFilterMode,
+		opacityModel: inputs.opacityModel,
+		geometryColorWeight: inputs.geometryColorWeight,
+		crossViewDepth: inputs.crossViewDepth,
+		geometryConsistencyEvery: inputs.geometryConsistencyEvery,
+		geometryDepthWeight: inputs.geometryDepthWeight,
 	};
 	for (const [key, input] of Object.entries(mappings)) {
 		if (query.has(key)) input.value = query.get(key);

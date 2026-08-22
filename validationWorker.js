@@ -1,12 +1,13 @@
 import {
 	SPLAT_FLOATS,
 	resolveTrainViewIndices,
-} from "./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1";
+} from "./trainerWebGpu3d.js?v=20260821-stablegs-ablation-1";
 import {
 	computeSnapshotMetrics,
 	snapshotUpdateRatios,
 	summarizeSplatParameters,
-} from "./snapshotMetrics.js?v=20260803-fullfps-pixelgs-1";
+} from "./snapshotMetrics.js?v=20260821-stablegs-ablation-1";
+import { computeCameraStressMetrics } from "./cameraStressMetrics.js?v=20260821-stablegs-ablation-1";
 import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260803-fullfps-pixelgs-1";
 import { hydrateDatasetSharedViews } from "./datasetSharing.js";
 
@@ -90,6 +91,9 @@ self.onmessage = ({ data }) => {
 			splatCount: data.options?.splatCount,
 			modelMode: data.options?.modelMode ?? 0,
 			temporalSigma: data.options?.temporalSigma ?? 0.30,
+			pixelFilterMode: data.options?.pixelFilterMode ?? "legacy-floor",
+			opacityModel: data.options?.opacityModel ?? "coupled",
+			materialOpacityBias: data.options?.materialOpacityBias ?? 4.59511985013459,
 		};
 		const trainViewIndices = representativeTrainViews();
 		const heldoutViewIndices = heldoutViews();
@@ -126,6 +130,15 @@ self.onmessage = ({ data }) => {
 		const strongestCamera = cameraPsnr.at(-1);
 		const splatCount = options.splatCount ?? params.length / SPLAT_FLOATS;
 		const activeValues = splatCount * SPLAT_FLOATS;
+		// This bounded stencil is deliberately evaluated in the CPU validation
+		// worker. It must never insert a readback or synchronization point into
+		// the continuous WebGPU optimization queue.
+		const cameraStress = computeCameraStressMetrics(dataset, params, {
+			...options,
+			splatCount,
+			viewIndices: [...new Set([...trainViewIndices, ...heldoutViewIndices])],
+			frameIndex: cameraSweepFrame,
+		});
 		const metrics = {
 			gridLoss: train.mse,
 			gridMae: train.mae,
@@ -150,6 +163,13 @@ self.onmessage = ({ data }) => {
 			medianTrainCameraPsnr: medianCamera?.psnr ?? Number.NaN,
 			strongestTrainCameraPsnr: strongestCamera?.psnr ?? Number.NaN,
 			weakestTrainCameraSsim: weakestCamera?.ssim ?? Number.NaN,
+			cameraStress,
+			trainMultiLayerRayFraction: cameraStress.train?.poseMultiLayerRayFraction
+				?? Number.NaN,
+			heldoutMultiLayerRayFraction: cameraStress.heldout?.poseMultiLayerRayFraction
+				?? Number.NaN,
+			trainSecondLayerMass: cameraStress.train?.poseSecondLayerMass ?? Number.NaN,
+			heldoutSecondLayerMass: cameraStress.heldout?.poseSecondLayerMass ?? Number.NaN,
 			motionLoss: Number.NaN,
 			motionCoverage: train.coverage,
 			staticCoverage: Number.NaN,
@@ -178,6 +198,7 @@ self.onmessage = ({ data }) => {
 				cameraSweepFrame,
 				heldoutViews: heldoutViewIndices.map((view) => dataset.cameras[view].name),
 				ssim: "channelwise_11x11_gaussian_sigma1.5_reflect",
+				cameraStress: cameraStress.contract,
 			},
 		};
 		previousParams = params.slice();

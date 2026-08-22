@@ -2,6 +2,7 @@ import {
 	SPLAT_FLOATS,
 	projectAnisotropicGaussianCpu,
 	resolveTrainViewIndices,
+	screenSpaceFilterVariance,
 } from "./trainerWebGpu3d.js";
 import { decodeFrameRgb, frameTime01 } from "./dataset.js";
 
@@ -9,6 +10,12 @@ const DEFAULT_TILE_SIZE = 16;
 const DEFAULT_ALPHA_THRESHOLD = 1 / 255;
 const DEFAULT_TRANSMITTANCE_THRESHOLD = 1e-4;
 const DEFAULT_TEMPORAL_SIGMA = 0.30;
+const DEFAULT_MATERIAL_OPACITY_BIAS = 4.59511985013459;
+const PIXEL_FILTER_MODES = new Set(["legacy-floor", "mip-2d-compensated"]);
+const OPACITY_MODELS = new Set(["coupled", "dual"]);
+const MULTIMODAL_MIN_COVERAGE = 0.05;
+const MULTIMODAL_MIN_LAYER_MASS = 0.10;
+const MULTIMODAL_MIN_DEPTH_RATIO = 1.15;
 const SSIM_RADIUS = 5;
 const SSIM_SIGMA = 1.5;
 const SSIM_C1 = 0.01 ** 2;
@@ -20,6 +27,7 @@ export const SNAPSHOT_PARAMETER_FAMILIES = Object.freeze({
 	velocity: Object.freeze([4, 5, 6]),
 	timeCenter: Object.freeze([7]),
 	harmonic: Object.freeze([8, 9, 10]),
+	materialOpacity: Object.freeze([11]),
 	logScale: Object.freeze([12, 13, 14]),
 	rotation: Object.freeze([16, 17, 18, 19]),
 	color: Object.freeze([20, 21, 22]),
@@ -32,6 +40,75 @@ function clamp(value, minimum, maximum) {
 
 function sigmoid(value) {
 	return 1 / (1 + Math.exp(-value));
+}
+
+function resolveAblationOptions({
+	pixelFilterMode = "legacy-floor",
+	opacityModel = "coupled",
+	materialOpacityBias = DEFAULT_MATERIAL_OPACITY_BIAS,
+} = {}) {
+	if (!PIXEL_FILTER_MODES.has(pixelFilterMode)) {
+		throw new RangeError(`Unknown pixelFilterMode: ${pixelFilterMode}.`);
+	}
+	if (!OPACITY_MODELS.has(opacityModel)) {
+		throw new RangeError(`Unknown opacityModel: ${opacityModel}.`);
+	}
+	if (!Number.isFinite(materialOpacityBias)) {
+		throw new RangeError("materialOpacityBias must be finite.");
+	}
+	return { pixelFilterMode, opacityModel, materialOpacityBias };
+}
+
+export function mip2dOpacityCompensation(projection, height) {
+	if (!projection?.valid) return 0;
+	assertPositiveInteger(height, "height");
+	const filterVariance = screenSpaceFilterVariance(height);
+	const [filtered00, cross, filtered11] = projection.covariance;
+	const unfiltered00 = filtered00 - filterVariance;
+	const unfiltered11 = filtered11 - filterVariance;
+	const unfilteredDeterminant = unfiltered00 * unfiltered11 - cross * cross;
+	const filteredDeterminant = filtered00 * filtered11 - cross * cross;
+	if (!Number.isFinite(unfilteredDeterminant) || !Number.isFinite(filteredDeterminant)
+		|| !(filteredDeterminant > 0)) return 0;
+	return Math.sqrt(clamp(Math.max(0, unfilteredDeterminant) / filteredDeterminant, 0, 1));
+}
+
+// This is intentionally a diagnostic, not a loss. It asks whether a ray's
+// geometry-opacity contributions support two depth groups separated by a real
+// gap, without introducing a monocular or external depth prior.
+export function separatedWeightedDepthModes(contributions, {
+	minLayerMass = MULTIMODAL_MIN_LAYER_MASS,
+	minDepthRatio = MULTIMODAL_MIN_DEPTH_RATIO,
+} = {}) {
+	if (!(minLayerMass > 0 && minLayerMass < 0.5) || !(minDepthRatio > 1)) {
+		throw new RangeError("Depth-mode thresholds must satisfy mass in (0, 0.5) and ratio > 1.");
+	}
+	const samples = contributions
+		.filter(({ depth, weight }) => Number.isFinite(depth) && depth > 0
+			&& Number.isFinite(weight) && weight > 0)
+		.sort((left, right) => left.depth - right.depth);
+	const totalWeight = samples.reduce((sum, { weight }) => sum + weight, 0);
+	if (samples.length < 2 || !(totalWeight > 0)) {
+		return { multiLayer: false, secondLayerMass: 0, splitDepthRatio: 1 };
+	}
+	let prefixWeight = 0;
+	let bestSecondLayerMass = 0;
+	let bestDepthRatio = 1;
+	for (let index = 0; index + 1 < samples.length; index += 1) {
+		prefixWeight += samples[index].weight;
+		const depthRatio = samples[index + 1].depth / samples[index].depth;
+		if (!(depthRatio >= minDepthRatio)) continue;
+		const secondLayerMass = Math.min(prefixWeight, totalWeight - prefixWeight) / totalWeight;
+		if (secondLayerMass > bestSecondLayerMass) {
+			bestSecondLayerMass = secondLayerMass;
+			bestDepthRatio = depthRatio;
+		}
+	}
+	return {
+		multiLayer: bestSecondLayerMass >= minLayerMass,
+		secondLayerMass: bestSecondLayerMass,
+		splitDepthRatio: bestDepthRatio,
+	};
 }
 
 function quantile(values, probability) {
@@ -231,29 +308,49 @@ function opacityAwarePixelBounds(projection, peakAlpha, width, height, alphaThre
 }
 
 function projectFrame(dataset, params, {
+	camera,
 	viewIndex,
 	frameIndex,
 	splatCount,
 	modelMode,
 	temporalSigma,
+	width,
+	height,
+	pixelFilterMode,
+	opacityModel,
+	materialOpacityBias,
+	collectGeometryDiagnostics,
 }) {
 	const time = frameTime01(dataset, frameIndex);
-	const camera = dataset.cameras[viewIndex];
-	const aspect = dataset.width / dataset.height;
+	const renderCamera = camera ?? dataset.cameras[viewIndex];
+	const aspect = width / height;
 	return Array.from({ length: splatCount }, (_, index) => {
 		const base = index * SPLAT_FLOATS;
 		const projection = projectAnisotropicGaussianCpu({
 			center: worldCenter(params, base, time, modelMode),
 			logScales: [params[base + 12], params[base + 13], params[base + 14]],
 			quaternion: [params[base + 16], params[base + 17], params[base + 18], params[base + 19]],
-			camera,
+			camera: renderCamera,
 			aspect,
-			height: dataset.height,
+			height,
 		});
+		const legacyPeakAlpha = sigmoid(params[base + 23])
+			* temporalGate(params, base, time, temporalSigma);
+		const mipCompensation = pixelFilterMode === "mip-2d-compensated"
+			? mip2dOpacityCompensation(projection, height) : 1;
+		const geometryPeakAlpha = pixelFilterMode === "legacy-floor"
+			? legacyPeakAlpha : legacyPeakAlpha * mipCompensation;
+		const appearancePeakAlpha = opacityModel === "dual"
+			? geometryPeakAlpha * sigmoid(params[base + 11] + materialOpacityBias)
+			: geometryPeakAlpha;
 		return {
 			index,
 			projection,
-			peakAlpha: sigmoid(params[base + 23]) * temporalGate(params, base, time, temporalSigma),
+			peakAlpha: appearancePeakAlpha,
+			geometryPeakAlpha,
+			rasterPeakAlpha: collectGeometryDiagnostics
+				? Math.max(appearancePeakAlpha, geometryPeakAlpha) : appearancePeakAlpha,
+			mipCompensation,
 			color: [params[base + 20], params[base + 21], params[base + 22]],
 		};
 	});
@@ -265,9 +362,14 @@ function binProjectedSplats(projected, width, height, tileSize, alphaThreshold) 
 	const tiles = Array.from({ length: tilesX * tilesY }, () => []);
 	for (const splat of projected) {
 		const bounds = opacityAwarePixelBounds(
-			splat.projection, splat.peakAlpha, width, height, alphaThreshold,
+			splat.projection, splat.rasterPeakAlpha, width, height, alphaThreshold,
 		);
 		if (!bounds) continue;
+		// The opacity-aware screen rectangle is deliberately used here: a
+		// low-opacity large covariance should not be classified as a giant
+		// floater when its visible support is actually compact.
+		splat.screenAreaFraction = (bounds.maxX - bounds.minX + 1)
+			* (bounds.maxY - bounds.minY + 1) / (width * height);
 		const minTileX = Math.floor(bounds.minX / tileSize);
 		const maxTileX = Math.floor(bounds.maxX / tileSize);
 		const minTileY = Math.floor(bounds.minY / tileSize);
@@ -303,14 +405,26 @@ function binProjectedSplats(projected, width, height, tileSize, alphaThreshold) 
 export function renderSnapshotFrame(dataset, params, {
 	viewIndex = 0,
 	frameIndex = 0,
+	camera = null,
+	width: requestedWidth = dataset.width,
+	height: requestedHeight = dataset.height,
 	splatCount: requestedSplatCount,
 	tileSize = DEFAULT_TILE_SIZE,
 	modelMode = 0,
 	temporalSigma = DEFAULT_TEMPORAL_SIGMA,
 	alphaThreshold = DEFAULT_ALPHA_THRESHOLD,
 	transmittanceThreshold = DEFAULT_TRANSMITTANCE_THRESHOLD,
+	collectGeometryDiagnostics = false,
+	nearDepthThreshold = 0,
+	largeFootprintFraction = 0.25,
+	pixelFilterMode = "legacy-floor",
+	opacityModel = "coupled",
+	materialOpacityBias = DEFAULT_MATERIAL_OPACITY_BIAS,
 } = {}) {
 	assertDataset(dataset);
+	const ablations = resolveAblationOptions({
+		pixelFilterMode, opacityModel, materialOpacityBias,
+	});
 	const splatCount = resolveSplatCount(params, requestedSplatCount);
 	assertPositiveInteger(tileSize, "tileSize");
 	if (!Number.isSafeInteger(viewIndex) || viewIndex < 0 || viewIndex >= dataset.cameras.length) {
@@ -319,19 +433,43 @@ export function renderSnapshotFrame(dataset, params, {
 	if (!Number.isSafeInteger(frameIndex) || frameIndex < 0 || frameIndex >= dataset.frameCount) {
 		throw new RangeError("frameIndex is outside dataset.frameCount.");
 	}
+	assertPositiveInteger(requestedWidth, "width");
+	assertPositiveInteger(requestedHeight, "height");
+	if (camera != null && (!camera.worldToCamera || !camera.intrinsics)) {
+		throw new TypeError("camera must provide worldToCamera and intrinsics.");
+	}
 	if (!(alphaThreshold > 0 && alphaThreshold < 1)
 		|| !(transmittanceThreshold > 0 && transmittanceThreshold < 1)) {
 		throw new RangeError("Raster thresholds must be finite values between zero and one.");
 	}
-	const { width, height } = dataset;
+	if (!Number.isFinite(nearDepthThreshold) || nearDepthThreshold < 0) {
+		throw new RangeError("nearDepthThreshold must be finite and nonnegative.");
+	}
+	if (!(largeFootprintFraction > 0 && largeFootprintFraction <= 1)) {
+		throw new RangeError("largeFootprintFraction must be in (0, 1].");
+	}
+	const width = requestedWidth;
+	const height = requestedHeight;
 	const projected = projectFrame(dataset, params, {
-		viewIndex, frameIndex, splatCount, modelMode, temporalSigma,
+		camera, viewIndex, frameIndex, splatCount, modelMode, temporalSigma, width, height,
+		...ablations, collectGeometryDiagnostics,
 	});
 	const { tiles, tilesX } = binProjectedSplats(
 		projected, width, height, tileSize, alphaThreshold,
 	);
 	const rgb = new Float32Array(width * height * 3);
 	const coverage = new Float32Array(width * height);
+	const geometryCoverage = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const depthMean = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const depthStd = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const nearCoverage = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const largeFootprintCoverage = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const multiLayerRay = collectGeometryDiagnostics ? new Uint8Array(width * height) : null;
+	const secondLayerMass = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	const splitDepthRatio = collectGeometryDiagnostics ? new Float32Array(width * height) : null;
+	let geometryCoveredRays = 0;
+	let multiLayerRays = 0;
+	let secondLayerMassSum = 0;
 	let primitiveEvaluations = 0;
 	for (let y = 0; y < height; y += 1) {
 		for (let x = 0; x < width; x += 1) {
@@ -343,6 +481,13 @@ export function renderSnapshotFrame(dataset, params, {
 			let green = 0;
 			let blue = 0;
 			let transmittance = 1;
+			let geometryTransmittance = 1;
+			let depthWeight = 0;
+			let depthFirstMoment = 0;
+			let depthSecondMoment = 0;
+			let nearContribution = 0;
+			let largeFootprintContribution = 0;
+			const depthContributions = collectGeometryDiagnostics ? [] : null;
 			for (const splat of tile) {
 				primitiveEvaluations += 1;
 				const dx = pointX - splat.projection.center[0];
@@ -350,19 +495,61 @@ export function renderSnapshotFrame(dataset, params, {
 				const [a, b, c] = splat.projection.conic;
 				const qform = a * dx * dx + 2 * b * dx * dy + c * dy * dy;
 				if (!Number.isFinite(qform) || qform < 0 || qform > 9) continue;
-				const rawAlpha = splat.peakAlpha * Math.exp(-0.5 * qform);
+				const gaussian = Math.exp(-0.5 * qform);
+				const rawAlpha = splat.peakAlpha * gaussian;
 				const alpha = rawAlpha >= alphaThreshold ? Math.min(0.99, rawAlpha) : 0;
-				red += transmittance * alpha * splat.color[0];
-				green += transmittance * alpha * splat.color[1];
-				blue += transmittance * alpha * splat.color[2];
+				const contribution = transmittance * alpha;
+				red += contribution * splat.color[0];
+				green += contribution * splat.color[1];
+				blue += contribution * splat.color[2];
+				if (collectGeometryDiagnostics) {
+					const rawGeometryAlpha = splat.geometryPeakAlpha * gaussian;
+					const geometryAlpha = rawGeometryAlpha >= alphaThreshold
+						? Math.min(0.99, rawGeometryAlpha) : 0;
+					const geometryContribution = geometryTransmittance * geometryAlpha;
+					const depth = splat.projection.cameraPoint[2];
+					depthWeight += geometryContribution;
+					depthFirstMoment += geometryContribution * depth;
+					depthSecondMoment += geometryContribution * depth * depth;
+					if (nearDepthThreshold > 0 && depth < nearDepthThreshold) {
+						nearContribution += geometryContribution;
+					}
+					if (splat.screenAreaFraction >= largeFootprintFraction) {
+						largeFootprintContribution += geometryContribution;
+					}
+					if (geometryContribution > 0) {
+						depthContributions.push({ depth, weight: geometryContribution });
+					}
+					geometryTransmittance *= 1 - geometryAlpha;
+				}
 				transmittance *= 1 - alpha;
-				if (transmittance < transmittanceThreshold) break;
+				if (transmittance < transmittanceThreshold
+					&& (!collectGeometryDiagnostics
+						|| geometryTransmittance < transmittanceThreshold)) break;
 			}
 			const rgbBase = pixel * 3;
 			rgb[rgbBase] = red;
 			rgb[rgbBase + 1] = green;
 			rgb[rgbBase + 2] = blue;
 			coverage[pixel] = 1 - transmittance;
+			if (collectGeometryDiagnostics && depthWeight > 0) {
+				geometryCoverage[pixel] = 1 - geometryTransmittance;
+				const mean = depthFirstMoment / depthWeight;
+				depthMean[pixel] = mean;
+				depthStd[pixel] = Math.sqrt(Math.max(0,
+					depthSecondMoment / depthWeight - mean * mean));
+				nearCoverage[pixel] = nearContribution;
+				largeFootprintCoverage[pixel] = largeFootprintContribution;
+				if (geometryCoverage[pixel] >= MULTIMODAL_MIN_COVERAGE) {
+					geometryCoveredRays += 1;
+					const modes = separatedWeightedDepthModes(depthContributions);
+					multiLayerRay[pixel] = modes.multiLayer ? 1 : 0;
+					secondLayerMass[pixel] = modes.secondLayerMass;
+					splitDepthRatio[pixel] = modes.splitDepthRatio;
+					multiLayerRays += multiLayerRay[pixel];
+					secondLayerMassSum += modes.secondLayerMass;
+				}
+			}
 		}
 	}
 	return {
@@ -372,6 +559,19 @@ export function renderSnapshotFrame(dataset, params, {
 		frameIndex,
 		rgb,
 		coverage,
+		...(collectGeometryDiagnostics ? {
+			geometryCoverage,
+			depthMean,
+			depthStd,
+			nearCoverage,
+			largeFootprintCoverage,
+			multiLayerRay,
+			secondLayerMass,
+			splitDepthRatio,
+			multiLayerRayFraction: multiLayerRays / Math.max(1, geometryCoveredRays),
+			meanSecondLayerMass: secondLayerMassSum / Math.max(1, geometryCoveredRays),
+			geometryCoveredRays,
+		} : {}),
 		primitiveEvaluations,
 		binnedReferences: tiles.reduce((sum, tile) => sum + tile.length, 0),
 	};

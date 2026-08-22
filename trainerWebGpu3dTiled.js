@@ -9,7 +9,7 @@ import {
 	normalizeDatasetGeometry,
 	rgbaFloatFrameBytes,
 	resolveTrainViewIndices,
-} from "./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1";
+} from "./trainerWebGpu3d.js?v=20260821-stablegs-ablation-1";
 import {
 	FRAME_BANK_FORMAT_RGBA8,
 	frameTime01,
@@ -22,6 +22,7 @@ import {
 	DENSITY_STAT_DECAY,
 	browserLearningRates,
 } from "./trainingSchedule.js?v=20260803-fullfps-pixelgs-1";
+import { cameraRigRadius } from "./orbitCamera.js?v=20260813-camera-stress-1";
 
 const SPLAT_BYTES = SPLAT_FLOATS * 4;
 export const DEFAULT_TILE_SIZE = 16;
@@ -39,7 +40,7 @@ const DENSITY_START_STEP = 600;
 const DENSITY_INTERVAL = 100;
 const DENSITY_DISPATCHES = 4;
 const DENSITY_SPLITS_PER_DISPATCH = 4;
-const TILED_CONFIG_BYTES = 192;
+const TILED_CONFIG_BYTES = 224;
 const DIRECT_GRADIENT_FLOATS = SPLAT_FLOATS;
 const PROJECTED_GRADIENT_FLOATS = 12;
 const TILED_GPU_PHASES = Object.freeze([
@@ -70,6 +71,17 @@ export const TILED_SSIM_LAYOUTS = Object.freeze({
 	NAIVE_2D: "naive-2d",
 	SEPARABLE: "separable",
 });
+export const TILED_PIXEL_FILTER_MODES = Object.freeze({
+	LEGACY_FLOOR: "legacy-floor",
+	MIP_2D_COMPENSATED: "mip-2d-compensated",
+});
+export const TILED_OPACITY_MODELS = Object.freeze({
+	COUPLED: "coupled",
+	DUAL: "dual",
+});
+// sigmoid(log(99)) = 0.99. Old checkpoints store zero in harmonicPad.w,
+// so dual opacity starts as an almost identity appearance gate.
+export const DEFAULT_MATERIAL_OPACITY_BIAS = Math.log(99);
 export const DEFAULT_MAX_TILE_CAPACITY = 4096;
 export const DEFAULT_BROWSER_GROWTH_CAPACITY = 8192;
 export const DEFAULT_CHECKPOINT_PRECISION = "packed-f16";
@@ -98,30 +110,46 @@ export function resolvePixelDepthGamma(value = PIXEL_GS_DEPTH_GAMMA) {
 	return gamma;
 }
 
-export function cameraSceneRadius(cameras) {
-	if (!Array.isArray(cameras) || cameras.length === 0) {
-		throw new TypeError("cameraSceneRadius needs at least one calibrated camera.");
+export function resolveTiledPixelFilterMode(value = TILED_PIXEL_FILTER_MODES.LEGACY_FLOOR) {
+	if (!Object.values(TILED_PIXEL_FILTER_MODES).includes(value)) {
+		throw new RangeError(`pixelFilterMode must be one of: `
+			+ `${Object.values(TILED_PIXEL_FILTER_MODES).join(", ")}.`);
 	}
-	const centers = cameras.map((camera) => {
-		const matrix = camera?.worldToCamera;
-		if (!matrix || matrix.length !== 16 || !Array.from(matrix).every(Number.isFinite)) {
-			throw new TypeError("Every camera needs a finite 4x4 worldToCamera matrix.");
-		}
-		const translation = [matrix[3], matrix[7], matrix[11]];
-		return [
-			-(matrix[0] * translation[0] + matrix[4] * translation[1] + matrix[8] * translation[2]),
-			-(matrix[1] * translation[0] + matrix[5] * translation[1] + matrix[9] * translation[2]),
-			-(matrix[2] * translation[0] + matrix[6] * translation[1] + matrix[10] * translation[2]),
-		];
-	});
-	const mean = [0, 1, 2].map((axis) =>
-		centers.reduce((sum, center) => sum + center[axis], 0) / centers.length);
-	const radius = 1.1 * Math.max(...centers.map((center) => Math.hypot(
-		center[0] - mean[0], center[1] - mean[1], center[2] - mean[2],
-	)));
-	// Pixel-GS's camera-radius definition collapses for a single camera. A
-	// unit fallback keeps the optional guard finite for compatibility fixtures.
-	return radius > 1e-6 ? radius : 1;
+	return value;
+}
+
+export function resolveTiledOpacityModel(value = TILED_OPACITY_MODELS.COUPLED) {
+	if (!Object.values(TILED_OPACITY_MODELS).includes(value)) {
+		throw new RangeError(`opacityModel must be one of: `
+			+ `${Object.values(TILED_OPACITY_MODELS).join(", ")}.`);
+	}
+	return value;
+}
+
+export function resolveNonNegativeWeight(value, label) {
+	const weight = Number(value);
+	if (!Number.isFinite(weight) || weight < 0) {
+		throw new RangeError(`${label} must be a non-negative finite number.`);
+	}
+	return weight;
+}
+
+export function resolveGeometryConsistencyEvery(value = 8) {
+	if (!Number.isSafeInteger(value) || value < 1 || value > 1024) {
+		throw new RangeError("geometryConsistencyEvery must be an integer from 1 through 1024.");
+	}
+	return value;
+}
+
+export function mip2dOpacityCompensation(c00, c01, c11, filterVariance) {
+	const determinant = c00 * c11 - c01 * c01;
+	const filteredDeterminant = (c00 + filterVariance) * (c11 + filterVariance) - c01 * c01;
+	if (!(determinant > 0) || !(filteredDeterminant > 0)) return 0;
+	return Math.min(1, Math.max(0, Math.sqrt(determinant / filteredDeterminant)));
+}
+
+export function cameraSceneRadius(cameras) {
+	return cameraRigRadius(cameras);
 }
 
 export function resolveTiledBackwardMode(value = TILED_BACKWARD_MODES.DIRECT_3D) {
@@ -524,6 +552,135 @@ export function trainingPairForStep(trainViewIndices, frameCount, step, staticWa
 	};
 }
 
+export function pairedReferenceViewForStep(trainViewIndices, sourceViewIndex, eventIndex) {
+	if (!Array.isArray(trainViewIndices) || trainViewIndices.length < 2) {
+		throw new RangeError("Paired depth consistency requires at least two train views.");
+	}
+	if (!Number.isSafeInteger(eventIndex) || eventIndex < 0) {
+		throw new RangeError("eventIndex must be a non-negative safe integer.");
+	}
+	const sourceSlot = trainViewIndices.indexOf(sourceViewIndex);
+	if (sourceSlot < 0) throw new RangeError("sourceViewIndex must belong to the train split.");
+	// Rotate the partner offset so the regularizer cannot collapse into one
+	// privileged stereo pair. Every event remains same-time and train-only.
+	const offset = 1 + (eventIndex % (trainViewIndices.length - 1));
+	return trainViewIndices[(sourceSlot + offset) % trainViewIndices.length];
+}
+
+function relativeCameraRotationDegrees(left, right) {
+	let trace = 0;
+	for (let row = 0; row < 3; row += 1) {
+		for (let column = 0; column < 3; column += 1) {
+			trace += right.worldToCamera[row * 4 + column]
+				* left.worldToCamera[row * 4 + column];
+		}
+	}
+	return Math.acos(Math.max(-1, Math.min(1, (trace - 1) / 2))) * 180 / Math.PI;
+}
+
+function seedVisibleInCamera(seedPoints, pointIndex, camera) {
+	const base = pointIndex * 6;
+	const matrix = camera.worldToCamera;
+	const x = seedPoints[base]; const y = seedPoints[base + 1]; const z = seedPoints[base + 2];
+	const cameraX = matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[3];
+	const cameraY = matrix[4] * x + matrix[5] * y + matrix[6] * z + matrix[7];
+	const cameraZ = matrix[8] * x + matrix[9] * y + matrix[10] * z + matrix[11];
+	if (!(cameraZ > 0.1)) return false;
+	const imageX = camera.intrinsics[0] * cameraX / cameraZ + camera.intrinsics[2];
+	const imageY = camera.intrinsics[1] * cameraY / cameraZ + camera.intrinsics[3];
+	return imageX >= 0 && imageX <= 1 && imageY >= 0 && imageY <= 1;
+}
+
+export function buildGeometryPairSchedule(dataset, trainViewIndices, {
+	minCoVisibleSeedPoints = 30,
+	minCoVisibleFraction = 0.25,
+	minRotationDegrees = 16,
+	maxRotationDegrees = 60,
+} = {}) {
+	if (!dataset?.cameras || !dataset.seedPoints || !Number.isSafeInteger(dataset.seedPointCount)) {
+		throw new TypeError("Geometry pair selection needs calibrated cameras and seed points.");
+	}
+	if (!Array.isArray(trainViewIndices) || trainViewIndices.length < 2) {
+		throw new RangeError("Geometry pair selection requires at least two train views.");
+	}
+	if (!Number.isSafeInteger(minCoVisibleSeedPoints) || minCoVisibleSeedPoints < 0) {
+		throw new RangeError("minCoVisibleSeedPoints must be a non-negative safe integer.");
+	}
+	if (!Number.isFinite(minCoVisibleFraction)
+		|| minCoVisibleFraction < 0 || minCoVisibleFraction > 1) {
+		throw new RangeError("minCoVisibleFraction must be between 0 and 1.");
+	}
+	if (!Number.isFinite(minRotationDegrees) || !Number.isFinite(maxRotationDegrees)
+		|| minRotationDegrees < 0 || maxRotationDegrees > 180
+		|| minRotationDegrees > maxRotationDegrees) {
+		throw new RangeError("Geometry-pair rotation bounds must satisfy 0 <= min <= max <= 180.");
+	}
+	const visibility = new Map(trainViewIndices.map((viewIndex) => {
+		const visible = new Uint8Array(dataset.seedPointCount);
+		for (let point = 0; point < dataset.seedPointCount; point += 1) {
+			visible[point] = seedVisibleInCamera(dataset.seedPoints, point, dataset.cameras[viewIndex]);
+		}
+		return [viewIndex, visible];
+	}));
+	const candidatesByView = Array.from({ length: dataset.cameras.length }, () => []);
+	let fallbackSourceCount = 0;
+	for (const sourceViewIndex of trainViewIndices) {
+		const all = [];
+		for (const referenceViewIndex of trainViewIndices) {
+			if (referenceViewIndex === sourceViewIndex) continue;
+			let coVisibleSeedPoints = 0;
+			const sourceVisibility = visibility.get(sourceViewIndex);
+			const referenceVisibility = visibility.get(referenceViewIndex);
+			for (let point = 0; point < dataset.seedPointCount; point += 1) {
+				coVisibleSeedPoints += sourceVisibility[point] & referenceVisibility[point];
+			}
+			all.push({
+				viewIndex: referenceViewIndex,
+				coVisibleSeedPoints,
+				coVisibleFraction: coVisibleSeedPoints / Math.max(1, dataset.seedPointCount),
+				relativeRotationDegrees: relativeCameraRotationDegrees(
+					dataset.cameras[sourceViewIndex],
+					dataset.cameras[referenceViewIndex],
+				),
+			});
+		}
+		let selected = all.filter((candidate) => (
+			candidate.coVisibleSeedPoints >= minCoVisibleSeedPoints
+			&& candidate.coVisibleFraction >= minCoVisibleFraction
+			&& candidate.relativeRotationDegrees >= minRotationDegrees
+			&& candidate.relativeRotationDegrees <= maxRotationDegrees
+		));
+		if (!selected.length) {
+			// The bundle has no feature-track or homography table. Keep training
+			// usable on tiny custom bundles, but make the fallback observable.
+			fallbackSourceCount += 1;
+			selected = all.slice().sort((left, right) => (
+				right.coVisibleFraction - left.coVisibleFraction
+				|| Math.abs(left.relativeRotationDegrees - 30)
+					- Math.abs(right.relativeRotationDegrees - 30)
+			)).slice(0, 1);
+		}
+		candidatesByView[sourceViewIndex] = selected.sort((left, right) => (
+			Math.abs(left.relativeRotationDegrees - 30)
+				- Math.abs(right.relativeRotationDegrees - 30)
+			|| right.coVisibleFraction - left.coVisibleFraction
+		));
+	}
+	return {
+		candidatesByView,
+		fallbackSourceCount,
+		contract: {
+			trainOnly: true,
+			seedFrustumCoVisibility: true,
+			featureTrackCoVisibility: false,
+			homographyDegeneracyFilter: false,
+			minCoVisibleSeedPoints,
+			minCoVisibleFraction,
+			rotationDegrees: [minRotationDegrees, maxRotationDegrees],
+		},
+	};
+}
+
 export function opacityAwarePixelBounds(projection, peakAlpha, width, height, alphaThreshold = 1 / 255) {
 	if (!projection?.valid || !(peakAlpha > alphaThreshold)) return null;
 	const qLimit = Math.min(9, 2 * Math.log(peakAlpha / alphaThreshold));
@@ -727,6 +884,10 @@ function writeTiledConfig(buffer, values) {
 	u32(164, values.targetPacked ? 1 : 0); f32(168, values.frameTime); u32(172, values.cycleMetricCount);
 	f32(176, values.densitySceneRadius); f32(180, values.pixelDepthGamma);
 	f32(184, values.pixelDepthScaling ? 1 : 0); f32(188, 0);
+	f32(192, values.geometryColorWeight); f32(196, values.geometryDepthWeight);
+	f32(200, values.materialOpacityBias); f32(204, values.geometryDepthActive ? 1 : 0);
+	u32(208, values.referenceViewIndex); u32(212, values.geometryConsistencyEvery);
+	u32(216, values.geometryEnabled ? 1 : 0); u32(220, 0);
 }
 
 const CONFIG_WGSL = `
@@ -743,6 +904,8 @@ const CONFIG_WGSL = `
 		c1:f32, c2:f32, minScale:f32, maxScale:f32,
 		activeSplatCount:u32, configPad0:u32, frameTime:f32, cycleMetricCount:u32,
 		densityControl:vec4<f32>,
+		geometryControl:vec4<f32>,
+		geometrySchedule:vec4<u32>,
 	};
 	struct Splat {
 		centerStatic:vec4<f32>, velocityTime:vec4<f32>, harmonicPad:vec4<f32>,
@@ -863,6 +1026,12 @@ function targetDecodeWgsl() {
 function projectWgsl(
 	projectionLayout,
 	projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
+	{
+		encodeGeometryPeak = false,
+		pixelFilterMode = TILED_PIXEL_FILTER_MODES.LEGACY_FLOOR,
+		opacityModel = TILED_OPACITY_MODELS.COUPLED,
+		geometryEnabled = false,
+	} = {},
 ) {
 	const split = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
 	const packed = split
@@ -874,6 +1043,22 @@ function projectWgsl(
 		? `pack_compact_projection_vjp(${cameraPoint},${jacobian},${basis0},${basis1},${basis2})`
 		: `CompactProjectionVjp(${cameraPoint},${jacobian},${basis0},${basis1},${basis2})`;
 	const storedVariances = packed ? "storedVariances" : "variances";
+	const compensatedFilter = pixelFilterMode === TILED_PIXEL_FILTER_MODES.MIP_2D_COMPENSATED;
+	const dualOpacity = opacityModel === TILED_OPACITY_MODELS.DUAL;
+	const projectedPeak = encodeGeometryPeak ? `
+		let filterCompensation=${compensatedFilter
+			? "clamp(sqrt(max(unfilteredDeterminant,0.0)/max(determinant,1e-16)),0.0,1.0)"
+			: "1.0"};
+		let geometryPeak=peak*filterCompensation;
+		let materialFactor=${dualOpacity
+			? "sigmoid(p.harmonicPad.w+cfg.geometryControl.z)" : "1.0"};
+		let rasterPeak=geometryPeak*materialFactor;
+		let binPeak=${geometryEnabled ? "geometryPeak" : "rasterPeak"};`
+		: `
+		let geometryPeak=opacity;
+		let materialFactor=timeWeight;
+		let rasterPeak=peak;
+		let binPeak=peak;`;
 	const packedVjpPreflight = packed ? `
 		// World-space variances can be subnormal in f16. Store them relative
 		// to scene scale, then restore world units in the one-per-splat VJP.
@@ -997,22 +1182,28 @@ function projectWgsl(
 		let invZ=1.0/cp.z; let horizontalFocal=cfg.targetAspect*camera.intrinsics.x;
 		let j0=vec3<f32>(horizontalFocal*invZ,0.0,-horizontalFocal*cp.x*invZ*invZ);
 		let j1=vec3<f32>(0.0,camera.intrinsics.y*invZ,-camera.intrinsics.y*cp.y*invZ*invZ);
-		// Conservative screen-space footprint floor. This is point-sampled
-		// EWA-style filtering, not Mip-Splatting's compensated pixel filter.
+		// The covariance floor is shared by both lanes. The compensated lane
+		// additionally scales peak opacity by sqrt(det(C)/det(C+sI)); it is the
+		// 2D Mip filter, not Mip-Splatting's separate 3D frequency smoothing.
 		let filterVariance=pow(${FILTER_SIGMA_PIXELS}/max(1.0,f32(cfg.height)),2.0);
-		let covariance=vec3<f32>(dot(j0,sigmaCamera*j0)+filterVariance,
-			dot(j0,sigmaCamera*j1),dot(j1,sigmaCamera*j1)+filterVariance);
+		let unfilteredCovariance=vec3<f32>(dot(j0,sigmaCamera*j0),
+			dot(j0,sigmaCamera*j1),dot(j1,sigmaCamera*j1));
+		let unfilteredDeterminant=unfilteredCovariance.x*unfilteredCovariance.z
+			-unfilteredCovariance.y*unfilteredCovariance.y;
+		let covariance=unfilteredCovariance+vec3<f32>(filterVariance,0.0,filterVariance);
 		let determinant=covariance.x*covariance.z-covariance.y*covariance.y;
 		if(determinant<=1e-16){write_projection(i,raster,vjp);return;}
+		${projectedPeak}
+		if(binPeak<=cfg.alphaThreshold){write_projection(i,raster,vjp);return;}
 		let center=vec2<f32>(cfg.targetAspect*(camera.intrinsics.x*cp.x*invZ+camera.intrinsics.z),
 			camera.intrinsics.y*cp.y*invZ+camera.intrinsics.w);
 		let conic=vec3<f32>(covariance.z,-covariance.y,covariance.x)/determinant;
 		raster=RasterProjection(
-			vec4<f32>(center,conic.xy),vec4<f32>(conic.z,cp.z,opacity,timeWeight));
+			vec4<f32>(center,conic.xy),vec4<f32>(conic.z,cp.z,geometryPeak,materialFactor));
 		${packedVjpPreflight}
 		vjp=${validVjp};
 		write_projection(i,raster,vjp);
-		let qLimit=min(9.0,2.0*log(peak/cfg.alphaThreshold));
+		let qLimit=min(9.0,2.0*log(binPeak/cfg.alphaThreshold));
 		let centerPx=vec2<f32>(center.x*f32(cfg.height),center.y*f32(cfg.height));
 		let radiusPx=vec2<f32>(sqrt(max(0.0,qLimit*covariance.x)),
 			sqrt(max(0.0,qLimit*covariance.z)))*f32(cfg.height);
@@ -1072,6 +1263,7 @@ function sortWgsl(
 	tileCapacity,
 	backwardGranularity = TILED_BACKWARD_GRANULARITIES.PAIR,
 	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+	emitBackwardPairs = true,
 ) {
 	const checkpointBlocks = backwardGranularity
 		=== TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK;
@@ -1079,7 +1271,7 @@ function sortWgsl(
 		? "RasterProjection" : "Projection";
 	const depthMask = `0x${TILED_DEPTH_KEY_MASK.toString(16).padStart(8, "0")}u`;
 	const idMask = `0x${TILED_SPLAT_ID_MASK.toString(16).padStart(8, "0")}u`;
-	const compactSetup = checkpointBlocks ? `
+	const compactSetup = !emitBackwardPairs ? "" : checkpointBlocks ? `
 			atomicAdd(&counters[0],count);
 			compactCount=(count+cfg.checkpointStride-1u)/cfg.checkpointStride;
 			compactBase=atomicAdd(&counters[6],compactCount);` : `
@@ -1144,10 +1336,10 @@ function sortWgsl(
 			atomicMax(&counters[5],count);
 			${compactSetup}
 		}
-		workgroupBarrier();
+		${emitBackwardPairs ? `workgroupBarrier();
 		for(var index=lid.x;index<compactCount;index+=256u){
 			pairData[cfg.pairCapacity+compactBase+index]=${compactSlot};
-		}
+		}` : ""}
 	}`;
 }
 
@@ -1207,9 +1399,48 @@ function forwardWgsl(
 	checkpointOrder,
 	tileSize = DEFAULT_TILE_SIZE,
 	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+	{ geometryEnabled = false } = {},
 ) {
 	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
 		? "RasterProjection" : "Projection";
+	const geometryDeclarations = geometryEnabled ? `
+	struct PixelGradientPacket {
+		appGradStop:vec4<f32>, geometryRendered:vec4<f32>,
+		geometryGrad:vec4<f32>, geometryDepth:vec4<f32>,
+	};
+	struct GeometryCheckpoint { packedColorT:vec2<u32>, depthMoment:f32, pad:f32 };
+	@group(0) @binding(8) var<storage,read_write> pixelPackets:array<PixelGradientPacket>;
+	@group(0) @binding(9) var<storage,read_write> geometryCheckpoints:array<GeometryCheckpoint>;
+	fn write_geometry_checkpoint(index:u32,state:vec4<f32>,depthMoment:f32){
+		geometryCheckpoints[index]=GeometryCheckpoint(
+			vec2<u32>(pack2x16float(state.xy),pack2x16float(state.zw)),depthMoment,0.0);
+	}` : "";
+	const geometryState = geometryEnabled ? `
+		var geometryColor=vec3<f32>(0.0);var geometryTransmittance=1.0;
+		var geometryDepthMoment=0.0;` : "";
+	const geometryCheckpoint = geometryEnabled ? `
+				write_geometry_checkpoint(
+					checkpoint_index(pixel,rank/cfg.checkpointStride),
+					vec4<f32>(geometryColor,geometryTransmittance),geometryDepthMoment);` : "";
+	const geometryAccumulate = geometryEnabled ? `
+			let d=point-projections[id].screenConic0.xy;
+			let qform=projections[id].screenConic0.z*d.x*d.x
+				+2.0*projections[id].screenConic0.w*d.x*d.y
+				+projections[id].conicDepthAlpha.x*d.y*d.y;
+			let geometryRaw=projections[id].conicDepthAlpha.z*exp(-0.5*max(qform,0.0));
+			let geometryAlpha=select(0.0,min(0.99,geometryRaw),
+				qform>=0.0&&qform<=9.0&&geometryRaw>=cfg.alphaThreshold);
+			if(geometryTransmittance>=cfg.transmittanceThreshold){
+				let geometryWeight=geometryTransmittance*geometryAlpha;
+				geometryColor+=geometryWeight*params[id].colorOpacity.xyz;
+				geometryDepthMoment+=geometryWeight*projections[id].conicDepthAlpha.y;
+				geometryTransmittance*=1.0-geometryAlpha;
+			}` : "";
+	const geometryOutput = geometryEnabled ? `
+		pixelPackets[pixel]=PixelGradientPacket(
+			vec4<f32>(0.0),
+			vec4<f32>(geometryColor+geometryTransmittance*background,1.0-geometryTransmittance),
+			vec4<f32>(0.0),vec4<f32>(geometryDepthMoment,0.0,0.0,0.0));` : "";
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
@@ -1219,6 +1450,7 @@ function forwardWgsl(
 	@group(0) @binding(5) var<storage,read_write> rendered:array<vec4<f32>>;
 	${checkpointForwardWgsl(checkpointPrecision, checkpointOrder)}
 	@group(0) @binding(7) var<storage,read_write> stopRanks:array<u32>;
+	${geometryDeclarations}
 	fn alpha_at(proj:${projectionType},point:vec2<f32>)->f32{
 		let d=point-proj.screenConic0.xy;
 		let q=proj.screenConic0.z*d.x*d.x+2.0*proj.screenConic0.w*d.x*d.y
@@ -1234,21 +1466,157 @@ function forwardWgsl(
 		let count=min(atomicLoad(&tileCounts[tile]),cfg.tileCapacity);
 		let point=vec2<f32>((f32(gid.x)+0.5)/f32(cfg.height),(f32(gid.y)+0.5)/f32(cfg.height));
 		var color=vec3<f32>(0.0);var transmittance=1.0;var stop=count;
+		${geometryState}
 		// Depth-sorted source-over is the model's occlusion/transmittance law.
 		// A softmax over contributors would normalize away this visibility state.
 		for(var rank=0u;rank<count;rank++){
 			if(rank%cfg.checkpointStride==0u){
 				write_checkpoint(checkpoint_index(pixel,rank/cfg.checkpointStride),vec4<f32>(color,transmittance));
+				${geometryCheckpoint}
 			}
-			let id=pairData[tile*cfg.tileCapacity+rank];let alpha=alpha_at(projections[id],point);
+			let id=pairData[tile*cfg.tileCapacity+rank];
+			let alpha=alpha_at(projections[id],point);
 			color+=transmittance*alpha*params[id].colorOpacity.xyz;transmittance*=1.0-alpha;
+			${geometryAccumulate}
 			if(transmittance<cfg.transmittanceThreshold){stop=rank+1u;break;}
 		}
 		// Randomizing only the train underlay breaks the color/opacity shortcut
 		// without injecting a camera image. Alpha remains true splat coverage.
 		let background=training_background(cfg.trainingBackgroundPacked);
 		rendered[pixel]=vec4<f32>(color+transmittance*background,1.0-transmittance);
+		${geometryOutput}
 		stopRanks[pixel]=stop;
+	}`;
+}
+
+function referenceClearWgsl() {
+	return `${CONFIG_WGSL}
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read_write> tileCounts:array<atomic<u32>>;
+	@group(0) @binding(2) var<storage,read_write> counters:array<atomic<u32>>;
+	@compute @workgroup_size(64)
+	fn clear_reference(@builtin(global_invocation_id) gid:vec3<u32>){
+		let tileCount=cfg.tilesX*cfg.tilesY;
+		if(gid.x<tileCount){atomicStore(&tileCounts[gid.x],0u);}
+		if(gid.x==0u){
+			atomicStore(&counters[0],0u);atomicStore(&counters[1],0u);
+			atomicStore(&counters[2],0u);atomicStore(&counters[3],0u);
+			atomicStore(&counters[4],0u);atomicStore(&counters[5],0u);
+			atomicStore(&counters[6],0u);atomicStore(&counters[8],0u);
+		}
+	}`;
+}
+
+function referenceDepthWgsl(
+	tileSize = DEFAULT_TILE_SIZE,
+	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+) {
+	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
+		? "RasterProjection" : "Projection";
+	return `${CONFIG_WGSL}
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read> projections:array<${projectionType}>;
+	@group(0) @binding(2) var<storage,read> tileCounts:array<atomic<u32>>;
+	@group(0) @binding(3) var<storage,read> pairData:array<u32>;
+	@group(0) @binding(4) var<storage,read_write> depthCoverage:array<vec2<f32>>;
+	@compute @workgroup_size(${tileSize},${tileSize})
+	fn render_reference_depth(@builtin(global_invocation_id) gid:vec3<u32>){
+		if(gid.x>=cfg.width||gid.y>=cfg.height){return;}
+		let pixel=gid.y*cfg.width+gid.x;
+		let tile=(gid.y/cfg.tileSize)*cfg.tilesX+(gid.x/cfg.tileSize);
+		let count=min(atomicLoad(&tileCounts[tile]),cfg.tileCapacity);
+		let point=vec2<f32>((f32(gid.x)+0.5)/f32(cfg.height),
+			(f32(gid.y)+0.5)/f32(cfg.height));
+		var transmittance=1.0;var depthMoment=0.0;
+		for(var rank=0u;rank<count;rank++){
+			let id=pairData[tile*cfg.tileCapacity+rank];let proj=projections[id];
+			let d=point-proj.screenConic0.xy;
+			let q=proj.screenConic0.z*d.x*d.x+2.0*proj.screenConic0.w*d.x*d.y
+				+proj.conicDepthAlpha.x*d.y*d.y;
+			if(q>=0.0&&q<=9.0){
+				let raw=proj.conicDepthAlpha.z*exp(-0.5*q);
+				let alpha=select(0.0,min(0.99,raw),raw>=cfg.alphaThreshold);
+				depthMoment+=transmittance*alpha*proj.conicDepthAlpha.y;
+				transmittance*=1.0-alpha;
+				if(transmittance<cfg.transmittanceThreshold){break;}
+			}
+		}
+		depthCoverage[pixel]=vec2<f32>(depthMoment,1.0-transmittance);
+	}`;
+}
+
+function depthConsistencyWgsl() {
+	return `${CONFIG_WGSL}
+	struct PixelGradientPacket {
+		appGradStop:vec4<f32>, geometryRendered:vec4<f32>,
+		geometryGrad:vec4<f32>, geometryDepth:vec4<f32>,
+	};
+	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
+	@group(0) @binding(1) var<storage,read_write> pixelPackets:array<PixelGradientPacket>;
+	@group(0) @binding(2) var<storage,read> referenceDepth:array<vec2<f32>>;
+	@group(0) @binding(3) var<storage,read> cameras:array<Camera>;
+	@group(0) @binding(4) var<storage,read_write> pixelLoss:array<vec4<f32>>;
+	fn sample_reference(pixelPosition:vec2<f32>)->vec2<f32>{
+		let base=vec2<i32>(floor(pixelPosition));
+		let fraction=fract(pixelPosition);
+		let maximum=vec2<i32>(i32(cfg.width)-1,i32(cfg.height)-1);
+		let p00=vec2<u32>(clamp(base,vec2<i32>(0),maximum));
+		let p10=vec2<u32>(clamp(base+vec2<i32>(1,0),vec2<i32>(0),maximum));
+		let p01=vec2<u32>(clamp(base+vec2<i32>(0,1),vec2<i32>(0),maximum));
+		let p11=vec2<u32>(clamp(base+vec2<i32>(1,1),vec2<i32>(0),maximum));
+		let top=mix(referenceDepth[p00.y*cfg.width+p00.x],
+			referenceDepth[p10.y*cfg.width+p10.x],fraction.x);
+		let bottom=mix(referenceDepth[p01.y*cfg.width+p01.x],
+			referenceDepth[p11.y*cfg.width+p11.x],fraction.x);
+		return mix(top,bottom,fraction.y);
+	}
+	@compute @workgroup_size(64)
+	fn cross_view_depth(@builtin(global_invocation_id) gid:vec3<u32>){
+		let pixel=gid.x;if(pixel>=cfg.pixelCount||cfg.geometryControl.w<0.5){return;}
+		var packet=pixelPackets[pixel];let sourceCoverage=packet.geometryRendered.w;
+		if(sourceCoverage<0.05){packet.geometryGrad.w=0.0;pixelPackets[pixel]=packet;return;}
+		let sourceDepth=packet.geometryDepth.x/max(sourceCoverage,1e-6);
+		let x=pixel%cfg.width;let y=pixel/cfg.width;
+		let source=cameras[cfg.viewIndex];let reference=cameras[cfg.geometrySchedule.x];
+		let screen=vec2<f32>((f32(x)+0.5)/f32(cfg.height),(f32(y)+0.5)/f32(cfg.height));
+		let imageX=screen.x/cfg.targetAspect;
+		let sourceRay=vec3<f32>((imageX-source.intrinsics.z)/source.intrinsics.x,
+			(screen.y-source.intrinsics.w)/source.intrinsics.y,1.0);
+		let sourcePoint=sourceRay*sourceDepth;
+		let shifted=sourcePoint-vec3<f32>(source.row0.w,source.row1.w,source.row2.w);
+		let worldPoint=vec3<f32>(
+			dot(vec3<f32>(source.row0.x,source.row1.x,source.row2.x),shifted),
+			dot(vec3<f32>(source.row0.y,source.row1.y,source.row2.y),shifted),
+			dot(vec3<f32>(source.row0.z,source.row1.z,source.row2.z),shifted));
+		let h=vec4<f32>(worldPoint,1.0);
+		let referencePoint=vec3<f32>(dot(reference.row0,h),dot(reference.row1,h),dot(reference.row2,h));
+		if(referencePoint.z<=0.1){packet.geometryGrad.w=0.0;pixelPackets[pixel]=packet;return;}
+		let invZ=1.0/referencePoint.z;
+		let referenceScreen=vec2<f32>(cfg.targetAspect
+			*(reference.intrinsics.x*referencePoint.x*invZ+reference.intrinsics.z),
+			reference.intrinsics.y*referencePoint.y*invZ+reference.intrinsics.w);
+		let referencePixel=referenceScreen*f32(cfg.height)-vec2<f32>(0.5);
+		if(any(referencePixel<vec2<f32>(0.0))
+			||any(referencePixel>vec2<f32>(f32(cfg.width-1u),f32(cfg.height-1u)))){
+			packet.geometryGrad.w=0.0;pixelPackets[pixel]=packet;return;
+		}
+		let sampled=sample_reference(referencePixel);
+		if(sampled.y<0.05){packet.geometryGrad.w=0.0;pixelPackets[pixel]=packet;return;}
+		let referenceSurfaceDepth=sampled.x/max(sampled.y,1e-6);
+		let sceneScale=max(cfg.geometryScale,1e-6);
+		let residual=(referencePoint.z-referenceSurfaceDepth)/sceneScale;
+		let epsilon=0.01;let robust=sqrt(residual*residual+epsilon*epsilon);
+		let worldRay=vec3<f32>(
+			dot(vec3<f32>(source.row0.x,source.row1.x,source.row2.x),sourceRay),
+			dot(vec3<f32>(source.row0.y,source.row1.y,source.row2.y),sourceRay),
+			dot(vec3<f32>(source.row0.z,source.row1.z,source.row2.z),sourceRay));
+		let referenceDepthDerivative=dot(reference.row2.xyz,worldRay);
+		packet.geometryGrad.w=cfg.geometryControl.y*residual/max(robust,1e-6)
+			*referenceDepthDerivative/(sceneScale*f32(cfg.pixelCount));
+		pixelPackets[pixel]=packet;
+		var lossPacket=pixelLoss[pixel];
+		lossPacket.w+=cfg.geometryControl.y*robust;
+		pixelLoss[pixel]=lossPacket;
 	}`;
 }
 
@@ -1430,7 +1798,17 @@ function separableSsimHorizontalWgsl() {
 	}`;
 }
 
-function separableSsimVerticalWgsl() {
+function separableSsimVerticalWgsl({ geometryEnabled = false } = {}) {
+	const geometryDeclaration = geometryEnabled ? `
+	struct PixelGradientPacket {
+		appGradStop:vec4<f32>, geometryRendered:vec4<f32>,
+		geometryGrad:vec4<f32>, geometryDepth:vec4<f32>,
+	};
+	@group(0) @binding(6) var<storage,read> pixelPackets:array<PixelGradientPacket>;` : "";
+	const geometryLoss = geometryEnabled ? `
+		let geometryError=pixelPackets[pixel].geometryRendered.xyz-targetPixel.xyz;
+		let geometryL1=objectiveWeight*(abs(geometryError.x)+abs(geometryError.y)
+			+abs(geometryError.z))/3.0;` : "";
 	return `${CONFIG_WGSL}
 	struct SsimStats { muX:vec4<f32>,muY:vec4<f32>,varX:vec4<f32>,varY:vec4<f32>,cov:vec4<f32> };
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
@@ -1439,6 +1817,7 @@ function separableSsimVerticalWgsl() {
 	@group(0) @binding(3) var<storage,read> scratch:array<SsimStats>;
 	@group(0) @binding(4) var<storage,read_write> stats:array<SsimStats>;
 	@group(0) @binding(5) var<storage,read_write> pixelLoss:array<vec4<f32>>;
+	${geometryDeclaration}
 	fn loss_weight(targetPixel:vec4<f32>)->f32 {
 		return select(1.0,targetPixel.w,cfg.motionWeighting!=0u);
 	}
@@ -1490,10 +1869,11 @@ function separableSsimVerticalWgsl() {
 		let targetPixel=targets[cfg.targetOffset+pixel];
 		let objectiveWeight=loss_weight(targetPixel);
 		let err=rendered[pixel].xyz-targetPixel.xyz;
+		${geometryLoss}
 		pixelLoss[pixel]=vec4<f32>(
 			objectiveWeight*(abs(err.x)+abs(err.y)+abs(err.z))/3.0,
 			objectiveWeight*(1.0-(ssim.x+ssim.y+ssim.z)/3.0),
-			rendered[pixel].w,0.0);
+			rendered[pixel].w,${geometryEnabled ? "cfg.geometryControl.x*geometryL1" : "0.0"});
 	}`;
 }
 
@@ -1564,7 +1944,24 @@ function separableSsimGradientHorizontalWgsl() {
 	}`;
 }
 
-function separableSsimGradientVerticalWgsl() {
+function separableSsimGradientVerticalWgsl({ geometryEnabled = false } = {}) {
+	const gradientDeclaration = geometryEnabled ? `
+	struct PixelGradientPacket {
+		appGradStop:vec4<f32>, geometryRendered:vec4<f32>,
+		geometryGrad:vec4<f32>, geometryDepth:vec4<f32>,
+	};
+	@group(0) @binding(5) var<storage,read_write> pixelPackets:array<PixelGradientPacket>;`
+		: "@group(0) @binding(5) var<storage,read_write> pixelGrad:array<vec4<f32>>;";
+	const gradientWrite = geometryEnabled ? `
+		let geometryGradient=cfg.geometryControl.x
+			*loss_weight(targets[cfg.targetOffset+pixel])
+			*sign(pixelPackets[pixel].geometryRendered.xyz-targetColor)
+			/(f32(cfg.pixelCount)*3.0);
+		pixelPackets[pixel].appGradStop=vec4<f32>(
+			cfg.l1Weight*l1+cfg.dssimWeight*dssim,f32(stopRanks[pixel]));
+		pixelPackets[pixel].geometryGrad=vec4<f32>(geometryGradient,0.0);`
+		: `pixelGrad[pixel]=vec4<f32>(
+			cfg.l1Weight*l1+cfg.dssimWeight*dssim,f32(stopRanks[pixel]));`;
 	return `${CONFIG_WGSL}
 	struct SsimStats { muX:vec4<f32>,muY:vec4<f32>,varX:vec4<f32>,varY:vec4<f32>,cov:vec4<f32> };
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
@@ -1572,7 +1969,7 @@ function separableSsimGradientVerticalWgsl() {
 	@group(0) @binding(2) var<storage,read> targets:array<vec4<f32>>;
 	@group(0) @binding(3) var<storage,read> scratch:array<SsimStats>;
 	@group(0) @binding(4) var<storage,read> stopRanks:array<u32>;
-	@group(0) @binding(5) var<storage,read_write> pixelGrad:array<vec4<f32>>;
+	${gradientDeclaration}
 	fn loss_weight(targetPixel:vec4<f32>)->f32 {
 		return select(1.0,targetPixel.w,cfg.motionWeighting!=0u);
 	}
@@ -1616,8 +2013,7 @@ function separableSsimGradientVerticalWgsl() {
 		let dssim=constant+targetCoefficient*targetColor+predictionCoefficient*prediction;
 		let l1=loss_weight(targets[cfg.targetOffset+pixel])
 			*sign(prediction-targetColor)/(f32(cfg.pixelCount)*3.0);
-		pixelGrad[pixel]=vec4<f32>(
-			cfg.l1Weight*l1+cfg.dssimWeight*dssim,f32(stopRanks[pixel]));
+		${gradientWrite}
 	}`;
 }
 
@@ -1649,7 +2045,7 @@ function metricsWgsl() {
 			let mean=scratch[0]/f32(cfg.pixelCount);
 			let pairCount=f32(atomicLoad(&counters[0]));
 			metrics[0]=vec4<f32>(
-				cfg.l1Weight*mean.x+cfg.dssimWeight*mean.y,mean.x,mean.y,
+				cfg.l1Weight*mean.x+cfg.dssimWeight*mean.y+mean.w,mean.x,mean.y,
 				f32(atomicLoad(&counters[1])));
 			metrics[1]=vec4<f32>(
 				mean.z,pairCount,
@@ -1661,7 +2057,7 @@ function metricsWgsl() {
 				f32(atomicLoad(&counters[4])),f32(atomicLoad(&counters[5])),
 				f32(cfg.step),f32(cfg.activeSplatCount));
 			metrics[4]=vec4<f32>(
-				f32(atomicLoad(&counters[8])),f32(atomicLoad(&counters[9])),0.0,0.0);
+				f32(atomicLoad(&counters[8])),f32(atomicLoad(&counters[9])),mean.w,0.0);
 			cycleMetrics[cfg.step%min(cfg.cycleMetricCount,arrayLength(&cycleMetrics))]=vec4<f32>(
 				metrics[0].xyz,f32(cfg.step+1u));
 		}
@@ -1828,9 +2224,17 @@ function backwardWgsl(
 	}`;
 }
 
-function projectedGradientVjpWgsl(projectionType = "Projection") {
+function projectedGradientVjpWgsl(
+	projectionType = "Projection",
+	{
+		pixelFilterMode = TILED_PIXEL_FILTER_MODES.LEGACY_FLOOR,
+		opacityModel = TILED_OPACITY_MODELS.COUPLED,
+	} = {},
+) {
 	const packed = projectionType === "PackedCompactProjectionVjp";
 	const compact = packed || projectionType === "CompactProjectionVjp";
+	const compensatedFilter = pixelFilterMode === TILED_PIXEL_FILTER_MODES.MIP_2D_COMPENSATED;
+	const dualOpacity = opacityModel === TILED_OPACITY_MODELS.DUAL;
 	const cameraArgument = compact ? ",camera:Camera" : "";
 	const packedProjectionUnpack = `
 			let sparse01=unpack2x16float(proj.packed0.x);
@@ -1905,16 +2309,42 @@ function projectedGradientVjpWgsl(projectionType = "Projection") {
 		p:Splat,proj:${projectionType},g:ProjectedGradient${cameraArgument}
 	)->Splat{
 		let barMu=g.screen0.xy;
-		let barC00=g.screen0.z;let barC01=g.screen0.w;let barC11=g.screen1.x;
+		var barC00=g.screen0.z;var barC01=g.screen0.w;var barC11=g.screen1.x;
 		var worldGrad=vec3<f32>(0.0);var gradLogScale=vec3<f32>(0.0);
 		var gradRotation=vec4<f32>(0.0);
+		let staticWarmup=cfg.staticWarmup!=0u;let t=frame_time(cfg);
+		let tc=select(t*2.0-1.0,0.0,staticWarmup);
+		let wave=select(sin(t*6.28318530718),0.0,staticWarmup);
+		let sigma=clamp(cfg.temporalSigma,0.12,0.36);
+		let staticMix=clamp(p.centerStatic.w,0.0,1.0);
+		let temporalFloor=clamp(sigma*0.30,0.035,0.12);
+		let timeDelta=t-clamp(p.velocityTime.w,0.0,1.0);
+		let temporalKernel=exp(-0.5*timeDelta*timeDelta/(sigma*sigma));
+		let dynamicCore=(1.0-temporalFloor)*temporalKernel;
+		let dynamicGate=temporalFloor+dynamicCore;
+		let opacity=sigmoid(p.colorOpacity.w);
+		let timeWeight=select(mix(dynamicGate,1.0,staticMix),1.0,staticWarmup);
+		var filterCompensation=1.0;
 		if(proj.cameraPointValid.w>=0.5){
 			${projectionUnpack}
-			let barSigma=barC00*outer3(j0,j0)
-				+barC01*(outer3(j0,j1)+outer3(j1,j0))+barC11*outer3(j1,j1);
 			let sigmaCamera=variances.x*outer3(basis[0],basis[0])
 				+variances.y*outer3(basis[1],basis[1])
 				+variances.z*outer3(basis[2],basis[2]);
+			${compensatedFilter ? `
+			let c00=dot(j0,sigmaCamera*j0);let c01=dot(j0,sigmaCamera*j1);
+			let c11=dot(j1,sigmaCamera*j1);
+			let filterVariance=pow(${FILTER_SIGMA_PIXELS}/max(1.0,f32(cfg.height)),2.0);
+			let filteredC00=c00+filterVariance;let filteredC11=c11+filterVariance;
+			let det=max(c00*c11-c01*c01,1e-16);
+			let filteredDet=max(filteredC00*filteredC11-c01*c01,1e-16);
+			filterCompensation=clamp(sqrt(det/filteredDet),0.0,1.0);
+			let barCompensation=g.screen1.y*opacity*timeWeight;
+			let determinantScale=0.5*barCompensation*filterCompensation;
+			barC00+=determinantScale*(c11/det-filteredC11/filteredDet);
+			barC01+=determinantScale*(-2.0*c01/det+2.0*c01/filteredDet);
+			barC11+=determinantScale*(c00/det-filteredC00/filteredDet);` : ""}
+			let barSigma=barC00*outer3(j0,j0)
+				+barC01*(outer3(j0,j1)+outer3(j1,j0))+barC11*outer3(j1,j1);
 			let sigmaJ0=sigmaCamera*j0;let sigmaJ1=sigmaCamera*j1;
 			let barJ0=2.0*(barC00*sigmaJ0+barC01*sigmaJ1);
 			let barJ1=2.0*(barC01*sigmaJ0+barC11*sigmaJ1);
@@ -1954,30 +2384,19 @@ function projectedGradientVjpWgsl(projectionType = "Projection") {
 				gradRotation=(normalizedQuatGrad-q*dot(q,normalizedQuatGrad))*inverseSqrt(rawNorm2);
 			}
 		}
-		let staticWarmup=cfg.staticWarmup!=0u;let t=frame_time(cfg);
-		let tc=select(t*2.0-1.0,0.0,staticWarmup);
-		let wave=select(sin(t*6.28318530718),0.0,staticWarmup);
-		let sigma=clamp(cfg.temporalSigma,0.12,0.36);
-		let staticMix=clamp(p.centerStatic.w,0.0,1.0);
-		let temporalFloor=clamp(sigma*0.30,0.035,0.12);
-		let timeDelta=t-clamp(p.velocityTime.w,0.0,1.0);
-		let temporalKernel=exp(-0.5*timeDelta*timeDelta/(sigma*sigma));
-		let dynamicCore=(1.0-temporalFloor)*temporalKernel;
-		let dynamicGate=temporalFloor+dynamicCore;
-		let opacity=sigmoid(p.colorOpacity.w);
-		// Forward uses temporal_gate(), which blends the dynamic gate with
-		// staticMix. Reconstruct exactly that value here; using dynamicGate
-		// directly under-scaled opacity and time gradients for static-heavy init.
-		let timeWeight=select(mix(dynamicGate,1.0,staticMix),1.0,staticWarmup);
 		let gPeak=g.screen1.y;
-		let gradTime=select(gPeak*opacity*(1.0-staticMix)*dynamicCore
+		let gradTime=select(gPeak*filterCompensation*opacity*(1.0-staticMix)*dynamicCore
 			*(t-p.velocityTime.w)/(sigma*sigma),0.0,staticWarmup);
-		let gradStaticMix=select(gPeak*opacity*(1.0-dynamicGate),0.0,staticWarmup);
-		let gradOpacity=gPeak*timeWeight*opacity*(1.0-opacity);
+		let gradStaticMix=select(gPeak*filterCompensation*opacity*(1.0-dynamicGate),0.0,staticWarmup);
+		let gradOpacity=gPeak*filterCompensation*timeWeight*opacity*(1.0-opacity);
+		let materialFactor=${dualOpacity
+			? "sigmoid(p.harmonicPad.w+cfg.geometryControl.z)" : "1.0"};
+		let gradMaterial=${dualOpacity
+			? "g.colorPad.w*materialFactor*(1.0-materialFactor)" : "g.screen1.z"};
 		return Splat(
 			vec4<f32>(worldGrad,gradStaticMix),
 			vec4<f32>(worldGrad*tc,gradTime),
-			vec4<f32>(select(vec3<f32>(0.0),worldGrad*wave,cfg.modelMode==0u),g.screen1.z),
+			vec4<f32>(select(vec3<f32>(0.0),worldGrad*wave,cfg.modelMode==0u),gradMaterial),
 			vec4<f32>(gradLogScale,g.screen1.w),
 			gradRotation,
 			vec4<f32>(g.colorPad.xyz,gradOpacity));
@@ -2135,21 +2554,133 @@ function checkpointBlockBackwardWgsl(
 	checkpointOrder,
 	tileSize = DEFAULT_TILE_SIZE,
 	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
+	{
+		geometryEnabled = false,
+		pixelFilterMode = TILED_PIXEL_FILTER_MODES.LEGACY_FLOOR,
+		opacityModel = TILED_OPACITY_MODELS.COUPLED,
+	} = {},
 ) {
 	const laneCount = tileSize * tileSize;
 	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
 		? "RasterProjection" : "Projection";
+	const geometryDeclarations = geometryEnabled ? `
+	struct PixelGradientPacket {
+		appGradStop:vec4<f32>, geometryRendered:vec4<f32>,
+		geometryGrad:vec4<f32>, geometryDepth:vec4<f32>,
+	};
+	struct GeometryCheckpoint { packedColorT:vec2<u32>, depthMoment:f32, pad:f32 };
+	@group(0) @binding(8) var<storage,read> geometryCheckpoints:array<GeometryCheckpoint>;
+	fn read_geometry_checkpoint(index:u32)->vec4<f32>{
+		let checkpoint=geometryCheckpoints[index];
+		return vec4<f32>(unpack2x16float(checkpoint.packedColorT.x),
+			unpack2x16float(checkpoint.packedColorT.y));
+	}
+	fn geometry_alpha_at(proj:${projectionType},point:vec2<f32>)->f32{
+		let d=point-proj.screenConic0.xy;
+		let q=proj.screenConic0.z*d.x*d.x+2.0*proj.screenConic0.w*d.x*d.y
+			+proj.conicDepthAlpha.x*d.y*d.y;
+		if(q<0.0||q>9.0){return 0.0;}
+		let raw=proj.conicDepthAlpha.z*exp(-0.5*q);
+		return select(0.0,min(0.99,raw),raw>=cfg.alphaThreshold);
+	}` : "";
+	const pixelGradientDeclaration = geometryEnabled
+		? "@group(0) @binding(6) var<storage,read> pixelGrad:array<PixelGradientPacket>;"
+		: "@group(0) @binding(6) var<storage,read> pixelGrad:array<vec4<f32>>;";
+	const rasterDerivative = geometryEnabled ? `
+						let gaussian=exp(-0.5*qform);
+						let geometryPeak=currentProjection.conicDepthAlpha.z;
+						let materialFactor=currentProjection.conicDepthAlpha.w;
+						let rawAlpha=geometryPeak*materialFactor*gaussian;
+						alpha=select(0.0,min(0.99,rawAlpha),rawAlpha>=cfg.alphaThreshold);
+						let geometryRawAlpha=geometryPeak*gaussian;
+						geometryAlpha=select(0.0,min(0.99,geometryRawAlpha),
+							geometryRawAlpha>=cfg.alphaThreshold);
+						let denominator=transmittance*(1.0-alpha);
+						let behind=select(vec3<f32>(0.0),
+							(renderedColor-before-transmittance*alpha*currentColorOpacity.xyz)
+								/max(denominator,1e-8),denominator>1e-8);
+						let alphaGrad=dot(
+							imageGrad,transmittance*(currentColorOpacity.xyz-behind));
+						let geometryDenominator=geometryTransmittance*(1.0-geometryAlpha);
+						let geometryBehind=select(vec3<f32>(0.0),
+							(geometryRenderedColor-geometryBefore
+								-geometryTransmittance*geometryAlpha*currentColorOpacity.xyz)
+								/max(geometryDenominator,1e-8),geometryDenominator>1e-8);
+						let geometryColorAlphaGrad=dot(geometryImageGrad,
+							geometryTransmittance*(currentColorOpacity.xyz-geometryBehind));
+						let safeCoverage=max(geometryCoverage,1e-6);
+						let meanDepth=geometryDepthMoment/safeCoverage;
+						let geometryWeight=geometryTransmittance*geometryAlpha;
+						let suffixCoverage=max(0.0,geometryCoverage
+							-(1.0-geometryTransmittance)-geometryWeight);
+						let suffixDepthMoment=geometryDepthMoment-geometryPrefixDepthMoment
+							-geometryWeight*currentProjection.conicDepthAlpha.y;
+						let depthAlphaDerivative=(geometryTransmittance
+							*(currentProjection.conicDepthAlpha.y-meanDepth)
+							-(suffixDepthMoment-meanDepth*suffixCoverage)
+								/max(1.0-geometryAlpha,1e-6))/safeCoverage;
+						let geometryAlphaGrad=geometryColorAlphaGrad
+							+geometryDepthGrad*depthAlphaDerivative;
+						let clampGate=select(0.0,1.0,
+							rawAlpha<0.99&&rawAlpha>=cfg.alphaThreshold);
+						let geometryClampGate=select(0.0,1.0,
+							geometryRawAlpha<0.99&&geometryRawAlpha>=cfg.alphaThreshold);
+						let barQform=-0.5*(alphaGrad*rawAlpha*clampGate
+							+geometryAlphaGrad*geometryRawAlpha*geometryClampGate);
+						let conicDelta=vec2<f32>(
+							currentProjection.screenConic0.z*d.x
+								+currentProjection.screenConic0.w*d.y,
+							currentProjection.screenConic0.w*d.x
+								+currentProjection.conicDepthAlpha.x*d.y);
+						let barMu=-2.0*barQform*conicDelta;
+						gradient=ProjectedGradient(
+							vec4<f32>(barMu,-barQform*conicDelta.x*conicDelta.x,
+								-barQform*conicDelta.x*conicDelta.y),
+							vec4<f32>(-barQform*conicDelta.y*conicDelta.y,
+								clampGate*alphaGrad*materialFactor*gaussian
+									+geometryClampGate*geometryAlphaGrad*gaussian,
+								geometryAlpha/f32(cfg.pixelCount),length(barMu)),
+							vec4<f32>(imageGrad*transmittance*alpha
+								+geometryImageGrad*geometryTransmittance*geometryAlpha,
+								clampGate*alphaGrad*geometryPeak*gaussian));`
+		: `
+						let gaussian=exp(-0.5*qform);
+						let rawAlpha=currentProjection.conicDepthAlpha.z
+							*currentProjection.conicDepthAlpha.w*gaussian;
+						alpha=select(0.0,min(0.99,rawAlpha),rawAlpha>=cfg.alphaThreshold);
+						let denominator=transmittance*(1.0-alpha);
+						let behind=select(vec3<f32>(0.0),
+							(renderedColor-before-transmittance*alpha*currentColorOpacity.xyz)
+								/max(denominator,1e-8),denominator>1e-8);
+						let alphaGrad=dot(
+							imageGrad,transmittance*(currentColorOpacity.xyz-behind));
+						let clampGate=select(0.0,1.0,
+							rawAlpha<0.99&&rawAlpha>=cfg.alphaThreshold);
+						let barQform=-0.5*alphaGrad*rawAlpha*clampGate;
+						let conicDelta=vec2<f32>(
+							currentProjection.screenConic0.z*d.x
+								+currentProjection.screenConic0.w*d.y,
+							currentProjection.screenConic0.w*d.x
+								+currentProjection.conicDepthAlpha.x*d.y);
+						let barMu=-2.0*barQform*conicDelta;
+						gradient=ProjectedGradient(
+							vec4<f32>(barMu,-barQform*conicDelta.x*conicDelta.x,
+								-barQform*conicDelta.x*conicDelta.y),
+							vec4<f32>(-barQform*conicDelta.y*conicDelta.y,
+								clampGate*alphaGrad*gaussian,alpha/f32(cfg.pixelCount),length(barMu)),
+							vec4<f32>(imageGrad*transmittance*alpha,0.0));`;
 	return `${CONFIG_WGSL}
-	${projectedGradientVjpWgsl()}
+	${projectedGradientVjpWgsl(projectionType, { pixelFilterMode, opacityModel })}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
 	@group(0) @binding(2) var<storage,read> projections:array<${projectionType}>;
 	@group(0) @binding(3) var<storage,read> pairData:array<u32>;
 	@group(0) @binding(4) var<storage,read> rendered:array<vec4<f32>>;
 	${checkpointBackwardWgsl(checkpointPrecision, checkpointOrder)}
-	@group(0) @binding(6) var<storage,read> pixelGrad:array<vec4<f32>>;
+	${pixelGradientDeclaration}
 	@group(0) @binding(7) var<storage,read_write> gradientAtoms:array<atomic<u32>>;
 	@group(0) @binding(9) var<storage,read_write> tileCounts:array<atomic<u32>>;
+	${geometryDeclarations}
 	var<workgroup> gradientScratch:array<ProjectedGradient,${laneCount}>;
 	var<workgroup> blockMeta:vec4<u32>;
 	var<workgroup> currentProjection:${projectionType};
@@ -2195,17 +2726,36 @@ function checkpointBlockBackwardWgsl(
 			var point=vec2<f32>(0.0);var imageGrad=vec3<f32>(0.0);
 			var renderedColor=vec3<f32>(0.0);
 			var before=vec3<f32>(0.0);var transmittance=0.0;
+			${geometryEnabled ? `
+			var geometryImageGrad=vec3<f32>(0.0);var geometryDepthGrad=0.0;
+			var geometryRenderedColor=vec3<f32>(0.0);var geometryCoverage=0.0;
+			var geometryDepthMoment=0.0;var geometryBefore=vec3<f32>(0.0);
+			var geometryTransmittance=0.0;var geometryPrefixDepthMoment=0.0;` : ""}
 			if(pixelValid){
 				pixel=y*cfg.width+x;
+				${geometryEnabled ? `
+				let packet=pixelGrad[pixel];
+				stopRank=u32(packet.appGradStop.w);
+				imageGrad=packet.appGradStop.xyz;
+				geometryImageGrad=packet.geometryGrad.xyz;
+				geometryDepthGrad=packet.geometryGrad.w;
+				geometryRenderedColor=packet.geometryRendered.xyz;
+				geometryCoverage=packet.geometryRendered.w;
+				geometryDepthMoment=packet.geometryDepth.x;` : `
 				stopRank=u32(pixelGrad[pixel].w);
+				imageGrad=pixelGrad[pixel].xyz;`}
 				point=vec2<f32>((f32(x)+0.5)/f32(cfg.height),
 					(f32(y)+0.5)/f32(cfg.height));
-				imageGrad=pixelGrad[pixel].xyz;
 				renderedColor=rendered[pixel].xyz;
 				if(startRank<stopRank){
-					let checkpoint=read_checkpoint(
-						checkpoint_index(pixel,startRank/cfg.checkpointStride));
+					let checkpointIndex=checkpoint_index(pixel,startRank/cfg.checkpointStride);
+					let checkpoint=read_checkpoint(checkpointIndex);
 					before=checkpoint.xyz;transmittance=checkpoint.w;
+					${geometryEnabled ? `
+					let geometryCheckpoint=read_geometry_checkpoint(checkpointIndex);
+					geometryBefore=geometryCheckpoint.xyz;
+					geometryTransmittance=geometryCheckpoint.w;
+					geometryPrefixDepthMoment=geometryCheckpoints[checkpointIndex].depthMoment;` : ""}
 				}
 			}
 			// Owning a complete checkpoint block turns the old triangular
@@ -2228,42 +2778,18 @@ function checkpointBlockBackwardWgsl(
 						+2.0*currentProjection.screenConic0.w*d.x*d.y
 						+currentProjection.conicDepthAlpha.x*d.y*d.y;
 					var alpha=0.0;
+					${geometryEnabled ? "var geometryAlpha=0.0;" : ""}
 					if(qform>=0.0&&qform<=9.0&&transmittance>cfg.transmittanceThreshold){
-						let gaussian=exp(-0.5*qform);
-						let rawAlpha=currentProjection.conicDepthAlpha.z
-							*currentProjection.conicDepthAlpha.w*gaussian;
-						alpha=select(0.0,min(0.99,rawAlpha),rawAlpha>=cfg.alphaThreshold);
-						let denominator=transmittance*(1.0-alpha);
-						let behind=select(vec3<f32>(0.0),
-							(renderedColor-before-transmittance*alpha*currentColorOpacity.xyz)
-								/max(denominator,1e-8),
-							denominator>1e-8);
-						let alphaGrad=dot(
-							imageGrad,
-							transmittance*(currentColorOpacity.xyz-behind));
-						let clampGate=select(0.0,1.0,
-							rawAlpha<0.99&&rawAlpha>=cfg.alphaThreshold);
-						let barQform=-0.5*alphaGrad*rawAlpha*clampGate;
-						let conicDelta=vec2<f32>(
-							currentProjection.screenConic0.z*d.x
-								+currentProjection.screenConic0.w*d.y,
-							currentProjection.screenConic0.w*d.x
-								+currentProjection.conicDepthAlpha.x*d.y);
-						let barMu=-2.0*barQform*conicDelta;
-						gradient=ProjectedGradient(
-							vec4<f32>(
-								barMu,
-								-barQform*conicDelta.x*conicDelta.x,
-								-barQform*conicDelta.x*conicDelta.y),
-							vec4<f32>(
-								-barQform*conicDelta.y*conicDelta.y,
-								clampGate*alphaGrad*gaussian,
-								alpha/f32(cfg.pixelCount),
-								length(barMu)),
-							vec4<f32>(imageGrad*transmittance*alpha,0.0));
+						${rasterDerivative}
 					}
 					before+=transmittance*alpha*currentColorOpacity.xyz;
 					transmittance*=1.0-alpha;
+					${geometryEnabled ? `
+					let geometryWeight=geometryTransmittance*geometryAlpha;
+					geometryBefore+=geometryWeight*currentColorOpacity.xyz;
+					geometryPrefixDepthMoment+=geometryWeight
+						*currentProjection.conicDepthAlpha.y;
+					geometryTransmittance*=1.0-geometryAlpha;` : ""}
 				}
 				gradientScratch[lane]=gradient;workgroupBarrier();
 				var stride=${laneCount / 2}u;loop{
@@ -2285,8 +2811,13 @@ function updateWgsl(
 	backwardMode = TILED_BACKWARD_MODES.DIRECT_3D,
 	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
 	projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
+	{
+		pixelFilterMode = TILED_PIXEL_FILTER_MODES.LEGACY_FLOOR,
+		opacityModel = TILED_OPACITY_MODELS.COUPLED,
+	} = {},
 ) {
 	const staged = backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D;
+	const dualOpacity = opacityModel === TILED_OPACITY_MODELS.DUAL;
 	const compactProjection = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
 	const projectionType = compactProjection
 		? projectionVjpPrecision === TILED_PROJECTION_VJP_PRECISIONS.PACKED_F16
@@ -2340,7 +2871,10 @@ function updateWgsl(
 		);
 	}`;
 	return `${CONFIG_WGSL}
-	${staged ? projectedGradientVjpWgsl(projectionType) : ""}
+	${staged ? projectedGradientVjpWgsl(
+		projectionType,
+		{ pixelFilterMode, opacityModel },
+	) : ""}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> paramsIn:array<Splat>;
 	@group(0) @binding(2) var<storage,read_write> paramsOut:array<Splat>;
@@ -2355,13 +2889,15 @@ function updateWgsl(
 	@compute @workgroup_size(64)
 	fn reduce_update(@builtin(global_invocation_id) gid:vec3<u32>){
 		let i=gid.x;if(i>=cfg.activeSplatCount){return;}
-		var gradient=${staged
-		? `projected_to_splat_gradient(
-			paramsIn[i],projections[i],load_projected_gradient(i)${compactProjection
-				? ",cameras[cfg.viewIndex]" : ""}
-		)`
-		: "load_gradient(i)"};
-		let meanAlpha=gradient.harmonicPad.w;gradient.harmonicPad.w=0.0;
+		${staged ? `let projectedGradient=load_projected_gradient(i);
+		var gradient=projected_to_splat_gradient(
+			paramsIn[i],projections[i],projectedGradient${compactProjection
+				? ",cameras[cfg.viewIndex]" : ""});
+		let meanAlpha=projectedGradient.screen1.z;
+		${dualOpacity ? "" : "gradient.harmonicPad.w=0.0;"}` : `
+		var gradient=load_gradient(i);
+		let meanAlpha=gradient.harmonicPad.w;
+		gradient.harmonicPad.w=0.0;`}
 		let screenGradient=gradient.logScalePad.w;gradient.logScalePad.w=0.0;
 		var p=paramsIn[i];var m=firstMoment[i];var v=secondMoment[i];
 		m.centerStatic=cfg.beta1*m.centerStatic+(1.0-cfg.beta1)*gradient.centerStatic;
@@ -2390,7 +2926,12 @@ function updateWgsl(
 			vec3<f32>(-2.0*cfg.geometryScale),vec3<f32>(2.0*cfg.geometryScale)),
 			clamp(p.velocityTime.w-cfg.lrMotion*velocityUpdate.w,0.0,1.0));
 		p.harmonicPad=vec4<f32>(clamp(p.harmonicPad.xyz-cfg.lrMotion*harmonicUpdate.xyz,
-			vec3<f32>(-1.5*cfg.geometryScale),vec3<f32>(1.5*cfg.geometryScale)),p.harmonicPad.w);
+			vec3<f32>(-1.5*cfg.geometryScale),vec3<f32>(1.5*cfg.geometryScale)),
+			${dualOpacity
+				// The +log(99) compatibility bias makes lane -8 bottom out near 3.2%.
+				// Permit a near-zero material gate so glass can actually become transparent.
+				? "clamp(p.harmonicPad.w-cfg.lrOpacity*harmonicUpdate.w,-16.0,8.0)"
+				: "p.harmonicPad.w"});
 		var nextLogScale=clamp(p.logScalePad.xyz-${SCALE_LR_FROM_POSITION}*cfg.lrPosition*scaleUpdate.xyz,
 			vec3<f32>(log(cfg.minScale)),vec3<f32>(log(cfg.maxScale)));
 		let meanLog=(nextLogScale.x+nextLogScale.y+nextLogScale.z)/3.0;
@@ -2487,6 +3028,7 @@ function densityWgsl(gradientFloats) {
 function stagedGradientDebugWgsl(
 	projectionLayout = TILED_PROJECTION_LAYOUTS.MONOLITHIC,
 	projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32,
+	options = {},
 ) {
 	const compactProjection = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT;
 	const projectionType = compactProjection
@@ -2494,7 +3036,7 @@ function stagedGradientDebugWgsl(
 			? "PackedCompactProjectionVjp" : "CompactProjectionVjp"
 		: "Projection";
 	return `${CONFIG_WGSL}
-	${projectedGradientVjpWgsl(projectionType)}
+	${projectedGradientVjpWgsl(projectionType, options)}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
 	@group(0) @binding(2) var<storage,read> projections:array<${projectionType}>;
@@ -2544,6 +3086,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.backwardMode = TILED_BACKWARD_MODES.DIRECT_3D;
 		this.gradientFloats = DIRECT_GRADIENT_FLOATS;
 		this.tiledConfigBytes = new ArrayBuffer(TILED_CONFIG_BYTES);
+		this.referenceConfigBytes = new ArrayBuffer(TILED_CONFIG_BYTES);
 		this.activeSplatCount = this.initialSplatCount;
 		this.projectionVjpPrecision = TILED_PROJECTION_VJP_PRECISIONS.F32;
 		this.compactTargetFrames = false;
@@ -2602,6 +3145,13 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		ssimLayout = TILED_SSIM_LAYOUTS.NAIVE_2D,
 		pixelDepthScaling = true,
 		pixelDepthGamma = PIXEL_GS_DEPTH_GAMMA,
+		pixelFilterMode = TILED_PIXEL_FILTER_MODES.LEGACY_FLOOR,
+		opacityModel = TILED_OPACITY_MODELS.COUPLED,
+		geometryColorWeight = 0,
+		crossViewDepth = false,
+		geometryConsistencyEvery = 8,
+		geometryDepthWeight = 0.05,
+		materialOpacityBias = DEFAULT_MATERIAL_OPACITY_BIAS,
 		profileGpu = false,
 	} = {}) {
 		this.initialSplatCount = splatCount;
@@ -2622,6 +3172,23 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.ssimLayout = resolveTiledSsimLayout(ssimLayout);
 		this.pixelDepthScaling = Boolean(pixelDepthScaling);
 		this.pixelDepthGamma = resolvePixelDepthGamma(pixelDepthGamma);
+		this.pixelFilterMode = resolveTiledPixelFilterMode(pixelFilterMode);
+		this.opacityModel = resolveTiledOpacityModel(opacityModel);
+		this.geometryColorWeight = resolveNonNegativeWeight(
+			geometryColorWeight,
+			"geometryColorWeight",
+		);
+		this.crossViewDepth = Boolean(crossViewDepth);
+		this.geometryConsistencyEvery = resolveGeometryConsistencyEvery(geometryConsistencyEvery);
+		this.geometryDepthWeight = resolveNonNegativeWeight(
+			geometryDepthWeight,
+			"geometryDepthWeight",
+		);
+		this.materialOpacityBias = Number(materialOpacityBias);
+		if (!Number.isFinite(this.materialOpacityBias)) {
+			throw new RangeError("materialOpacityBias must be finite.");
+		}
+		this.geometryEnabled = this.geometryColorWeight > 0 || this.crossViewDepth;
 		if (this.backwardGranularity === TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK
 			&& this.backwardMode !== TILED_BACKWARD_MODES.STAGED_PROJECT_3D) {
 			throw new RangeError("checkpoint-block backward requires staged-project3d gradients.");
@@ -2629,6 +3196,19 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		if (this.projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
 			&& this.backwardMode !== TILED_BACKWARD_MODES.STAGED_PROJECT_3D) {
 			throw new RangeError("split-compact projections require staged-project3d gradients.");
+		}
+		const specializedGeometry = this.pixelFilterMode !== TILED_PIXEL_FILTER_MODES.LEGACY_FLOOR
+			|| this.opacityModel !== TILED_OPACITY_MODELS.COUPLED || this.geometryEnabled;
+		if (specializedGeometry && (
+			this.backwardMode !== TILED_BACKWARD_MODES.STAGED_PROJECT_3D
+			|| this.backwardGranularity !== TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK
+			|| this.ssimLayout !== TILED_SSIM_LAYOUTS.SEPARABLE
+		)) {
+			throw new RangeError("Mip/dual-opacity/geometry ablations require the fast staged "
+				+ "checkpoint-block path with separable SSIM.");
+		}
+		if (this.crossViewDepth && resolveTrainViewIndices(dataset).length < 2) {
+			throw new RangeError("Cross-view depth consistency requires at least two train cameras.");
 		}
 		this.gradientFloats = this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D
 			? PROJECTED_GRADIENT_FLOATS : DIRECT_GRADIENT_FLOATS;
@@ -2639,6 +3219,20 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.compactTargetFrames = resolveFrameBank(dataset).format === FRAME_BANK_FORMAT_RGBA8;
 		const capacity = resolveTiledCapacity(splatCount, growthCapacity);
 		await super.init(dataset, { splatCount: capacity, requiredWorkgroupStorageSize: 24576 });
+		this.geometryPairSchedule = this.crossViewDepth
+			? buildGeometryPairSchedule(this.dataset, this.trainViewIndices) : null;
+		if (this.geometryPairSchedule) {
+			const candidatePairCount = this.geometryPairSchedule.candidatesByView
+				.reduce((sum, candidates) => sum + candidates.length, 0);
+			this.memoryPlan = Object.freeze({
+				...this.memoryPlan,
+				geometryPairSelection: {
+					...this.geometryPairSchedule.contract,
+					candidatePairCount,
+					fallbackSourceCount: this.geometryPairSchedule.fallbackSourceCount,
+				},
+			});
+		}
 		const bindGroupError = await this.tiledBindGroupValidation;
 		if (bindGroupError) {
 			throw new Error(`Tiled WebGPU bind-group validation failed: ${bindGroupError.message}`);
@@ -2649,6 +3243,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			+ ` · ${this.projectionLayout} projection`
 			+ ` · ${this.ssimLayout} SSIM`
 			+ (this.pixelDepthScaling ? " · Pixel-GS floater guard" : "")
+			+ (this.pixelFilterMode === TILED_PIXEL_FILTER_MODES.MIP_2D_COMPENSATED
+				? " · compensated 2D Mip" : "")
+			+ (this.opacityModel === TILED_OPACITY_MODELS.DUAL ? " · dual opacity" : "")
+			+ (this.geometryColorWeight > 0 ? " · geometry color" : "")
+			+ (this.crossViewDepth ? " · paired depth" : "")
 			+ (this.sharePairPacket ? " · shared pair packet" : "");
 	}
 
@@ -2663,6 +3262,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				this.checkpointOrder,
 				this.tileSize,
 				this.projectionLayout,
+				{
+					geometryEnabled: this.geometryEnabled,
+					pixelFilterMode: this.pixelFilterMode,
+					opacityModel: this.opacityModel,
+				},
 			)
 			: this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D
 				? stagedBackwardWgsl(
@@ -2681,7 +3285,12 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		const moduleSources = {
 			targetDecode: targetDecodeWgsl(),
 			clear: clearWgsl(this.gradientFloats),
-			project: projectWgsl(this.projectionLayout, this.projectionVjpPrecision),
+			project: projectWgsl(this.projectionLayout, this.projectionVjpPrecision, {
+				encodeGeometryPeak: this.backwardMode === TILED_BACKWARD_MODES.STAGED_PROJECT_3D,
+				pixelFilterMode: this.pixelFilterMode,
+				opacityModel: this.opacityModel,
+				geometryEnabled: this.geometryEnabled,
+			}),
 			sort: sortWgsl(this.tileCapacity, this.backwardGranularity, this.projectionLayout),
 			finalize: finalizeWgsl(this.backwardGranularity),
 			forward: forwardWgsl(
@@ -2689,6 +3298,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				this.checkpointOrder,
 				this.tileSize,
 				this.projectionLayout,
+				{ geometryEnabled: this.geometryEnabled },
 			),
 			metrics: metricsWgsl(),
 			backward: backwardSource,
@@ -2696,17 +3306,34 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				this.backwardMode,
 				this.projectionLayout,
 				this.projectionVjpPrecision,
+				{
+					pixelFilterMode: this.pixelFilterMode,
+					opacityModel: this.opacityModel,
+				},
 			),
 			density: densityWgsl(this.gradientFloats),
 			...(separableSsim ? {
 				ssimHorizontal: separableSsimHorizontalWgsl(),
-				ssimVertical: separableSsimVerticalWgsl(),
+				ssimVertical: separableSsimVerticalWgsl({ geometryEnabled: this.geometryEnabled }),
 				ssimGradientHorizontal: separableSsimGradientHorizontalWgsl(),
-				ssimGradientVertical: separableSsimGradientVerticalWgsl(),
+				ssimGradientVertical: separableSsimGradientVerticalWgsl({
+					geometryEnabled: this.geometryEnabled,
+				}),
 			} : {
 				ssimStats: ssimStatsWgsl(),
 				ssimGradient: ssimGradientWgsl(),
 			}),
+			...(this.crossViewDepth ? {
+				referenceClear: referenceClearWgsl(),
+				referenceSort: sortWgsl(
+					this.tileCapacity,
+					TILED_BACKWARD_GRANULARITIES.PAIR,
+					this.projectionLayout,
+					false,
+				),
+				referenceDepth: referenceDepthWgsl(this.tileSize, this.projectionLayout),
+				depthConsistency: depthConsistencyWgsl(),
+			} : {}),
 		};
 		const modules = Object.fromEntries(await Promise.all(
 			Object.entries(moduleSources).map(async ([name, source]) => [
@@ -2719,6 +3346,10 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				stagedGradientDebugWgsl(
 					this.projectionLayout,
 					this.projectionVjpPrecision,
+					{
+						pixelFilterMode: this.pixelFilterMode,
+						opacityModel: this.opacityModel,
+					},
 				))
 			: null;
 		const pipeline = (module, entryPoint) => this.device.createComputePipeline({
@@ -2738,6 +3369,12 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			update: pipeline(modules.update, "reduce_update"),
 			density: pipeline(modules.density, "activate_prefix_splits"),
 			gradientDebug: debugModule ? pipeline(debugModule, "materialize_gradient") : null,
+			...(this.crossViewDepth ? {
+				referenceClear: pipeline(modules.referenceClear, "clear_reference"),
+				referenceSort: pipeline(modules.referenceSort, "sort_tiles"),
+				referenceDepth: pipeline(modules.referenceDepth, "render_reference_depth"),
+				depthConsistency: pipeline(modules.depthConsistency, "cross_view_depth"),
+			} : {}),
 			...(separableSsim ? {
 				ssimHorizontal: pipeline(modules.ssimHorizontal, "ssim_horizontal"),
 				ssimVertical: pipeline(modules.ssimVertical, "ssim_vertical"),
@@ -2782,18 +3419,21 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		this.tileCount = this.tilesX * this.tilesY;
 		this.pixelCount = this.dataset.width * this.dataset.height;
 		this.pairCapacity = this.tileCount * this.tileCapacity;
+		const appCheckpointBytes = this.checkpointPrecision === "packed-f16" ? 8 : 16;
 		const checkpointLayout = resolveCheckpointLayout(
 			this.pixelCount,
 			this.tileCapacity,
 			this.storageBufferLimit,
-			this.checkpointPrecision === "packed-f16" ? 8 : 16,
+			this.geometryEnabled ? 16 : appCheckpointBytes,
 			this.requestedCheckpointStride,
 		);
 		this.checkpointStride = checkpointLayout.stride;
 		this.blocksPerTile = checkpointLayout.blocksPerTile;
 		const tiledBufferBytes = {
 			pairData: this.pairCapacity * 8,
-			checkpoints: checkpointLayout.byteLength,
+			checkpoints: this.pixelCount * checkpointLayout.blocksPerTile * appCheckpointBytes,
+			geometryCheckpoints: this.geometryEnabled
+				? this.pixelCount * checkpointLayout.blocksPerTile * 16 : 0,
 			gradientAccumulator: this.splatCount * this.gradientFloats * 4,
 		};
 		for (const [label, byteLength] of Object.entries(tiledBufferBytes)) {
@@ -2811,6 +3451,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		const packedTargetPageBytes = this.compactTargetFrames ? this.pixelCount * 4 : 4;
 		Object.assign(this.buffers, {
 			tiledConfig: makeBuffer(TILED_CONFIG_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST),
+			referenceConfig: this.crossViewDepth
+				? makeBuffer(TILED_CONFIG_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST) : null,
 			projections: makeBuffer(rasterProjectionBytes),
 			tileCounts: makeBuffer(this.tileCount * 4),
 			pairData: makeBuffer(tiledBufferBytes.pairData),
@@ -2823,9 +3465,18 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			stopRanks: makeBuffer(this.pixelCount * 4),
 			ssimStats: makeBuffer(this.pixelCount * SSIM_STATS_BYTES),
 			pixelLoss: makeBuffer(this.pixelCount * 16),
-			pixelGrad: makeBuffer(this.pixelCount * 16),
+			pixelGrad: makeBuffer(this.pixelCount * (this.geometryEnabled ? 64 : 16)),
+			geometryCheckpoints: this.geometryEnabled
+				? makeBuffer(tiledBufferBytes.geometryCheckpoints) : null,
 			gradientAtoms: makeBuffer(tiledBufferBytes.gradientAccumulator),
 			tiledMetrics: makeBuffer(TILED_METRICS_BYTES),
+			referenceProjections: this.crossViewDepth ? makeBuffer(rasterProjectionBytes) : null,
+			referenceProjectionVjp: this.crossViewDepth && splitProjection
+				? makeBuffer(projectionVjpBytes) : null,
+			referenceTileCounts: this.crossViewDepth ? makeBuffer(this.tileCount * 4) : null,
+			referencePairData: this.crossViewDepth ? makeBuffer(this.pairCapacity * 4) : null,
+			referenceCounters: this.crossViewDepth ? makeBuffer(TILED_COUNTER_BYTES) : null,
+			referenceDepth: this.crossViewDepth ? makeBuffer(this.pixelCount * 8) : null,
 		});
 		if (splitProjection) {
 			this.buffers.projectionVjp = makeBuffer(projectionVjpBytes);
@@ -2865,6 +3516,11 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			densityStats: size(this.buffers.stats),
 			gradientAccumulator: size(this.buffers.gradientAtoms),
 			projections: size(this.buffers.projections) + size(this.buffers.projectionVjp),
+			referenceGeometry: size(this.buffers.referenceProjections)
+				+ size(this.buffers.referenceProjectionVjp)
+				+ size(this.buffers.referenceTileCounts)
+				+ size(this.buffers.referencePairData)
+				+ size(this.buffers.referenceCounters) + size(this.buffers.referenceDepth),
 			parameterReadback: size(this.buffers.paramsReadback),
 			previewSort: total(this.buffers.renderOrder) + total(this.buffers.renderDepths),
 			sampleIndices: size(this.buffers.sampleIndices),
@@ -2874,12 +3530,14 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			cameraData: size(this.buffers.cameras) + size(this.buffers.renderCameras) + size(this.buffers.trainViews)
 				+ size(this.buffers.cameraSampleIndices) + size(this.buffers.cameraSampleRanges),
 			rasterPairs: size(this.buffers.pairData) + size(this.buffers.tileCounts),
-			transmittanceCheckpoints: size(this.buffers.checkpoints),
+			transmittanceCheckpoints: size(this.buffers.checkpoints)
+				+ size(this.buffers.geometryCheckpoints),
 			fullImageWorkspace: size(this.buffers.renderedTrain) + size(this.buffers.stopRanks)
 				+ size(this.buffers.ssimStats) + size(this.buffers.ssimScratch)
 				+ size(this.buffers.pixelLoss) + size(this.buffers.pixelGrad),
 			configAndTelemetry: size(this.buffers.trainConfig) + total(this.buffers.renderConfig)
 				+ size(this.buffers.tiledConfig) + size(this.buffers.counters)
+				+ size(this.buffers.referenceConfig)
 				+ size(this.buffers.indirectArgs) + size(this.buffers.tiledMetrics)
 				+ size(this.buffers.cycleMetrics) + size(this.buffers.metricsReadback)
 				+ size(this.buffers.tiledTimestampResolve) + size(this.buffers.tiledTimestampReadback),
@@ -2901,6 +3559,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			checkpointPrecision: this.checkpointPrecision,
 			checkpointOrder: this.checkpointOrder,
 			checkpointBytes: tiledBufferBytes.checkpoints,
+			geometryCheckpointBytes: tiledBufferBytes.geometryCheckpoints,
 			pairDataBytes: tiledBufferBytes.pairData,
 			gradientAccumulatorBytes: tiledBufferBytes.gradientAccumulator,
 			rasterProjectionBytes,
@@ -2926,6 +3585,13 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			staticWarmupSteps: this.staticWarmupSteps,
 			pixelDepthScaling: this.pixelDepthScaling,
 			pixelDepthGamma: this.pixelDepthGamma,
+			pixelFilterMode: this.pixelFilterMode,
+			opacityModel: this.opacityModel,
+			geometryEnabled: this.geometryEnabled,
+			geometryColorWeight: this.geometryColorWeight,
+			crossViewDepth: this.crossViewDepth,
+			geometryConsistencyEvery: this.geometryConsistencyEvery,
+			geometryDepthWeight: this.geometryDepthWeight,
 			densitySceneRadius: this.densitySceneRadius,
 			metricCycleSteps: this.cycleMetricCount,
 			dormantSlotSparseUpdate: true,
@@ -3045,6 +3711,8 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		});
 		const buffer = (binding, value) => ({ binding, resource: { buffer: value } });
 		const projectionVjp = this.buffers.projectionVjp ?? this.buffers.projections;
+		const referenceProjectionVjp = this.buffers.referenceProjectionVjp
+			?? this.buffers.referenceProjections;
 		const updateEntries = (paramsIn, paramsOut) => {
 			const entries = [
 				buffer(0, this.buffers.tiledConfig), buffer(1, paramsIn),
@@ -3072,6 +3740,19 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			}
 			return entries;
 		};
+		const referenceProjectEntries = (params) => {
+			const entries = [
+				buffer(0, this.buffers.referenceConfig), buffer(1, params),
+				buffer(2, this.buffers.cameras), buffer(3, this.buffers.referenceTileCounts),
+				buffer(4, this.buffers.referencePairData),
+				buffer(5, this.buffers.referenceProjections),
+				buffer(6, this.buffers.referenceCounters),
+			];
+			if (this.projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT) {
+				entries.push(buffer(7, referenceProjectionVjp));
+			}
+			return entries;
+		};
 		const backwardEntries = (params) => {
 			const entries = [
 				buffer(0, this.buffers.tiledConfig), buffer(1, params),
@@ -3080,6 +3761,9 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				buffer(6, this.buffers.pixelGrad), buffer(7, this.buffers.gradientAtoms),
 			];
 			if (this.backwardGranularity === TILED_BACKWARD_GRANULARITIES.CHECKPOINT_BLOCK) {
+				if (this.geometryEnabled) {
+					entries.push(buffer(8, this.buffers.geometryCheckpoints));
+				}
 				entries.push(buffer(9, this.buffers.tileCounts));
 			} else {
 				entries.push(buffer(8, this.buffers.counters));
@@ -3095,6 +3779,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.renderedTrain),
 				buffer(2, this.buffers.target), buffer(3, this.buffers.ssimScratch),
 				buffer(4, this.buffers.ssimStats), buffer(5, this.buffers.pixelLoss),
+				...(this.geometryEnabled ? [buffer(6, this.buffers.pixelGrad)] : []),
 			]),
 			ssimGradientHorizontal: group(this.tiledPipelines.ssimGradientHorizontal, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.target),
@@ -3130,6 +3815,34 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			]),
 			project: this.buffers.params.map((params) =>
 				group(this.tiledPipelines.project, projectEntries(params))),
+			...(this.crossViewDepth ? {
+				referenceClear: group(this.tiledPipelines.referenceClear, [
+					buffer(0, this.buffers.referenceConfig),
+					buffer(1, this.buffers.referenceTileCounts),
+					buffer(2, this.buffers.referenceCounters),
+				]),
+				referenceProject: this.buffers.params.map((params) =>
+					group(this.tiledPipelines.project, referenceProjectEntries(params))),
+				referenceSort: group(this.tiledPipelines.referenceSort, [
+					buffer(0, this.buffers.referenceConfig),
+					buffer(1, this.buffers.referenceProjections),
+					buffer(2, this.buffers.referenceTileCounts),
+					buffer(3, this.buffers.referencePairData),
+					buffer(4, this.buffers.referenceCounters),
+				]),
+				referenceDepth: group(this.tiledPipelines.referenceDepth, [
+					buffer(0, this.buffers.referenceConfig),
+					buffer(1, this.buffers.referenceProjections),
+					buffer(2, this.buffers.referenceTileCounts),
+					buffer(3, this.buffers.referencePairData),
+					buffer(4, this.buffers.referenceDepth),
+				]),
+				depthConsistency: group(this.tiledPipelines.depthConsistency, [
+					buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.pixelGrad),
+					buffer(2, this.buffers.referenceDepth), buffer(3, this.buffers.cameras),
+					buffer(4, this.buffers.pixelLoss),
+				]),
+			} : {}),
 			sort: group(this.tiledPipelines.sort, [
 				buffer(0, this.buffers.tiledConfig), buffer(1, this.buffers.projections),
 				buffer(2, this.buffers.tileCounts), buffer(3, this.buffers.pairData),
@@ -3143,6 +3856,10 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				buffer(3, this.buffers.tileCounts), buffer(4, this.buffers.pairData),
 				buffer(5, this.buffers.renderedTrain), buffer(6, this.buffers.checkpoints),
 				buffer(7, this.buffers.stopRanks),
+				...(this.geometryEnabled ? [
+					buffer(8, this.buffers.pixelGrad),
+					buffer(9, this.buffers.geometryCheckpoints),
+				] : []),
 			])),
 			...ssimBindGroups,
 			metrics: group(this.tiledPipelines.metrics, [
@@ -3204,7 +3921,18 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			this.stepCount,
 			this.staticWarmupSteps,
 		);
+		const geometryDepthActive = this.crossViewDepth
+			&& this.stepCount % this.geometryConsistencyEvery === 0;
+		const geometryEventIndex = Math.floor(this.stepCount / this.geometryConsistencyEvery);
+		const referenceCandidates = this.geometryPairSchedule
+			?.candidatesByView[selected.viewIndex] ?? [];
+		const referencePair = referenceCandidates.length
+			? referenceCandidates[geometryEventIndex % referenceCandidates.length] : null;
+		const referenceViewIndex = referencePair?.viewIndex ?? selected.viewIndex;
 		this.lastCameraBatch = [selected.viewIndex]; this.lastCameraBatchStart = selected.viewSlot;
+		this.lastReferenceViewIndex = referenceViewIndex;
+		this.lastReferencePair = referencePair;
+		this.lastGeometryDepthActive = geometryDepthActive;
 		this.lastFrameIndex = selected.frameIndex;
 		this.lastTrainingPhase = selected.staticWarmup ? "static_warmup" : "dynamic_fit";
 		const expectedActiveSplats = activeSplatCountForStep(
@@ -3235,7 +3963,7 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 		);
 		const targetOffset = 0;
 		this.lastTargetOffset = targetOffset;
-		writeTiledConfig(this.tiledConfigBytes, {
+		const configValues = {
 			width: this.dataset.width, height: this.dataset.height, splatCount: this.splatCount,
 			tileSize: this.tileSize,
 			tilesX: this.tilesX, tilesY: this.tilesY, tileCapacity: this.tileCapacity,
@@ -3253,14 +3981,35 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			densitySceneRadius: this.densitySceneRadius,
 			pixelDepthGamma: this.pixelDepthGamma,
 			pixelDepthScaling: this.pixelDepthScaling,
+			geometryColorWeight: this.geometryColorWeight,
+			geometryDepthWeight: this.geometryDepthWeight,
+			materialOpacityBias: this.materialOpacityBias,
+			geometryDepthActive,
+			referenceViewIndex,
+			geometryConsistencyEvery: this.geometryConsistencyEvery,
+			geometryEnabled: this.geometryEnabled,
 			staticWarmup: selected.staticWarmup,
 			motionWeighting,
 			randomBackground,
 			checkpointStride: this.checkpointStride,
 			activeSplatCount: this.activeSplatCount,
 			targetPacked: this.targetDecodePending,
-		});
+		};
+		writeTiledConfig(this.tiledConfigBytes, configValues);
 		this.device.queue.writeBuffer(this.buffers.tiledConfig, 0, this.tiledConfigBytes);
+		if (geometryDepthActive) {
+			writeTiledConfig(this.referenceConfigBytes, {
+				...configValues,
+				viewIndex: referenceViewIndex,
+				geometryDepthActive: false,
+				targetPacked: false,
+			});
+			this.device.queue.writeBuffer(
+				this.buffers.referenceConfig,
+				0,
+				this.referenceConfigBytes,
+			);
+		}
 		const encoder = this.device.createCommandEncoder();
 		if (this.targetDecodePending || this.activeTimestampProfile) {
 			this.encodePass(
@@ -3285,6 +4034,19 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			1, 1, 1, "finalize");
 		this.encodePass(encoder, this.tiledPipelines.forward, this.tiledBindGroups.forward[this.currentIndex],
 			this.tilesX, this.tilesY, 1, "forward");
+		if (geometryDepthActive) {
+			// These passes are in the same queue submission as training. They add
+			// no readback or synchronization; cadence controls their amortized cost.
+			this.encodePass(encoder, this.tiledPipelines.referenceClear,
+				this.tiledBindGroups.referenceClear, ceilDiv(this.tileCount, 64));
+			this.encodePass(encoder, this.tiledPipelines.project,
+				this.tiledBindGroups.referenceProject[this.currentIndex],
+				ceilDiv(this.splatCount, 64));
+			this.encodePass(encoder, this.tiledPipelines.referenceSort,
+				this.tiledBindGroups.referenceSort, this.tileCount);
+			this.encodePass(encoder, this.tiledPipelines.referenceDepth,
+				this.tiledBindGroups.referenceDepth, this.tilesX, this.tilesY);
+		}
 		const ssimWorkgroups = ceilDiv(this.pixelCount, 64);
 		if (this.ssimLayout === TILED_SSIM_LAYOUTS.SEPARABLE) {
 			const statsPass = this.beginTiledComputePass(encoder, "ssimStats");
@@ -3315,6 +4077,10 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 				1,
 				"ssimGradient",
 			);
+		}
+		if (geometryDepthActive) {
+			this.encodePass(encoder, this.tiledPipelines.depthConsistency,
+				this.tiledBindGroups.depthConsistency, ceilDiv(this.pixelCount, 64));
 		}
 		this.encodePass(encoder, this.tiledPipelines.metrics, this.tiledBindGroups.metrics,
 			1, 1, 1, "metrics");
@@ -3500,6 +4266,13 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			dormantUpdateSplats: values[9] - values[15],
 			projectionVjpHalfSaturations: values[16],
 			projectionVjpHalfSaturationsTotal: values[17],
+			geometryRegularizer: values[18],
+			geometryDepthActive: this.lastGeometryDepthActive,
+			referenceViewIndex: this.lastReferenceViewIndex,
+			referencePairRotationDegrees: this.lastReferencePair?.relativeRotationDegrees
+				?? Number.NaN,
+			referencePairCoVisibleFraction: this.lastReferencePair?.coVisibleFraction
+				?? Number.NaN,
 			cycleMeanLoss: cycle?.loss ?? values[0],
 			cycleMeanL1: cycle?.l1 ?? values[1],
 			cycleMeanDssim: cycle?.dssim ?? values[2],

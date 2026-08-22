@@ -544,13 +544,50 @@ determinant-compensated 2D Mip filter and a view-derived 3D smoothing
 constraint. [Analytic-Splatting](https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/02597.pdf)
 instead approximates the Gaussian integral over the pixel area.
 
-The next honest antialiasing ablation is current filtering versus a complete
-Mip-style 2D filter, including opacity compensation and its covariance
-derivative in the shared backward, tested across train/display resolutions.
-A forward-only compensation patch would make training and gradients disagree.
-The 3D Nyquist constraint is a separate experiment because it needs each
-primitive's maximum observed sampling frequency. Neither change should be
-presented as a same-resolution convergence fix without a matched run.
+The fast tiled backend now exposes that honest 2D ablation. `Mip 2D
+compensated` applies `sqrt(det(C) / det(C + sI))` to peak opacity and includes
+the determinant derivative in the staged shared backward. Live rendering uses
+the same rule at display resolution. The default remains `Legacy covariance
+floor` so old behavior is an exact control. Mip-Splatting's separate 3D Nyquist
+constraint is still unimplemented because it needs each primitive's maximum
+observed sampling frequency. Neither mechanism should be presented as a
+same-resolution convergence win without a matched run.
+
+### StableGS-Inspired Floater Ablations
+
+The fast tiled backend also exposes a prior-free, reset-time geometry stack:
+
+- `Dual opacity` keeps the existing base opacity for geometry and multiplies it
+  by a learned material gate for final appearance;
+- `Geometry Color Weight` adds an auxiliary L1 scaffold loss;
+- `Cross-View Depth` periodically renders a train-only paired camera and adds
+  robust expected-depth consistency;
+- `Depth Cadence` amortizes the reference-camera passes;
+- `Depth Weight` defaults to `0.05`, matching StableGS's reported consistency
+  coefficient but not claiming equal effective scaling.
+
+Geometry color, geometry transmittance, and source depth are accumulated in the
+same sorted forward loop as appearance. The checkpoint-block backward shares
+the same replay and emits the existing 12-float projected-gradient record.
+Reference depth runs in the same queue submission and never adds `mapAsync` or
+`queue.onSubmittedWorkDone` to `trainStep`.
+
+This is StableGS-inspired rather than paper parity. Pair selection uses
+train-only seed-frustum overlap and a 16-60 degree rotation range because the
+browser bundle does not carry COLMAP feature tracks or homography statistics.
+The current loss is one-sided per event; rotating source/reference membership
+samples both directions over time. No monocular or foundation-model depth
+prior is loaded.
+
+For glass, the geometry path may learn an opaque structural surface while the
+material gate restores appearance transparency. This addresses the
+geometry/transparency optimization conflict, but it does not model refraction,
+view-dependent specular transport, or explicit front/back surfaces.
+
+All new controls default to the old shader: legacy filter, coupled opacity,
+zero geometry-color weight, and paired depth off. See
+[`../../research_notes/browser_stablegs_mip_ablation_design_2026-08-21.md`](../../research_notes/browser_stablegs_mip_ablation_design_2026-08-21.md)
+for the formulas, memory model, limitations, and A0-A5 run matrix.
 
 ### Why Not Softmax Splatting?
 
@@ -696,6 +733,40 @@ it currently omits LPIPS, and only the center-time camera sweep covers all 17
 train cameras. A measured 4,096-splat validation pass took about 4.5 seconds on
 the local Apple browser in the earlier contended run and 1.4-1.9 seconds in the
 final clean smoke, without pausing the optimizer.
+
+### Bounded camera-stress diagnostic
+
+The validation worker also evaluates a deterministic camera-stress stencil at
+the center time on two representative train cameras and the heldout camera.
+It is deliberately capped at 48 pixels high and runs beside, never inside, the
+continuous WebGPU optimizer queue.
+
+Two kinds of perturbation must not be conflated:
+
+- **Optical zoom/shift:** focal length changes by `1.05x` or `1/1.05x`, and
+  the principal point shifts by `+/-1.5%` on each axis. These preserve the
+  captured camera center and orientation, so the real frame can be exactly
+  crop-resampled into a valid target. `Zoom/Shift PSNR` is therefore a real
+  pixel metric, reported as train / heldout.
+- **Physical pose:** dolly by `+/-3%` of pivot distance, translate laterally by
+  `+/-1.5%` of camera-rig radius, or orbit by `+/-2 degrees`. No captured target
+  exists at those poses. The UI consequently reports geometry-risk indicators,
+  not invented PSNR: near-camera alpha contribution, alpha from splats whose
+  opacity-aware support rectangle covers at least 25% of the image, and
+  coverage-weighted contributor depth spread `sigma/z`.
+
+The risk indicators are useful for detecting the translucent-cloud failure
+seen under small camera motion, but they are not calibrated geometry error and
+have no promotion threshold yet. They use only the learned splats, known camera
+calibration, and captured RGB images; no monocular or foundation-model depth
+prior is involved.
+
+The diagnostic additionally reports the fraction of stressed rays with two
+opacity-supported depth groups and the weaker group's opacity mass. Those
+metrics change no loss, gradient, topology, or default regularizer. The new
+`Cross-View Depth` control is different: when explicitly enabled at reset it
+does add a prior-free train-time geometry loss. The distinction keeps a stress
+measurement from being mislabeled as an optimizer intervention.
 
 ## July 28 Scaling Result
 
@@ -1048,16 +1119,19 @@ The relevant paper interventions are deliberately ranked rather than mixed:
    failure without unbounded spawning.
 4. [Mip-Splatting](https://openaccess.thecvf.com/content/CVPR2024/html/Yu_Mip-Splatting_Alias-free_3D_Gaussian_Splatting_CVPR_2024_paper.html)
    supplies the principled zoom/resolution experiment: 3D smoothing plus a
-   determinant-compensated 2D Mip filter. The current 0.3-pixel sigma floor is
-   display filtering, not complete Mip-Splatting.
-5. [Dynamic 3D Gaussians](https://arxiv.org/abs/2308.09713) supplies a local
+   determinant-compensated 2D Mip filter. The latter is now a toggleable fused
+   ablation; view-derived 3D smoothing remains absent.
+5. [StableGS](https://arxiv.org/html/2503.18458) motivates the new dual-opacity,
+   geometry-color, and prior-free paired-depth controls. The browser omits its
+   external depth prior and records the remaining pair/gradient divergences.
+6. [Dynamic 3D Gaussians](https://arxiv.org/abs/2308.09713) supplies a local
    rigidity prior, but it should be enabled only after diagnostics show that a
    floater moves incorrectly over time rather than merely appearing from a new
    camera.
-6. [StopThePop](https://doi.org/10.1145/3658187) addresses view-dependent
+7. [StopThePop](https://doi.org/10.1145/3658187) addresses view-dependent
    sorting pops, not stationary unsupported geometry. It is appropriate only
    if a fixed-model orbit trace shows camera-motion popping.
-7. Sparse-view methods such as
+8. Sparse-view methods such as
    [DropoutGS](https://openaccess.thecvf.com/content/CVPR2025/html/Xu_DropoutGS_Dropping_Out_Gaussians_for_Better_Sparse-view_Rendering_CVPR_2025_paper.html),
    [CoMapGS](https://openaccess.thecvf.com/content/CVPR2025/html/Jang_CoMapGS_Covisibility_Map-based_Gaussian_Splatting_for_Sparse_Novel_View_Synthesis_CVPR_2025_paper.html),
    and [DepthSplat](https://openaccess.thecvf.com/content/CVPR2025/html/Xu_DepthSplat_Connecting_Gaussian_Splatting_and_Depth_CVPR_2025_paper.html)
@@ -1079,8 +1153,8 @@ The highest-value remaining evidence is:
    denser verified cloud with a stronger matcher;
 3. residual/depth-guided relocation and pruning, compared against the new
    fixed-topology default rather than the removed proxy recycler;
-4. complete Mip-Splatting filtering, measured on deterministic zoom paths as
-   well as calibrated cameras;
+4. measure the new compensated 2D Mip path on deterministic zoom paths, then
+   separately add Mip-Splatting's still-missing 3D smoothing constraint;
 5. matched initialization, normalized-scale-bound, LR-family, and splat-capacity
    ablations;
 6. full-image heldout PSNR, SSIM, LPIPS, and L1 on more than one scene and seed;
@@ -1106,3 +1180,8 @@ See
 `research_notes/browser_full_rate_paging_and_novel_view_roadmap_2026-08-03.md`
 for the paging derivation, temporal VJP backtrack, paper intervention matrix,
 and ordered A0-A5 floater ablation plan.
+
+See
+`research_notes/browser_stablegs_mip_ablation_design_2026-08-21.md` for the
+implemented prior-free StableGS/Mip controls, exact divergences, buffer model,
+and updated A0-A5 measurement contract.

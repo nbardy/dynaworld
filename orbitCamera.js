@@ -47,6 +47,21 @@ export function cameraCenterFromWorldToCamera(worldToCamera) {
 	];
 }
 
+export function cameraRigRadius(cameras) {
+	if (!Array.isArray(cameras) || cameras.length === 0) {
+		throw new TypeError("cameraRigRadius needs at least one calibrated camera.");
+	}
+	const centers = cameras.map((camera) =>
+		cameraCenterFromWorldToCamera(camera?.worldToCamera));
+	const mean = [0, 1, 2].map((axis) =>
+		centers.reduce((sum, center) => sum + center[axis], 0) / centers.length);
+	const radius = 1.1 * Math.max(...centers.map((center) => Math.hypot(
+		center[0] - mean[0], center[1] - mean[1], center[2] - mean[2],
+	)));
+	// Pixel-GS's camera-radius definition collapses for a single camera.
+	return radius > 1e-6 ? radius : 1;
+}
+
 export function lookAtOpenCv(eye, target, downHint = [0, 1, 0]) {
 	assertFiniteVector(eye, 3, "eye");
 	assertFiniteVector(target, 3, "target");
@@ -137,4 +152,25 @@ export function panOrbitCamera(state, deltaX, deltaY) {
 export function zoomOrbitCamera(state, deltaY) {
 	const distance = state.distance * Math.exp(deltaY * ZOOM_EXPONENT_PER_PIXEL);
 	return { ...state, distance: Math.max(state.minDistance, Math.min(state.maxDistance, distance)) };
+}
+
+export function dollyOrbitCamera(state, distanceRatio) {
+	if (!(distanceRatio > 0) || !Number.isFinite(distanceRatio)) {
+		throw new RangeError("distanceRatio must be finite and positive.");
+	}
+	return {
+		...state,
+		distance: Math.max(state.minDistance, Math.min(state.maxDistance,
+			state.distance * distanceRatio)),
+	};
+}
+
+export function translateOrbitCamera(state, { rightFraction = 0, downFraction = 0 } = {}) {
+	if (![rightFraction, downFraction].every(Number.isFinite)) {
+		throw new TypeError("Camera translation fractions must be finite.");
+	}
+	const camera = orbitPreviewCamera(state).worldToCamera;
+	let target = addScaled(state.target, camera.slice(0, 3), state.distance * rightFraction);
+	target = addScaled(target, camera.slice(4, 7), state.distance * downFraction);
+	return { ...state, target };
 }

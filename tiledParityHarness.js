@@ -5,8 +5,8 @@ import {
 	readFrameBankValue,
 	readFrameLossWeight,
 } from "./dataset.js?v=20260731-compactfp16-5";
-import { renderSnapshotFrame } from "./snapshotMetrics.js?v=20260731-compactfp16-5";
-import { SPLAT_FLOATS } from "./trainerWebGpu3d.js?v=20260731-compactfp16-5";
+import { renderSnapshotFrame } from "./snapshotMetrics.js?v=20260821-stablegs-ablation-1";
+import { SPLAT_FLOATS } from "./trainerWebGpu3d.js?v=20260821-stablegs-ablation-1";
 import {
 	DynamicSplatWebGpu3dTiledTrainer,
 	fullFramePairForStep,
@@ -18,7 +18,7 @@ import {
 	TILED_SSIM_LAYOUTS,
 	trainingBackgroundForStep,
 	windowedL1DssimCpu,
-} from "./trainerWebGpu3dTiled.js?v=20260731-compactfp16-5";
+} from "./trainerWebGpu3dTiled.js?v=20260821-stablegs-ablation-1";
 
 export const TILED_PARITY_DIAGNOSTIC_COMPONENTS = Object.freeze([11, 15]);
 
