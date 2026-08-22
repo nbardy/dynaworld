@@ -101,11 +101,17 @@ test("fast fused shader carries compensated-filter and dual-opacity adjoints", (
 	assert.match(previewSource, /sigmoid\(p\.harmonicPad\.w\+/);
 });
 
+test("split compact backward keeps raster depth separate from projection VJP state", () => {
+	assert.match(tiledSource, /const densityDepth = projectionType === "RasterProjection"\s*\? "proj\.conicDepthAlpha\.y"/);
+	assert.match(tiledSource, /projectedGradientVjpWgsl\("Projection", \{ pixelFilterMode, opacityModel \}\)/);
+});
+
 test("cross-view depth is periodic and queue-local rather than a readback loss", () => {
 	assert.match(tiledSource, /this\.stepCount % this\.geometryConsistencyEvery === 0/);
 	assert.match(tiledSource, /buildGeometryPairSchedule\(this\.dataset, this\.trainViewIndices\)/);
 	assert.match(tiledSource, /this\.tiledPipelines\.referenceDepth/);
 	assert.match(tiledSource, /this\.tiledPipelines\.depthConsistency/);
+	assert.match(tiledSource, /var<storage,read_write> tileCounts:array<atomic<u32>>/);
 	const trainStep = tiledSource.slice(
 		tiledSource.indexOf("\ttrainStep("),
 		tiledSource.indexOf("\n\tasync profileGpuStep", tiledSource.indexOf("\ttrainStep(")),

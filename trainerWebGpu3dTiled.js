@@ -1516,7 +1516,7 @@ function referenceDepthWgsl(
 	return `${CONFIG_WGSL}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> projections:array<${projectionType}>;
-	@group(0) @binding(2) var<storage,read> tileCounts:array<atomic<u32>>;
+	@group(0) @binding(2) var<storage,read_write> tileCounts:array<atomic<u32>>;
 	@group(0) @binding(3) var<storage,read> pairData:array<u32>;
 	@group(0) @binding(4) var<storage,read_write> depthCoverage:array<vec2<f32>>;
 	@compute @workgroup_size(${tileSize},${tileSize})
@@ -2413,6 +2413,8 @@ function stagedBackwardWgsl(
 	const laneCount = tileSize * tileSize;
 	const projectionType = projectionLayout === TILED_PROJECTION_LAYOUTS.SPLIT_COMPACT
 		? "RasterProjection" : "Projection";
+	const densityDepth = projectionType === "RasterProjection"
+		? "proj.conicDepthAlpha.y" : "proj.cameraPointValid.z";
 	const sharedPairDeclarations = sharePairPacket ? `
 	var<workgroup> sharedPairMeta:vec4<u32>;
 	var<workgroup> sharedPairProjection:${projectionType};
@@ -2527,7 +2529,7 @@ function stagedBackwardWgsl(
 						let barC01=-barQform*conicDelta.x*conicDelta.y;
 						let barC11=-barQform*conicDelta.y*conicDelta.y;
 						let densitySignal=length(barMu)
-							*density_gradient_scale(proj.cameraPointValid.z,cfg);
+							*density_gradient_scale(${densityDepth},cfg);
 						gradient=ProjectedGradient(
 							vec4<f32>(barMu,barC00,barC01),
 							vec4<f32>(barC11,clampGate*alphaGrad*gaussian,
@@ -2670,7 +2672,10 @@ function checkpointBlockBackwardWgsl(
 								clampGate*alphaGrad*gaussian,alpha/f32(cfg.pixelCount),length(barMu)),
 							vec4<f32>(imageGrad*transmittance*alpha,0.0));`;
 	return `${CONFIG_WGSL}
-	${projectedGradientVjpWgsl(projectionType, { pixelFilterMode, opacityModel })}
+	// This module only accumulates projected gradients. The update module owns
+	// the compact projection VJP, so keep this unused helper on the full packet
+	// instead of asking RasterProjection for fields it deliberately omits.
+	${projectedGradientVjpWgsl("Projection", { pixelFilterMode, opacityModel })}
 	@group(0) @binding(0) var<uniform> cfg:TiledConfig;
 	@group(0) @binding(1) var<storage,read> params:array<Splat>;
 	@group(0) @binding(2) var<storage,read> projections:array<${projectionType}>;
