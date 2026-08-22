@@ -75,6 +75,7 @@
 					<option value="projection">Monolithic vs compact projection</option>
 					<option value="precision">FP32 vs packed-FP16 projection VJP</option>
 					<option value="ssim">Naive vs separable SSIM</option>
+					<option value="geometry">Fast baseline vs StableGS-inspired</option>
 				</select>
 			</label>
 			<label>Kernel variants
@@ -151,6 +152,33 @@
 					<option value="naive-2d">Naive 2D reference</option>
 				</select>
 			</label>
+			<label>Pixel filter
+				<select id="kernelPixelFilter">
+					<option value="legacy-floor">Legacy footprint floor</option>
+					<option value="mip-2d-compensated">Compensated 2D Mip</option>
+				</select>
+			</label>
+			<label>Opacity model
+				<select id="kernelOpacityModel">
+					<option value="coupled">Coupled</option>
+					<option value="dual">Dual geometry/material</option>
+				</select>
+			</label>
+			<label>Geometry color weight
+				<input id="kernelGeometryColorWeight" type="number" min="0" max="1" step="0.01" value="0.1">
+			</label>
+			<label>Paired depth
+				<select id="kernelCrossViewDepth">
+					<option value="false">Off</option>
+					<option value="true">On</option>
+				</select>
+			</label>
+			<label>Depth cadence
+				<input id="kernelGeometryEvery" type="number" min="1" max="1024" value="8">
+			</label>
+			<label>Depth weight
+				<input id="kernelGeometryDepthWeight" type="number" min="0" max="1" step="0.01" value="0.05">
+			</label>
 			<label>Current pair packet
 				<select id="kernelPairPacket">
 					<option value="lane">Per lane</option>
@@ -217,6 +245,6 @@
 			<textarea id="kernelBenchmarkJson" readonly spellcheck="false"></textarea>
 		</section>
 	</main>
-	<script type="module" src="./benchmarkTiledKernels.js?v=20260731-compactfp16-5"></script>
+	<script type="module" src="./benchmarkTiledKernels.js?v=20260821-stablegs-ablation-1"></script>
 </body>
 </html>

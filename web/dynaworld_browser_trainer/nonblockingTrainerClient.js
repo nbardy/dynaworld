@@ -9,7 +9,7 @@ function canTransferCanvas(canvas) {
 }
 
 export class NonblockingTrainerClient extends EventTarget {
-	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260814-camera-stress-1", import.meta.url) } = {}) {
+	constructor({ workerUrl = new URL("./trainingWorker.js?v=20260821-stablegs-ablation-1", import.meta.url) } = {}) {
 		super();
 		this.worker = new Worker(workerUrl, { type: "module", name: "dynaworld-webgpu-trainer" });
 		this.statusBuffer = createSharedStatusBuffer();

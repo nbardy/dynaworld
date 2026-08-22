@@ -35,6 +35,12 @@ const OPTION_SPECS = Object.freeze({
 	"--granularity": ["granularity", String, "checkpoint-block"],
 	"--tile": ["tile", Number, 8],
 	"--tile-capacity": ["tileCapacity", Number, 1024],
+	"--pixel-filter": ["pixelFilterMode", String, "legacy-floor"],
+	"--opacity-model": ["opacityModel", String, "coupled"],
+	"--geometry-color-weight": ["geometryColorWeight", Number, 0.1],
+	"--cross-view-depth": ["crossViewDepth", String, "false"],
+	"--geometry-every": ["geometryConsistencyEvery", Number, 8],
+	"--geometry-depth-weight": ["geometryDepthWeight", Number, 0.05],
 	"--max-round-cv": ["maxRoundCv", Number, 0.10],
 	"--contention-policy": ["contentionPolicy", String, "warn"],
 	"--contention-sample-ms": ["contentionSampleMs", Number, 1000],
@@ -60,7 +66,7 @@ function usage() {
 Runs the tiled WebGPU kernel benchmark in headless Chromium and emits JSON.
 The browser is the WebGPU runtime; Bun owns orchestration and artifact output.
 
-  --experiment MODE          backward, projection, precision, or ssim
+	--experiment MODE          backward, projection, precision, ssim, or geometry
   --variant MODE             both, control, candidate, or a concrete variant id
   --order MODE               control-first or candidate-first
   --splats N                 active splats (default: 8192)
@@ -80,7 +86,13 @@ The browser is the WebGPU runtime; Bun owns orchestration and artifact output.
   --pair-packet MODE         lane or shared
   --granularity MODE         pair or checkpoint-block
   --tile N                   tile edge: 8 or 16
-  --tile-capacity N          256, 512, 1024, 2048, or 4096
+	--tile-capacity N          256, 512, 1024, 2048, or 4096
+	--pixel-filter MODE        legacy-floor or mip-2d-compensated
+	--opacity-model MODE       coupled or dual
+	--geometry-color-weight N  auxiliary geometry-color L1 weight
+	--cross-view-depth BOOL    true or false
+	--geometry-every N         paired-depth cadence in steps
+	--geometry-depth-weight N  paired-depth robust-loss weight
   --max-round-cv N           maximum per-variant throughput CV (default: 0.10)
   --contention-policy MODE   record, warn, or fail (default: warn)
   --contention-sample-ms N   host sample duration (default: 1000)
@@ -131,8 +143,20 @@ function parseArgs(argv) {
 	if (!["record", "warn", "fail"].includes(args.contentionPolicy)) {
 		throw new Error("--contention-policy must be record, warn, or fail.");
 	}
+	if (!["legacy-floor", "mip-2d-compensated"].includes(args.pixelFilterMode)) {
+		throw new Error("--pixel-filter must be legacy-floor or mip-2d-compensated.");
+	}
+	if (!["coupled", "dual"].includes(args.opacityModel)) {
+		throw new Error("--opacity-model must be coupled or dual.");
+	}
+	if (!["true", "false"].includes(args.crossViewDepth)) {
+		throw new Error("--cross-view-depth must be true or false.");
+	}
 	if (args.out && args.outDir) throw new Error("--out and --out-dir are mutually exclusive.");
 	for (const [name, value, minimum, maximum] of [
+		["--geometry-color-weight", args.geometryColorWeight, 0, 1],
+		["--geometry-every", args.geometryConsistencyEvery, 1, 1024],
+		["--geometry-depth-weight", args.geometryDepthWeight, 0, 1],
 		["--max-round-cv", args.maxRoundCv, 0.001, 1],
 		["--contention-sample-ms", args.contentionSampleMs, 100, 10000],
 		["--postflight-cooldown-ms", args.postflightCooldownMs, 0, 10000],
@@ -289,6 +313,12 @@ function benchmarkUrl(port, args) {
 		granularity: args.granularity,
 		tile: String(args.tile),
 		tileCapacity: String(args.tileCapacity),
+		pixelFilterMode: args.pixelFilterMode,
+		opacityModel: args.opacityModel,
+		geometryColorWeight: String(args.geometryColorWeight),
+		crossViewDepth: args.crossViewDepth,
+		geometryConsistencyEvery: String(args.geometryConsistencyEvery),
+		geometryDepthWeight: String(args.geometryDepthWeight),
 		maxRoundCv: String(args.maxRoundCv),
 	});
 	return `http://127.0.0.1:${port}/benchmarkTiledKernels.html?${query}`;

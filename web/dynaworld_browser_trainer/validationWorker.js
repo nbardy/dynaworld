@@ -1,13 +1,13 @@
 import {
 	SPLAT_FLOATS,
 	resolveTrainViewIndices,
-} from "./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1";
+} from "./trainerWebGpu3d.js?v=20260821-stablegs-ablation-1";
 import {
 	computeSnapshotMetrics,
 	snapshotUpdateRatios,
 	summarizeSplatParameters,
-} from "./snapshotMetrics.js?v=20260814-camera-stress-1";
-import { computeCameraStressMetrics } from "./cameraStressMetrics.js?v=20260814-camera-stress-1";
+} from "./snapshotMetrics.js?v=20260821-stablegs-ablation-1";
+import { computeCameraStressMetrics } from "./cameraStressMetrics.js?v=20260821-stablegs-ablation-1";
 import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260803-fullfps-pixelgs-1";
 import { hydrateDatasetSharedViews } from "./datasetSharing.js";
 
@@ -91,6 +91,9 @@ self.onmessage = ({ data }) => {
 			splatCount: data.options?.splatCount,
 			modelMode: data.options?.modelMode ?? 0,
 			temporalSigma: data.options?.temporalSigma ?? 0.30,
+			pixelFilterMode: data.options?.pixelFilterMode ?? "legacy-floor",
+			opacityModel: data.options?.opacityModel ?? "coupled",
+			materialOpacityBias: data.options?.materialOpacityBias ?? 4.59511985013459,
 		};
 		const trainViewIndices = representativeTrainViews();
 		const heldoutViewIndices = heldoutViews();
@@ -161,6 +164,12 @@ self.onmessage = ({ data }) => {
 			strongestTrainCameraPsnr: strongestCamera?.psnr ?? Number.NaN,
 			weakestTrainCameraSsim: weakestCamera?.ssim ?? Number.NaN,
 			cameraStress,
+			trainMultiLayerRayFraction: cameraStress.train?.poseMultiLayerRayFraction
+				?? Number.NaN,
+			heldoutMultiLayerRayFraction: cameraStress.heldout?.poseMultiLayerRayFraction
+				?? Number.NaN,
+			trainSecondLayerMass: cameraStress.train?.poseSecondLayerMass ?? Number.NaN,
+			heldoutSecondLayerMass: cameraStress.heldout?.poseSecondLayerMass ?? Number.NaN,
 			motionLoss: Number.NaN,
 			motionCoverage: train.coverage,
 			staticCoverage: Number.NaN,

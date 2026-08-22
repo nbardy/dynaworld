@@ -618,11 +618,20 @@ As of 2026-05-28:
   GPU timestamp phase timing, an executable Bun/headless-WebGPU harness, staged
   one-VJP-per-splat backward, checkpoint-block replay, compact hot/cold
   projection packets, and exact separable SSIM. Active parity and
-  order-controlled 8K/30K timings pass. Remaining browser TODOs are matched
-  768-verified-plus-growth versus legacy-init, fixed-topology/residual-density
-  ablations, LPIPS, and multi-scene/multi-seed evidence before a `BASELINES.md`
-  row. Do not implement a parallel WebGPU SfM/calibration stack or expose the
-  incomplete STAR/DynamicGs probes as production backends.
+  order-controlled 8K/30K timings pass. The 2026-08-21 source pass adds
+  independently toggleable compensated 2D Mip filtering, dual geometry and
+  appearance opacity, fused geometry-color supervision, periodic prior-free
+  paired-depth consistency, train-only seed-overlap pair selection, and
+  multilayer camera-stress diagnostics. The exact old shader remains the
+  default control. These changes pass the 193-test browser suite but still need
+  live Apple WGSL compilation, full geometry finite-difference parity, matched
+  A0-A5 quality/timing artifacts, and contention-qualified throughput before
+  promotion. Remaining browser TODOs also include matched
+  768-verified-plus-growth versus legacy init, residual-guided fixed-budget
+  relocation, LPIPS, complete 3D Mip smoothing, and multi-scene/multi-seed
+  evidence before a `BASELINES.md` row. Do not implement a parallel WebGPU
+  SfM/calibration stack or expose the incomplete STAR/DynamicGs probes as
+  production backends.
 - STAR UVT support/binner binfix lives in
   `../agent_notes/loose_notes/2026-05-26_18-52-25_star_uvt_binner_binfix_train.md`;
   current artifacts are

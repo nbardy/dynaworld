@@ -3,7 +3,7 @@ import {
 	loadPresetDataset,
 	loadTemporalPageDataset,
 } from "./dataset.js?v=20260803-fullfps-pixelgs-1";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260814-camera-stress-1";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260821-stablegs-ablation-1";
 import {
 	createOrbitCameraState,
 	orbitPreviewCamera,
@@ -32,6 +32,10 @@ const resultViewRoles = [0, 1, 2].map((index) => $(`resultViewRole${index}`));
 const controls = {
 	run: $("runButton"), step: $("stepButton"), reset: $("resetButton"), backend: $("backendSelect"),
 	resolution: $("resolutionSelect"), precision: $("checkpointPrecisionSelect"), mode: $("modeSelect"),
+	pixelFilter: $("pixelFilterSelect"), opacityModel: $("opacityModelSelect"),
+	geometryColorWeight: $("geometryColorWeightInput"), crossViewDepth: $("crossViewDepthToggle"),
+	geometryConsistencyEvery: $("geometryConsistencyEverySelect"),
+	geometryDepthWeight: $("geometryDepthWeightInput"),
 	splats: $("splatSlider"), growthCapacity: $("growthCapacitySelect"),
 	time: $("timeSlider"), loop: $("timeLoopToggle"), live: $("livePreviewToggle"),
 	fullMetrics: $("fullMetricsToggle"), speed: $("timeSpeedSlider"), targetView: $("targetViewSelect"),
@@ -63,7 +67,9 @@ const values = {
 	detailMae: $("detailMaeValue"), lowPassPsnr: $("lowPassPsnrValue"),
 	cameraPsnr: $("cameraPsnrValue"), cameraOpticalPsnr: $("cameraOpticalPsnrValue"),
 	cameraNearAlpha: $("cameraNearAlphaValue"), cameraGiantAlpha: $("cameraGiantAlphaValue"),
-	cameraDepthSpread: $("cameraDepthSpreadValue"), gpuMemory: $("gpuMemoryValue"),
+	cameraDepthSpread: $("cameraDepthSpreadValue"), multiLayerRays: $("multiLayerRayValue"),
+	secondLayerMass: $("secondLayerMassValue"), geometryRegularizer: $("geometryRegularizerValue"),
+	gpuMemory: $("gpuMemoryValue"),
 	representation: $("representationValue"), dynamicSplats: $("dynamicSplatValue"),
 	persistentSplats: $("persistentSplatValue"), staticMixP50: $("staticMixP50Value"),
 	edgeSupport: $("edgeSupportValue"), aspectP90: $("aspectP90Value"),
@@ -159,6 +165,24 @@ function effectiveMotionMix() {
 
 function sampledBackendSelected() {
 	return controls.backend.value === "sampled3d";
+}
+
+function fastTiledBackendSelected() {
+	return controls.backend.value === "tiled3d-fast";
+}
+
+function shaderAblationDescription() {
+	const parts = [];
+	if (controls.pixelFilter.value === "mip-2d-compensated") parts.push("Mip 2D");
+	const stableParts = [];
+	if (controls.opacityModel.value === "dual") stableParts.push("dual opacity");
+	const geometryColorWeight = Number(controls.geometryColorWeight.value);
+	if (geometryColorWeight > 0) stableParts.push(`geometry color ${geometryColorWeight}`);
+	if (controls.crossViewDepth.checked) {
+		stableParts.push(`paired depth/${Number(controls.geometryConsistencyEvery.value)}`);
+	}
+	if (stableParts.length) parts.push(`StableGS-inspired: ${stableParts.join(" + ")}`);
+	return parts.length ? parts.join(" · ") : "baseline shader";
 }
 
 function comparisonCameraIndices() {
@@ -296,6 +320,21 @@ function updateControlLabels() {
 	$("randomBackgroundField").toggleAttribute("data-disabled", sampledBackendSelected());
 	controls.pixelDepthScaling.disabled = sampledBackendSelected();
 	$("pixelDepthScalingField").toggleAttribute("data-disabled", sampledBackendSelected());
+	const shaderAblationsDisabled = !fastTiledBackendSelected();
+	for (const control of [controls.pixelFilter, controls.opacityModel, controls.geometryColorWeight,
+		controls.crossViewDepth, controls.geometryConsistencyEvery, controls.geometryDepthWeight]) {
+		control.disabled = shaderAblationsDisabled;
+	}
+	for (const field of [$("pixelFilterField"), $("opacityModelField"), $("geometryColorWeightField"),
+		$("crossViewDepthField"), $("geometryConsistencyEveryField"), $("geometryDepthWeightField")]) {
+		field.toggleAttribute("data-disabled", shaderAblationsDisabled);
+	}
+	controls.geometryConsistencyEvery.disabled = shaderAblationsDisabled || !controls.crossViewDepth.checked;
+	controls.geometryDepthWeight.disabled = shaderAblationsDisabled || !controls.crossViewDepth.checked;
+	$("geometryConsistencyEveryField").toggleAttribute("data-disabled",
+		shaderAblationsDisabled || !controls.crossViewDepth.checked);
+	$("geometryDepthWeightField").toggleAttribute("data-disabled",
+		shaderAblationsDisabled || !controls.crossViewDepth.checked);
 	values.temporalLabel.textContent = controls.temporalSchedule.checked ? "Temporal Support Now" : "Temporal Support";
 	if (!controls.temporalSchedule.checked) {
 		values.temporalSchedule.textContent = "manual · fixed";
@@ -395,7 +434,8 @@ function resetMetrics() {
 		values.metricPair, values.visibleSplats, values.tilePairs, values.tileLoad,
 		values.detailMae, values.lowPassPsnr, values.cameraPsnr, values.gpuMemory,
 		values.cameraOpticalPsnr, values.cameraNearAlpha, values.cameraGiantAlpha,
-		values.cameraDepthSpread,
+		values.cameraDepthSpread, values.multiLayerRays, values.secondLayerMass,
+		values.geometryRegularizer,
 		values.parameterDelta, values.centerUpdate,
 		values.motionUpdate, values.scaleUpdate, values.rotationUpdate, values.colorUpdate,
 		values.opacityUpdate]) {
@@ -445,6 +485,8 @@ function consumeSampleMetric({ step, loss, breakdown = null, totalRecycled = Num
 		setMetricText(values.visibleSplats, breakdown.visibleSplats,
 			(value) => `${Math.round(value)}/${Math.round(breakdown.capacitySplats)}`);
 		setMetricText(values.tilePairs, breakdown.pairCount, (value) => Math.round(value).toLocaleString());
+		setMetricText(values.geometryRegularizer, breakdown.geometryRegularizer,
+			(value) => value.toExponential(2));
 		if (Number.isFinite(breakdown.maxTileOccupancy) && Number.isFinite(breakdown.meanStopRank)) {
 			const maximumEver = Number.isFinite(breakdown.maxTileOccupancyEver)
 				? ` (${Math.round(breakdown.maxTileOccupancyEver)})` : "";
@@ -504,6 +546,12 @@ function consumeValidation({ step, metrics }) {
 	setStressPair(values.cameraDepthSpread,
 		trainStress?.poseNormalizedDepthSpread, heldoutStress?.poseNormalizedDepthSpread,
 		(value) => value.toFixed(3));
+	setStressPair(values.multiLayerRays,
+		metrics.trainMultiLayerRayFraction, metrics.heldoutMultiLayerRayFraction,
+		(value) => `${(value * 100).toFixed(1)}%`);
+	setStressPair(values.secondLayerMass,
+		metrics.trainSecondLayerMass, metrics.heldoutSecondLayerMass,
+		(value) => `${(value * 100).toFixed(1)}%`);
 	setMetricText(values.motionLoss, metrics.motionLoss, (value) => value.toFixed(6));
 	setMetricText(values.motionCoverage, metrics.motionCoverage, (value) => `${(value * 100).toFixed(1)}%`);
 	setMetricText(values.staticCoverage, metrics.staticCoverage, (value) => `${(value * 100).toFixed(1)}%`);
@@ -537,7 +585,10 @@ function consumeValidation({ step, metrics }) {
 	setMetricText(values.scaleUpdate, updates.logScale?.updateRms, (value) => value.toExponential(1));
 	setMetricText(values.rotationUpdate, updates.rotation?.updateRms, (value) => value.toExponential(1));
 	setMetricText(values.colorUpdate, updates.color?.updateRms, (value) => value.toExponential(1));
-	setMetricText(values.opacityUpdate, updates.opacity?.updateRms, (value) => value.toExponential(1));
+	setMetricText(values.opacityUpdate, Math.max(
+		updates.opacity?.updateRms ?? -Infinity,
+		updates.materialOpacity?.updateRms ?? -Infinity,
+	), (value) => value.toExponential(1));
 	if (metrics.validationContract) {
 		const trainViews = metrics.validationContract.trainViews?.length ?? 0;
 		const heldoutViews = metrics.validationContract.heldoutViews?.length ?? 0;
@@ -795,6 +846,12 @@ async function initWorkerTrainer() {
 		trainerOptions: { backend: controls.backend.value, splatCount: Number(controls.splats.value),
 			growthCapacity: sampledBackendSelected() ? null : Number(controls.growthCapacity.value),
 			checkpointPrecision: controls.precision.value,
+			pixelFilterMode: controls.pixelFilter.value,
+			opacityModel: controls.opacityModel.value,
+			geometryColorWeight: Number(controls.geometryColorWeight.value),
+			crossViewDepth: controls.crossViewDepth.checked,
+			geometryConsistencyEvery: Number.parseInt(controls.geometryConsistencyEvery.value, 10),
+			geometryDepthWeight: Number(controls.geometryDepthWeight.value),
 			pixelDepthScaling: controls.pixelDepthScaling.checked && !sampledBackendSelected(),
 			staticWarmupSteps: controls.staticWarmup.checked && !sampledBackendSelected()
 				? STATIC_WARMUP_STEPS : 0 },
@@ -807,7 +864,7 @@ async function initWorkerTrainer() {
 	values.gpu.textContent = ready.adapter ?? "WebGPU";
 	values.runtime.textContent = ready.capabilities.offscreenRender
 		? `${ready.backend?.label ?? "worker"} + render` : `${ready.backend?.label ?? "worker"} optimizer`;
-	values.representation.textContent = "Trajectory 3DGS";
+	values.representation.textContent = `Trajectory 3DGS · ${shaderAblationDescription()}`;
 	values.representation.title = ready.backend?.representation ?? "trajectory-gated dynamic 3DGS";
 	$("motionCoverageLabel").textContent = ready.backend?.sampledControls ? "Motion Cov" : "Train Cov";
 	values.shared.textContent = ready.capabilities.sharedStatus ? "atomic SAB" : "messages";
@@ -836,6 +893,7 @@ async function initWorkerTrainer() {
 		: "";
 	setStatus(`Ready: ${ready.backend?.label ?? "WebGPU"} · `
 		+ `${ready.backend?.representation ?? "trajectory-gated dynamic 3DGS"} · `
+		+ `${shaderAblationDescription()} · `
 		+ `${objective} · `
 		+ `${checkpointPrecision ? `${checkpointPrecision} checkpoints · ` : ""}`
 		+ background
@@ -1024,6 +1082,10 @@ controls.resolution.addEventListener("change", () => { updateControlLabels(); vo
 controls.precision.addEventListener("change", () => { void resetTrainer(); });
 controls.staticWarmup.addEventListener("change", () => { void resetTrainer(); });
 controls.pixelDepthScaling.addEventListener("change", () => { void resetTrainer(); });
+for (const control of [controls.pixelFilter, controls.opacityModel, controls.geometryColorWeight,
+	controls.crossViewDepth, controls.geometryConsistencyEvery, controls.geometryDepthWeight]) {
+	control.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
+}
 controls.mode.addEventListener("change", () => { syncWorkerOptions(true); updateControlLabels(); });
 for (const control of [controls.time, controls.speed, controls.temporal, controls.lr, controls.samples,
 	controls.motionMix, controls.staticMix, controls.supportGuard]) {

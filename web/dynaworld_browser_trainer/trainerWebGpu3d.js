@@ -1320,7 +1320,14 @@ const RENDER_SORT_WGSL = `
 	}
 `;
 
-const RENDER_WGSL = `
+function renderWgsl({
+	pixelFilterMode = "legacy-floor",
+	opacityModel = "coupled",
+	materialOpacityBias = Math.log(99),
+} = {}) {
+	const compensatedFilter = pixelFilterMode === "mip-2d-compensated";
+	const dualOpacity = opacityModel === "dual";
+	return `
 	struct Splat { centerStatic: vec4<f32>, velocityTime: vec4<f32>, harmonicPad: vec4<f32>,
 		logScalePad: vec4<f32>, rotation: vec4<f32>, colorOpacity: vec4<f32> };
 	struct Camera { row0: vec4<f32>, row1: vec4<f32>, row2: vec4<f32>, row3: vec4<f32>, intrinsics: vec4<f32> };
@@ -1376,8 +1383,12 @@ const RENDER_WGSL = `
 		// Use display height here so preview filtering matches its own pixel
 		// footprint rather than the lower-resolution training raster.
 		let filterVariance = pow(${FILTER_SIGMA_PIXELS} / max(1.0, cfg.height), 2.0);
-		let c00 = dot(j0, sigmaCamera*j0) + filterVariance;
-		let c01 = dot(j0, sigmaCamera*j1); let c11 = dot(j1, sigmaCamera*j1) + filterVariance;
+		let unfilteredC00=dot(j0,sigmaCamera*j0);
+		let c01=dot(j0,sigmaCamera*j1);let unfilteredC11=dot(j1,sigmaCamera*j1);
+		let c00=unfilteredC00+filterVariance;let c11=unfilteredC11+filterVariance;
+		let opacityCompensation=${compensatedFilter
+			? "clamp(sqrt(max(unfilteredC00*unfilteredC11-c01*c01,0.0)/max(c00*c11-c01*c01,1e-16)),0.0,1.0)"
+			: "1.0"};
 		let l00 = sqrt(max(c00, 1e-12)); let l10 = c01 / l00;
 		let l11 = sqrt(max(c11 - l10*l10, 1e-12));
 		let offsetMetric = 3.0 * vec2<f32>(l00*quad.x, l10*quad.x + l11*quad.y);
@@ -1386,7 +1397,8 @@ const RENDER_WGSL = `
 		let ndc = vec2<f32>(projected.x * 2.0 - 1.0, 1.0 - projected.y * 2.0);
 		let offset = vec2<f32>(2.0 * offsetMetric.x / cfg.targetAspect, -2.0 * offsetMetric.y);
 		return VSOut(vec4<f32>(ndc + offset, 0.0, 1.0), quad * 3.0, p.colorOpacity.xyz,
-			sigmoid(p.colorOpacity.w) * temporal_gate(p));
+			sigmoid(p.colorOpacity.w)*temporal_gate(p)*opacityCompensation
+				*${dualOpacity ? `sigmoid(p.harmonicPad.w+${materialOpacityBias})` : "1.0"});
 	}
 	@fragment fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
 		let qform = dot(input.local, input.local); if (qform > 9.0) { discard; }
@@ -1398,6 +1410,7 @@ const RENDER_WGSL = `
 		return vec4<f32>(input.color * alpha, alpha);
 	}
 `;
+}
 
 function temporalGateCpu(params, base, time, sigma) {
 	const floor = Math.min(0.12, Math.max(0.035, sigma * 0.30));
@@ -1531,6 +1544,9 @@ export class DynamicSplatWebGpu3dTrainer {
 		this.timestampQueryEnabled = false;
 		this.configBytes = new ArrayBuffer(144);
 		this.renderConfigBytes = Array.from({ length: MAX_RENDER_VIEWS }, () => new ArrayBuffer(48));
+		this.pixelFilterMode = "legacy-floor";
+		this.opacityModel = "coupled";
+		this.materialOpacityBias = Math.log(99);
 	}
 
 	targetBufferByteLength(dataset) {
@@ -1601,7 +1617,11 @@ export class DynamicSplatWebGpu3dTrainer {
 		const update = this.device.createShaderModule({ code: UPDATE_WGSL });
 		const maintenance = this.device.createShaderModule({ code: MAINTENANCE_WGSL });
 		const renderSort = this.device.createShaderModule({ code: RENDER_SORT_WGSL });
-		const render = this.device.createShaderModule({ code: RENDER_WGSL });
+		const render = this.device.createShaderModule({ code: renderWgsl({
+			pixelFilterMode: this.pixelFilterMode,
+			opacityModel: this.opacityModel,
+			materialOpacityBias: this.materialOpacityBias,
+		}) });
 		const modules = [["order", order], ["training", gradients], ["update", update], ["maintenance", maintenance],
 			["render-sort", renderSort], ["render", render]];
 		const diagnostics = await Promise.all(modules.map(async ([name, module]) => ({

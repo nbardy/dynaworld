@@ -6,7 +6,7 @@ import {
 	orbitPreviewCamera,
 	translateOrbitCamera,
 } from "./orbitCamera.js?v=20260814-camera-stress-1";
-import { renderSnapshotFrame } from "./snapshotMetrics.js?v=20260814-camera-stress-1";
+import { renderSnapshotFrame } from "./snapshotMetrics.js?v=20260821-stablegs-ablation-1";
 
 export const CAMERA_STRESS_DEFAULTS = Object.freeze({
 	opticalZoom: 1.05,
@@ -171,8 +171,9 @@ function summarizeGeometry(rendered) {
 	let near = 0;
 	let large = 0;
 	let normalizedDepthSpread = 0;
-	for (let pixel = 0; pixel < rendered.coverage.length; pixel += 1) {
-		const weight = rendered.coverage[pixel];
+	const geometryCoverage = rendered.geometryCoverage ?? rendered.coverage;
+	for (let pixel = 0; pixel < geometryCoverage.length; pixel += 1) {
+		const weight = geometryCoverage[pixel];
 		coverage += weight;
 		near += rendered.nearCoverage[pixel];
 		large += rendered.largeFootprintCoverage[pixel];
@@ -181,10 +182,12 @@ function summarizeGeometry(rendered) {
 		}
 	}
 	return {
-		coverage: coverage / rendered.coverage.length,
+		coverage: coverage / geometryCoverage.length,
 		nearContribution: near / Math.max(coverage, 1e-8),
 		largeFootprintContribution: large / Math.max(coverage, 1e-8),
 		normalizedDepthSpread: normalizedDepthSpread / Math.max(coverage, 1e-8),
+		multiLayerRayFraction: rendered.multiLayerRayFraction ?? 0,
+		secondLayerMass: rendered.meanSecondLayerMass ?? 0,
 	};
 }
 
@@ -205,6 +208,9 @@ function aggregateViews(perView, role) {
 		poseLargeFootprintContribution: poseWorst("largeFootprintContribution")
 			.pose.largeFootprintContribution,
 		poseNormalizedDepthSpread: poseWorst("normalizedDepthSpread").pose.normalizedDepthSpread,
+		poseMultiLayerRayFraction: poseWorst("multiLayerRayFraction")
+			.pose.multiLayerRayFraction,
+		poseSecondLayerMass: poseWorst("secondLayerMass").pose.secondLayerMass,
 		poseCoverageDrift: poseWorst("coverageDrift").pose.coverageDrift,
 	};
 }
@@ -226,6 +232,9 @@ export function computeCameraStressMetrics(dataset, params, {
 	const nearDepthThreshold = options.nearDepthGamma * cameraRigRadius(dataset.cameras);
 	const renderOptions = {
 		frameIndex, width, height, splatCount, modelMode, temporalSigma,
+		pixelFilterMode: options.pixelFilterMode ?? "legacy-floor",
+		opacityModel: options.opacityModel ?? "coupled",
+		materialOpacityBias: options.materialOpacityBias ?? 4.59511985013459,
 		collectGeometryDiagnostics: true,
 		nearDepthThreshold,
 		largeFootprintFraction: options.largeFootprintFraction,
@@ -284,9 +293,12 @@ export function computeCameraStressMetrics(dataset, params, {
 			});
 			return { name: variant.name, rendered, ...summarizeGeometry(rendered) };
 		});
-		const baseCoverage = physical[0].rendered.coverage;
+		const baseCoverage = physical[0].rendered.geometryCoverage
+			?? physical[0].rendered.coverage;
 		for (const pose of physical) {
-			pose.coverageDrift = meanAbsoluteDifference(pose.rendered.coverage, baseCoverage);
+			pose.coverageDrift = meanAbsoluteDifference(
+				pose.rendered.geometryCoverage ?? pose.rendered.coverage, baseCoverage,
+			);
 			delete pose.rendered;
 		}
 		return {
@@ -306,6 +318,9 @@ export function computeCameraStressMetrics(dataset, params, {
 				largeFootprintContribution: Math.max(...physical.map((item) =>
 					item.largeFootprintContribution)),
 				normalizedDepthSpread: Math.max(...physical.map((item) => item.normalizedDepthSpread)),
+				multiLayerRayFraction: Math.max(...physical.map((item) =>
+					item.multiLayerRayFraction)),
+				secondLayerMass: Math.max(...physical.map((item) => item.secondLayerMass)),
 				coverageDrift: Math.max(...physical.map((item) => item.coverageDrift)),
 				variants: physical,
 			},
@@ -328,6 +343,14 @@ export function computeCameraStressMetrics(dataset, params, {
 			orbitRadians: options.orbitRadians,
 			nearDepthThreshold,
 			largeFootprintFraction: options.largeFootprintFraction,
+			pixelFilterMode: renderOptions.pixelFilterMode,
+			opacityModel: renderOptions.opacityModel,
+			materialOpacityBias: renderOptions.materialOpacityBias,
+			multimodalDepth: {
+				kind: "diagnostic_only_separated_weighted_depth_modes",
+				externalDepthPrior: false,
+				trainingLoss: false,
+			},
 		},
 	};
 }

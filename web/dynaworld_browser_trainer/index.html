@@ -124,6 +124,46 @@
 						</select>
 					</label>
 
+					<label id="pixelFilterField" class="field">
+						<span>Pixel Filter</span>
+						<select id="pixelFilterSelect" title="Reset-time raster ablation; compensated mode preserves projected Gaussian mass under the 2D pixel filter">
+							<option value="legacy-floor" selected>Legacy covariance floor</option>
+							<option value="mip-2d-compensated">Mip 2D compensated</option>
+						</select>
+					</label>
+
+					<label id="opacityModelField" class="field">
+						<span>Opacity Model</span>
+						<select id="opacityModelSelect" title="StableGS-inspired reset-time ablation; dual separates geometry and appearance opacity without claiming paper parity">
+							<option value="coupled" selected>Coupled (baseline)</option>
+							<option value="dual">Dual opacity</option>
+						</select>
+					</label>
+
+					<label id="geometryColorWeightField" class="field">
+						<span>Geometry Color Weight</span>
+						<input id="geometryColorWeightInput" title="StableGS-inspired auxiliary geometry-color L1 weight; 0 keeps the baseline objective" type="number" min="0" max="1" step="0.01" value="0" />
+					</label>
+
+					<label id="crossViewDepthField" class="field toggle-field">
+						<span>Cross-View Depth</span>
+						<input id="crossViewDepthToggle" title="StableGS-inspired prior-free paired-camera depth consistency; reset-time ablation, not full StableGS parity" type="checkbox" />
+					</label>
+
+					<label id="geometryConsistencyEveryField" class="field">
+						<span>Depth Cadence</span>
+						<select id="geometryConsistencyEverySelect" title="Run paired-camera geometry consistency every N training steps">
+							<option value="4">Every 4 steps</option>
+							<option value="8" selected>Every 8 steps</option>
+							<option value="16">Every 16 steps</option>
+						</select>
+					</label>
+
+					<label id="geometryDepthWeightField" class="field">
+						<span>Depth Weight</span>
+						<input id="geometryDepthWeightInput" title="Weight for prior-free paired-camera geometry depth consistency" type="number" min="0" max="1" step="0.01" value="0.05" />
+					</label>
+
 					<label class="field">
 						<span>Initial Splats</span>
 						<input id="splatSlider" title="Use up to all 4,096 checked-in external, provenance-unverified point-cloud seeds before GPU splitting fills the selected capacity" type="range" min="96" max="4096" step="32" value="4096" />
@@ -283,6 +323,15 @@
 						<div title="Worst bounded physical pose: coverage-weighted contributor depth standard deviation divided by mean depth; train / heldout">
 							<span>Ray Depth σ/z</span><strong id="cameraDepthSpreadValue">--</strong>
 						</div>
+						<div title="Diagnostic only: stressed rays with two opacity-supported depth layers separated by at least 15%; train / heldout">
+							<span>Multilayer Rays</span><strong id="multiLayerRayValue">--</strong>
+						</div>
+						<div title="Diagnostic only: weaker layer's opacity mass on the worst stressed pose; train / heldout">
+							<span>Second-Layer α</span><strong id="secondLayerMassValue">--</strong>
+						</div>
+						<div title="Weighted geometry-color plus active paired-depth contribution in the fused objective">
+							<span>Geometry Reg</span><strong id="geometryRegularizerValue">--</strong>
+						</div>
 						<div><span>GPU Buffers</span><strong id="gpuMemoryValue">--</strong></div>
 					<div>
 						<span>Heldout Cov</span>
@@ -438,6 +487,6 @@
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260814-camera-stress-1"></script>
+		<script type="module" src="./app.js?v=20260821-stablegs-ablation-1"></script>
 	</body>
 </html>
