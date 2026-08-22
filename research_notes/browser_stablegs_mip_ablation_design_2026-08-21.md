@@ -396,7 +396,7 @@ Next action if weakened:
 Verified locally:
 
 - JavaScript syntax for browser modules and tests;
-- 193 browser unit/contract tests;
+- 194 browser unit/contract tests;
 - exact baseline defaults and CPU baseline equivalence;
 - compensated-filter determinant behavior;
 - dual appearance/geometry separation;
@@ -407,7 +407,7 @@ Verified locally:
 
 Not yet verified in this work chunk:
 
-- compilation of every specialized WGSL module on the live Apple adapter;
+- compilation of every possible specialized WGSL combination on the live Apple adapter;
 - forward/backward finite differences for the complete geometry variant;
 - matched quality ablations A0-A5;
 - host-qualified throughput for the geometry stack;
@@ -415,10 +415,36 @@ Not yet verified in this work chunk:
 
 No `BASELINES.md` row should be added until those runtime artifacts exist.
 
+### 2026-08-22 headless runtime follow-up
+
+The selected full candidate and exact control were initialized in headless
+Chrome/Dawn on the Apple adapter at 8,192 splats and 96x72. Live WGSL
+validation found two source-only-test blind spots before measurement:
+
+1. checkpoint-block backward emitted an unused projection-VJP helper against
+   the raster-only packet, which does not contain `cameraPointValid`;
+2. reference-depth tile-count atomics were declared with read-only storage
+   access, which WGSL forbids for atomic types.
+
+Both were corrected and the matched run completed with finite loss, zero tile
+overflow, and zero projection-VJP FP16 saturation. Under a heavily contended
+host, the baseline measured 499.2 steps/s and the full stack measured 476.9
+steps/s, a diagnostic 4.5% wall-throughput reduction. The candidate's four
+rounds were stable (CV 0.042); the control was not (CV 0.195). Preflight also
+reported roughly 70% existing Apple GPU utilization, high CPU load, and high
+swap, so the artifact is explicitly non-promotable. The resource gate blocked
+the reversed-order mate. This is compile/trainability evidence and a rough cost
+bound, not a benchmark or a quality result.
+
+The temporary artifact is
+`/private/tmp/dynaworld-stablegs-geometry-headless.json`; it is intentionally
+not a retained baseline artifact. No PSNR/SSIM conclusion follows from the
+64-step kernel timing run because its reported objective includes the new
+regularizers and the runner does not perform heldout image validation.
+
 ## Decision
 
 Keep all new controls opt-in until matched evidence exists. The implementation
 is valuable now because it converts the camera-stress finding into falsifiable
 optimizer interventions while preserving an exact control. The next work is
 measurement and parity, not another renderer family.
-
