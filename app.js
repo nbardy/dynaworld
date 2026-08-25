@@ -2,7 +2,7 @@ import {
 	drawTargetFrame,
 	loadPresetDataset,
 	loadTemporalPageDataset,
-} from "./dataset.js?v=20260803-fullfps-pixelgs-1";
+} from "./dataset.js?v=20260825-multidataset-1";
 import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260821-stablegs-ablation-1";
 import {
 	createOrbitCameraState,
@@ -31,6 +31,7 @@ const resultViewLabels = [0, 1, 2].map((index) => $(`resultViewLabel${index}`));
 const resultViewRoles = [0, 1, 2].map((index) => $(`resultViewRole${index}`));
 const controls = {
 	run: $("runButton"), step: $("stepButton"), reset: $("resetButton"), backend: $("backendSelect"),
+	dataset: $("datasetSelect"),
 	resolution: $("resolutionSelect"), precision: $("checkpointPrecisionSelect"), mode: $("modeSelect"),
 	pixelFilter: $("pixelFilterSelect"), opacityModel: $("opacityModelSelect"),
 	geometryColorWeight: $("geometryColorWeightInput"), crossViewDepth: $("crossViewDepthToggle"),
@@ -97,6 +98,7 @@ const RENDER_FPS = 15;
 const MAX_RENDER_WIDTH = 960;
 const VALIDATION_STEP_INTERVAL = 8192;
 const STATIC_WARMUP_STEPS = 2048;
+const PROGRESSIVE_PREFETCH_STEP = 6144;
 const UI_STATE_KEY = "dynaworld-browser-trainer-ui-v2";
 const metricHistory = { sampleLoss: [], trainLoss: [], heldoutLoss: [],
 	trainPsnr: [], heldoutPsnr: [], trainSsim: [], heldoutSsim: [] };
@@ -235,6 +237,23 @@ function renderOptions() {
 
 function setStatus(message) {
 	$("statusText").textContent = message;
+}
+
+function reportDatasetProgress(progress) {
+	const container = $("datasetProgress");
+	const bar = $("datasetProgressBar");
+	const label = $("datasetProgressLabel");
+	container.hidden = progress.phase === "ready";
+	const bytes = progress.phase === "download" && progress.total
+		? ` · ${(progress.completed / 1024).toFixed(0)} / ${(progress.total / 1024).toFixed(0)} KiB`
+		: "";
+	label.textContent = `${progress.label}${bytes}`;
+	if (progress.cameraCount) {
+		bar.value = Math.min(1, ((progress.camera - 1) + progress.completed / Math.max(1, progress.total))
+			/ progress.cameraCount);
+	} else {
+		bar.value = progress.completed / Math.max(1, progress.total);
+	}
 }
 
 function updateDatasetIdentity() {
@@ -698,7 +717,10 @@ function queueNextTemporalPage() {
 	const page = temporalPagingPlan.pages[nextPageIndex];
 	const sourceDataset = dataset;
 	const generation = temporalPagingGeneration;
-	temporalPageLoadPromise = loadTemporalPageDataset(sourceDataset, page, { computeSamples: false })
+	temporalPageLoadPromise = loadTemporalPageDataset(sourceDataset, page, {
+		computeSamples: false,
+		onProgress: reportDatasetProgress,
+	})
 		.then((pageDataset) => {
 			if (generation === temporalPagingGeneration) {
 				temporalPageReady = { page, dataset: pageDataset };
@@ -777,7 +799,10 @@ function preloadProgressiveDataset() {
 	if (resolutionMode !== RESOLUTION_MODE_PROGRESSIVE) return null;
 	if (!progressiveDatasetPromise) {
 		const coarseDataset = dataset;
-		progressiveDatasetPromise = loadPresetDataset({ preset: "384x288", computeSamples: false })
+		progressiveDatasetPromise = loadPresetDataset({
+			datasetId: controls.dataset.value, preset: "384x288", computeSamples: false,
+			onProgress: reportDatasetProgress,
+		})
 			.then((fineDataset) => {
 				assertResolutionContinuationCompatible(coarseDataset, fineDataset);
 				progressiveDataset = fineDataset;
@@ -800,7 +825,7 @@ async function beginProgressiveResolutionTransition() {
 			? await loadTemporalPageDataset(fineBaseDataset, {
 				pageIndex: sourcePageIndex,
 				nativeFrameIndices: [...dataset.frameIndices],
-			}, { computeSamples: false })
+			}, { computeSamples: false, onProgress: reportDatasetProgress })
 			: fineBaseDataset;
 		assertResolutionContinuationCompatible(dataset, fineDataset);
 		const ready = await workerClient.switchDataset(fineDataset, {
@@ -902,9 +927,6 @@ async function initWorkerTrainer() {
 		+ `${heldoutDescription}; init ${dataset.seedProvenance?.train_only_verified
 			? "train-only verified" : "external/unverified"}.`);
 	configureTemporalPaging();
-	void preloadProgressiveDataset()?.catch((error) => {
-		setStatus(`Native 384x288 preload failed: ${error?.message ?? String(error)}`);
-	});
 }
 
 async function initLocalTrainer() {
@@ -1015,7 +1037,14 @@ function frameLoop(now) {
 				lastStatusMetricStep = status.lastMetricStep;
 			}
 		}
-		const resolutionStage = resolutionStageForStep(resolutionMode, status?.step ?? 0);
+		const workerStep = status?.step ?? 0;
+		if (resolutionMode === RESOLUTION_MODE_PROGRESSIVE
+			&& workerStep >= PROGRESSIVE_PREFETCH_STEP && !progressiveDatasetPromise) {
+			void preloadProgressiveDataset()?.catch((error) => {
+				setStatus(`Native 384x288 preload failed: ${error?.message ?? String(error)}`);
+			});
+		}
+		const resolutionStage = resolutionStageForStep(resolutionMode, workerStep);
 		if (resolutionStage.progressive && resolutionStage.preset !== resolutionPreset
 			&& !resolutionTransitionPending && !resolutionTransitionComplete) {
 			void beginProgressiveResolutionTransition();
@@ -1051,7 +1080,10 @@ async function boot() {
 		resolutionTransitionComplete = resolutionMode !== RESOLUTION_MODE_PROGRESSIVE;
 		progressiveDataset = null;
 		progressiveDatasetPromise = null;
-		dataset = await loadPresetDataset({ preset: resolutionPreset });
+		dataset = await loadPresetDataset({
+			datasetId: controls.dataset.value, preset: resolutionPreset,
+			onProgress: reportDatasetProgress,
+		});
 		updateDatasetIdentity();
 		values.splatCount.textContent = controls.splats.value;
 		values.motionSamples.textContent = String(dataset.motionSamples?.length ?? 0);
@@ -1078,6 +1110,7 @@ controls.reset.addEventListener("click", () => { void resetTrainer(); });
 controls.splats.addEventListener("change", () => { void resetTrainer(); });
 controls.growthCapacity.addEventListener("change", () => { void resetTrainer(); });
 controls.backend.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
+controls.dataset.addEventListener("change", () => { void resetTrainer(); });
 controls.resolution.addEventListener("change", () => { updateControlLabels(); void resetTrainer(); });
 controls.precision.addEventListener("change", () => { void resetTrainer(); });
 controls.staticWarmup.addEventListener("change", () => { void resetTrainer(); });

@@ -63,7 +63,7 @@ test("protocol exposes bounded resolution and temporal-page handoffs", async () 
 	assert.ok(exportAt >= 0 && restoreAt > exportAt);
 	assert.match(workerSource, /await sourceTrainer\.device\.queue\.onSubmittedWorkDone\(\)/);
 	assert.match(workerSource, /if \(wasRunning\)[\s\S]+schedulePump\(pumpToken\)/);
-	assert.match(appSource, /loadPresetDataset\(\{ preset: "384x288", computeSamples: false \}\)/);
+	assert.match(appSource, /datasetId: controls\.dataset\.value, preset: "384x288", computeSamples: false/);
 	assert.match(appSource, /resolutionStageMarkers\.push\(ready\.step\)/);
 	assert.match(workerSource, /trainer\.replaceTemporalPage\(incoming\.dataset\)/);
 	assert.doesNotMatch(workerSource.match(/function switchTemporalPage[\s\S]*?\n\}/)?.[0] ?? "",

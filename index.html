@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Dynaworld Browser Trainer</title>
-		<link rel="stylesheet" href="./styles.css?v=20260803-fullfps-pixelgs-1" />
+		<link rel="stylesheet" href="./styles.css?v=20260825-multidataset-1" />
 		<script type="module">
 			import { ensureStaticHostIsolation } from "./crossOriginIsolation.js";
 			ensureStaticHostIsolation().catch((error) => console.warn("Shared-memory bootstrap unavailable.", error));
@@ -17,6 +17,10 @@
 					<div class="brand-copy">
 						<h1>Dynaworld Browser Trainer</h1>
 						<p id="datasetName">preloading dataset</p>
+						<div id="datasetProgress" class="dataset-progress" role="status" aria-live="polite">
+							<progress id="datasetProgressBar" max="1" value="0"></progress>
+							<span id="datasetProgressLabel">Loading metadata</span>
+						</div>
 					</div>
 					<nav class="diagnostic-nav" aria-label="Developer diagnostics">
 						<a href="./benchmarkTiledKernels.html">Kernel Lab</a>
@@ -91,6 +95,15 @@
 
 				<section class="controls" aria-label="Training controls">
 					<label class="field">
+						<span>Dataset</span>
+						<select id="datasetSelect">
+							<option value="coffee_martini" selected>Coffee Martini · 17 train / 1 heldout</option>
+							<option value="cook_spinach">Cook Spinach · 2 train / 1 heldout</option>
+							<option value="cut_roasted_beef">Cut Roasted Beef · 2 train / 1 heldout</option>
+						</select>
+					</label>
+
+					<label class="field">
 						<span>Training Backend</span>
 						<select id="backendSelect">
 							<option value="tiled3d-fast">Fast tiled full-frame</option>
@@ -102,9 +115,9 @@
 					<label class="field">
 						<span>Training Resolution</span>
 						<select id="resolutionSelect">
-							<option value="progressive-96-384" selected>Progressive 96 → 384</option>
+							<option value="progressive-96-384" selected>Progressive 96 → 384 (not 4K)</option>
 							<option value="96x72">96 x 72</option>
-							<option value="384x288">384 x 288</option>
+							<option value="384x288">384 x 288 (current maximum)</option>
 						</select>
 					</label>
 

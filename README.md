@@ -31,9 +31,9 @@ GitHub Pages cannot configure COOP/COEP response headers directly. The hosted
 page therefore registers a same-origin isolation service worker and reloads
 once on its first visit. Subsequent loads use SharedArrayBuffer for the target
 bank and report `atomic SAB` in the runtime diagnostics. The `gh-pages` branch
-contains only this directory's static subtree; the checked-in deployment
-workflow can replace the legacy branch build when repository Actions are
-available.
+contains only this directory's static subtree. The checked-in workflow updates
+that legacy Pages branch using first-party checkout steps whenever the browser
+subtree changes.
 
 Useful diagnostics:
 
@@ -127,19 +127,21 @@ npm test
 
 ## Current Data Contract
 
-The checked-in presets share one calibration/split contract:
+The selector exposes three canonical Neural 3D Video manifests. Every scene has
+both a 96x72 bundle and a 384x288 bundle; progressive mode starts at 96x72 and
+continues the same model and optimizer state at 384x288.
 
-| Field | 96x72 default | 384x288 native 4x-linear |
-| --- | --- | --- |
-| Bundle | `coffee_martini_train17_holdout1.json` | `coffee_martini_train17_holdout1_384.json` |
-| Scene | Neural 3D Video Coffee Martini | same |
-| Raster | 96x72 | 384x288 |
-| Times | All 300 synchronized frames at 30 fps (10.0 s), 16 resident at once | same full-rate timeline |
-| Training cameras | 17 | 17 |
-| Heldout cameras | `cam06` only | `cam06` only |
-| Checked-in initialization | 4,096 train-visible external Ex4DGS XYZRGB points | same points |
-| Anchor coordinates | `cam04` OpenCV camera frame | same frame |
-| Pose convention | LLFF raw `[down, right, back]` to OpenCV `[right, down, forward]` (`v2`) | same convention |
+| Scene | Training cameras | Heldout | Initialization | Full-rate streams |
+| --- | ---: | --- | --- | ---: |
+| Coffee Martini | 17 | `cam06` | 4,096 train-visible external Ex4DGS points; provenance unverified | 18 |
+| Cook Spinach | `cam14`, `cam18` | `cam16` | 272 train-only known-pose SIFT/pycolmap points | 3 |
+| Cut Roasted Beef | `cam14`, `cam18` | `cam16` | 272 train-only known-pose SIFT/pycolmap points | 3 |
+
+All three captures expose all 300 synchronized frames at 30 fps (10.0 s), keep
+16 decoded frames resident per temporal page, use the corrected LLFF-to-OpenCV
+`v2` pose convention, and preserve their canonical anchor-relative world frame.
+The two-camera scenes are useful browser-system and heldout-view demos; they are
+not substitutes for Coffee Martini's much denser 17-camera training coverage.
 
 Coffee Martini really is a short capture: the source videos contain exactly
 300 frames at 30 fps, or 10.0 seconds. The old browser run used 16 samples
@@ -167,7 +169,7 @@ The SPA rejects that legacy identity, non-finite or non-rigid camera matrices,
 and a non-identity anchor transform before creating the trainer.
 
 JSON numbers become `Float32Array` camera, seed, and optimizer buffers. Target
-video is stored as 18 checked-in 384x288 H.264 streams and decoded into bounded
+video is stored as checked-in 384x288 H.264 streams and decoded into bounded
 RGBA8 page banks; the original 16-frame RGBA8 atlases remain the no-video
 fallback. Only the selected frame is decoded to `f32` on the GPU for raster
 loss. Browser
@@ -177,6 +179,32 @@ LLFF scene units, not documented meters. A running worker owns its loaded
 camera copy. Changing the resolution or pressing Reset reloads the SPA and
 constructs a fresh dataset and trainer, which is also required after replacing
 a bundle or pose convention on disk.
+
+### Hosting and loading
+
+The deployed JSON, PNG, MP4, JavaScript, and CSS files are ordinary Git blobs
+on the `gh-pages` branch. They are served directly by GitHub Pages; Git LFS is
+not involved. Selecting a dataset and resetting reloads only that scene's JSON
+bundle and 16-frame fallback atlases. The other scenes are not fetched. During
+full-rate training, the next 16-frame temporal page is decoded from only the
+selected scene's camera MP4s while the worker optimizer continues running.
+Progressive mode delays the 384x288 atlas prefetch until step 6,144, ahead of
+the step-8,192 transition; short 96x72 sessions therefore never fetch it.
+
+The header progress indicator reports transferred PNG atlas bytes when the
+server supplies `Content-Length`, and camera/frame decode progress for MP4
+pages. `HTMLVideoElement` controls media range requests and does not expose a
+reliable byte counter, so the UI deliberately does not invent one. `preload`
+may fetch more encoded video than the immediately requested frames, but decoded
+host memory remains bounded to the current and prefetched pages.
+
+The current training maximum is 384x288. The label says "4x linear" because it
+is four times 96x72 in each dimension, not 4K. A 3840x2880 RGBA32F target alone
+is 168.75 MiB and exceeds WebGPU's portable 128 MiB storage-binding floor;
+checkpoints and raster scratch add substantially more. The original Neural 3D
+Video frames are also 2704x2028, below 4K width. A true high-resolution mode
+needs texture-backed targets plus tiled/checkpoint paging and a measured memory
+budget, not a misleading selector option.
 
 The checked-in bundle predates the provenance report contract. Its external
 Ex4DGS cloud is filtered after loading to points visible from at least one

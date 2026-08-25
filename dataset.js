@@ -1,9 +1,20 @@
 const DEFAULT_VIDEO_URL =
 	"/data/multicam_val/clip_sets/multicam_val_v1_128_4fps_16f/previews/neural3d_coffee_martini_cam00_to_cam10.mp4";
-export const CALIBRATED_MULTICAM_PRESETS = Object.freeze({
-	"96x72": "./coffee_martini_train17_holdout1.json",
-	"384x288": "./coffee_martini_train17_holdout1_384.json",
+export const CALIBRATED_MULTICAM_DATASETS = Object.freeze({
+	coffee_martini: Object.freeze({
+		"96x72": "./coffee_martini_train17_holdout1.json",
+		"384x288": "./coffee_martini_train17_holdout1_384.json",
+	}),
+	cook_spinach: Object.freeze({
+		"96x72": "./cook_spinach_train2_holdout1.json",
+		"384x288": "./cook_spinach_train2_holdout1_384.json",
+	}),
+	cut_roasted_beef: Object.freeze({
+		"96x72": "./cut_roasted_beef_train2_holdout1.json",
+		"384x288": "./cut_roasted_beef_train2_holdout1_384.json",
+	}),
 });
+export const CALIBRATED_MULTICAM_PRESETS = CALIBRATED_MULTICAM_DATASETS.coffee_martini;
 export const CALIBRATED_MULTICAM_POSE_SOURCE = "neural_3d_llff_opencv_relative_pinhole_v2";
 
 export const FRAME_BANK_FORMAT_RGBA8 = "rgba8unorm-rgb+weight-u8x127/v1";
@@ -558,6 +569,7 @@ async function decodeVideoFramesInto({
 	frameTimesSeconds,
 	target,
 	targetOffset = 0,
+	onProgress = null,
 }) {
 	if (!(await canFetch(url))) {
 		throw new Error(`Dataset video unavailable: ${url}`);
@@ -584,6 +596,7 @@ async function decodeVideoFramesInto({
 		ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, width, height);
 		const image = ctx.getImageData(0, 0, width, height).data;
 		writeDecodedImage(targetBank, targetOffset + frame * width * height * 4, image);
+		onProgress?.(frame + 1, frameCount);
 	}
 	video.removeAttribute("src");
 	video.load();
@@ -626,6 +639,7 @@ function pageViewDatasets(dataset, frameData, backgrounds, frameBankFormat) {
 export async function loadTemporalPageDataset(baseDataset, page, {
 	computeSamples = false,
 	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
+	onProgress = null,
 } = {}) {
 	const stream = baseDataset?.temporalStream;
 	if (stream?.version !== "dynaworld_browser_temporal_stream/v1") {
@@ -651,6 +665,14 @@ export async function loadTemporalPageDataset(baseDataset, page, {
 			frameTimesSeconds: frameIndices.map((index) => start + index / baseDataset.nativeFps),
 			target: { format: frameBankFormat, data: frames },
 			targetOffset: view * valuesPerView,
+			onProgress: (completed, total) => onProgress?.({
+				phase: "decode",
+				completed,
+				total,
+				camera: view + 1,
+				cameraCount: baseDataset.cameras.length,
+				label: `Decoding page ${page.pageIndex + 1}: ${camera.name}`,
+			}),
 		});
 	}
 	const backgrounds = baseDataset.backgrounds;
@@ -680,6 +702,7 @@ export async function loadTemporalPageDataset(baseDataset, page, {
 		viewDatasets: undefined,
 		previewViews: undefined,
 	}, frames, backgrounds, frameBankFormat);
+	onProgress?.({ phase: "ready", completed: 1, total: 1, label: "Temporal page ready" });
 	return pageViewDatasets(dataset, frames, backgrounds, frameBankFormat);
 }
 
@@ -690,13 +713,31 @@ async function decodeFrameAtlasInto({
 	frameCount,
 	target,
 	targetOffset = 0,
+	onProgress = null,
 }) {
 	const targetBank = resolveFrameBank(target);
 	const response = await fetch(url);
 	if (!response.ok) {
 		throw new Error(`Frame atlas unavailable: ${url}`);
 	}
-	const bitmap = await createImageBitmap(await response.blob());
+	const totalBytes = Number(response.headers?.get?.("content-length")) || null;
+	let blob;
+	if (response.body && onProgress) {
+		const reader = response.body.getReader();
+		const chunks = [];
+		let loadedBytes = 0;
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			chunks.push(value);
+			loadedBytes += value.byteLength;
+			onProgress(loadedBytes, totalBytes);
+		}
+		blob = new Blob(chunks, { type: response.headers?.get?.("content-type") ?? "image/png" });
+	} else {
+		blob = await response.blob();
+	}
+	const bitmap = await createImageBitmap(blob);
 	if (bitmap.width !== width * frameCount || bitmap.height !== height) {
 		throw new Error(`Frame atlas ${url} has ${bitmap.width}x${bitmap.height}; expected ${width * frameCount}x${height}.`);
 	}
@@ -912,12 +953,15 @@ export async function loadCalibratedMulticamDataset({
 	computeSamples = true,
 	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
 	bundleUrl = CALIBRATED_MULTICAM_PRESETS["96x72"],
+	onProgress = null,
 } = {}) {
+	onProgress?.({ phase: "metadata", completed: 0, total: 1, label: "Loading dataset metadata" });
 	const response = await fetch(bundleUrl);
 	if (!response.ok) {
 		throw new Error(`Calibrated browser bundle unavailable: ${response.status}`);
 	}
 	const bundle = validateCalibratedMulticamBundle(await response.json());
+	onProgress?.({ phase: "metadata", completed: 1, total: 1, label: "Dataset metadata ready" });
 	const [width, height] = bundle.decode_size;
 	const frameCount = bundle.frame_count;
 	const nativeFrameCount = Number(bundle.temporal_stream?.frame_count
@@ -945,6 +989,16 @@ export async function loadCalibratedMulticamDataset({
 			frameTimesSeconds: bundle.frame_times_seconds,
 			target: { format: frameBankFormat, data: frames },
 			targetOffset: view * valuesPerView,
+			onProgress: (completed, total) => onProgress?.({
+				phase: camera.frame_atlas_url ? "download" : "decode",
+				completed,
+				total,
+				camera: view + 1,
+				cameraCount: bundle.cameras.length,
+				label: camera.frame_atlas_url
+					? `Downloading ${camera.name} atlas`
+					: `Decoding ${camera.name} frames`,
+			}),
 		});
 		backgrounds.set(
 			computeMeanBackground(
@@ -1019,21 +1073,28 @@ export async function loadCalibratedMulticamDataset({
 	const preferredTrainB = cameras.findIndex((camera) => camera.name === "cam09" && camera.role === "train");
 	const trainB = preferredTrainB >= 0 ? preferredTrainB : trainViewIndices.find((view) => view !== trainA) ?? trainA;
 	dataset.comparisonViewIndices = [trainA, trainB, heldoutViewIndex];
+	onProgress?.({ phase: "ready", completed: 1, total: 1, label: "Dataset ready" });
 	return pageViewDatasets(dataset, frames, backgrounds, frameBankFormat);
 }
 
 export async function loadPresetDataset({
 	allowLegacyFallback = false,
 	computeSamples = true,
+	datasetId = "coffee_martini",
 	preset = "96x72",
+	onProgress = null,
 	// Both GPU trainers decode compact targets at their binding boundary. Keep
 	// the much larger all-camera frame bank byte-packed on the host.
 	frameBankFormat = FRAME_BANK_FORMAT_RGBA8,
 } = {}) {
 	try {
-		const bundleUrl = CALIBRATED_MULTICAM_PRESETS[preset];
-		if (!bundleUrl) throw new RangeError(`Unknown calibrated browser preset: ${preset}.`);
-		return await loadCalibratedMulticamDataset({ computeSamples, frameBankFormat, bundleUrl });
+		const datasetPresets = CALIBRATED_MULTICAM_DATASETS[datasetId];
+		if (!datasetPresets) throw new RangeError(`Unknown calibrated browser dataset: ${datasetId}.`);
+		const bundleUrl = datasetPresets[preset];
+		if (!bundleUrl) throw new RangeError(`Unknown calibrated browser preset: ${datasetId}/${preset}.`);
+		return await loadCalibratedMulticamDataset({
+			computeSamples, frameBankFormat, bundleUrl, onProgress,
+		});
 	} catch (error) {
 		if (!allowLegacyFallback) {
 			throw error;
