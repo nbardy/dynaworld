@@ -33,7 +33,9 @@ once on its first visit. Subsequent loads use SharedArrayBuffer for the target
 bank and report `atomic SAB` in the runtime diagnostics. The `gh-pages` branch
 contains only this directory's static subtree. The checked-in workflow updates
 that legacy Pages branch using first-party checkout steps whenever the browser
-subtree changes.
+subtree changes. As of 2026-08-25, this repository's Actions service rejects
+jobs before creating any steps; deploys therefore use the same static-subtree
+commit path manually until that repository-level gate is lifted.
 
 Useful diagnostics:
 

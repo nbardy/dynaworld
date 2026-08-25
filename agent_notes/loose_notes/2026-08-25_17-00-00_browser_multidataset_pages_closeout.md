@@ -33,6 +33,10 @@ static-host behavior, and keep the Python paper-trainer hierarchy untouched.
   scene/split/cameras; Cut Roasted Beef also loaded directly at 384x288. The
   automation browser had no WebGPU adapter, so shader execution remained under
   the existing unit/headless gates rather than being claimed from that session.
+- Source commit `157e7c1` was pushed. Repository Actions rejected the deploy job
+  before creating steps, so the exact browser tree was published manually with
+  a force-with-lease as Pages commit `6f92743`; GitHub Pages reported `built`
+  and the public selector plus Cook Spinach bundle contract were fetched back.
 
 ## Dataset candidates
 
