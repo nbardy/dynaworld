@@ -11,9 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: github-pages
@@ -21,16 +19,27 @@ concurrency:
 
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - name: Check out source
+        uses: actions/checkout@v4
         with:
-          path: web/dynaworld_browser_trainer
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
+          path: source
+      - name: Check out Pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: publish
+      - name: Publish static browser subtree
+        run: |
+          rsync -a --delete --exclude .git/ source/web/dynaworld_browser_trainer/ publish/
+          cd publish
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Pages branch is already current."
+          else
+            git commit -m "Deploy browser trainer ${GITHUB_SHA::12}"
+            git push origin HEAD:gh-pages
+          fi

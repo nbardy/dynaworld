@@ -78,6 +78,25 @@ select {
 	white-space: nowrap;
 }
 
+.dataset-progress {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 5px;
+	color: var(--muted);
+	font-size: 0.7rem;
+}
+
+.dataset-progress[hidden] {
+	display: none;
+}
+
+.dataset-progress progress {
+	width: min(190px, 36vw);
+	height: 5px;
+	accent-color: var(--accent);
+}
+
 .diagnostic-nav {
 	display: flex;
 	gap: 14px;
