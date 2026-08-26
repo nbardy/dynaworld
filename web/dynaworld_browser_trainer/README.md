@@ -129,21 +129,24 @@ npm test
 
 ## Current Data Contract
 
-The selector exposes three canonical Neural 3D Video manifests. Every scene has
+The top-row scene selector exposes four canonical Neural 3D Video manifests. Every scene has
 both a 96x72 bundle and a 384x288 bundle; progressive mode starts at 96x72 and
 continues the same model and optimizer state at 384x288.
 
 | Scene | Training cameras | Heldout | Initialization | Full-rate streams |
 | --- | ---: | --- | --- | ---: |
 | Coffee Martini | 17 | `cam06` | 4,096 train-visible external Ex4DGS points; provenance unverified | 18 |
-| Cook Spinach | `cam14`, `cam18` | `cam16` | 272 train-only known-pose SIFT/pycolmap points | 3 |
-| Cut Roasted Beef | `cam14`, `cam18` | `cam16` | 272 train-only known-pose SIFT/pycolmap points | 3 |
+| Cook Spinach | 20 | `cam16` | 272 verified train-only points from the `cam14`/`cam18` seed subset | 21 |
+| Cut Roasted Beef | 19 | `cam16` | 272 verified train-only points from the `cam14`/`cam18` seed subset | 20 |
+| Flame Steak | 20 | `cam16` | 4,096-point subset of 6,487 dense-rig verified train-only points | 21 |
 
-All three captures expose all 300 synchronized frames at 30 fps (10.0 s), keep
+All four captures expose all 300 synchronized frames at 30 fps (10.0 s), keep
 16 decoded frames resident per temporal page, use the corrected LLFF-to-OpenCV
 `v2` pose convention, and preserve their canonical anchor-relative world frame.
-The two-camera scenes are useful browser-system and heldout-view demos; they are
-not substitutes for Coffee Martini's much denser 17-camera training coverage.
+The previous Cook and Cut browser packages used two train cameras only to bound
+the first static deployment. Their source captures were never two-camera rigs.
+One optimizer step still selects one camera/time pair; dense packages improve
+coverage without multiplying the raster work of an individual step.
 
 Coffee Martini really is a short capture: the source videos contain exactly
 300 frames at 30 fps, or 10.0 seconds. The old browser run used 16 samples
@@ -199,6 +202,18 @@ pages. `HTMLVideoElement` controls media range requests and does not expose a
 reliable byte counter, so the UI deliberately does not invent one. `preload`
 may fetch more encoded video than the immediately requested frames, but decoded
 host memory remains bounded to the current and prefetched pages.
+
+The checked-in 96x72 bundles for dense scenes are derived from their canonical
+384x288 bundles by `src/train/downsample_dynaworld_browser_bundle.py`. Frames
+are resized independently so filtering cannot cross atlas seams; normalized
+intrinsics, poses, split identities, full-rate streams, and seed provenance are
+copied unchanged.
+
+Candidate datasets with substantially faster motion, their licenses, and the
+canonical-adapter acceptance gates are ranked in
+`research_notes/browser_dynamic_multicam_dataset_shortlist.md`. PanopticSports
+is the next research adapter; it is not republished on the static site because
+its prepared-data and CMU licensing contract needs explicit handling.
 
 The current training maximum is 384x288. The label says "4x linear" because it
 is four times 96x72 in each dimension, not 4K. A 3840x2880 RGBA32F target alone

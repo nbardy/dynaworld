@@ -22,8 +22,9 @@ import {
 test("calibrated browser presets select native 1x and 4x-linear target bundles", () => {
 	assert.equal(CALIBRATED_MULTICAM_PRESETS["96x72"], "./coffee_martini_train17_holdout1.json");
 	assert.equal(CALIBRATED_MULTICAM_PRESETS["384x288"], "./coffee_martini_train17_holdout1_384.json");
-	assert.equal(CALIBRATED_MULTICAM_DATASETS.cook_spinach["96x72"], "./cook_spinach_train2_holdout1.json");
-	assert.equal(CALIBRATED_MULTICAM_DATASETS.cut_roasted_beef["384x288"], "./cut_roasted_beef_train2_holdout1_384.json");
+	assert.equal(CALIBRATED_MULTICAM_DATASETS.cook_spinach["96x72"], "./cook_spinach_train20_holdout1.json");
+	assert.equal(CALIBRATED_MULTICAM_DATASETS.cut_roasted_beef["384x288"], "./cut_roasted_beef_train19_holdout1_384.json");
+	assert.equal(CALIBRATED_MULTICAM_DATASETS.flame_steak["96x72"], "./flame_steak_train20_holdout1.json");
 });
 
 test("resident temporal pages retain native source times", () => {

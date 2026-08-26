@@ -2091,9 +2091,9 @@ export class DynamicSplatWebGpu3dTrainer {
 	dispose() {
 		if (this.buffers) for (const buffer of Object.values(this.buffers)) {
 			if (Array.isArray(buffer)) {
-				for (const item of buffer) item.destroy?.();
+				for (const item of buffer) item?.destroy?.();
 			} else {
-				buffer.destroy?.();
+				buffer?.destroy?.();
 			}
 		}
 		this.context?.unconfigure(); this.buffers = null;

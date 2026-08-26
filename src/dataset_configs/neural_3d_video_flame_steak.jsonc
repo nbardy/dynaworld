@@ -1,0 +1,18 @@
+{
+  // High-motion browser scene from the official Neural 3D Video release.
+  // Keeping this ingest separate avoids changing the conservative seed config.
+  "dataset_name": "neural_3d_video_flame_steak",
+  "root_dir": "data/external/neural_3d_video",
+  "github": {
+    "owner": "facebookresearch",
+    "repo": "Neural_3D_Video",
+    "tag": "v1.0"
+  },
+  "download": {
+    "asset_names": ["flame_steak.zip"],
+    "overwrite": false
+  },
+  "extract": {
+    "overwrite": false
+  }
+}
