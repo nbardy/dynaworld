@@ -6,12 +6,16 @@ export const CALIBRATED_MULTICAM_DATASETS = Object.freeze({
 		"384x288": "./coffee_martini_train17_holdout1_384.json",
 	}),
 	cook_spinach: Object.freeze({
-		"96x72": "./cook_spinach_train2_holdout1.json",
-		"384x288": "./cook_spinach_train2_holdout1_384.json",
+		"96x72": "./cook_spinach_train20_holdout1.json",
+		"384x288": "./cook_spinach_train20_holdout1_384.json",
 	}),
 	cut_roasted_beef: Object.freeze({
-		"96x72": "./cut_roasted_beef_train2_holdout1.json",
-		"384x288": "./cut_roasted_beef_train2_holdout1_384.json",
+		"96x72": "./cut_roasted_beef_train19_holdout1.json",
+		"384x288": "./cut_roasted_beef_train19_holdout1_384.json",
+	}),
+	flame_steak: Object.freeze({
+		"96x72": "./flame_steak_train20_holdout1.json",
+		"384x288": "./flame_steak_train20_holdout1_384.json",
 	}),
 });
 export const CALIBRATED_MULTICAM_PRESETS = CALIBRATED_MULTICAM_DATASETS.coffee_martini;

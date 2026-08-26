@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Dynaworld Browser Trainer</title>
-		<link rel="stylesheet" href="./styles.css?v=20260825-multidataset-1" />
+		<link rel="stylesheet" href="./styles.css?v=20260826-dense-scenes-1" />
 		<script type="module">
 			import { ensureStaticHostIsolation } from "./crossOriginIsolation.js";
 			ensureStaticHostIsolation().catch((error) => console.warn("Shared-memory bootstrap unavailable.", error));
@@ -22,6 +22,15 @@
 							<span id="datasetProgressLabel">Loading metadata</span>
 						</div>
 					</div>
+					<label class="scene-picker" for="datasetSelect">
+						<span>Scene</span>
+						<select id="datasetSelect">
+							<option value="coffee_martini" selected>Coffee Martini · 17 train / 1 heldout</option>
+							<option value="cook_spinach">Cook Spinach · 20 train / 1 heldout</option>
+							<option value="cut_roasted_beef">Cut Roasted Beef · 19 train / 1 heldout</option>
+							<option value="flame_steak">Flame Steak · 20 train / 1 heldout</option>
+						</select>
+					</label>
 					<nav class="diagnostic-nav" aria-label="Developer diagnostics">
 						<a href="./benchmarkTiledKernels.html">Kernel Lab</a>
 						<a href="./tiledParityHarness.html?backwardMode=staged-project3d&amp;backwardGranularity=checkpoint-block&amp;checkpointOrder=pixel-major&amp;projectionLayout=split-compact&amp;ssimLayout=separable&amp;tileSize=8">Parity Gate</a>
@@ -94,15 +103,6 @@
 				</div>
 
 				<section class="controls" aria-label="Training controls">
-					<label class="field">
-						<span>Dataset</span>
-						<select id="datasetSelect">
-							<option value="coffee_martini" selected>Coffee Martini · 17 train / 1 heldout</option>
-							<option value="cook_spinach">Cook Spinach · 2 train / 1 heldout</option>
-							<option value="cut_roasted_beef">Cut Roasted Beef · 2 train / 1 heldout</option>
-						</select>
-					</label>
-
 					<label class="field">
 						<span>Training Backend</span>
 						<select id="backendSelect">

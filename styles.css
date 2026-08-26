@@ -44,13 +44,37 @@ select {
 .brand {
 	order: 1;
 	display: grid;
-	grid-template-columns: minmax(260px, 1fr) auto auto;
+	grid-template-columns: minmax(260px, 1fr) minmax(250px, 330px) auto auto;
 	gap: 18px;
 	align-items: center;
 	min-width: 0;
 	padding: 12px max(16px, calc((100vw - 1440px) / 2));
 	border-bottom: 1px solid var(--line);
 	background: #151a20;
+}
+
+.scene-picker {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	gap: 8px;
+	align-items: center;
+	min-width: 0;
+}
+
+.scene-picker span {
+	color: var(--muted);
+	font-size: 0.76rem;
+}
+
+.scene-picker select {
+	width: 100%;
+	min-width: 0;
+	min-height: 36px;
+	padding: 0 30px 0 10px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background-color: var(--surface-2);
+	color: var(--text);
 }
 
 .brand-copy {
@@ -614,12 +638,16 @@ button:disabled {
 
 @media (max-width: 980px) {
 	.brand {
-		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-columns: minmax(220px, 1fr) auto auto;
 		gap: 10px 14px;
 	}
 
 	.brand-copy {
 		grid-column: 1 / -1;
+	}
+
+	.scene-picker {
+		min-width: 220px;
 	}
 }
 
@@ -631,7 +659,13 @@ button:disabled {
 
 @media (max-width: 640px) {
 	.brand {
+		grid-template-columns: minmax(0, 1fr) auto;
 		padding: 10px 8px;
+	}
+
+	.scene-picker {
+		grid-column: 1 / -1;
+		min-width: 0;
 	}
 
 	.brand h1 {

@@ -6,7 +6,7 @@ import {
 	TILED_BACKWARD_MODES,
 	TILED_PROJECTION_LAYOUTS,
 	TILED_SSIM_LAYOUTS,
-} from "./trainerWebGpu3dTiled.js?v=20260821-stablegs-ablation-1";
+} from "./trainerWebGpu3dTiled.js?v=20260826-dense-scenes-1";
 
 export function resolveFastTileCapacity(
 	initialSplats,

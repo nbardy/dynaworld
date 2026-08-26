@@ -9,7 +9,7 @@ import {
 	normalizeDatasetGeometry,
 	rgbaFloatFrameBytes,
 	resolveTrainViewIndices,
-} from "./trainerWebGpu3d.js?v=20260821-stablegs-ablation-1";
+} from "./trainerWebGpu3d.js?v=20260826-dense-scenes-1";
 import {
 	FRAME_BANK_FORMAT_RGBA8,
 	frameTime01,

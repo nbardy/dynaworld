@@ -2,8 +2,8 @@ import {
 	resolveActiveSplatCount,
 	resolveCamerasPerStep,
 	resolveRenderViewIndices,
-} from "./trainerWebGpu3d.js?v=20260803-fullfps-pixelgs-1";
-import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260821-stablegs-ablation-1";
+} from "./trainerWebGpu3d.js?v=20260826-dense-scenes-1";
+import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260826-dense-scenes-1";
 import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
 	WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
