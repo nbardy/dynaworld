@@ -25,6 +25,10 @@ test("calibrated browser presets select native 1x and 4x-linear target bundles",
 	assert.equal(CALIBRATED_MULTICAM_DATASETS.cook_spinach["96x72"], "./cook_spinach_train20_holdout1.json");
 	assert.equal(CALIBRATED_MULTICAM_DATASETS.cut_roasted_beef["384x288"], "./cut_roasted_beef_train19_holdout1_384.json");
 	assert.equal(CALIBRATED_MULTICAM_DATASETS.flame_steak["96x72"], "./flame_steak_train20_holdout1.json");
+	assert.equal(
+		CALIBRATED_MULTICAM_DATASETS.deep3d_mask_eval_jump["384x288"],
+		"./deep3d_mask_eval_jump_train9_holdout1_384.json",
+	);
 });
 
 test("resident temporal pages retain native source times", () => {
@@ -331,6 +335,24 @@ test("calibrated bundles reject the legacy LLFF camera-axis convention", () => {
 			{ name: "cam01", role: "heldout", intrinsics: [1, 1, 0.5, 0.5], world_to_camera: identity },
 		],
 	}), /expected neural_3d_llff_opencv_relative_pinhole_v2/);
+});
+
+test("Deep3D bundles retain their calibrated LLFF provenance", () => {
+	const identity = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+	assert.doesNotThrow(() => validateCalibratedMulticamBundle({
+		version: "dynaworld_browser_multicam_dataset/v1",
+		dataset: "deep3d_mask",
+		decode_size: [96, 72],
+		seed_coordinate_frame: "cam00_opencv",
+		dataset_contract: {
+			anchor_camera: "cam00",
+			pose_source: "deep3d_mask_llff_opencv_relative_pinhole_v2",
+		},
+		cameras: [
+			{ name: "cam00", role: "train", intrinsics: [1, 1, 0.5, 0.5], world_to_camera: identity },
+			{ name: "cam01", role: "heldout", intrinsics: [1, 1, 0.5, 0.5], world_to_camera: identity },
+		],
+	}));
 });
 
 test("calibrated atlases decode sequentially into compact or explicit FP32 final banks", {
