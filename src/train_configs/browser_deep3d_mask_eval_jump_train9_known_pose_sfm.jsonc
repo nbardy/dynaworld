@@ -1,0 +1,23 @@
+{
+  // The heldout center-right camera never contributes pixels or feature tracks.
+  "data": {
+    "video_path": null,
+    "frame_source": "multicam_val",
+    "max_frames": 1,
+    "multicam_manifest": "src/dataset_configs/deep3d_mask_eval_jump_train9_holdout1_60f_manifest.jsonl",
+    "multicam_split": "train9_holdout1",
+    "multicam_sample_id": "deep3d_mask_eval_jump_train9_holdout_cam05_60f",
+    "multicam_heldout_camera": "cam05",
+    "multicam_anchor_camera": "cam04",
+    "multicam_condition_camera": "cam04"
+  },
+  "camera": {
+    "lens_model": "pinhole",
+    "rig_init": "deep3d_mask"
+  },
+  "model": {
+    "xy_extent": 80.0,
+    "z_min": 20.0,
+    "z_max": 360.0
+  }
+}

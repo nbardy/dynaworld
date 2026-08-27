@@ -17,9 +17,17 @@ export const CALIBRATED_MULTICAM_DATASETS = Object.freeze({
 		"96x72": "./flame_steak_train20_holdout1.json",
 		"384x288": "./flame_steak_train20_holdout1_384.json",
 	}),
+	deep3d_mask_eval_jump: Object.freeze({
+		"96x72": "./deep3d_mask_eval_jump_train9_holdout1.json",
+		"384x288": "./deep3d_mask_eval_jump_train9_holdout1_384.json",
+	}),
 });
 export const CALIBRATED_MULTICAM_PRESETS = CALIBRATED_MULTICAM_DATASETS.coffee_martini;
 export const CALIBRATED_MULTICAM_POSE_SOURCE = "neural_3d_llff_opencv_relative_pinhole_v2";
+export const CALIBRATED_MULTICAM_POSE_SOURCES = Object.freeze({
+	neural_3d_video: CALIBRATED_MULTICAM_POSE_SOURCE,
+	deep3d_mask: "deep3d_mask_llff_opencv_relative_pinhole_v2",
+});
 
 export const FRAME_BANK_FORMAT_RGBA8 = "rgba8unorm-rgb+weight-u8x127/v1";
 export const FRAME_BANK_FORMAT_RGBA32_FLOAT = "rgba32float/v1";
@@ -897,9 +905,11 @@ export function validateCalibratedMulticamBundle(bundle) {
 		throw new Error(`Unsupported calibrated browser bundle: ${bundle?.version ?? "missing version"}`);
 	}
 	const contract = bundle.dataset_contract;
-	if (contract?.pose_source !== CALIBRATED_MULTICAM_POSE_SOURCE) {
+	const expectedPoseSource = CALIBRATED_MULTICAM_POSE_SOURCES[bundle.dataset]
+		?? CALIBRATED_MULTICAM_POSE_SOURCE;
+	if (contract?.pose_source !== expectedPoseSource) {
 		throw new Error(`Calibrated browser bundle pose source ${contract?.pose_source ?? "missing"}; `
-			+ `expected ${CALIBRATED_MULTICAM_POSE_SOURCE}. Refresh or rebuild the dataset bundle.`);
+			+ `expected ${expectedPoseSource}. Refresh or rebuild the dataset bundle.`);
 	}
 	if (!contract.anchor_camera || bundle.seed_coordinate_frame !== `${contract.anchor_camera}_opencv`) {
 		throw new Error("Calibrated browser seeds and anchor-relative cameras must share the declared OpenCV frame.");

@@ -63,7 +63,9 @@ Official source: https://neural-3d-video.github.io/
 - Integration cost: a canonical HDF5/video adapter, exact synchronized split
   definitions, and browser-oriented scene curation. Camera baselines target
   binocular extrapolation, so it complements rather than replaces dense rigs.
-- Decision: second practical adapter after PanopticSports.
+- Decision: the official 60-frame evaluation jump clip is now integrated as a
+  bounded 9-train/1-heldout browser scene. The full HDF5 corpus remains an
+  opt-in ingestion lane because individual compressed scenes are 6-10 GiB.
 
 Official source: https://cseweb.ucsd.edu/~viscomp/projects/ICCV21Deep/
 

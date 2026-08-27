@@ -2,7 +2,7 @@ import {
 	drawTargetFrame,
 	loadPresetDataset,
 	loadTemporalPageDataset,
-} from "./dataset.js?v=20260826-dense-scenes-1";
+} from "./dataset.js?v=20260828-deep3d-jump-2";
 import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260826-dense-scenes-1";
 import {
 	createOrbitCameraState,

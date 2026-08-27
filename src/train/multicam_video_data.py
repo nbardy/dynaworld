@@ -98,6 +98,7 @@ class MulticamVideoBundle:
 
 CAMXTIME_DATASETS = {"camxtime", "camxtime_full_grid", "camxtime_eval_gt"}
 DNERF_DATASETS = {"dnerf"}
+LLFF_VIDEO_DATASETS = {"neural_3d_video", "deep3d_mask"}
 CAMXTIME_TRAJECTORY_VIDEOS = {
     "moving_forward",
     "moving_backward",
@@ -904,7 +905,7 @@ def neural_3d_camera_from_poses_bounds(
     return K, c2w_t
 
 
-def neural_3d_video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
+def llff_video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
     if camera_name == str(record.get("source_camera")):
         return Path(record["source_video_path"])
     if camera_name == str(record.get("target_camera")):
@@ -912,16 +913,16 @@ def neural_3d_video_path_for_camera(record: dict[str, Any], camera_name: str) ->
     scene_dir = record.get("dataset_scene_dir")
     if not scene_dir:
         raise ValueError(
-            f"Cannot locate Neural 3D Video video for {camera_name!r} on record "
+            f"Cannot locate LLFF video for {camera_name!r} on record "
             f"{record.get('sample_id')!r}: missing dataset_scene_dir."
         )
     path = Path(scene_dir) / f"{camera_name}.mp4"
     if not path.exists():
-        raise FileNotFoundError(f"Neural 3D Video camera video not found: {path}")
+        raise FileNotFoundError(f"LLFF camera video not found: {path}")
     return path
 
 
-def make_neural_3d_multiview_cameras(
+def make_llff_video_multiview_cameras(
     record: dict[str, Any],
     *,
     train_cameras: list[str],
@@ -933,9 +934,9 @@ def make_neural_3d_multiview_cameras(
     device: torch.device,
     translation_scale: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
-    if record.get("dataset") != "neural_3d_video" or not record.get("dataset_scene_dir"):
+    if record.get("dataset") not in LLFF_VIDEO_DATASETS or not record.get("dataset_scene_dir"):
         raise ValueError(
-            "Configured multicam_train_cameras for a Neural 3D Video record require "
+            "Configured multicam_train_cameras for an LLFF video record require "
             "dataset_scene_dir; rebuild the manifest after extracting the scene zip."
         )
     _, anchor_c2w = neural_3d_camera_from_poses_bounds(
@@ -967,8 +968,18 @@ def make_neural_3d_multiview_cameras(
         torch.stack(train_w2c, dim=0),
         torch.stack(heldout_K, dim=0),
         torch.stack(heldout_w2c, dim=0),
-        "neural_3d_llff_opencv_relative_pinhole_v2",
+        (
+            "neural_3d_llff_opencv_relative_pinhole_v2"
+            if record["dataset"] == "neural_3d_video"
+            else "deep3d_mask_llff_opencv_relative_pinhole_v2"
+        ),
     )
+
+
+# Compatibility names retained for dataset tools and configs that predate the
+# second LLFF-video source. Both call the same canonical camera implementation.
+neural_3d_video_path_for_camera = llff_video_path_for_camera
+make_neural_3d_multiview_cameras = make_llff_video_multiview_cameras
 
 
 # ---------------------------------------------------------------------------
@@ -1243,7 +1254,7 @@ def camera_start_seconds(record: dict[str, Any], camera_name: str) -> float:
         return float(record.get("target_start_seconds", 0.0))
 
     dataset = str(record.get("dataset") or "")
-    if dataset in {"deepview_video", "aist_dance_db", "neural_3d_video"} | CAMXTIME_DATASETS:
+    if dataset in {"deepview_video", "aist_dance_db"} | LLFF_VIDEO_DATASETS | CAMXTIME_DATASETS:
         return float(record.get("source_start_seconds", record.get("target_start_seconds", 0.0)))
     if dataset == "vivo":
         raise ValueError(
@@ -1261,8 +1272,8 @@ def video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
         return deepview_video_path_for_camera(record, camera_name)
     elif dataset == "aist_dance_db":
         return aist_video_path_for_camera(record, camera_name)
-    elif dataset == "neural_3d_video":
-        return neural_3d_video_path_for_camera(record, camera_name)
+    elif dataset in LLFF_VIDEO_DATASETS:
+        return llff_video_path_for_camera(record, camera_name)
     elif dataset == "vivo":
         return vivo_video_path_for_camera(record, camera_name)
     elif dataset in CAMXTIME_DATASETS:
@@ -1273,7 +1284,7 @@ def video_path_for_camera(record: dict[str, Any], camera_name: str) -> Path:
         return Path(record["target_video_path"])
     else:
         raise ValueError(
-            f"Arbitrary train camera {camera_name!r} requires a DeepView, AIST, Neural 3D Video, ViVo, "
+            f"Arbitrary train camera {camera_name!r} requires a DeepView, AIST, LLFF video, ViVo, "
             f"or CamXTime record; "
             f"record dataset={dataset!r}."
         )
@@ -1758,6 +1769,27 @@ def load_multicam_video_bundle(
             record, anchor_camera, H=H, W=W, device=device, translation_scale=translation_scale
         )
         train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_neural_3d_multiview_cameras(
+            record,
+            train_cameras=train_cameras,
+            heldout_cameras=heldout_cameras,
+            anchor_camera=anchor_camera,
+            T=T,
+            H=H,
+            W=W,
+            device=device,
+            translation_scale=translation_scale,
+        )
+    elif rig_init == "deep3d_mask":
+        if record.get("dataset") != "deep3d_mask":
+            raise ValueError(
+                f"camera.rig_init=deep3d_mask requires a Deep 3D Mask record; "
+                f"got dataset={record.get('dataset')!r}."
+            )
+        translation_scale = float(camera_cfg.get("deep3d_translation_scale", 1.0))
+        _, anchor_c2w = neural_3d_camera_from_poses_bounds(
+            record, anchor_camera, H=H, W=W, device=device, translation_scale=translation_scale
+        )
+        train_K, train_w2c, heldout_K, heldout_w2c, pose_source = make_llff_video_multiview_cameras(
             record,
             train_cameras=train_cameras,
             heldout_cameras=heldout_cameras,

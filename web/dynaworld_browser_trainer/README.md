@@ -129,7 +129,7 @@ npm test
 
 ## Current Data Contract
 
-The top-row scene selector exposes four canonical Neural 3D Video manifests. Every scene has
+The top-row scene selector exposes five canonical multicamera manifests. Every scene has
 both a 96x72 bundle and a 384x288 bundle; progressive mode starts at 96x72 and
 continues the same model and optimizer state at 384x288.
 
@@ -139,14 +139,21 @@ continues the same model and optimizer state at 384x288.
 | Cook Spinach | 20 | `cam16` | 272 verified train-only points from the `cam14`/`cam18` seed subset | 21 |
 | Cut Roasted Beef | 19 | `cam16` | 272 verified train-only points from the `cam14`/`cam18` seed subset | 20 |
 | Flame Steak | 20 | `cam16` | 4,096-point subset of 6,487 dense-rig verified train-only points | 21 |
+| Deep3D Jump | 9 | `cam05` | 4,096-point subset of 5,517 verified train-only points | 10 |
 
-All four captures expose all 300 synchronized frames at 30 fps (10.0 s), keep
+The four Neural 3D Video captures expose all 300 synchronized frames at 30 fps (10.0 s), keep
 16 decoded frames resident per temporal page, use the corrected LLFF-to-OpenCV
 `v2` pose convention, and preserve their canonical anchor-relative world frame.
 The previous Cook and Cut browser packages used two train cameras only to bound
 the first static deployment. Their source captures were never two-camera rigs.
 One optimizer step still selects one camera/time pair; dense packages improve
 coverage without multiplying the raster work of an individual step.
+
+Deep3D Jump is the official Deep 3D Mask evaluation clip: a person jumps from
+a wall across ten synchronized 1080p cameras. It preserves all 60 native frames
+at 120 fps, keeps `cam05` validation-only, and uses the official LLFF calibration.
+The source archive is converted once by `src/dataset_pipeline/deep3d_mask.py`;
+the browser remains a thin consumer of the canonical manifest.
 
 Coffee Martini really is a short capture: the source videos contain exactly
 300 frames at 30 fps, or 10.0 seconds. The old browser run used 16 samples

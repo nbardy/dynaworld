@@ -291,11 +291,12 @@ def _load_browser_multicam_sparse_frames(
         "multicam_sample_id": sample_id,
     }
     record = select_multicam_record(data_cfg)
-    if str(record.get("dataset")) != "neural_3d_video":
+    if str(record.get("dataset")) not in {"neural_3d_video", "deep3d_mask"}:
         raise ValueError(
             "Sparse browser frame decode is currently verified only for synchronized "
-            "Neural 3D Video manifests."
+            "LLFF-video manifests."
         )
+    rig_init = "deep3d_mask" if record["dataset"] == "deep3d_mask" else "neural_3d_video"
     normalized_indices = [int(index) for index in frame_indices]
     if not normalized_indices:
         raise ValueError("Browser sparse frame decode requires at least one frame index.")
@@ -318,7 +319,7 @@ def _load_browser_multicam_sparse_frames(
                         "multicam_split": split,
                         "multicam_sample_id": sample_id,
                     },
-                    camera_cfg={"rig_init": "neural_3d_video"},
+                    camera_cfg={"rig_init": rig_init},
                     target_size=target_size,
                     device=torch.device("cpu"),
                 )
@@ -508,6 +509,14 @@ def export_browser_multicam_dataset_bundle(
             frame_indices=frame_indices,
         )
     else:
+        export_record = streaming_record or select_multicam_record(
+            {
+                "multicam_manifest": str(manifest_path),
+                "multicam_split": split,
+                "multicam_sample_id": sample_id,
+            }
+        )
+        rig_init = "deep3d_mask" if export_record.get("dataset") == "deep3d_mask" else "neural_3d_video"
         bundle = load_multicam_video_bundle(
             data_cfg={
                 "multicam_manifest": str(manifest_path),
@@ -515,7 +524,7 @@ def export_browser_multicam_dataset_bundle(
                 "multicam_sample_id": sample_id,
                 "frame_indices": frame_indices,
             },
-            camera_cfg={"rig_init": "neural_3d_video"},
+            camera_cfg={"rig_init": rig_init},
             target_size=target_size,
             device=torch.device("cpu"),
         )

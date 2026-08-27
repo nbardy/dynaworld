@@ -34,6 +34,12 @@ poses, and marks heldout cameras `validation_only`. The browser may optimize on
 serialized train views only; changing that split requires changing the
 canonical manifest/loader contract first.
 
+Deep 3D Mask evaluation clips use the same thin-browser rule. The preparation
+script converts the official synchronized per-frame JPEG layout into one MP4
+per camera while preserving the companion LLFF `poses_bounds.npy`. Records keep
+the distinct `deep3d_mask` dataset and pose-source identities; they share only
+the canonical LLFF-to-OpenCV camera implementation with Neural 3D Video.
+
 Neural 3D Video `poses_bounds.npy` rows use raw LLFF storage axes
 `[down, right, backwards]`. The canonical loader converts them to OpenCV
 `[right, down, forwards]` by reordering columns `[1, 0, 2]` and negating the
