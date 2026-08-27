@@ -58,8 +58,9 @@ marks the initialization `train_only_verified`.
 - Added the scene to the top-row selector.
 - Fixed a browser validator that incorrectly hard-coded Neural 3D's pose-source
   identity. Validation is now dataset-specific and still fails closed.
-- Payload added by the scene is about 25 MiB, dominated by the ten 384 atlases;
-  the complete 120 FPS MP4 stream is about 400 KiB.
+- The complete 120 FPS MP4 stream is about 400 KiB. The two atlas resolutions
+  remain PNG: a measured lossless-WebP trial was pixel-exact but larger overall
+  for the unusually wide 6,144x288 atlas layout.
 - Node browser tests: 196/196 pass after the provenance regression test.
 - Focused Python data/export tests: 20/20 pass.
 - Real Chromium verification: desktop and 390x844 mobile both load the scene,
@@ -73,3 +74,9 @@ runtime compatibility. It does not establish final reconstruction quality on
 Deep3D. The 0.5-second clip is excellent for fast dynamic stress testing but is
 not a substitute for a longer full-scene Deep3D training run; individual full
 compressed scenes are multi-gigabyte downloads and should remain opt-in.
+
+The first two Pages deployments timed out after ten minutes in GitHub's
+`updating_pages` phase. The browser directory had reached 244 MiB. The deploy
+cleanup removes 13 MiB of obsolete Cook/Cut two-camera packages that the
+selector no longer references; the canonical dense-camera bundles remain
+intact.
