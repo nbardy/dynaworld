@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+September 13 progress: temporal-slice bounds resolve the demonstrated excess
+tile candidates. A fresh 80-step, 2048-tube Metal run completes at 14.47/8.01
+dB train/heldout with zero overflow, under the same resource caps. STAR commit
+`ed6f393` also retains learned state before evaluation. Complete-reference RGB
+and gradient regressions pass, as do 81 sampled real-scene pixels (max error
+2.98e-7). Quality remains blurry; next isolate duration with retained training
+checkpoints. See `agent_notes/loose_notes/2026-09-13_00-17-20_world_tube_slice_bounds_and_complete_fits.md`.
+
 Later September 12 correction: the 2048-tube diagnostics below overflowed
 native tile lists, so their PSNRs describe truncated rendering. The 400-step
 control fell to 9.13/7.75 dB train/heldout with every evaluated tile overflowing.

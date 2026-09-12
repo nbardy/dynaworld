@@ -58,6 +58,20 @@
       "init_sampling": "random",
       "tile_capacity": 256,
       "tile_t": 1
+    },
+    {
+      "name": "random_2048_balanced_cap256_t1_checkpoint",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 256,
+      "tile_t": 1
+    },
+    {
+      "name": "random_2048_balanced_sliced_cap256_t1",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 256,
+      "tile_t": 1
     }
   ]
 }

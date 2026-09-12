@@ -1,5 +1,12 @@
 # DynaWorld TODO Index
 
+September 13: tighter temporal-slice bounds close the demonstrated 80-step
+overflow blocker. The corrected 2048-tube run reaches 14.47/8.01 dB with zero
+overflow, and pre-evaluation checkpoints survive evaluation failure. Next run
+the duration control with checkpoints retained during training. The prior
+truncated 400-step result does not answer convergence. Details are in the
+September 13 slice-bounds loose note; paper counts remain unchanged.
+
 Later September 12 correction: stop the 2048-tube duration/capacity sweep.
 The 80- and 400-step reports contain tile overflow; the guarded capacity-256
 retry also stops at evaluation. Next repair complete rendering and checkpoint

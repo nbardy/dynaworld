@@ -1,5 +1,16 @@
 # DynaWorld Experiment Registry
 
+2026-09-13 slice-bounds repair: STAR `ed6f393` uses time-local Gaussian boxes
+and retains learned worlds before evaluation. The unchanged saved 80-step
+checkpoint now evaluates at 14.512481/8.005188 dB train/heldout with zero
+overflow (offline `wkqf9tm6`). A fresh 80-step run reaches 14.466347/8.005325 dB,
+tile maxima 78/65/118, zero overflow, 1,416,806,400-byte peak tree/launcher RSS,
+and zero new swap (offline `pa4de6ce29d421`). Thirty focused checks pass;
+81 sampled actual scene pixels match uncapped compositing within 2.98e-7.
+See `agent_notes/loose_notes/2026-09-13_00-17-20_world_tube_slice_bounds_and_complete_fits.md`
+for configs, artifacts, numerical limits, and next work. These remain local
+diagnostics; BASELINES standings and paper acceptance counts do not change.
+
 2026-09-12 later correction: the 2048-tube rows below overflowed tile lists.
 The 400-step control completed at 9.131199/7.752918 dB train/heldout with all
 3072 evaluated tile instances per camera overflowing capacity 128 (offline
