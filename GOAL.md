@@ -1,4 +1,34 @@
-# GOAL — Evidence-First Overnight Paper Run
+# GOAL — Overnight World Tubes Iteration
+
+## Active continuation — 2026-09-12
+
+The user renewed the broad objective: iterate overnight, run experiments,
+read the math and code, commit useful changes, retain training notes, and
+improve from the evidence. The completed local playground below is history,
+not the success definition for this renewed campaign. No token budget was
+specified for the active goal; the historical token cap below is not its cap.
+
+The latest review recovered successful source-space STAR UVT fits and showed
+that the small shared-world multicamera run was a different experiment. The
+first next measurement is an unchanged scientific recipe from the successful
+128px source fit, with fresh output paths and offline W&B logging. Subsequent
+experiments should isolate demonstrated optimization, capacity, or projection
+issues in the current world-space route. Do not assume that more steps alone
+fix it, or discard the older positive evidence.
+
+One lead owns new run configs, narrowly necessary source fixes, commits, and
+shared status updates; no subagents. Accelerator jobs and native builds remain
+sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;
+stop the affected runtime lane on a guard trip. Each diagnostic has a declared
+finite update count and a 600-second wall timeout. Logging remains offline
+after the prior upload rejection. Do not weaken publication acceptance gates.
+
+Observable progress is retained optimizer-run evidence with images and metrics,
+an independently checked reproduced defect and fix, or manuscript improvements
+grounded in accepted evidence. Record negative results and source provenance.
+Keep practical diagnostic results separate from accepted paper counts. Commit
+only changes whose ownership and scope are established; preserve unrelated WIP.
+This campaign is not complete merely because the first control reproduces.
 
 ## Objective
 

@@ -1,5 +1,13 @@
 # DynaWorld TODO Index
 
+Overnight follow-up (2026-09-12): source-space fitting reproduces at 21.77 dB;
+the shared-world 80-step diagnostic reaches 13.92 dB train / 8.03 dB heldout
+with 2048 randomly initialized tubes and corrected coarse camera/time coverage.
+Next is a training-duration control at fixed capacity and initialization,
+before increasing breadth or treating remaining error as a renderer limit.
+The active renewed scope is in `GOAL.md`; retained measurements and caveats are
+in the September 12 initialization-fix loose note. Paper counts remain unchanged.
+
 This folder is the active backlog. Use this index to route work before opening
 individual TODO files. The execution handoff for the next quota run is
 [`../GOAL.md`](../GOAL.md) (thin pointer — read it first, then the plans below).

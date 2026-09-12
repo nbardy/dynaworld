@@ -1,5 +1,14 @@
 # DynaWorld Project Index
 
+Overfit follow-up (2026-09-12): the historical STAR UVT source recipe reproduces
+at 21.76853 dB. In controlled 80-step Coffee Martini diagnostics, random
+initialization, 2048-tube capacity, and balanced coarse camera/time coverage
+raise train/heldout PSNR from 6.49/6.50 to 13.92/8.03 dB. The prefix-coverage
+fix is STAR commit `7f2482c`; 27 focused tests and a real post-fix Metal run
+pass. These are one-seed diagnostics, not paper acceptance. Next: isolate
+training duration with this corrected initialization. See
+`agent_notes/loose_notes/2026-09-12_15-32-00_world_tube_overfit_controls_and_initialization_fix.md`.
+
 This is the first operational index after `AGENTS.md`. It is for a new agent
 that has no thread context and needs to know where the project state, active
 experiments, logs, TODOs, and code-organization rules live.

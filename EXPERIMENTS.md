@@ -1,5 +1,19 @@
 # DynaWorld Experiment Registry
 
+2026-09-12 overnight diagnostics: the historical 128px/16f/2048-tube STAR
+source fit reproduces at 21.768527 dB (offline `l61kgq5d`). Four matched
+80-step world-space controls isolate boundary-grid initialization, capacity,
+and camera/time ordering; train/heldout PSNR progresses from 6.49/6.50 to
+8.69/6.11, 13.06/7.87, then 13.92/8.03 dB. Exact target schedules, data,
+evaluator and native identity were checked. The last row validates STAR commit
+`7f2482c`, which balances progressive prefixes across camera/time groups;
+27 focused checks pass. All runs used the existing resource caps and offline
+W&B, with zero new swap. See
+`outputs/benchmarks/2026-09-12_world_tubes_sampling_ablation/comparison.json`
+and `agent_notes/loose_notes/2026-09-12_15-32-00_world_tube_overfit_controls_and_initialization_fix.md`.
+These remain diagnostic runs; accepted paper and BASELINES standings do not
+change. Next is a duration control with capacity and initialization fixed.
+
 This registry tracks active experiment lanes and the artifacts a new agent
 needs to resume or interpret them. It is not a replacement for `BASELINES.md`:
 benchmark claims still belong there.

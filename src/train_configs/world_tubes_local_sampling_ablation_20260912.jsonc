@@ -1,0 +1,34 @@
+// Sequential initialization and capacity diagnostics; pre-fix rows bind their retained source identities.
+{
+  "seed": 17,
+  "device": "mps",
+  "backward_policy": "fast_exploration",
+  "timeout_seconds": 600,
+  "logging": {
+    "wandb_enabled": true,
+    "wandb_mode": "offline"
+  },
+  "output_dir": "outputs/benchmarks/2026-09-12_world_tubes_sampling_ablation",
+  "variants": [
+    {
+      "name": "grid",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_playground.jsonc",
+      "init_sampling": "grid"
+    },
+    {
+      "name": "random",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_playground.jsonc",
+      "init_sampling": "random"
+    },
+    {
+      "name": "random_2048",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
+      "init_sampling": "random"
+    },
+    {
+      "name": "random_2048_balanced",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
+      "init_sampling": "random"
+    }
+  ]
+}

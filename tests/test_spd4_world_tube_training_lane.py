@@ -278,6 +278,7 @@ def _tiny_bundle() -> SimpleNamespace:
     )
     w2c = torch.eye(4, dtype=torch.float32).reshape(1, 1, 4, 4).repeat(1, 2, 1, 1)
     return SimpleNamespace(
+        deferred_target_frames=False,
         train_frames=frames,
         train_K=K,
         train_w2c=w2c,
