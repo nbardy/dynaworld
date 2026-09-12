@@ -131,6 +131,9 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Exact fallback host values (2026-09-13): 174 tests and all fitted-world
+  checks pass; F32 compilation falls 4.37 -> 3.02 s, full cost 13.83 -> 12.47 s.
+  [Exact metadata, paired CPU timing and Metal evidence](agent_notes/loose_notes/2026-09-13_06-53-00_exact_host_depth_values_and_fallback_cost.md).
 - [x] Visibility query reuse (2026-09-13): exact atlas bytes and all 174 tests
   pass; F32 compilation falls 8.19 -> 4.37 s and full cost 17.80 -> 13.83 s.
   [Paired CPU comparison, Metal sweep and limits](agent_notes/loose_notes/2026-09-13_06-39-00_visibility_query_reuse_and_f32_profile.md).

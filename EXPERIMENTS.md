@@ -1,5 +1,13 @@
 # DynaWorld Experiment Registry
 
+September 13 fallback host values: STAR `dc067d1` preserves exact metadata
+while reducing paired CPU fallback marking 1.60 -> 0.24 s. All 174 CPU/Metal
+tests and fitted-world rows pass with identical atlases. F32 compilation falls
+4.37 -> 3.02 s; full cost 13.83 -> 12.47 s. Peak RSS is 1.87 GiB with no new
+swap. Rendering is unchanged and sublinear scaling remains unproven. Next
+combine duplicate cell construction in frame slicing. See `agent_notes/loose_notes/2026-09-13_06-53-00_exact_host_depth_values_and_fallback_cost.md`.
+Public counts remain unchanged.
+
 September 13 visibility reuse: STAR `c97e0c2` memoizes exact root/depth
 queries within each compilation. Paired CPU visibility falls 4.98 -> 1.48 s
 with identical cells; 174 CPU/Metal tests and all fitted-world rows pass.
