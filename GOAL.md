@@ -138,6 +138,14 @@ backward is 3.16 -> 2.96 s and full cost 12.47 -> 12.17 s. Peak RSS is
 remains unproven. Next measure interval lookup to avoid full-cell scans per frame.
 See `agent_notes/loose_notes/2026-09-13_07-07-55_single_cell_construction_in_frame_slicing.md`. Public counts remain unchanged.
 
+September 13 overlap sweep: STAR `bb6c6f4` replaces full-cell scans per frame
+with transient ordered interval events. All 181 CPU/Metal tests, exact multi-
+chunk slices and four fitted-world rows pass. Paired CPU slicing falls 0.864 ->
+0.679 s including index setup; F32 evaluator+backward falls 2.96 -> 2.74 s,
+full cost 12.17 -> 12.07 s. Smaller-frame timings are mixed. Exact atlases,
+1.87-GiB RSS and zero new swap hold; no sublinear claim. Next refresh the bounded
+Python profile. See `agent_notes/loose_notes/2026-09-13_07-21-55_interval_sweep_for_frame_slicing.md`. Public counts stay unchanged.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

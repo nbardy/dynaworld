@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+September 13 overlap sweep: STAR `bb6c6f4` replaces full-cell scans per frame
+with transient ordered interval events. All 181 CPU/Metal tests, exact multi-
+chunk slices and four fitted-world rows pass. Paired CPU slicing falls 0.864 ->
+0.679 s including index setup; F32 evaluator+backward falls 2.96 -> 2.74 s,
+full cost 12.17 -> 12.07 s. Smaller-frame timings are mixed. Exact atlases,
+1.87-GiB RSS and zero new swap hold; no sublinear claim. Next refresh the bounded
+Python profile. See `agent_notes/loose_notes/2026-09-13_07-21-55_interval_sweep_for_frame_slicing.md`. Public counts stay unchanged.
+
 September 13 frame slicing: STAR `f3544aa` combines duplicate cell construction.
 All 174 CPU/Metal tests, 60 exact real chunks plus 12 other windows, and all four
 fitted-world rows pass. Paired CPU slicing falls 1.08 -> 0.85 s; F32 evaluator+

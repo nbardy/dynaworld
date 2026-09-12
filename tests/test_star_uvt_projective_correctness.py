@@ -69,6 +69,7 @@ from torch_gsplat_bridge_star_uvt import (  # noqa: E402
     render_uvt_tubes_gated,
     rebin_projective_trace_cell_atlas,
     slice_projective_trace_cell_atlas_frames,
+    iter_projective_trace_cell_atlas_frame_slices,
     split_projective_trace_cell_atlas_fallback_cells,
     split_projective_trace_windows,
     stratify_projective_trace_cell_atlas_visibility,
@@ -296,7 +297,8 @@ def _direct_continuous_cell_atlas(
     )
 
 
-def test_projective_cell_atlas_frame_slices_preserve_reference_forward_and_vjp() -> None:
+@pytest.mark.parametrize("chunk_frames", [1, 2, 3, 7])
+def test_projective_cell_atlas_frame_slices_preserve_reference_forward_and_vjp(chunk_frames: int) -> None:
     coeffs = torch.tensor(
         [
             [3.0, 0.1, 0.0, 3.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -361,17 +363,16 @@ def test_projective_cell_atlas_frame_slices_preserve_reference_forward_and_vjp()
         times,
         **render_args,
     )
+    slices = iter_projective_trace_cell_atlas_frame_slices(
+        atlas, frame_count=4, chunk_frames=chunk_frames,
+    )
     chunks = [
         render_projective_trace_cell_atlas_reference(
-            slice_projective_trace_cell_atlas_frames(
-                atlas,
-                start=start,
-                stop=stop,
-            ),
-            times[start:stop],
+            sliced,
+            times[start : min(start + chunk_frames, 4)],
             **render_args,
         )
-        for start, stop in ((0, 2), (2, 4))
+        for start, sliced in zip(range(0, 4, chunk_frames), slices, strict=True)
     ]
     concatenated = torch.cat(chunks, dim=0)
 
@@ -414,6 +415,47 @@ def test_projective_cell_atlas_frame_slices_preserve_reference_forward_and_vjp()
             rtol=1.0e-6,
             atol=1.0e-7,
         )
+
+
+@pytest.mark.parametrize("chunk_frames", [1, 2, 3, 12])
+def test_frame_slice_sweep_preserves_gaps_order_and_topology_snapshot(chunk_frames: int) -> None:
+    spans = [(3, 5), (0, 2), (1, 4), (5, 5), (7, 9), (-2, 1)]
+    atlas = ProjectiveTraceCellTraceAtlas(
+        coeffs=torch.arange(54, dtype=torch.float32).reshape(6, 9),
+        opacity=torch.arange(6, dtype=torch.float32),
+        color=torch.arange(18, dtype=torch.float32).reshape(6, 3),
+        cells=[
+            ProjectiveTraceTileTimeCell(
+                0, 0, start, stop, (i,), (i,), ((float(i), float(i)),),
+                bool(i % 2), ("test_fallback",) if i % 2 else (),
+            )
+            for i, (start, stop) in enumerate(spans)
+        ],
+        source_window_indices=tuple(range(6)),
+        source_primitive_ids=tuple(range(10, 16)),
+        active_start=tuple(start for start, _ in spans),
+        active_stop=tuple(stop for _, stop in spans),
+    )
+    snapshot = replace(atlas, cells=list(atlas.cells))
+    stream = iter_projective_trace_cell_atlas_frame_slices(
+        atlas, frame_count=10, chunk_frames=chunk_frames,
+    )
+    first = next(stream)
+    atlas.cells.reverse()
+    # An in-flight iterator keeps its topology; a new iterator sees the edit.
+    for source, slices in (
+        (snapshot, [first, *stream]),
+        (atlas, list(iter_projective_trace_cell_atlas_frame_slices(
+            atlas, frame_count=10, chunk_frames=chunk_frames,
+        ))),
+    ):
+        for start, sliced in zip(range(0, 10, chunk_frames), slices, strict=True):
+            expected = slice_projective_trace_cell_atlas_frames(
+                source, start=start, stop=min(10, start + chunk_frames),
+            )
+            assert sliced.cells == expected.cells
+            assert sliced.source_primitive_ids == expected.source_primitive_ids
+            assert torch.equal(sliced.coeffs, expected.coeffs)
 
 
 def test_projective_cell_atlas_frame_slice_can_be_temporally_empty() -> None:

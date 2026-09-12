@@ -131,6 +131,9 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Ordered interval sweep for frame slicing (2026-09-13): 181 tests and
+  all four Metal rows pass; F32 evaluator+backward 2.96 -> 2.74 s, mixed at small F.
+  [Setup-inclusive CPU timing, full results and limits](agent_notes/loose_notes/2026-09-13_07-21-55_interval_sweep_for_frame_slicing.md).
 - [x] Single cell construction in frame slicing (2026-09-13): exact slice fields,
   174 passing tests and four passing Metal rows; paired CPU slicing 1.08 -> 0.85 s.
   [Full timing, numerical parity and limits](agent_notes/loose_notes/2026-09-13_07-07-55_single_cell_construction_in_frame_slicing.md).
