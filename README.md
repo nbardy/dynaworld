@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Frozen F4 failure localized (2026-09-13): preserving centered depth in a
+  diagnostic passes image/world-gradient parity. Production integration and
+  excessive fallback remain open; this is not a compiler speed result.
+  [Counterexample and measurements](agent_notes/loose_notes/2026-09-13_01-04-42_frozen_compiler_depth_rounding_cause.md).
 - [x] Local World Tubes controls (2026-09-13): complete Metal rendering and
   training-camera-informed depth/footprint initialization reach 19.69 dB train
   / 14.96 dB heldout at 400 updates, with zero tile overflow and new swap.

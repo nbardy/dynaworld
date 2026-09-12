@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+September 13 frozen-compiler diagnosis: a float32 depth-order swap explains
+the saved F4 image/VJP failure. A centered-depth intervention reduces max
+RGB error to 6.85e-7 and global world-VJP error to 7.05e-7; all numerical
+parity checks pass. This is a diagnostic intervention, not a production
+fix or speed result. Fallback remains 38.9% versus the 20% budget. Preserve
+source depth/tie semantics in the actual compiler next; paper counts remain
+unchanged. See `agent_notes/loose_notes/2026-09-13_01-04-42_frozen_compiler_depth_rounding_cause.md`.
+
 Later September 13: training-camera-informed depth with matched initial screen
 footprint reaches 19.69/14.96 dB train/heldout at 400 updates, with zero overflow.
 The matched 80-step row is 14.40/14.41 dB; depth 9 without size correction is
