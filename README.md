@@ -131,6 +131,9 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Centered-depth compiler correction (2026-09-13): production F4 image/world-
+  gradient parity and non-unit F3 slicing pass, with retained depth bytes counted.
+  Fallback still exceeds budget; no scaling claim. [Results](agent_notes/loose_notes/2026-09-13_01-27-39_centered_depth_compiler_fix.md).
 - [x] Frozen F4 failure localized (2026-09-13): preserving centered depth in a
   diagnostic passes image/world-gradient parity. Production integration and
   excessive fallback remain open; this is not a compiler speed result.

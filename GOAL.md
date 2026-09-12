@@ -14,10 +14,11 @@ control reaches 19.69/14.96 dB train/heldout at 400 updates with zero overflow.
 Periodic learned-state checkpoints now preserve the trajectory. Keep these
 one-seed local runs as quality controls and resolve the independent frozen
 replay/compiled image/VJP/fallback mismatch before claiming sublinear scaling.
-The frozen F4 failure is now isolated to float32 depth-order rounding in
-fallback. A centered-depth diagnostic passes image/all-world-VJP thresholds;
-production integration and the unchanged 38.9% fallback rate remain open.
-See `agent_notes/loose_notes/2026-09-13_01-04-42_frozen_compiler_depth_rounding_cause.md`.
+The production centered-depth fix (STAR `048f797`) now passes F4 image/all-
+world-VJP checks and non-unit F3 slicing. Retained bytes and cached UVT updates
+include source depth. Next diagnose the remaining ~38% fallback distribution;
+its 20% budget and the scaling gate remain open.
+See `agent_notes/loose_notes/2026-09-13_01-27-39_centered_depth_compiler_fix.md`.
 Further quality work should isolate capacity, scene-unit conditioning, and
 projection/visibility approximations; do not discard successful source fits.
 

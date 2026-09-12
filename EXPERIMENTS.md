@@ -1,5 +1,13 @@
 # DynaWorld Experiment Registry
 
+September 13 production correction: STAR `048f797` retains centered UVT
+depth and stable source ids through compiled fallback. The unchanged F4
+world now passes image/all-world-VJP checks (~7e-7); a non-unit F3 slice
+also passes. Extra retained depth bytes are counted, and the cached trainer
+update preserves current depth. Fallback remains about 38%, above the 20%
+budget; no scaling or paper-acceptance claim follows. See
+`agent_notes/loose_notes/2026-09-13_01-27-39_centered_depth_compiler_fix.md`.
+
 September 13 frozen-compiler diagnosis: a float32 depth-order swap explains
 the saved F4 image/VJP failure. A centered-depth intervention reduces max
 RGB error to 6.85e-7 and global world-VJP error to 7.05e-7; all numerical
