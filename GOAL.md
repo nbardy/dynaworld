@@ -44,6 +44,14 @@ better-fitted 2048-tube world through the bounded four-time replay/compiled
 contract before a larger sweep, retaining every numerical and resource gate.
 Do not discard successful source fits. See `agent_notes/loose_notes/2026-09-13_03-12-15_world_tube_800step_same_trajectory_control.md`.
 
+September 13 fitted-world compiler check: per-trace axis support bounds
+(STAR `a316cc6`) remove false tile overflow, reducing the maximum from 938 to
+119 at unchanged capacity 256. RGB parity passes at 1.40e-6, but temporal-
+precision VJP error is 3.24e-5 against a 1e-5 gate. Identical backward passes
+also vary by up to 1.22e-5 on that parameter; the full check remains negative.
+Next isolate temporal-adjoint conditioning. No scaling/public count change.
+See `agent_notes/loose_notes/2026-09-13_03-41-15_compiled_support_bounds_and_temporal_gradient_noise.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

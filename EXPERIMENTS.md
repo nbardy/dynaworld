@@ -1,5 +1,13 @@
 # DynaWorld Experiment Registry
 
+September 13 fitted-world compiler check: per-trace axis support bounds
+(STAR `a316cc6`) remove false tile overflow, reducing the maximum from 938 to
+119 at unchanged capacity 256. RGB parity passes at 1.40e-6, but temporal-
+precision VJP error is 3.24e-5 against a 1e-5 gate. Identical backward passes
+also vary by up to 1.22e-5 on that parameter; the full check remains negative.
+Next isolate temporal-adjoint conditioning. No scaling/public count change.
+See `agent_notes/loose_notes/2026-09-13_03-41-15_compiled_support_bounds_and_temporal_gradient_noise.md`.
+
 September 13 convergence control: the 800-update, 2048-tube Metal fit reaches
 20.84/15.30 dB train/heldout with zero overflow and new swap. Evaluating its own
 step-400 checkpoint gives 19.67/14.93 dB, confirming improvement along the same

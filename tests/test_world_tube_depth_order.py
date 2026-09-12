@@ -22,6 +22,46 @@ from torch_gsplat_bridge_star_uvt.projective_trace import (
 
 
 @pytest.mark.parametrize('device', ['cpu', pytest.param('mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required'))])
+def test_mixed_size_tubes_preserve_images_and_gradients_without_false_tile_overflow(device):
+    # One broad tube must not give forty small tubes its support footprint.
+    # An inactive first row also exercises source-row mapping after filtering.
+    centers = [[4.+8*x,4.+8*y,0.] for y in range(5) for x in range(8)]
+    ma = torch.tensor([[32.,20.,0.],*centers,[32.,20.,0.]],device=device)
+    count = len(ma)
+    precision = torch.tensor([[.8,.1,4.]]*count,device=device)
+    precision[[0,-1]] = torch.tensor([.004,0.,.03],device=device)
+    velocity = torch.stack((torch.arange(count,device=device)%2*1.8-.9,torch.full((count,),.1,device=device)),dim=1)
+    cross = -torch.stack((precision[:,0]*velocity[:,0]+precision[:,1]*velocity[:,1],precision[:,1]*velocity[:,0]+precision[:,2]*velocity[:,1]),dim=1)
+    q = torch.stack((precision[:,0],precision[:,1],cross[:,0],precision[:,2],cross[:,1],.025-(cross*velocity).sum(1)),dim=1)
+    opacity = torch.full((count,),.45,device=device)
+    opacity[0] = .001
+    inputs = dict(ma=ma.requires_grad_(),q_uvt=q.requires_grad_(),depth0=1+torch.arange(count,device=device)*.1,depth_beta=torch.zeros((count,3),device=device),opacity=opacity.requires_grad_(),color=torch.linspace(.1,.9,count*3,device=device).reshape(count,3).requires_grad_())
+    frames = [0,3,5,6]
+    times = torch.tensor(frames,device=device,dtype=torch.float32)-3
+    config = UVTRenderConfig(height=40,width=64,frames=7,transmittance_threshold=0.)
+    atlas = uvt_tubes_to_projective_trace_cell_atlas(**inputs,times=times,sigma_px=1.,image_width=config.width,image_height=config.height,tile_size=config.tile_x,alpha_threshold=config.alpha_threshold,require_isotropic_spatial=False,auto_support_padding_from_alpha=True,allow_depth_affine_uv=True,mark_visibility_fallback=True)
+    assert 0 not in atlas.source_primitive_ids
+    bins = pack_projective_trace_tile_time_bins(atlas.cells,image_width=config.width,image_height=config.height,frames=len(times),tile_x=config.tile_x,tile_y=config.tile_y,tile_t=len(times),tile_capacity=32,allow_fallback_cells=True)
+    assert not bins.tile_overflow.any(), 'a distant broad tube inflated unrelated tile lists'
+    from star_uvt_feature_tube_model import FeatureTubeRenderConfig, dense_render_feature_tubes
+    expected, _alpha = dense_render_feature_tubes(**{('feature' if k=='color' else k):v for k,v in inputs.items()},config=FeatureTubeRenderConfig(frames=config.frames,height=config.height,width=config.width,feature_dim=3,alpha_threshold=config.alpha_threshold,max_alpha=1.))
+    expected = expected.permute(0,2,3,1)[frames]
+    if device == 'mps':
+        from research_project.trainer_harness.tile_metal_autograd import ProjectiveCellIntervalTrainerState
+        state = ProjectiveCellIntervalTrainerState(atlas=atlas,times=times,config=replace(config,frames=len(times)),sigma_px=1.,image_width=config.width,image_height=config.height,tile_size=config.tile_x,fallback_render_mode='mixed')
+        actual = state.render()
+    else:
+        actual = render_projective_trace_cell_atlas_reference(atlas,times,image_width=config.width,image_height=config.height,tile_size=config.tile_x,sigma_px=1.,alpha_cutoff=config.alpha_threshold,transmittance_cutoff=0.,allow_fallback_cells=True)
+    torch.testing.assert_close(actual,expected,rtol=2e-5,atol=2e-6)
+    cotangent = torch.linspace(-.8,1.2,actual.numel(),device=device).reshape_as(actual)/actual.numel()
+    parameters = tuple(inputs[k] for k in ['ma','q_uvt','opacity','color'])
+    expected_grads = torch.autograd.grad((expected*cotangent).sum(),parameters,retain_graph=True)
+    actual_grads = torch.autograd.grad((actual*cotangent).sum(),parameters)
+    for actual_grad,expected_grad in zip(actual_grads,expected_grads):
+        torch.testing.assert_close(actual_grad,expected_grad,rtol=2e-5,atol=2e-6)
+
+
+@pytest.mark.parametrize('device', ['cpu', pytest.param('mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required'))])
 @pytest.mark.parametrize('case', ['temporal_anisotropic','opaque','tile_stop','partial_stop'])
 def test_batched_fallback_matches_scalar_compositing_and_gradients(device,case):
     count = 5

@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Fitted-world support repair (2026-09-13): individual Gaussian bounds
+  remove compiled tile overflow (maximum 938 -> 119). Images match replay;
+  temporal-gradient acceptance remains negative, including repeatability.
+  [Measured defect, fix, and remaining numerical issue](agent_notes/loose_notes/2026-09-13_03-41-15_compiled_support_bounds_and_temporal_gradient_noise.md).
 - [x] Same-trajectory convergence control (2026-09-13): 400 -> 800 updates
   improves train/heldout PSNR 19.67/14.93 -> 20.84/15.30 dB with zero overflow.
   Images remain blurry; this is one local quality control.
