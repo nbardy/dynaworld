@@ -131,6 +131,9 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Visibility query reuse (2026-09-13): exact atlas bytes and all 174 tests
+  pass; F32 compilation falls 8.19 -> 4.37 s and full cost 17.80 -> 13.83 s.
+  [Paired CPU comparison, Metal sweep and limits](agent_notes/loose_notes/2026-09-13_06-39-00_visibility_query_reuse_and_f32_profile.md).
 - [x] Retained backward inputs (2026-09-13): the reproduced mutable-topology
   gradient defect is fixed; 173 tests and all fitted-world rows pass. F32
   evaluator+backward falls 4.05 -> 3.22 s; full cost 18.47 -> 17.80 s.

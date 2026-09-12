@@ -1,5 +1,13 @@
 # DynaWorld TODO Index
 
+September 13 visibility reuse: STAR `c97e0c2` memoizes exact root/depth
+queries within each compilation. Paired CPU visibility falls 4.98 -> 1.48 s
+with identical cells; 174 CPU/Metal tests and all fitted-world rows pass.
+F32 compilation falls 8.19 -> 4.37 s and full cost 17.80 -> 13.83 s, with
+exact atlas bytes, 1.93-GiB peak RSS and no new swap. Rendering is nearly
+unchanged; no sublinear claim follows. Next address measured scalar depth
+reads in fallback marking. See `agent_notes/loose_notes/2026-09-13_06-39-00_visibility_query_reuse_and_f32_profile.md`. Public counts remain unchanged.
+
 September 13 retained backward inputs: STAR `1aedaf4` fixes a reproduced
 multi-forward topology/gradient defect and removes duplicate backward packing.
 All 173 CPU/Metal tests and fitted-world F4/8/16/32 numerical checks pass, with

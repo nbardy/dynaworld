@@ -227,6 +227,34 @@ def test_projective_cell_visibility_event_stratifier_isolates_exact_root_sample(
     assert stats.fallback_tile_samples == 1
 
 
+def test_visibility_preserves_distinct_roots_and_depth_ranges_across_tile_spans() -> None:
+    # The same pair crosses at -1 and +1, in different spatial tile windows.
+    # Repeated queries must not reuse a result from a different time span.
+    times = torch.arange(-2., 3.)
+    atlas = _cell_atlas_from_depth_coeffs(
+        torch.tensor([[-1., 0., 1.], [0., 0., 0.]]), frame_count=5,
+    )
+    atlas = replace(atlas, cells=[
+        replace(atlas.cells[0], tile_u=0, start=0, stop=3),
+        replace(atlas.cells[0], tile_u=1, start=2, stop=5),
+        replace(atlas.cells[0], tile_u=2, start=0, stop=5),
+    ])
+    for offset in [0., .5]:
+        changed = replace(atlas, coeffs=atlas.coeffs.clone())
+        changed.coeffs[0, 6] += offset
+        together = stratify_projective_trace_cell_atlas_visibility_events(changed, times)
+        separate = [
+            child
+            for cell in changed.cells
+            for child in stratify_projective_trace_cell_atlas_visibility_events(
+                replace(changed, cells=[cell]), times,
+            ).cells
+        ]
+        assert together.cells == sorted(separate, key=lambda cell: (cell.start, cell.stop, cell.tile_v, cell.tile_u))
+        report = projective_trace_cell_atlas_visibility_report(together, times)
+        assert report.order_mismatch_samples == 0
+
+
 def test_visibility_root_filter_keeps_single_sample_contributors_and_ties() -> None:
     times = torch.tensor([-2., 0., 3., 5.])
     atlas = _cell_atlas_from_depth_coeffs(
