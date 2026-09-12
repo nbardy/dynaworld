@@ -31,6 +31,11 @@ Cold execution remains costly; warm replay is ~0.057 s. Next inspect
 operation-level backward/gather costs and remaining compilation overhead,
 preserving centered source depth, source-id ties and all contributors.
 Full scaling/public evidence remain open. See `agent_notes/loose_notes/2026-09-13_02-46-35_batched_fallback_compositing.md`.
+The subsequent full-world Kineto/record_shapes profile exceeded the unchanged
+3-GiB process-tree cap and was terminated. Its profiling lane is stopped;
+no operator attribution was obtained. Keep the passing ordinary benchmark
+as the current evidence and do not automatically retry this profiling mode.
+See `agent_notes/loose_notes/2026-09-13_02-51-34_full_world_profiler_resource_stop.md`.
 Further quality work should isolate capacity, scene-unit conditioning, and
 projection/visibility approximations; do not discard successful source fits.
 

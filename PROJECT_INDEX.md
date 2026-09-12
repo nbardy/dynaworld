@@ -1,5 +1,10 @@
 # DynaWorld Project Index
 
+September 13 profiling stop: the full-world Kineto run with shape recording
+exceeded the unchanged 3-GiB process-tree RSS cap and was terminated. No
+operator ranking was produced; this profiling lane is stopped. The ordinary
+batched-fallback timings below remain valid local evidence. See `agent_notes/loose_notes/2026-09-13_02-51-34_full_world_profiler_resource_stop.md`.
+
 September 13 batched fallback: STAR `68fa855` removes repeated scalar MPS
 readbacks and batches each fallback tile's ordered compositing. Same-world
 warm forward/backward falls 3.97 -> 1.02 s; compilation-inclusive cost falls
