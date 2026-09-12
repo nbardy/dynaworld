@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] In-trial forward breakdown (2026-09-13): F32 CPU decoding costs ~6.25 s,
+  but compiled evaluator+backward remains 7.02 s versus replay 0.545 s.
+  All four correctness rows and exact atlas checks pass; no sublinear claim.
+  [Measured phases and CPU packing diagnosis](agent_notes/loose_notes/2026-09-13_05-32-47_frozen_forward_breakdown_and_packing_cost.md).
 - [x] Source alpha-cutoff repair (2026-09-13): the same fitted-world F4/8/16/32
   sweep now passes all image/gradient checks. F32 max RGB error falls 6.17e-4
   -> 8.64e-7; reference storage adds 36 bytes/trace. Speed remains negative.

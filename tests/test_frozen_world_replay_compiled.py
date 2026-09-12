@@ -1554,3 +1554,52 @@ def test_frozen_world_report_validator_checks_identity_and_checkpoint(
             seed=17,
             max_frames=4,
         )
+
+
+def _timing_with_forward_breakdown():
+    timing = _timing_benchmark(4, warmups=1, repeats=3)
+    samples = {route: {phase: [value * weight for value in timing['samples_s'][route + '_total_forward']]
+                       for phase, weight in [('evaluator_forward', .6), ('target_cpu_load', .2), ('target_transfer', .1), ('loss', .1)]}
+               for route in ['replay', 'compiled']}
+    timing['forward_breakdown'] = {
+        'schema_version': 1,
+        'measurement_source': 'same_trial_nonoverlapping_device_synchronized_intervals',
+        'synchronization_overhead_included': True,
+        'same_forward_total': True,
+        'evaluator_forward_definition': 'replay projection/render; compiled slice/state setup plus render; excludes target load/transfer and loss',
+        'samples_s': samples,
+        'summary_s': {route: {phase: timing_summary(values) for phase, values in phases.items()} for route, phases in samples.items()},
+    }
+    return timing
+
+
+def test_forward_breakdown_accepts_complete_same_trial_partition():
+    from research_experiments.paper_runner_suite.run_frozen_world_replay_compiled import validate_timing_benchmark
+    validate_timing_benchmark(_timing_with_forward_breakdown(), frame_count=4, resident_chunk_frames=2, legacy_timing={}, expected_warmups=1, expected_repeats=3)
+
+
+@pytest.mark.parametrize('corruption', ['missing_phase', 'missing_trial', 'nan', 'negative', 'wrong_summary', 'wrong_total', 'other_process'])
+def test_forward_breakdown_rejects_incomplete_or_misattributed_cost(corruption):
+    # A report must not label partial, cross-process or non-reconciling costs
+    # as the renderer share of its end-to-end forward measurement.
+    from research_experiments.paper_runner_suite.run_frozen_world_replay_compiled import validate_timing_benchmark
+    timing = _timing_with_forward_breakdown()
+    breakdown = timing['forward_breakdown']
+    values = breakdown['samples_s']['compiled']['target_cpu_load']
+    if corruption == 'missing_phase':
+        del breakdown['samples_s']['compiled']['target_cpu_load']
+    elif corruption == 'missing_trial':
+        values.pop()
+    elif corruption == 'nan':
+        values[0] = float('nan')
+    elif corruption == 'negative':
+        values[0] = -1.
+    elif corruption == 'wrong_summary':
+        breakdown['summary_s']['compiled']['target_cpu_load']['median'] += .1
+    elif corruption == 'wrong_total':
+        values[0] += .1
+        breakdown['summary_s']['compiled']['target_cpu_load'] = timing_summary(values)
+    else:
+        breakdown['measurement_source'] = 'separate_process_decode_probe'
+    with pytest.raises(ValueError, match='forward breakdown'):
+        validate_timing_benchmark(timing, frame_count=4, resident_chunk_frames=2, legacy_timing={}, expected_warmups=1, expected_repeats=3)

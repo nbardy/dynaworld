@@ -87,6 +87,15 @@ The 159-test Metal/CPU gate and resource guards pass. Runtime remains slower
 than replay; next separate target loading in the forward measurements. Local
 accepted rows rise 3/4 -> 4/4; public counts remain unchanged. See `agent_notes/loose_notes/2026-09-13_05-19-02_source_alpha_cutoff_repair.md`.
 
+September 13 measured forward breakdown: STAR `91ee6b0` partitions each
+paired trial into evaluator, CPU target load, transfer and loss; existing
+validators check that phases sum to the same forward total. All F4/8/16/32
+image/gradient gates and exact atlas bytes pass. F32 decoding costs ~6.25 s,
+but compiled evaluator+backward still costs 7.02 s versus replay 0.545 s and
+grows 12.64x for 8x frames. CPU packing alone takes ~32 ms on the first frame.
+Next batch its scalar buffer writes, preserving exact buffers and gradients.
+Public counts stay unchanged. See `agent_notes/loose_notes/2026-09-13_05-32-47_frozen_forward_breakdown_and_packing_cost.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

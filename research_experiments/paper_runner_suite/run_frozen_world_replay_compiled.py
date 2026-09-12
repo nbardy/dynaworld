@@ -479,6 +479,48 @@ def validate_timing_benchmark(
                 )
 
 
+    if "forward_breakdown" in timing:
+        _validate_forward_breakdown(timing, repeats=expected_repeats)
+
+
+def _validate_forward_breakdown(timing: Mapping[str, Any], *, repeats: int) -> None:
+    breakdown = timing["forward_breakdown"]
+    if (
+        not isinstance(breakdown, Mapping)
+        or breakdown.get("schema_version") != 1
+        or breakdown.get("measurement_source") != "same_trial_nonoverlapping_device_synchronized_intervals"
+        or breakdown.get("synchronization_overhead_included") is not True
+        or breakdown.get("same_forward_total") is not True
+        or breakdown.get("evaluator_forward_definition") != "replay projection/render; compiled slice/state setup plus render; excludes target load/transfer and loss"
+        or timing["measurement_source"] != "independent_alternating_paired_trials"
+    ):
+        raise ValueError("frozen-world forward breakdown contract drifted")
+    samples, summaries = breakdown.get("samples_s"), breakdown.get("summary_s")
+    routes = {"replay", "compiled"}
+    phases = {"evaluator_forward", "target_cpu_load", "target_transfer", "loss"}
+    if not isinstance(samples, Mapping) or not isinstance(summaries, Mapping) or set(samples) != routes or set(summaries) != routes:
+        raise ValueError("frozen-world forward breakdown routes are incomplete")
+    for route in routes:
+        if not isinstance(samples[route], Mapping) or not isinstance(summaries[route], Mapping) or set(samples[route]) != phases or set(summaries[route]) != phases:
+            raise ValueError("frozen-world forward breakdown phases are incomplete")
+        for phase in phases:
+            values = samples[route][phase]
+            if not isinstance(values, list) or len(values) != repeats or any(not _finite_nonnegative(v) for v in values):
+                raise ValueError("frozen-world forward breakdown samples are invalid")
+            expected = timing_summary(values)
+            summary = summaries[route][phase]
+            if not isinstance(summary, Mapping) or set(summary) != set(expected):
+                raise ValueError("frozen-world forward breakdown summary is incomplete")
+            for key, value in expected.items():
+                actual = summary[key]
+                if not _finite_nonnegative(actual) or not math.isclose(actual, value, rel_tol=1e-12, abs_tol=1e-12):
+                    raise ValueError("frozen-world forward breakdown summary is inconsistent")
+        for index in range(repeats):
+            total = sum(samples[route][phase][index] for phase in phases)
+            if not math.isclose(total, timing["samples_s"][route + "_total_forward"][index], rel_tol=1e-12, abs_tol=1e-12):
+                raise ValueError("frozen-world forward breakdown does not sum to its same-trial forward total")
+
+
 def _nonnegative_integer(value: Any) -> bool:
     return (
         not isinstance(value, bool)

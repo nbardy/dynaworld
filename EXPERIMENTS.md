@@ -1,5 +1,14 @@
 # DynaWorld Experiment Registry
 
+September 13 measured forward breakdown: STAR `91ee6b0` partitions each
+paired trial into evaluator, CPU target load, transfer and loss; existing
+validators check that phases sum to the same forward total. All F4/8/16/32
+image/gradient gates and exact atlas bytes pass. F32 decoding costs ~6.25 s,
+but compiled evaluator+backward still costs 7.02 s versus replay 0.545 s and
+grows 12.64x for 8x frames. CPU packing alone takes ~32 ms on the first frame.
+Next batch its scalar buffer writes, preserving exact buffers and gradients.
+Public counts stay unchanged. See `agent_notes/loose_notes/2026-09-13_05-32-47_frozen_forward_breakdown_and_packing_cost.md`.
+
 September 13 alpha-cutoff repair: STAR `01bd9e0` preserves source cutoff
 membership while differentiating compiled values. The identical fitted-world
 F4/8/16/32 sweep now passes all four rows; F32 max RGB error falls 6.17e-4 ->
