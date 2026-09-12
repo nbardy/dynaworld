@@ -131,6 +131,9 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Single cell construction in frame slicing (2026-09-13): exact slice fields,
+  174 passing tests and four passing Metal rows; paired CPU slicing 1.08 -> 0.85 s.
+  [Full timing, numerical parity and limits](agent_notes/loose_notes/2026-09-13_07-07-55_single_cell_construction_in_frame_slicing.md).
 - [x] Exact fallback host values (2026-09-13): 174 tests and all fitted-world
   checks pass; F32 compilation falls 4.37 -> 3.02 s, full cost 13.83 -> 12.47 s.
   [Exact metadata, paired CPU timing and Metal evidence](agent_notes/loose_notes/2026-09-13_06-53-00_exact_host_depth_values_and_fallback_cost.md).

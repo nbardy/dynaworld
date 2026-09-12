@@ -1,5 +1,13 @@
 # DynaWorld TODO Index
 
+September 13 frame slicing: STAR `f3544aa` combines duplicate cell construction.
+All 174 CPU/Metal tests, 60 exact real chunks plus 12 other windows, and all four
+fitted-world rows pass. Paired CPU slicing falls 1.08 -> 0.85 s; F32 evaluator+
+backward is 3.16 -> 2.96 s and full cost 12.47 -> 12.17 s. Peak RSS is
+1.91 GiB with no new swap. Exact atlas bytes hold; sublinear total scaling
+remains unproven. Next measure interval lookup to avoid full-cell scans per frame.
+See `agent_notes/loose_notes/2026-09-13_07-07-55_single_cell_construction_in_frame_slicing.md`. Public counts remain unchanged.
+
 September 13 fallback host values: STAR `dc067d1` preserves exact metadata
 while reducing paired CPU fallback marking 1.60 -> 0.24 s. All 174 CPU/Metal
 tests and fitted-world rows pass with identical atlases. F32 compilation falls

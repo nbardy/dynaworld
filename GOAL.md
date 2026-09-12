@@ -130,6 +130,14 @@ swap. Rendering is unchanged and sublinear scaling remains unproven. Next
 combine duplicate cell construction in frame slicing. See `agent_notes/loose_notes/2026-09-13_06-53-00_exact_host_depth_values_and_fallback_cost.md`.
 Public counts remain unchanged.
 
+September 13 frame slicing: STAR `f3544aa` combines duplicate cell construction.
+All 174 CPU/Metal tests, 60 exact real chunks plus 12 other windows, and all four
+fitted-world rows pass. Paired CPU slicing falls 1.08 -> 0.85 s; F32 evaluator+
+backward is 3.16 -> 2.96 s and full cost 12.47 -> 12.17 s. Peak RSS is
+1.91 GiB with no new swap. Exact atlas bytes hold; sublinear total scaling
+remains unproven. Next measure interval lookup to avoid full-cell scans per frame.
+See `agent_notes/loose_notes/2026-09-13_07-07-55_single_cell_construction_in_frame_slicing.md`. Public counts remain unchanged.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;
