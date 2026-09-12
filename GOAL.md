@@ -61,6 +61,14 @@ is 4.23/0.37/8.62 s versus 0.078 s total replay, so speed remains negative.
 Next test batched UVT lowering against the same retained world and atlas.
 No full scaling/public count change. See `agent_notes/loose_notes/2026-09-13_04-06-51_centered_temporal_adjoint_and_fitted_world_timing.md`.
 
+September 13 batched UVT lowering: STAR `470a36d` replaces per-tube
+coefficient graphs (84,235 nodes) with 65 batched nodes. The same fitted-world
+atlas bytes and F4 image/world-gradient/slice gates are preserved. Warmed
+forward/backward falls 8.98 -> 0.575 s; compilation falls 4.23 -> 1.67 s.
+Replay also improves to 0.045 s, so this remains slower than replay. CPU
+profiling locates the next cost in visibility pair checks and scalar depth
+sorting. No scaling/public count change. See `agent_notes/loose_notes/2026-09-13_04-18-45_batched_uvt_lowering_and_metadata_profile.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

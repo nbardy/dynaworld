@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Batched UVT lowering (2026-09-13): same fitted-world atlas and passing
+  image/gradient/slicing checks, with warmed forward/backward 8.98 -> 0.575 s
+  and compile 4.23 -> 1.67 s. Replay remains faster at 0.045 s.
+  [Graph comparison, measurements and next bottleneck](agent_notes/loose_notes/2026-09-13_04-18-45_batched_uvt_lowering_and_metadata_profile.md).
 - [x] Centered temporal adjoint (2026-09-13): fitted-world image/gradient/slice
   checks now pass at unchanged tolerances. Three warmed repeats still give
   8.98 s forward/backward plus 4.23 s compile versus 0.078 s replay.

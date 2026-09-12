@@ -1,5 +1,13 @@
 # DynaWorld TODO Index
 
+September 13 batched UVT lowering: STAR `470a36d` replaces per-tube
+coefficient graphs (84,235 nodes) with 65 batched nodes. The same fitted-world
+atlas bytes and F4 image/world-gradient/slice gates are preserved. Warmed
+forward/backward falls 8.98 -> 0.575 s; compilation falls 4.23 -> 1.67 s.
+Replay also improves to 0.045 s, so this remains slower than replay. CPU
+profiling locates the next cost in visibility pair checks and scalar depth
+sorting. No scaling/public count change. See `agent_notes/loose_notes/2026-09-13_04-18-45_batched_uvt_lowering_and_metadata_profile.md`.
+
 September 13 centered temporal adjoint: STAR `f98b288` evaluates and
 accumulates the envelope as lambda*(t-t0)^2. The fitted 2048-tube world now
 passes F4 image/all-world-gradient and slicing gates; raw temporal-precision

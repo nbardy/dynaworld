@@ -137,6 +137,29 @@ def _uvt_center_velocity(q_uvt: torch.Tensor) -> torch.Tensor:
     return torch.stack((velocity_u, velocity_v), dim=-1)
 
 
+@pytest.mark.parametrize("empty_input", [False, True])
+@pytest.mark.parametrize("temporal_mode", ["trace", "centered"])
+def test_uvt_producer_renders_black_when_no_tubes_survive(empty_input, temporal_mode):
+    # Filtering every row must remain a valid empty renderer input, including
+    # when the original batch itself is empty.
+    inputs = list(_affine_uvt_fixture())
+    inputs[4].zero_()
+    if empty_input:
+        inputs = [value[:0] for value in inputs]
+    times = torch.tensor([-1., 0., 1.])
+    atlas = uvt_tubes_to_projective_trace_cell_atlas(
+        *inputs, times, sigma_px=2., image_width=16, image_height=16,
+        tile_size=8, temporal_mode=temporal_mode,
+        alpha_threshold=1/255, auto_support_padding_from_alpha=True,
+    )
+    rendered = render_projective_trace_cell_atlas_reference(
+        atlas, times, image_width=16, image_height=16, tile_size=8, sigma_px=2.,
+    )
+    assert rendered.shape == (3, 16, 16, 3)
+    assert not rendered.any()
+    assert not atlas.cells and not atlas.source_primitive_ids
+
+
 def test_feature_tube_model_has_spd_trainable_uv_cross_precision() -> None:
     config = FeatureTubeRenderConfig(frames=3, height=8, width=8, feature_dim=3)
     model = FeatureScreenTimeTubeModel(2, config, seed=1)
