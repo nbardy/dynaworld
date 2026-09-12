@@ -1,5 +1,14 @@
 # DynaWorld Experiment Registry
 
+September 13 batched packing: STAR `8720d4e` preserves all five buffers
+across 60 real frame chunks and cuts paired CPU packing 31.65 -> 7.75 ms.
+The 171-test CPU/Metal gate and all fitted-world F4/8/16/32 checks pass, with
+exact retained atlases and no new swap. F32 evaluator+backward falls 7.02 ->
+4.05 s; full compilation/forward/backward falls 21.42 -> 18.47 s. Replay
+remains faster, and no sublinear claim follows. Next profile remaining
+packing/validation/slicing/native-order costs before another optimization.
+See `agent_notes/loose_notes/2026-09-13_05-50-00_batched_interval_packing_and_fitted_world_timing.md`. Public counts remain unchanged.
+
 September 13 measured forward breakdown: STAR `91ee6b0` partitions each
 paired trial into evaluator, CPU target load, transfer and loss; existing
 validators check that phases sum to the same forward total. All F4/8/16/32

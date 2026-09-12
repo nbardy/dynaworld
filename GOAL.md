@@ -96,6 +96,15 @@ grows 12.64x for 8x frames. CPU packing alone takes ~32 ms on the first frame.
 Next batch its scalar buffer writes, preserving exact buffers and gradients.
 Public counts stay unchanged. See `agent_notes/loose_notes/2026-09-13_05-32-47_frozen_forward_breakdown_and_packing_cost.md`.
 
+September 13 batched packing: STAR `8720d4e` preserves all five buffers
+across 60 real frame chunks and cuts paired CPU packing 31.65 -> 7.75 ms.
+The 171-test CPU/Metal gate and all fitted-world F4/8/16/32 checks pass, with
+exact retained atlases and no new swap. F32 evaluator+backward falls 7.02 ->
+4.05 s; full compilation/forward/backward falls 21.42 -> 18.47 s. Replay
+remains faster, and no sublinear claim follows. Next profile remaining
+packing/validation/slicing/native-order costs before another optimization.
+See `agent_notes/loose_notes/2026-09-13_05-50-00_batched_interval_packing_and_fitted_world_timing.md`. Public counts remain unchanged.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

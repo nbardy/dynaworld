@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Batched interval packing (2026-09-13): exact buffers and passing Metal
+  image/gradient gates, with F32 evaluator+backward 7.02 -> 4.05 s and full
+  compile/forward/backward 21.42 -> 18.47 s. Still slower than replay.
+  [Paired CPU measurements and fixed-world results](agent_notes/loose_notes/2026-09-13_05-50-00_batched_interval_packing_and_fitted_world_timing.md).
 - [x] In-trial forward breakdown (2026-09-13): F32 CPU decoding costs ~6.25 s,
   but compiled evaluator+backward remains 7.02 s versus replay 0.545 s.
   All four correctness rows and exact atlas checks pass; no sublinear claim.

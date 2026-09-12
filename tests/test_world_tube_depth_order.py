@@ -224,6 +224,32 @@ def test_interval_union_preserves_sample_membership_without_false_overflow(tile_
         assert set(actual) == expected
 
 
+@pytest.mark.parametrize('device', ['cpu', pytest.param('mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required'))])
+@pytest.mark.parametrize('capacity', [2, 3, 5])
+@pytest.mark.parametrize('empty', [False, True])
+def test_interval_buffers_preserve_overflow_counts_gaps_and_empty_tile_padding(device, capacity, empty):
+    # Native consumers require the true count even on overflow, and negative
+    # ids/zero bounds in padding. A real temporal gap must survive packing.
+    bins = pack_projective_trace_tile_time_bins(
+        [] if empty else _segmented_atlas().cells,
+        image_width=16, image_height=8, frames=4, tile_x=8, tile_y=8,
+        tile_t=4, tile_capacity=capacity, device=device,
+    )
+    count = 0 if empty else 3
+    used = min(count, capacity)
+    expected = {
+        'tile_counts': [count, 0],
+        'tile_overflow': [int(count > capacity), 0],
+        'tile_primitive_ids': [0, 1, 1][:used] + [-1] * (2 * capacity - used),
+        'tile_active_start': [0, 0, 3][:used] + [0] * (2 * capacity - used),
+        'tile_active_stop': [4, 1, 4][:used] + [0] * (2 * capacity - used),
+    }
+    for name, values in expected.items():
+        actual = getattr(bins, name)
+        assert actual.is_contiguous() and actual.dtype == torch.int32
+        torch.testing.assert_close(actual, torch.tensor(values, dtype=torch.int32, device=device), rtol=0, atol=0)
+
+
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required')
 def test_metal_interval_union_preserves_rgb_and_vjp_with_real_gaps():
     from research_project.trainer_harness.tile_metal_autograd import render_projective_cell_interval_atlas_metal_backward
