@@ -131,6 +131,9 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Exact batched support bounds (2026-09-13): 184 tests and four Metal rows
+  pass; F32 compile 2.89 -> 2.40 s, full cost 11.53 -> 11.12 s.
+  [Numerical contract, measurements and limits](agent_notes/loose_notes/2026-09-13_07-55-22_batched_quadratic_support_bounds.md).
 - [x] Exact one-frame packing (2026-09-13): 183 tests and four Metal rows pass;
   F32 evaluator+backward 2.74 -> 2.34 s, full cost 12.07 -> 11.53 s.
   [Refreshed profile, exact bins, timing and limits](agent_notes/loose_notes/2026-09-13_07-38-18_profile_and_exact_one_frame_packing.md).

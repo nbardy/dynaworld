@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+September 13 batched bounds: STAR `48148ac` batches quadratic support extrema
+with exact float32 values and double-precision vertex inclusion. All 184
+CPU/Metal tests and four fitted-world rows pass with byte-identical atlases.
+Paired CPU rebinning falls 1.058 -> 0.706 s; F32 compile 2.89 -> 2.40 s,
+full cost 11.53 -> 11.12 s. RSS 1.91 GiB; new swap 0 bytes.
+No sublinear or quality claim changes. Next refresh the existing bounded
+Python profile. See `agent_notes/loose_notes/2026-09-13_07-55-22_batched_quadratic_support_bounds.md`. Public counts unchanged.
+
 September 13 one-frame packing: refreshed bounded profiling identifies general
 interval packing as a remaining cost. STAR `44c8265` uses exact ordered deduplication
 for [0,1) intervals. All 183 CPU/Metal tests, five-buffer parity and four fitted-world

@@ -74,6 +74,31 @@ from torch_gsplat_bridge_star_uvt import (  # noqa: E402
     split_projective_trace_windows,
     stratify_projective_trace_cell_atlas_visibility,
 )
+from torch_gsplat_bridge_star_uvt import projective_trace  # noqa: E402
+
+
+def test_batched_support_bounds_preserve_scalar_rounding_at_edges_and_vertices() -> None:
+    generator = torch.Generator().manual_seed(1701)
+    coeffs = torch.randn(128, 3, generator=generator) * torch.logspace(-6, 6, 128).unsqueeze(-1)
+    coeffs[::4, 2] = 0.0
+    coeffs = torch.cat((coeffs, torch.tensor([
+        [8.0, 2.0**-24, 0.0], [8.0, -2.0, 1.0], [8.0, 2.0, -1.0],
+        [-0.0, -0.0, 0.0], [1.0, 1.0, 1.0e-38], [1.0e-38, 1.0e-38, 0.0],
+    ])))
+    t_min = torch.linspace(-16.0, 0.0, len(coeffs), dtype=torch.float64)
+    t_max = torch.linspace(0.0, 16.0, len(coeffs), dtype=torch.float64)
+    expected = torch.tensor([
+        projective_trace._quadratic_value_range_over_interval(c, t_min=float(a), t_max=float(b))
+        for c, a, b in zip(coeffs, t_min, t_max, strict=True)
+    ], dtype=torch.float32)
+    actual = projective_trace._quadratic_value_ranges_over_intervals(
+        coeffs, t_min=t_min, t_max=t_max,
+    )
+    assert torch.equal(actual.view(torch.int32), expected.view(torch.int32))
+    empty = projective_trace._quadratic_value_ranges_over_intervals(
+        coeffs[:0], t_min=t_min[:0], t_max=t_max[:0],
+    )
+    assert empty.shape == (0, 2)
 
 
 def _tan_half_angle_times(theta_min: float, theta_max: float, count: int) -> torch.Tensor:
