@@ -1,12 +1,13 @@
 # DynaWorld Experiment Registry
 
-September 13 production correction: STAR `048f797` retains centered UVT
-depth and stable source ids through compiled fallback. The unchanged F4
-world now passes image/all-world-VJP checks (~7e-7); a non-unit F3 slice
-also passes. Extra retained depth bytes are counted, and the cached trainer
-update preserves current depth. Fallback remains about 38%, above the 20%
-budget; no scaling or paper-acceptance claim follows. See
-`agent_notes/loose_notes/2026-09-13_01-27-39_centered_depth_compiler_fix.md`.
+September 13 fallback correction: STAR `1a1fc3e` marks ambiguity only at
+its affected samples and unions repeated native intervals without filling gaps.
+The unchanged F4/F3 worlds pass all local image/world-VJP/fallback checks at
+12.78%/17.04% fallback, under the original 20% limit and capacity128. Retained
+cell topology grows; this is no storage or speed win. Mixed fallback still
+renders the whole Torch reference before patching selected tiles. Restrict
+that measured cost next. Paper counts remain unchanged. See
+`agent_notes/loose_notes/2026-09-13_01-55-39_time_local_fallback_and_interval_union.md`.
 
 September 13 frozen-compiler diagnosis: a float32 depth-order swap explains
 the saved F4 image/VJP failure. A centered-depth intervention reduces max

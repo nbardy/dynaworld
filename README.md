@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Local frozen compiler gate (2026-09-13): time-local fallback and exact
+  interval union pass F4/F3 image/world-gradient checks at 12.78%/17.04%
+  fallback, with zero overflow. Full-reference fallback cost still blocks a
+  speed claim. [Evidence and next cost](agent_notes/loose_notes/2026-09-13_01-55-39_time_local_fallback_and_interval_union.md).
 - [x] Centered-depth compiler correction (2026-09-13): production F4 image/world-
   gradient parity and non-unit F3 slicing pass, with retained depth bytes counted.
   Fallback still exceeds budget; no scaling claim. [Results](agent_notes/loose_notes/2026-09-13_01-27-39_centered_depth_compiler_fix.md).

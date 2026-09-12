@@ -1365,16 +1365,19 @@ def test_projective_tile_time_bins_preserve_split_window_intervals() -> None:
         min_samples=2,
     )
     assert len(windows) > 1
-    bounds = bound_projective_trace_windows(windows, uv_padding=4.0)
-    records = bin_projective_trace_support_bounds(
-        bounds,
+    # Lower first: distinct fitted charts need distinct coefficient-table ids,
+    # even when all of them came from one rational source primitive.
+    atlas = projective_trace_windows_to_cell_trace_atlas(
+        windows,
+        opacity=torch.tensor([0.6]),
+        color=torch.tensor([[0.9, 0.25, 0.1]]),
         image_width=8,
         image_height=8,
         tile_size=8,
+        uv_padding=4.0,
     )
-    cells = assemble_projective_trace_tile_time_atlas(records)
     bins = pack_projective_trace_tile_time_bins(
-        cells,
+        atlas.cells,
         image_width=8,
         image_height=8,
         frames=8,

@@ -16,9 +16,12 @@ one-seed local runs as quality controls and resolve the independent frozen
 replay/compiled image/VJP/fallback mismatch before claiming sublinear scaling.
 The production centered-depth fix (STAR `048f797`) now passes F4 image/all-
 world-VJP checks and non-unit F3 slicing. Retained bytes and cached UVT updates
-include source depth. Next diagnose the remaining ~38% fallback distribution;
-its 20% budget and the scaling gate remain open.
-See `agent_notes/loose_notes/2026-09-13_01-27-39_centered_depth_compiler_fix.md`.
+include source depth. Time-local fallback and native interval union (STAR
+`1a1fc3e`) now pass local F4/F3 image/VJP/fallback checks at 12.78%/17.04%,
+below the unchanged 20% limit with zero overflow. Scaling remains open: mixed
+fallback still renders the full Torch reference before patching flagged tiles.
+Restrict/profile this demonstrated cost while preserving all contributors and
+source-depth semantics. See `agent_notes/loose_notes/2026-09-13_01-55-39_time_local_fallback_and_interval_union.md`.
 Further quality work should isolate capacity, scene-unit conditioning, and
 projection/visibility approximations; do not discard successful source fits.
 

@@ -10,10 +10,82 @@ STAR = Path(__file__).resolve().parents[1] / 'third_party/fast-mac-gsplat/varian
 sys.path.insert(0, str(STAR))
 from torch_gsplat_bridge_star_uvt import UVTRenderConfig, brute_force_render_uvt_tubes
 from torch_gsplat_bridge_star_uvt.projective_trace import (
+    ProjectiveTraceCellTraceAtlas,
+    ProjectiveTraceTileTimeCell,
+    mark_projective_trace_cell_visibility_fallbacks,
+    pack_projective_trace_tile_time_bins,
+    projective_trace_cell_atlas_fallback_tile_sample_mask,
     render_projective_trace_cell_atlas_reference,
     slice_projective_trace_cell_atlas_frames,
     uvt_tubes_to_projective_trace_cell_atlas,
 )
+
+
+def _segmented_atlas(device='cpu'):
+    # Trace 0 is continuous; trace 1 disappears for two samples. Duplicate
+    # support must neither consume extra capacity nor fill that real gap.
+    intervals = [(0,0,2),(0,2,4),(0,1,3),(1,0,1),(1,3,4)]
+    return ProjectiveTraceCellTraceAtlas(
+        coeffs=torch.tensor([[.5,.02,0,.5,0,0,1,0,0],[.7,0,0,.5,.01,0,2,0,0]],device=device,requires_grad=True),
+        opacity=torch.tensor([.5,.4],device=device,requires_grad=True),
+        color=torch.tensor([[.9,.1,.2],[.1,.3,.8]],device=device,requires_grad=True),
+        cells=[ProjectiveTraceTileTimeCell(tile_u=0,tile_v=0,start=start,stop=stop,primitive_ids=(i,),ordered_primitive_ids=(i,),depth_intervals=((i+1.,i+1.),),fallback=False,fallback_reasons=()) for i,start,stop in intervals],
+        source_window_indices=(0,0),source_primitive_ids=(0,1),active_start=(0,0),active_stop=(4,4),
+    )
+
+
+@pytest.mark.parametrize('tile_t', [1,2,4])
+def test_interval_union_preserves_sample_membership_without_false_overflow(tile_t):
+    bins = pack_projective_trace_tile_time_bins(
+        _segmented_atlas().cells,image_width=2,image_height=2,frames=4,
+        tile_x=8,tile_y=8,tile_t=tile_t,tile_capacity=3,
+    )
+    assert not bins.tile_overflow.any()
+    for frame, expected in enumerate([{0,1},{0},{0},{0,1}]):
+        tile = frame//tile_t
+        actual = []
+        for slot in range(int(bins.tile_counts[tile])):
+            offset = tile*3+slot
+            if bins.tile_active_start[offset] <= frame < bins.tile_active_stop[offset]:
+                actual.append(int(bins.tile_primitive_ids[offset]))
+        assert len(actual) == len(expected)
+        assert set(actual) == expected
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required')
+def test_metal_interval_union_preserves_rgb_and_vjp_with_real_gaps():
+    from research_project.trainer_harness.tile_metal_autograd import render_projective_cell_interval_atlas_metal_backward
+    atlas = _segmented_atlas('mps')
+    times = torch.arange(4,device='mps',dtype=torch.float32)
+    expected = _render(atlas,times)
+    actual = render_projective_cell_interval_atlas_metal_backward(atlas,times,UVTRenderConfig(height=2,width=2,frames=4),sigma_px=1.0)
+    torch.testing.assert_close(actual,expected,rtol=1e-5,atol=1e-6)
+    cotangent = torch.linspace(-1,1,actual.numel(),device='mps').reshape_as(actual)
+    parameters = (atlas.coeffs,atlas.opacity,atlas.color)
+    expected_grads = torch.autograd.grad((expected*cotangent).sum(),parameters,retain_graph=True)
+    actual_grads = torch.autograd.grad((actual*cotangent).sum(),parameters)
+    for actual_grad, expected_grad in zip(actual_grads,expected_grads):
+        torch.testing.assert_close(actual_grad,expected_grad,rtol=2e-5,atol=2e-6)
+
+
+@pytest.mark.parametrize('inherited_fallback', [False, True])
+def test_single_ambiguous_time_does_not_mark_the_whole_cell(inherited_fallback):
+    # Depths touch the ambiguity band only at t=1; the entire four-sample
+    # interval has one valid spatial support and one unchanged physical order.
+    times = torch.arange(4, dtype=torch.float32)
+    atlas = ProjectiveTraceCellTraceAtlas(
+        coeffs=torch.tensor([[.5,0,0,.5,0,0,1,0,0],[.5,0,0,.5,0,0,1.0200001,-.04,.02]],dtype=torch.float32),
+        opacity=torch.tensor([.5,.5]),color=torch.tensor([[1.,0,0],[0.,0,1.]]),
+        cells=[ProjectiveTraceTileTimeCell(tile_u=0,tile_v=0,start=0,stop=4,primitive_ids=(0,1),ordered_primitive_ids=(0,1),depth_intervals=((1.,1.),(1.,1.09)),fallback=inherited_fallback,fallback_reasons=('unresolved_projection',) if inherited_fallback else ())],
+        source_window_indices=(0,0),source_primitive_ids=(0,1),active_start=(0,0),active_stop=(4,4),
+    )
+    marked = mark_projective_trace_cell_visibility_fallbacks(atlas,times,depth_epsilon=1e-6)
+    mask = projective_trace_cell_atlas_fallback_tile_sample_mask(marked,frames=4,image_width=2,image_height=2,tile_size=8)
+    assert mask[:,0,0].tolist() == ([True]*4 if inherited_fallback else [False,True,False,False])
+    if inherited_fallback:
+        assert all('unresolved_projection' in cell.fallback_reasons for cell in marked.cells)
+    # Changing fallback segmentation must preserve every pixel contribution.
+    torch.testing.assert_close(_render(marked,times),_render(atlas,times),rtol=0,atol=0)
 
 
 def _fixture(spatial_depth=False):
