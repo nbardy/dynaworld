@@ -8,13 +8,14 @@ improve from the evidence. The completed local playground below is history,
 not the success definition for this renewed campaign. No token budget was
 specified for the active goal; the historical token cap below is not its cap.
 
-The latest review recovered successful source-space STAR UVT fits and showed
-that the small shared-world multicamera run was a different experiment. The
-first next measurement is an unchanged scientific recipe from the successful
-128px source fit, with fresh output paths and offline W&B logging. Subsequent
-experiments should isolate demonstrated optimization, capacity, or projection
-issues in the current world-space route. Do not assume that more steps alone
-fix it, or discard the older positive evidence.
+The September 12 source recipe reproduced at 21.77 dB. After correcting
+initialization coverage and temporal-slice bounds, a shared-world depth/footprint
+control reaches 19.69/14.96 dB train/heldout at 400 updates with zero overflow.
+Periodic learned-state checkpoints now preserve the trajectory. Keep these
+one-seed local runs as quality controls and resolve the independent frozen
+replay/compiled image/VJP/fallback mismatch before claiming sublinear scaling.
+Further quality work should isolate capacity, scene-unit conditioning, and
+projection/visibility approximations; do not discard successful source fits.
 
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain

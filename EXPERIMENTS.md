@@ -1,5 +1,17 @@
 # DynaWorld Experiment Registry
 
+2026-09-13 duration/depth controls: corrected depth-2 training reaches
+16.38/9.20 dB at 400 updates. A depth-9 initializer derived from training-camera
+geometry, with precision scaled by (2/9)^2 to retain its source-view footprint,
+reaches 14.40/14.41 dB at 80 updates and 19.69/14.96 dB at 400. Depth 9 with
+unchanged sizes is negative (7.10/6.91 dB at 80 updates). All rows have zero
+overflow and new swap. Offline W&B ids, resource receipts, exact common-data
+and schedule checks are in
+`outputs/benchmarks/2026-09-13_convergence_depth_controls/comparison.json` and
+`agent_notes/loose_notes/2026-09-13_00-44-03_world_tube_duration_and_camera_depth_controls.md`.
+STAR `a20fc97` retains periodic learned states. These are exploratory local
+measurements, not accepted standings or compiled scaling evidence.
+
 2026-09-13 slice-bounds repair: STAR `ed6f393` uses time-local Gaussian boxes
 and retains learned worlds before evaluation. The unchanged saved 80-step
 checkpoint now evaluates at 14.512481/8.005188 dB train/heldout with zero

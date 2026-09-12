@@ -131,6 +131,11 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Local World Tubes controls (2026-09-13): complete Metal rendering and
+  training-camera-informed depth/footprint initialization reach 19.69 dB train
+  / 14.96 dB heldout at 400 updates, with zero tile overflow and new swap.
+  [Measurements and limits](agent_notes/loose_notes/2026-09-13_00-44-03_world_tube_duration_and_camera_depth_controls.md).
+  These are one-seed diagnostics; compiled parity and scaling remain unproven.
 - [x] Top-level video to splat baseline, reproducing TokenGS as the reference baseline.
 - [x] Implicit camera baseline, extending the TokenGS baseline.
 - [x] First real Neural3D `coffee_martini` train2/holdout1 protocol executes

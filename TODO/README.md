@@ -1,5 +1,12 @@
 # DynaWorld TODO Index
 
+Later September 13: complete duration/depth controls now reach 19.69/14.96 dB
+train/heldout at 400 updates, with zero overflow and 41 retained checkpoints.
+Depth and projected footprint must be adjusted together. Preserve these runs
+as quality controls and resolve the independent frozen compiler parity failure
+before a scaling claim. See the September 13 duration/depth loose note; paper
+acceptance counts remain unchanged.
+
 September 13: tighter temporal-slice bounds close the demonstrated 80-step
 overflow blocker. The corrected 2048-tube run reaches 14.47/8.01 dB with zero
 overflow, and pre-evaluation checkpoints survive evaluation failure. Next run

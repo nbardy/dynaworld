@@ -292,12 +292,14 @@ def _train_one_step(
     *,
     camera_sequence_mode: str = "static_view",
     alpha_mode: str = "peak_splat",
+    max_steps: int = 1,
+    progress_dir: Path | None = None,
 ):
     return train_world_tubes(
         bundle=_tiny_bundle(),
         tube_count=4,
         train_seconds=30.0,
-        max_steps=1,
+        max_steps=max_steps,
         lr=0.01,
         lr_decay_step=0,
         lr_decay_factor=1.0,
@@ -355,7 +357,37 @@ def _train_one_step(
             alpha_mode=alpha_mode,
         ),
         world_representation=world_representation,
+        progress_dir=progress_dir,
     )
+
+
+def test_learned_checkpoint_survives_a_later_renderer_failure(tmp_path, monkeypatch):
+    import json
+    from research_project.benchmarks import multicam_heldout_compare as comparison
+
+    render = comparison.render_projected_sequence
+    calls = 0
+
+    def fail_on_next_frame(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise RuntimeError("injected later renderer failure")
+        return render(*args, **kwargs)
+
+    monkeypatch.setattr(comparison, "render_projected_sequence", fail_on_next_frame)
+    with pytest.raises(RuntimeError, match="injected later renderer failure"):
+        _train_one_step("legacy_tube", max_steps=2, progress_dir=tmp_path)
+    receipt = json.loads((tmp_path / "latest.json").read_text())
+    assert receipt["step"] == 1
+    checkpoint = receipt["checkpoint"]
+    payload = torch.load(checkpoint["path"], map_location="cpu", weights_only=True)
+    monkeypatch.setattr(comparison, "render_projected_sequence", render)
+    expected, _, _ = _train_one_step("legacy_tube")
+    # It must contain the actual completed update, not merely an init snapshot.
+    torch.testing.assert_close(payload["state_dict"], expected.state_dict(), atol=0, rtol=0)
+    expected.load_state_dict(payload["state_dict"], strict=True)
+    assert payload["frame_count"] == 2
 
 
 @pytest.mark.parametrize(

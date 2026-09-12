@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+Later September 13: training-camera-informed depth with matched initial screen
+footprint reaches 19.69/14.96 dB train/heldout at 400 updates, with zero overflow.
+The matched 80-step row is 14.40/14.41 dB; depth 9 without size correction is
+negative. Periodic checkpoints now survive later renderer failure (STAR
+`a20fc97`). These remain one-seed local controls; frozen compiler parity and
+sublinear-scaling evidence remain open. See
+`agent_notes/loose_notes/2026-09-13_00-44-03_world_tube_duration_and_camera_depth_controls.md`.
+
 September 13 progress: temporal-slice bounds resolve the demonstrated excess
 tile candidates. A fresh 80-step, 2048-tube Metal run completes at 14.47/8.01
 dB train/heldout with zero overflow, under the same resource caps. STAR commit

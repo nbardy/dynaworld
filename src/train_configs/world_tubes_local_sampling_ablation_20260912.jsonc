@@ -72,6 +72,40 @@
       "init_sampling": "random",
       "tile_capacity": 256,
       "tile_t": 1
+    },
+    {
+      "name": "random_2048_balanced_sliced_cap256_t1_400",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_400step_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 256,
+      "tile_t": 1
+    },
+    {
+      "name": "random_2048_balanced_depth9",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 256,
+      "tile_t": 1,
+      "init_depth": 9.0,
+      "init_precision_xy": 30.0
+    },
+    {
+      "name": "random_2048_balanced_depth9_footprint_matched",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 256,
+      "tile_t": 1,
+      "init_depth": 9.0,
+      "init_precision_xy": 1.4814814814814814
+    },
+    {
+      "name": "random_2048_balanced_depth9_footprint_matched_400",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_400step_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 256,
+      "tile_t": 1,
+      "init_depth": 9.0,
+      "init_precision_xy": 1.4814814814814814
     }
   ]
 }
