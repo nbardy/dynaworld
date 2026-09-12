@@ -1,13 +1,13 @@
 # DynaWorld TODO Index
 
-September 13 scalar-depth specialization: STAR `ccf6c1c` skips spatial
-visibility work only when every spatial slope coefficient is exactly zero.
-The repeated same-world control cuts compilation 8.02 -> 0.94 s and total
-compile/forward/backward 11.90 -> 4.94 s. F4/F3 image/world-VJP and slicing
-gates pass; tensors, active traces and fallback masks are unchanged. Only a
-redundant spatial-event label is removed. Reference fallback still dominates
-rendering (~3.97 s versus ~0.043 s replay); inspect that next. No scaling or
-public paper count changes. See `agent_notes/loose_notes/2026-09-13_02-25-22_scalar_depth_compiler_specialization.md`.
+September 13 batched fallback: STAR `68fa855` removes repeated scalar MPS
+readbacks and batches each fallback tile's ordered compositing. Same-world
+warm forward/backward falls 3.97 -> 1.02 s; compilation-inclusive cost falls
+4.94 -> 2.00 s. F4/F3 image/world-VJP/slicing gates pass and serialized atlases
+are byte-identical. Cold execution remains costly; warm replay is ~0.057 s.
+Next inspect operation-level backward/gather costs (~0.82 s backward) and the
+remaining ~0.97 s compilation. No sublinear or public paper count change.
+See `agent_notes/loose_notes/2026-09-13_02-46-35_batched_fallback_compositing.md`.
 
 September 13 frozen-compiler diagnosis: a float32 depth-order swap explains
 the saved F4 image/VJP failure. A centered-depth intervention reduces max

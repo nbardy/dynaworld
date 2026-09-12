@@ -22,6 +22,40 @@ from torch_gsplat_bridge_star_uvt.projective_trace import (
 
 
 @pytest.mark.parametrize('device', ['cpu', pytest.param('mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required'))])
+@pytest.mark.parametrize('case', ['temporal_anisotropic','opaque','tile_stop','partial_stop'])
+def test_batched_fallback_matches_scalar_compositing_and_gradients(device,case):
+    count = 5
+    coeffs = torch.zeros((count,9),device=device)
+    coeffs[:,0] = 1.5
+    coeffs[:,3] = 1.5
+    coeffs[:,6] = torch.arange(count,device=device)+1
+    precision = torch.tensor([.8,.15,.6],device=device).repeat(count,1)
+    opacity = torch.tensor([0.,.003,.7,.999,1.1] if case=='temporal_anisotropic' else [1.1 if case=='opaque' else .8]*count,device=device)
+    if case in {'opaque','tile_stop'}:
+        precision[:] = torch.tensor([1e-4,0,1e-4],device=device)
+    atlas = ProjectiveTraceCellTraceAtlas(
+        coeffs=coeffs.requires_grad_(),opacity=opacity.requires_grad_(),
+        color=torch.linspace(.1,.9,count*3,device=device).reshape(count,3).requires_grad_(),
+        spatial_precision_uv=precision.requires_grad_(),
+        opacity_time_coeffs=torch.tensor([.1,-.05,.02] if case=='temporal_anisotropic' else [0.,0.,0.],device=device).repeat(count,1).requires_grad_(),
+        cells=[ProjectiveTraceTileTimeCell(tile_u=0,tile_v=0,start=0,stop=2,primitive_ids=tuple(range(count)),ordered_primitive_ids=tuple(range(count)),depth_intervals=tuple((i+1.,i+1.) for i in range(count)),fallback=True,fallback_reasons=('test_order',))],
+        source_window_indices=(0,)*count,source_primitive_ids=tuple(range(count)),active_start=(0,)*count,active_stop=(2,)*count,
+    )
+    times = torch.arange(2,device=device,dtype=torch.float32)
+    args = dict(image_width=5,image_height=3,tile_size=8,sigma_px=1.,allow_fallback_cells=True,alpha_cutoff=1/255,transmittance_cutoff=.01 if case=='tile_stop' else .1)
+    expected = render_projective_trace_cell_atlas_reference(atlas,times,**args)
+    actual = render_projective_trace_cell_atlas_reference(atlas,times,**args,fallback_tiles_only=True)
+    torch.testing.assert_close(actual,expected,rtol=1e-5,atol=1e-6)
+    cotangent = torch.linspace(-.8,1.2,actual.numel(),device=device).reshape_as(actual)
+    parameters = tuple(getattr(atlas,k) for k in ['coeffs','opacity','color','spatial_precision_uv','opacity_time_coeffs'])
+    expected_grads = torch.autograd.grad((expected*cotangent).sum(),parameters,retain_graph=True)
+    actual_grads = torch.autograd.grad((actual*cotangent).sum(),parameters)
+    for actual_grad,expected_grad in zip(actual_grads,expected_grads):
+        assert torch.isfinite(actual_grad).all()
+        torch.testing.assert_close(actual_grad,expected_grad,rtol=2e-5,atol=2e-6)
+
+
+@pytest.mark.parametrize('device', ['cpu', pytest.param('mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required'))])
 def test_sparse_fallback_keeps_all_tile_contributors_and_their_gradients(device):
     # Only the red cell at time 1 is flagged. Green still contributes behind it;
     # blue belongs to a different tile and must stay on the native route.

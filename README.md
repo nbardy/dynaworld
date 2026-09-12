@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Batched fallback control (2026-09-13): warm same-world forward/backward
+  falls 3.97 -> 1.02 s with F4/F3 image/world-gradient/slicing checks passing
+  and byte-identical atlases. Replay remains faster; no scaling claim.
+  [Measurements and remaining costs](agent_notes/loose_notes/2026-09-13_02-46-35_batched_fallback_compositing.md).
 - [x] Exact scalar-depth compiler control (2026-09-13): compilation falls
   8.02 -> 0.94 s with unchanged tensors/fallback masks and passing F4/F3
   image/world-gradient checks. General spatial-depth cases remain tested.
