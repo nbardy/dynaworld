@@ -21,6 +21,45 @@ from torch_gsplat_bridge_star_uvt.projective_trace import (
 )
 
 
+@pytest.mark.parametrize('device', ['cpu', pytest.param('mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required'))])
+def test_sparse_fallback_keeps_all_tile_contributors_and_their_gradients(device):
+    # Only the red cell at time 1 is flagged. Green still contributes behind it;
+    # blue belongs to a different tile and must stay on the native route.
+    atlas = ProjectiveTraceCellTraceAtlas(
+        coeffs=torch.tensor([[4.,0,0,4,0,0,1,0,0],[4.,0,0,4,0,0,2,0,0],[12.,0,0,4,0,0,3,0,0]],device=device,requires_grad=True),
+        opacity=torch.tensor([.5,.4,.6],device=device,requires_grad=True),
+        color=torch.eye(3,device=device,requires_grad=True),
+        cells=[ProjectiveTraceTileTimeCell(tile_u=tile,tile_v=0,start=start,stop=stop,primitive_ids=(trace,),ordered_primitive_ids=(trace,),depth_intervals=((trace+1.,trace+1.),),fallback=fallback,fallback_reasons=('depth_event',) if fallback else ()) for trace,tile,start,stop,fallback in [(0,0,0,1,False),(0,0,1,2,True),(1,0,0,2,False),(2,1,0,2,False)]],
+        source_window_indices=(0,0,0),source_primitive_ids=(0,1,2),active_start=(0,0,0),active_stop=(2,2,2),
+    )
+    times = torch.arange(2,device=device,dtype=torch.float32)
+    render_args = dict(image_width=16,image_height=8,tile_size=8,sigma_px=1.,allow_fallback_cells=True,alpha_cutoff=1/255,transmittance_cutoff=1e-4)
+    full = render_projective_trace_cell_atlas_reference(atlas,times,**render_args)
+    sparse = render_projective_trace_cell_atlas_reference(atlas,times,**render_args,fallback_tiles_only=True)
+    mask = torch.zeros_like(full,dtype=torch.bool)
+    mask[1,:,:8] = True
+    expected = torch.where(mask,full,torch.zeros_like(full))
+    torch.testing.assert_close(sparse,expected,rtol=0,atol=0)
+    assert sparse[1,:,:8,1].sum() > 0
+    parameters = (atlas.coeffs,atlas.opacity,atlas.color)
+    cotangent = torch.linspace(-1,1,full.numel(),device=device).reshape_as(full)
+    expected_grads = torch.autograd.grad((expected*cotangent).sum(),parameters,retain_graph=True)
+    actual_grads = torch.autograd.grad((sparse*cotangent).sum(),parameters,retain_graph=True)
+    for actual, reference in zip(actual_grads,expected_grads):
+        torch.testing.assert_close(actual,reference,rtol=1e-6,atol=1e-7)
+    assert actual_grads[-1][1].abs().sum() > 0
+    assert not actual_grads[-1][2].any()
+    if device == 'mps':
+        from research_project.trainer_harness.tile_metal_autograd import ProjectiveCellIntervalTrainerState
+        state = ProjectiveCellIntervalTrainerState(atlas=atlas,times=times,config=UVTRenderConfig(height=8,width=16,frames=2),sigma_px=1.,image_width=16,image_height=8,tile_size=8,fallback_render_mode='mixed')
+        mixed = state.render()
+        torch.testing.assert_close(mixed,full,rtol=1e-5,atol=1e-6)
+        expected_grads = torch.autograd.grad((full*cotangent).sum(),parameters,retain_graph=True)
+        actual_grads = torch.autograd.grad((mixed*cotangent).sum(),parameters)
+        for actual, reference in zip(actual_grads,expected_grads):
+            torch.testing.assert_close(actual,reference,rtol=2e-5,atol=2e-6)
+
+
 def _segmented_atlas(device='cpu'):
     # Trace 0 is continuous; trace 1 disappears for two samples. Duplicate
     # support must neither consume extra capacity nor fill that real gap.

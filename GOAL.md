@@ -18,10 +18,13 @@ The production centered-depth fix (STAR `048f797`) now passes F4 image/all-
 world-VJP checks and non-unit F3 slicing. Retained bytes and cached UVT updates
 include source depth. Time-local fallback and native interval union (STAR
 `1a1fc3e`) now pass local F4/F3 image/VJP/fallback checks at 12.78%/17.04%,
-below the unchanged 20% limit with zero overflow. Scaling remains open: mixed
-fallback still renders the full Torch reference before patching flagged tiles.
-Restrict/profile this demonstrated cost while preserving all contributors and
-source-depth semantics. See `agent_notes/loose_notes/2026-09-13_01-55-39_time_local_fallback_and_interval_union.md`.
+below the unchanged 20% limit with zero overflow. Sparse reference fallback
+(STAR `a7ec561`) now retains all contributors in flagged tiles and reduces
+F4 compiled forward/backward 10.76 -> 3.90 s with image/world-VJP parity.
+Compilation remains ~8 s; profiling points to UV event checks and tile-corner
+depths despite zero spatial depth slopes. Specialize that exact case next,
+preserving scalar ambiguity and general spatial-depth semantics. Full scaling
+and public evidence remain open. See `agent_notes/loose_notes/2026-09-13_02-09-51_sparse_fallback_cost_control.md`.
 Further quality work should isolate capacity, scene-unit conditioning, and
 projection/visibility approximations; do not discard successful source fits.
 

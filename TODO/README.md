@@ -1,13 +1,13 @@
 # DynaWorld TODO Index
 
-September 13 fallback correction: STAR `1a1fc3e` marks ambiguity only at
-its affected samples and unions repeated native intervals without filling gaps.
-The unchanged F4/F3 worlds pass all local image/world-VJP/fallback checks at
-12.78%/17.04% fallback, under the original 20% limit and capacity128. Retained
-cell topology grows; this is no storage or speed win. Mixed fallback still
-renders the whole Torch reference before patching selected tiles. Restrict
-that measured cost next. Paper counts remain unchanged. See
-`agent_notes/loose_notes/2026-09-13_01-55-39_time_local_fallback_and_interval_union.md`.
+September 13 sparse fallback: STAR `a7ec561` renders the reference only on
+flagged tile samples while preserving all contributing traces. The fixed-world
+F4 control (one warmup, three paired trials) cuts compiled forward/backward
+10.76 -> 3.90 s; including compilation, 18.75 -> 11.90 s. Image/world-VJP and
+F3 slicing checks pass; atlas bytes and fallback fractions are unchanged.
+Replay is still much faster. Profiling attributes 5.70 s of an 8.33 s compiler
+call to UV events despite zero spatial depth slopes; specialize that exact
+case next. No scaling or public paper count changes. See `agent_notes/loose_notes/2026-09-13_02-09-51_sparse_fallback_cost_control.md`.
 
 September 13 frozen-compiler diagnosis: a float32 depth-order swap explains
 the saved F4 image/VJP failure. A centered-depth intervention reduces max

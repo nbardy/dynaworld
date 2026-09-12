@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Sparse fallback cost control (2026-09-13): identical saved-world F4
+  forward/backward falls 10.76 -> 3.90 s, with image/world-gradient parity and
+  unchanged atlas bytes. Compilation stays ~8 s; no scaling claim.
+  [Repeated local timings and profile](agent_notes/loose_notes/2026-09-13_02-09-51_sparse_fallback_cost_control.md).
 - [x] Local frozen compiler gate (2026-09-13): time-local fallback and exact
   interval union pass F4/F3 image/world-gradient checks at 12.78%/17.04%
   fallback, with zero overflow. Full-reference fallback cost still blocks a

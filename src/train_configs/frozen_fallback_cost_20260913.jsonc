@@ -1,0 +1,11 @@
+{
+  // Local F4 before/after implementation-cost control, not a scaling sweep.
+  "setup_script": "outputs/benchmarks/2026-09-13_frozen_parity_diagnostic/compare_routes.py",
+  "frames": 4,
+  "timing_warmups": 1,
+  "timing_repeats": 3,
+  "camera_projection": "dataset_lens",
+  "wandb_enabled": true,
+  "wandb_project": "dynaworld",
+  "wandb_tags": ["world_tubes", "local_diagnostic", "frozen_fallback_cost"]
+}
