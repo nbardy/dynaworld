@@ -1,5 +1,12 @@
 # DynaWorld Project Index
 
+September 13 convergence control: the 800-update, 2048-tube Metal fit reaches
+20.84/15.30 dB train/heldout with zero overflow and new swap. Evaluating its own
+step-400 checkpoint gives 19.67/14.93 dB, confirming improvement along the same
+trajectory; SSIM and heldout LPIPS also improve. Images remain blurry. Next
+check this better-fitted world through the bounded replay/compiled contract.
+The full-world shape profiler stays stopped. See `agent_notes/loose_notes/2026-09-13_03-12-15_world_tube_800step_same_trajectory_control.md`.
+
 September 13 profiling stop: the full-world Kineto run with shape recording
 exceeded the unchanged 3-GiB process-tree RSS cap and was terminated. No
 operator ranking was produced; this profiling lane is stopped. The ordinary

@@ -36,8 +36,13 @@ The subsequent full-world Kineto/record_shapes profile exceeded the unchanged
 no operator attribution was obtained. Keep the passing ordinary benchmark
 as the current evidence and do not automatically retry this profiling mode.
 See `agent_notes/loose_notes/2026-09-13_02-51-34_full_world_profiler_resource_stop.md`.
-Further quality work should isolate capacity, scene-unit conditioning, and
-projection/visibility approximations; do not discard successful source fits.
+The independent 800-update quality lane now reaches 20.84/15.30 dB train/heldout.
+Its own step400 checkpoint gives 19.67/14.93 dB under the same evaluator;
+both have zero overflow and new swap. The separate older 400-step source hash
+differs, so the within-trajectory comparison is primary. Next evaluate this
+better-fitted 2048-tube world through the bounded four-time replay/compiled
+contract before a larger sweep, retaining every numerical and resource gate.
+Do not discard successful source fits. See `agent_notes/loose_notes/2026-09-13_03-12-15_world_tube_800step_same_trajectory_control.md`.
 
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain

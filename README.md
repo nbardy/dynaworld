@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Same-trajectory convergence control (2026-09-13): 400 -> 800 updates
+  improves train/heldout PSNR 19.67/14.93 -> 20.84/15.30 dB with zero overflow.
+  Images remain blurry; this is one local quality control.
+  [Metrics, previews, provenance and next experiment](agent_notes/loose_notes/2026-09-13_03-12-15_world_tube_800step_same_trajectory_control.md).
 - [x] Batched fallback control (2026-09-13): warm same-world forward/backward
   falls 3.97 -> 1.02 s with F4/F3 image/world-gradient/slicing checks passing
   and byte-identical atlases. Replay remains faster; no scaling claim.
