@@ -1,5 +1,12 @@
 # DynaWorld TODO Index
 
+Later September 12 correction: stop the 2048-tube duration/capacity sweep.
+The 80- and 400-step reports contain tile overflow; the guarded capacity-256
+retry also stops at evaluation. Next repair complete rendering and checkpoint
+retention before evaluation, then revisit convergence. Historical source fits
+remain successful. See the September 12 overflow loose note; paper counts do
+not change.
+
 Overnight follow-up (2026-09-12): source-space fitting reproduces at 21.77 dB;
 the shared-world 80-step diagnostic reaches 13.92 dB train / 8.03 dB heldout
 with 2048 randomly initialized tubes and corrected coarse camera/time coverage.

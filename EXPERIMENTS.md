@@ -1,5 +1,16 @@
 # DynaWorld Experiment Registry
 
+2026-09-12 later correction: the 2048-tube rows below overflowed tile lists.
+The 400-step control completed at 9.131199/7.752918 dB train/heldout with all
+3072 evaluated tile instances per camera overflowing capacity 128 (offline
+`pa00398da8947a`, peak tree/launcher RSS 1,405,714,432 bytes, zero new swap).
+The 256-tube controls have zero final-evaluation overflow. Ordinary and gated
+STAR RGB rendering now reject overflow, with 27 focused checks passing.
+Capacity 512 is unsupported; the supported capacity-256/tile_t=1 retry failed
+during evaluation and has no final quality report. These facts qualify the
+larger rows as truncated-render diagnostics and supersede the next-duration-run
+plan. See `agent_notes/loose_notes/2026-09-12_23-54-53_world_tube_overflow_qualifies_convergence.md`.
+
 2026-09-12 overnight diagnostics: the historical 128px/16f/2048-tube STAR
 source fit reproduces at 21.768527 dB (offline `l61kgq5d`). Four matched
 80-step world-space controls isolate boundary-grid initialization, capacity,

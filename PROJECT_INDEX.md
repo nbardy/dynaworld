@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+Later September 12 correction: the 2048-tube diagnostics below overflowed
+native tile lists, so their PSNRs describe truncated rendering. The 400-step
+control fell to 9.13/7.75 dB train/heldout with every evaluated tile overflowing.
+Ordinary STAR RGB rendering now rejects overflow; a capacity-256/tile_t=1
+retry stopped during evaluation. Resolve complete rendering and retain learned
+state before evaluation before another long fit. Old source fits remain real.
+See `agent_notes/loose_notes/2026-09-12_23-54-53_world_tube_overflow_qualifies_convergence.md`.
+
 Overfit follow-up (2026-09-12): the historical STAR UVT source recipe reproduces
 at 21.76853 dB. In controlled 80-step Coffee Martini diagnostics, random
 initialization, 2048-tube capacity, and balanced coarse camera/time coverage

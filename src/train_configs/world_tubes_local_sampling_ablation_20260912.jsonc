@@ -1,4 +1,4 @@
-// Sequential initialization and capacity diagnostics; pre-fix rows bind their retained source identities.
+// Historical cap128 rows overflow; cap512 is unsupported by the installed backend.
 {
   "seed": 17,
   "device": "mps",
@@ -13,22 +13,51 @@
     {
       "name": "grid",
       "protocol": "src/train_configs/paper_protocols/coffee_martini_local_playground.jsonc",
-      "init_sampling": "grid"
+      "init_sampling": "grid",
+      "tile_capacity": 128,
+      "tile_t": 2
     },
     {
       "name": "random",
       "protocol": "src/train_configs/paper_protocols/coffee_martini_local_playground.jsonc",
-      "init_sampling": "random"
+      "init_sampling": "random",
+      "tile_capacity": 128,
+      "tile_t": 2
     },
     {
       "name": "random_2048",
       "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
-      "init_sampling": "random"
+      "init_sampling": "random",
+      "tile_capacity": 128,
+      "tile_t": 2
     },
     {
       "name": "random_2048_balanced",
       "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
-      "init_sampling": "random"
+      "init_sampling": "random",
+      "tile_capacity": 128,
+      "tile_t": 2
+    },
+    {
+      "name": "random_2048_balanced_400",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_400step_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 128,
+      "tile_t": 2
+    },
+    {
+      "name": "random_2048_balanced_cap512",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 512,
+      "tile_t": 2
+    },
+    {
+      "name": "random_2048_balanced_cap256_t1",
+      "protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_20260912.jsonc",
+      "init_sampling": "random",
+      "tile_capacity": 256,
+      "tile_t": 1
     }
   ]
 }
