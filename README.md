@@ -131,6 +131,9 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Exact one-frame packing (2026-09-13): 183 tests and four Metal rows pass;
+  F32 evaluator+backward 2.74 -> 2.34 s, full cost 12.07 -> 11.53 s.
+  [Refreshed profile, exact bins, timing and limits](agent_notes/loose_notes/2026-09-13_07-38-18_profile_and_exact_one_frame_packing.md).
 - [x] Ordered interval sweep for frame slicing (2026-09-13): 181 tests and
   all four Metal rows pass; F32 evaluator+backward 2.96 -> 2.74 s, mixed at small F.
   [Setup-inclusive CPU timing, full results and limits](agent_notes/loose_notes/2026-09-13_07-21-55_interval_sweep_for_frame_slicing.md).

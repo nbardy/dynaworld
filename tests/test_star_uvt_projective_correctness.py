@@ -1392,6 +1392,30 @@ def test_projective_atlas_reference_renderer_matches_dense_per_frame_compositing
     torch.testing.assert_close(atlas_render, dense_render, atol=1.0e-6, rtol=1.0e-6)
 
 
+@pytest.mark.parametrize("tile_capacity", [3, 8])
+def test_one_frame_bins_preserve_first_seen_ids_overflow_and_empty_tiles(tile_capacity: int) -> None:
+    cells = [
+        ProjectiveTraceTileTimeCell(
+            0, 0, 0, 1, ids, ids, tuple((float(i), float(i)) for i in ids), False, (),
+        )
+        for ids in [(5, 2, 5), (2, 7), (11, 5)]
+    ]
+    bins = pack_projective_trace_tile_time_bins(
+        cells, image_width=16, image_height=8, frames=1,
+        tile_x=8, tile_y=8, tile_t=4, tile_capacity=tile_capacity,
+    )
+    retained = [5, 2, 7, 11][:tile_capacity]
+    expected = {
+        "tile_counts": [4, 0],
+        "tile_overflow": [int(tile_capacity < 4), 0],
+        "tile_primitive_ids": retained + [-1] * (2 * tile_capacity - len(retained)),
+        "tile_active_start": [0] * (2 * tile_capacity),
+        "tile_active_stop": [1] * len(retained) + [0] * (2 * tile_capacity - len(retained)),
+    }
+    for name, values in expected.items():
+        assert torch.equal(getattr(bins, name), torch.tensor(values, dtype=torch.int32))
+
+
 def test_projective_tile_time_bins_preserve_split_window_intervals() -> None:
     coeffs = torch.tensor(
         [[4.0, 0.0, 0.35, 4.0, 0.45, 0.0, 1.0, 0.0, 0.0]],

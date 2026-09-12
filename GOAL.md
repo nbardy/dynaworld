@@ -146,6 +146,14 @@ full cost 12.17 -> 12.07 s. Smaller-frame timings are mixed. Exact atlases,
 1.87-GiB RSS and zero new swap hold; no sublinear claim. Next refresh the bounded
 Python profile. See `agent_notes/loose_notes/2026-09-13_07-21-55_interval_sweep_for_frame_slicing.md`. Public counts stay unchanged.
 
+September 13 one-frame packing: refreshed bounded profiling identifies general
+interval packing as a remaining cost. STAR `44c8265` uses exact ordered deduplication
+for [0,1) intervals. All 183 CPU/Metal tests, five-buffer parity and four fitted-world
+rows pass with exact atlases. Paired CPU packing falls 0.542 -> 0.208 s; F32
+E+B 2.74 -> 2.34 s and full cost 12.07 -> 11.53 s. Peak RSS 1.91 GiB,
+zero new swap. No sublinear claim. Next batch quadratic support bounds while
+preserving float32 arithmetic. See `agent_notes/loose_notes/2026-09-13_07-38-18_profile_and_exact_one_frame_packing.md`. Public counts unchanged.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

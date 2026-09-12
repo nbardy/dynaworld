@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+September 13 one-frame packing: refreshed bounded profiling identifies general
+interval packing as a remaining cost. STAR `44c8265` uses exact ordered deduplication
+for [0,1) intervals. All 183 CPU/Metal tests, five-buffer parity and four fitted-world
+rows pass with exact atlases. Paired CPU packing falls 0.542 -> 0.208 s; F32
+E+B 2.74 -> 2.34 s and full cost 12.07 -> 11.53 s. Peak RSS 1.91 GiB,
+zero new swap. No sublinear claim. Next batch quadratic support bounds while
+preserving float32 arithmetic. See `agent_notes/loose_notes/2026-09-13_07-38-18_profile_and_exact_one_frame_packing.md`. Public counts unchanged.
+
 September 13 overlap sweep: STAR `bb6c6f4` replaces full-cell scans per frame
 with transient ordered interval events. All 181 CPU/Metal tests, exact multi-
 chunk slices and four fitted-world rows pass. Paired CPU slicing falls 0.864 ->
