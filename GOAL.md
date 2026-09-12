@@ -105,6 +105,15 @@ remains faster, and no sublinear claim follows. Next profile remaining
 packing/validation/slicing/native-order costs before another optimization.
 See `agent_notes/loose_notes/2026-09-13_05-50-00_batched_interval_packing_and_fitted_world_timing.md`. Public counts remain unchanged.
 
+September 13 retained backward inputs: STAR `1aedaf4` fixes a reproduced
+multi-forward topology/gradient defect and removes duplicate backward packing.
+All 173 CPU/Metal tests and fitted-world F4/8/16/32 numerical checks pass, with
+exact atlases. F32 backward falls 1.26 -> 0.46 s; evaluator+backward 4.05 ->
+3.22 s; full compiled cost 18.47 -> 17.80 s. Peak RSS is 1.74 GiB and new
+host swap 1.32 MiB, within unchanged limits. Still slower than replay and not
+sublinear. Next profile remaining F32 forward costs with bounded Python tools.
+See `agent_notes/loose_notes/2026-09-13_06-18-00_retained_forward_inputs_fix_backward_topology_and_cost.md`. Public counts remain unchanged.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

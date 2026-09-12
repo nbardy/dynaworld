@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Retained backward inputs (2026-09-13): the reproduced mutable-topology
+  gradient defect is fixed; 173 tests and all fitted-world rows pass. F32
+  evaluator+backward falls 4.05 -> 3.22 s; full cost 18.47 -> 17.80 s.
+  [Correctness, timing and bounded memory evidence](agent_notes/loose_notes/2026-09-13_06-18-00_retained_forward_inputs_fix_backward_topology_and_cost.md).
 - [x] Batched interval packing (2026-09-13): exact buffers and passing Metal
   image/gradient gates, with F32 evaluator+backward 7.02 -> 4.05 s and full
   compile/forward/backward 21.42 -> 18.47 s. Still slower than replay.

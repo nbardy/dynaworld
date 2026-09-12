@@ -1,5 +1,14 @@
 # DynaWorld Experiment Registry
 
+September 13 retained backward inputs: STAR `1aedaf4` fixes a reproduced
+multi-forward topology/gradient defect and removes duplicate backward packing.
+All 173 CPU/Metal tests and fitted-world F4/8/16/32 numerical checks pass, with
+exact atlases. F32 backward falls 1.26 -> 0.46 s; evaluator+backward 4.05 ->
+3.22 s; full compiled cost 18.47 -> 17.80 s. Peak RSS is 1.74 GiB and new
+host swap 1.32 MiB, within unchanged limits. Still slower than replay and not
+sublinear. Next profile remaining F32 forward costs with bounded Python tools.
+See `agent_notes/loose_notes/2026-09-13_06-18-00_retained_forward_inputs_fix_backward_topology_and_cost.md`. Public counts remain unchanged.
+
 September 13 batched packing: STAR `8720d4e` preserves all five buffers
 across 60 real frame chunks and cuts paired CPU packing 31.65 -> 7.75 ms.
 The 171-test CPU/Metal gate and all fitted-world F4/8/16/32 checks pass, with

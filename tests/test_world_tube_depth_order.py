@@ -251,6 +251,30 @@ def test_interval_buffers_preserve_overflow_counts_gaps_and_empty_tile_padding(d
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required')
+@pytest.mark.parametrize('second_weight', [0., .35])
+def test_each_forward_keeps_its_topology_for_backward_after_another_render(second_weight):
+    from research_project.trainer_harness.tile_metal_autograd import render_projective_cell_interval_atlas_metal_backward
+    atlas = _segmented_atlas('mps')
+    times = torch.arange(4, device='mps', dtype=torch.float32)
+    config = UVTRenderConfig(height=2, width=2, frames=4)
+    expected_a = _render(atlas, times)
+    actual_a = render_projective_cell_interval_atlas_metal_backward(atlas, times, config, sigma_px=1.)
+    # A caller may prepare the next topology before backpropagating the first
+    # image. Each graph must differentiate what its own forward rendered.
+    atlas.cells[:] = [cell for cell in atlas.cells if cell.primitive_ids == (0,)]
+    expected_b = _render(atlas, times)
+    actual_b = render_projective_cell_interval_atlas_metal_backward(atlas, times, config, sigma_px=1.)
+    torch.testing.assert_close(actual_a, expected_a, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(actual_b, expected_b, rtol=1e-5, atol=1e-6)
+    cotangent = torch.linspace(-.8, 1.2, actual_a.numel(), device='mps').reshape_as(actual_a)
+    parameters = (atlas.coeffs, atlas.opacity, atlas.color)
+    expected = torch.autograd.grad(((expected_a + second_weight * expected_b) * cotangent).sum(), parameters, retain_graph=True)
+    actual = torch.autograd.grad(((actual_a + second_weight * actual_b) * cotangent).sum(), parameters)
+    for value, reference in zip(actual, expected):
+        torch.testing.assert_close(value, reference, rtol=2e-5, atol=2e-6)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required')
 def test_metal_interval_union_preserves_rgb_and_vjp_with_real_gaps():
     from research_project.trainer_harness.tile_metal_autograd import render_projective_cell_interval_atlas_metal_backward
     atlas = _segmented_atlas('mps')
