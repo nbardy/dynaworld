@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Source alpha-cutoff repair (2026-09-13): the same fitted-world F4/8/16/32
+  sweep now passes all image/gradient checks. F32 max RGB error falls 6.17e-4
+  -> 8.64e-7; reference storage adds 36 bytes/trace. Speed remains negative.
+  [Repair, matched results and retained provenance](agent_notes/loose_notes/2026-09-13_05-19-02_source_alpha_cutoff_repair.md).
 - [x] Local density sweep (2026-09-13): visibility bookkeeping cuts F4 compile
   1.67 -> 0.98 s with exact atlas bytes. F4/8/16 pass; F32 exposes one alpha-
   cutoff pixel failure. Backward grows 10.50x for 8x more frames; no sublinear

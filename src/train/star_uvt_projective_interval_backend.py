@@ -281,6 +281,8 @@ def _projective_interval_atlas_with_cells(template: Any, cells: list[Any]) -> An
         spatial_precision_uv=template.spatial_precision_uv,
         depth_affine_uv=template.depth_affine_uv,
         depth_reference_uvt=template.depth_reference_uvt,
+        alpha_cutoff_reference_uvt=template.alpha_cutoff_reference_uvt,
+        opacity_time_centered=template.opacity_time_centered,
     )
 
 
@@ -799,6 +801,7 @@ def make_projective_cell_interval_live_atlas_from_uvt_tubes(
             spatial_precision_uv=empty_spatial_precision,
             depth_affine_uv=empty_depth_affine,
             depth_reference_uvt=torch.empty((0, 7), dtype=torch.float32, device=ma.device),
+            alpha_cutoff_reference_uvt=torch.empty((0, 9), dtype=torch.float32, device=ma.device),
             opacity_time_centered=reference_atlas.opacity_time_centered,
         )
 
@@ -904,6 +907,7 @@ def make_projective_cell_interval_live_atlas_from_uvt_tubes(
         spatial_precision_uv=spatial_precision_uv,
         depth_affine_uv=depth_affine_uv,
         depth_reference_uvt=torch.cat((ma_sel, depth0_sel[:, None], depth_beta_sel), dim=1).contiguous(),
+        alpha_cutoff_reference_uvt=torch.cat((ma_sel, q_sel), dim=1).detach().contiguous(),
         opacity_time_centered=reference_atlas.opacity_time_centered,
     )
 

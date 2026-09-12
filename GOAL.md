@@ -79,6 +79,14 @@ jump above F8 includes measured eight-frame-LRU decoding. Next repair source
 alpha-branch compatibility, then separate target-loading timing. Public counts
 stay unchanged. See `agent_notes/loose_notes/2026-09-13_04-49-00_visibility_bookkeeping_density_and_alpha_cutoff.md`.
 
+September 13 alpha-cutoff repair: STAR `01bd9e0` preserves source cutoff
+membership while differentiating compiled values. The identical fitted-world
+F4/8/16/32 sweep now passes all four rows; F32 max RGB error falls 6.17e-4 ->
+8.64e-7. Previous atlas tensors/topology are exact, with 36 extra bytes/trace.
+The 159-test Metal/CPU gate and resource guards pass. Runtime remains slower
+than replay; next separate target loading in the forward measurements. Local
+accepted rows rise 3/4 -> 4/4; public counts remain unchanged. See `agent_notes/loose_notes/2026-09-13_05-19-02_source_alpha_cutoff_repair.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

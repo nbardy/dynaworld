@@ -340,7 +340,7 @@ def test_source_id_tie_break_survives_trace_table_reordering():
     atlas = _compile(inputs, times)
     index = torch.tensor([1, 0])
     reordered = replace(atlas,
-        **{name:getattr(atlas,name).index_select(0,index) for name in ['coeffs','opacity','color','opacity_time_coeffs','spatial_precision_uv','depth_affine_uv','depth_reference_uvt']},
+        **{name:getattr(atlas,name).index_select(0,index) for name in ['coeffs','opacity','color','opacity_time_coeffs','spatial_precision_uv','depth_affine_uv','depth_reference_uvt','alpha_cutoff_reference_uvt']},
         source_primitive_ids=(1,0),
         active_start=tuple(reversed(atlas.active_start)), active_stop=tuple(reversed(atlas.active_stop)),
         cells=[replace(cell, primitive_ids=tuple(1-i for i in cell.primitive_ids), ordered_primitive_ids=tuple(1-i for i in cell.ordered_primitive_ids)) for cell in atlas.cells],
@@ -363,12 +363,13 @@ def test_stale_polynomial_edit_is_rejected_and_world_reprojection_updates_depth(
     torch.testing.assert_close(updated,expected,rtol=1e-5,atol=1e-6)
 
 
-def test_retained_artifact_counts_source_depth_state(tmp_path):
+@pytest.mark.parametrize('field,width', [('depth_reference_uvt',7), ('alpha_cutoff_reference_uvt',9)])
+def test_retained_artifact_counts_source_depth_state(tmp_path,field,width):
     from research_project.benchmarks.multicam_heldout_compare import _write_frozen_atlas_storage
     atlas = _compile(_fixture(), torch.arange(4, dtype=torch.float32)-1.5)
     with_source = _write_frozen_atlas_storage(atlas, out_dir=tmp_path/'with', frame_count=4)
-    without_source = _write_frozen_atlas_storage(replace(atlas,depth_reference_uvt=None), out_dir=tmp_path/'without', frame_count=4)
-    assert with_source['tensor_payload_bytes'] - without_source['tensor_payload_bytes'] == 2*7*4
+    without_source = _write_frozen_atlas_storage(replace(atlas,**{field:None}), out_dir=tmp_path/'without', frame_count=4)
+    assert with_source['tensor_payload_bytes'] - without_source['tensor_payload_bytes'] == 2*width*4
     assert with_source['tensor_count'] == without_source['tensor_count'] + 1
 
 

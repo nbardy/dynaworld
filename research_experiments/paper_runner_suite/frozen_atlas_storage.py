@@ -41,8 +41,10 @@ TENSOR_NAMES = (
     "spatial_precision_uv",
     "depth_affine_uv",
     "depth_reference_uvt",
+    "alpha_cutoff_reference_uvt",
 )
-LEGACY_TENSOR_NAMES = TENSOR_NAMES[:-1]
+LEGACY_TENSOR_NAMES = TENSOR_NAMES[:6]
+SUPPORTED_TENSOR_NAMES = (LEGACY_TENSOR_NAMES, TENSOR_NAMES[:7], TENSOR_NAMES)
 REQUIRED_TENSOR_NAMES = frozenset(("coeffs", "opacity", "color"))
 DTYPE_BYTES = {
     "float16": 2,
@@ -249,10 +251,9 @@ def write_retained_storage_artifact(
     frame_count = _integer(frame_count, name="frame_count", minimum=1)
     trace_count = _integer(trace_count, name="trace_count", minimum=1)
     cell_count = _integer(cell_count, name="cell_count", minimum=1)
-    if set(tensors) == set(LEGACY_TENSOR_NAMES):
-        tensors = {**tensors, "depth_reference_uvt": None}
-    if set(tensors) != set(TENSOR_NAMES):
+    if set(tensors) not in tuple(set(names) for names in SUPPORTED_TENSOR_NAMES):
         raise ValueError("retained atlas tensor set is incomplete")
+    tensors = {**dict.fromkeys(TENSOR_NAMES), **tensors}
     normalized_topology = json.loads(_canonical_json_bytes(topology))
     validate_topology(
         normalized_topology,
@@ -423,7 +424,7 @@ def verify_retained_storage_artifact(
     if (
         not isinstance(records, list)
         or [record.get("name") for record in records if isinstance(record, Mapping)]
-        not in (list(TENSOR_NAMES), list(LEGACY_TENSOR_NAMES))
+        not in tuple(list(names) for names in SUPPORTED_TENSOR_NAMES)
     ):
         raise ValueError("retained atlas tensor records are incomplete")
     payload_bytes = file_bytes - header_stop
