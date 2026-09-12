@@ -107,8 +107,9 @@ def test_metal_interval_union_preserves_rgb_and_vjp_with_real_gaps():
         torch.testing.assert_close(actual_grad,expected_grad,rtol=2e-5,atol=2e-6)
 
 
+@pytest.mark.parametrize('explicit_zero_depth', [False, True])
 @pytest.mark.parametrize('inherited_fallback', [False, True])
-def test_single_ambiguous_time_does_not_mark_the_whole_cell(inherited_fallback):
+def test_single_ambiguous_time_does_not_mark_the_whole_cell(inherited_fallback, explicit_zero_depth):
     # Depths touch the ambiguity band only at t=1; the entire four-sample
     # interval has one valid spatial support and one unchanged physical order.
     times = torch.arange(4, dtype=torch.float32)
@@ -117,14 +118,38 @@ def test_single_ambiguous_time_does_not_mark_the_whole_cell(inherited_fallback):
         opacity=torch.tensor([.5,.5]),color=torch.tensor([[1.,0,0],[0.,0,1.]]),
         cells=[ProjectiveTraceTileTimeCell(tile_u=0,tile_v=0,start=0,stop=4,primitive_ids=(0,1),ordered_primitive_ids=(0,1),depth_intervals=((1.,1.),(1.,1.09)),fallback=inherited_fallback,fallback_reasons=('unresolved_projection',) if inherited_fallback else ())],
         source_window_indices=(0,0),source_primitive_ids=(0,1),active_start=(0,0),active_stop=(4,4),
+        depth_affine_uv=torch.zeros((2,6)) if explicit_zero_depth else None,
     )
-    marked = mark_projective_trace_cell_visibility_fallbacks(atlas,times,depth_epsilon=1e-6)
+    marked = mark_projective_trace_cell_visibility_fallbacks(atlas,times,depth_epsilon=1e-6,image_width=2,image_height=2,tile_size=8)
     mask = projective_trace_cell_atlas_fallback_tile_sample_mask(marked,frames=4,image_width=2,image_height=2,tile_size=8)
     assert mask[:,0,0].tolist() == ([True]*4 if inherited_fallback else [False,True,False,False])
     if inherited_fallback:
         assert all('unresolved_projection' in cell.fallback_reasons for cell in marked.cells)
     # Changing fallback segmentation must preserve every pixel contribution.
     torch.testing.assert_close(_render(marked,times),_render(atlas,times),rtol=0,atol=0)
+
+
+@pytest.mark.parametrize('slope_kind,expected', [('zero',[False,False]),('constant',[True,True]),('time',[False,True])])
+def test_spatial_depth_crossing_is_checked_even_if_initial_slope_is_zero(slope_kind,expected):
+    atlas = _segmented_atlas()
+    coefficients = torch.tensor([[4.,0,0,4.,0,0,1.,0,0],[4.,0,0,4.,0,0,2.,0,0]])
+    slopes = torch.zeros((2,6))
+    if slope_kind != 'zero':
+        slopes[1,0 if slope_kind=='constant' else 1] = .5
+    cell = ProjectiveTraceTileTimeCell(tile_u=0,tile_v=0,start=0,stop=2,primitive_ids=(0,1),ordered_primitive_ids=(0,1),depth_intervals=((1.,1.),(2.,2.)),fallback=False,fallback_reasons=())
+    atlas = replace(atlas,coeffs=coefficients,depth_affine_uv=slopes,cells=[cell],active_stop=(2,2))
+    times = torch.arange(2,dtype=torch.float32)
+    marked = mark_projective_trace_cell_visibility_fallbacks(atlas,times,image_width=8,image_height=8,tile_size=8)
+    mask = projective_trace_cell_atlas_fallback_tile_sample_mask(marked,frames=2,image_width=8,image_height=8,tile_size=8)
+    assert mask[:,0,0].tolist() == expected
+
+
+@pytest.mark.parametrize('tile_u', [-1,1])
+def test_zero_spatial_depth_still_rejects_tiles_outside_the_image(tile_u):
+    atlas = _segmented_atlas()
+    atlas = replace(atlas,depth_affine_uv=torch.zeros((2,6)),cells=[replace(cell,tile_u=tile_u) for cell in atlas.cells])
+    with pytest.raises(ValueError,match='tile coordinates'):
+        mark_projective_trace_cell_visibility_fallbacks(atlas,torch.arange(4,dtype=torch.float32),image_width=8,image_height=8,tile_size=8)
 
 
 def _fixture(spatial_depth=False):

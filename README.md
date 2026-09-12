@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Exact scalar-depth compiler control (2026-09-13): compilation falls
+  8.02 -> 0.94 s with unchanged tensors/fallback masks and passing F4/F3
+  image/world-gradient checks. General spatial-depth cases remain tested.
+  [Timings, proof, and remaining cost](agent_notes/loose_notes/2026-09-13_02-25-22_scalar_depth_compiler_specialization.md).
 - [x] Sparse fallback cost control (2026-09-13): identical saved-world F4
   forward/backward falls 10.76 -> 3.90 s, with image/world-gradient parity and
   unchanged atlas bytes. Compilation stays ~8 s; no scaling claim.

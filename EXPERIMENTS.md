@@ -1,13 +1,13 @@
 # DynaWorld Experiment Registry
 
-September 13 sparse fallback: STAR `a7ec561` renders the reference only on
-flagged tile samples while preserving all contributing traces. The fixed-world
-F4 control (one warmup, three paired trials) cuts compiled forward/backward
-10.76 -> 3.90 s; including compilation, 18.75 -> 11.90 s. Image/world-VJP and
-F3 slicing checks pass; atlas bytes and fallback fractions are unchanged.
-Replay is still much faster. Profiling attributes 5.70 s of an 8.33 s compiler
-call to UV events despite zero spatial depth slopes; specialize that exact
-case next. No scaling or public paper count changes. See `agent_notes/loose_notes/2026-09-13_02-09-51_sparse_fallback_cost_control.md`.
+September 13 scalar-depth specialization: STAR `ccf6c1c` skips spatial
+visibility work only when every spatial slope coefficient is exactly zero.
+The repeated same-world control cuts compilation 8.02 -> 0.94 s and total
+compile/forward/backward 11.90 -> 4.94 s. F4/F3 image/world-VJP and slicing
+gates pass; tensors, active traces and fallback masks are unchanged. Only a
+redundant spatial-event label is removed. Reference fallback still dominates
+rendering (~3.97 s versus ~0.043 s replay); inspect that next. No scaling or
+public paper count changes. See `agent_notes/loose_notes/2026-09-13_02-25-22_scalar_depth_compiler_specialization.md`.
 
 September 13 frozen-compiler diagnosis: a float32 depth-order swap explains
 the saved F4 image/VJP failure. A centered-depth intervention reduces max

@@ -21,10 +21,13 @@ include source depth. Time-local fallback and native interval union (STAR
 below the unchanged 20% limit with zero overflow. Sparse reference fallback
 (STAR `a7ec561`) now retains all contributors in flagged tiles and reduces
 F4 compiled forward/backward 10.76 -> 3.90 s with image/world-VJP parity.
-Compilation remains ~8 s; profiling points to UV event checks and tile-corner
-depths despite zero spatial depth slopes. Specialize that exact case next,
-preserving scalar ambiguity and general spatial-depth semantics. Full scaling
-and public evidence remain open. See `agent_notes/loose_notes/2026-09-13_02-09-51_sparse_fallback_cost_control.md`.
+Exact-zero spatial-depth specialization (STAR `ccf6c1c`) now cuts compilation
+8.02 -> 0.94 s; total compile/forward/backward is 4.94 s with F4/F3 numerical,
+slice, and exact tensor/membership checks passing. General spatial visibility
+remains tested. Reference fallback (~3.97 s forward/backward) now dominates;
+inspect/profile that route while preserving centered source depth, source-id
+ties and all contributors. Full scaling/public evidence remain open. See
+`agent_notes/loose_notes/2026-09-13_02-25-22_scalar_depth_compiler_specialization.md`.
 Further quality work should isolate capacity, scene-unit conditioning, and
 projection/visibility approximations; do not discard successful source fits.
 
