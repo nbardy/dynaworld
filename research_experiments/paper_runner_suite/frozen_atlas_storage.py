@@ -116,8 +116,10 @@ def validate_topology(
         "active_stop",
         "cells",
     }
-    if set(topology) != expected_keys:
+    if set(topology) not in (expected_keys, expected_keys | {"opacity_time_centered"}):
         raise ValueError("retained atlas topology fields are incomplete")
+    if "opacity_time_centered" in topology and not isinstance(topology["opacity_time_centered"], bool):
+        raise ValueError("retained atlas opacity_time_centered must be boolean")
     for name in (
         "source_window_indices",
         "source_primitive_ids",

@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Centered temporal adjoint (2026-09-13): fitted-world image/gradient/slice
+  checks now pass at unchanged tolerances. Three warmed repeats still give
+  8.98 s forward/backward plus 4.23 s compile versus 0.078 s replay.
+  [Numerical repair and retained negative timing](agent_notes/loose_notes/2026-09-13_04-06-51_centered_temporal_adjoint_and_fitted_world_timing.md).
 - [x] Fitted-world support repair (2026-09-13): individual Gaussian bounds
   remove compiled tile overflow (maximum 938 -> 119). Images match replay;
   temporal-gradient acceptance remains negative, including repeatability.

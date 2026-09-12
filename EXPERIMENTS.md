@@ -1,5 +1,14 @@
 # DynaWorld Experiment Registry
 
+September 13 centered temporal adjoint: STAR `f98b288` evaluates and
+accumulates the envelope as lambda*(t-t0)^2. The fitted 2048-tube world now
+passes F4 image/all-world-gradient and slicing gates; raw temporal-precision
+error falls 3.24e-5 -> 3.14e-7 at unchanged 1e-5 tolerance. Repeated identical
+backward variation falls to ~1.26e-7. Warmed median compile/forward/backward
+is 4.23/0.37/8.62 s versus 0.078 s total replay, so speed remains negative.
+Next test batched UVT lowering against the same retained world and atlas.
+No full scaling/public count change. See `agent_notes/loose_notes/2026-09-13_04-06-51_centered_temporal_adjoint_and_fitted_world_timing.md`.
+
 September 13 fitted-world compiler check: per-trace axis support bounds
 (STAR `a316cc6`) remove false tile overflow, reducing the maximum from 938 to
 119 at unchanged capacity 256. RGB parity passes at 1.40e-6, but temporal-

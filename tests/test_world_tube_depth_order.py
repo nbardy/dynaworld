@@ -22,6 +22,50 @@ from torch_gsplat_bridge_star_uvt.projective_trace import (
 
 
 @pytest.mark.parametrize('device', ['cpu', pytest.param('mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required'))])
+@pytest.mark.parametrize('origin', [0., 8192.])
+@pytest.mark.parametrize('fallback', [False, True])
+def test_centered_temporal_envelope_keeps_value_and_adjoint_under_time_translation(device, origin, fallback):
+    # A change of time origin must not destroy the temporal Gaussian or VJP.
+    # All offsets are exactly representable at either origin in float32.
+    center = torch.tensor(origin+.125,device=device,requires_grad=True)
+    precision = torch.tensor(.5,device=device,requires_grad=True)
+    ma = torch.stack((center.new_tensor(1.5),center.new_tensor(1.5),center)).reshape(1,3)
+    q = torch.stack((precision.new_tensor(.75),precision.new_tensor(0.),precision.new_tensor(0.),precision.new_tensor(1.25),precision.new_tensor(0.),precision)).reshape(1,6)
+    opacity = torch.tensor([.7],device=device,requires_grad=True)
+    color = torch.tensor([[.8,.3,.2]],device=device,requires_grad=True)
+    inputs = dict(ma=ma,q_uvt=q,depth0=torch.ones(1,device=device),depth_beta=torch.zeros((1,3),device=device),opacity=opacity,color=color)
+    times = torch.tensor([origin-.5,origin,origin+.5],device=device)
+    atlas = uvt_tubes_to_projective_trace_cell_atlas(**inputs,times=times,sigma_px=1.,image_width=3,image_height=3,tile_size=8,alpha_threshold=1/255,require_isotropic_spatial=False,auto_support_padding_from_alpha=True,allow_depth_affine_uv=True,temporal_mode='centered')
+    # Cached live updates and frame slicing must carry the encoding as well.
+    from star_uvt_projective_interval_backend import make_projective_cell_interval_live_atlas_from_uvt_tubes
+    cfg = {'data':{'max_frames':3,'target_size':3},'feature_uvt':{'feature_dim':3,'tile_t':1,'tile_capacity':128,'alpha_threshold':1/255,'max_alpha':1.,'projective_interval':{'enabled':True,'sigma_px':1.,'tile_size':8,'allow_anisotropic_spatial_precision':True}}}
+    atlas = make_projective_cell_interval_live_atlas_from_uvt_tubes(**inputs,cfg=cfg,reference_atlas=atlas)
+    assert atlas.opacity_time_centered
+    if fallback:
+        atlas = replace(atlas,cells=[replace(cell,fallback=True,fallback_reasons=('test',)) for cell in atlas.cells])
+    actual = []
+    for frame in range(len(times)):
+        chunk = slice_projective_trace_cell_atlas_frames(atlas,start=frame,stop=frame+1)
+        if device == 'mps':
+            from research_project.trainer_harness.tile_metal_autograd import ProjectiveCellIntervalTrainerState
+            state = ProjectiveCellIntervalTrainerState(atlas=chunk,times=times[frame:frame+1],config=UVTRenderConfig(height=3,width=3,frames=1),sigma_px=1.,image_width=3,image_height=3,tile_size=8,fallback_render_mode='mixed')
+            actual.append(state.render())
+        else:
+            actual.append(render_projective_trace_cell_atlas_reference(chunk,times[frame:frame+1],image_width=3,image_height=3,tile_size=8,sigma_px=1.,alpha_cutoff=1/255,allow_fallback_cells=True))
+    actual = torch.cat(actual)
+    yy,xx = torch.meshgrid(torch.arange(3,device=device)+.5,torch.arange(3,device=device)+.5,indexing='ij')
+    qv = .75*(xx-1.5).square()+1.25*(yy-1.5).square()+precision*(times[:,None,None]-center).square()
+    expected = opacity*torch.exp(-.5*qv)[...,None]*color
+    torch.testing.assert_close(actual,expected,rtol=1e-5,atol=1e-6)
+    cotangent = torch.linspace(-.8,1.2,actual.numel(),device=device).reshape_as(actual)
+    parameters = (center,precision,opacity,color)
+    reference_grads = torch.autograd.grad((expected*cotangent).sum(),parameters,retain_graph=True)
+    actual_grads = torch.autograd.grad((actual*cotangent).sum(),parameters)
+    for value,reference in zip(actual_grads,reference_grads):
+        torch.testing.assert_close(value,reference,rtol=1e-5,atol=1e-6)
+
+
+@pytest.mark.parametrize('device', ['cpu', pytest.param('mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='local Metal required'))])
 def test_mixed_size_tubes_preserve_images_and_gradients_without_false_tile_overflow(device):
     # One broad tube must not give forty small tubes its support footprint.
     # An inactive first row also exercises source-row mapping after filtering.
@@ -145,6 +189,21 @@ def _segmented_atlas(device='cpu'):
         cells=[ProjectiveTraceTileTimeCell(tile_u=0,tile_v=0,start=start,stop=stop,primitive_ids=(i,),ordered_primitive_ids=(i,),depth_intervals=((i+1.,i+1.),),fallback=False,fallback_reasons=()) for i,start,stop in intervals],
         source_window_indices=(0,0),source_primitive_ids=(0,1),active_start=(0,0),active_stop=(4,4),
     )
+
+
+@pytest.mark.parametrize('centered', [False, True])
+def test_retained_atlas_preserves_temporal_envelope_interpretation(tmp_path, centered):
+    # Identical coefficient bytes have different meanings in the two encodings.
+    # Losing the flag would silently change a restored atlas's opacity over time.
+    from research_project.benchmarks.multicam_heldout_compare import _write_frozen_atlas_storage
+    from research_experiments.paper_runner_suite.frozen_atlas_storage import verify_retained_storage_artifact
+
+    atlas = replace(_segmented_atlas(), opacity_time_centered=centered,
+                    opacity_time_coeffs=torch.tensor([[0., .125, .5]]).repeat(2, 1))
+    identity = _write_frozen_atlas_storage(atlas, out_dir=tmp_path, frame_count=4)
+    header = verify_retained_storage_artifact(identity, expected_frame_count=4,
+                                             expected_trace_count=2, expected_cell_count=len(atlas.cells))
+    assert header['topology'].get('opacity_time_centered', False) is centered
 
 
 @pytest.mark.parametrize('tile_t', [1,2,4])

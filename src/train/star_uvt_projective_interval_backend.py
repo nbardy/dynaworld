@@ -799,6 +799,7 @@ def make_projective_cell_interval_live_atlas_from_uvt_tubes(
             spatial_precision_uv=empty_spatial_precision,
             depth_affine_uv=empty_depth_affine,
             depth_reference_uvt=torch.empty((0, 7), dtype=torch.float32, device=ma.device),
+            opacity_time_centered=reference_atlas.opacity_time_centered,
         )
 
     row_ids = torch.tensor(source_ids, dtype=torch.long, device=ma.device)
@@ -867,8 +868,8 @@ def make_projective_cell_interval_live_atlas_from_uvt_tubes(
     ).contiguous()
     opacity_time_coeffs = torch.stack(
         (
-            temporal_precision * t_center.square(),
-            -2.0 * temporal_precision * t_center,
+            zeros if reference_atlas.opacity_time_centered else temporal_precision * t_center.square(),
+            t_center if reference_atlas.opacity_time_centered else -2.0 * temporal_precision * t_center,
             temporal_precision,
         ),
         dim=-1,
@@ -903,6 +904,7 @@ def make_projective_cell_interval_live_atlas_from_uvt_tubes(
         spatial_precision_uv=spatial_precision_uv,
         depth_affine_uv=depth_affine_uv,
         depth_reference_uvt=torch.cat((ma_sel, depth0_sel[:, None], depth_beta_sel), dim=1).contiguous(),
+        opacity_time_centered=reference_atlas.opacity_time_centered,
     )
 
 

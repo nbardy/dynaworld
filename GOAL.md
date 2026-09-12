@@ -52,6 +52,15 @@ also vary by up to 1.22e-5 on that parameter; the full check remains negative.
 Next isolate temporal-adjoint conditioning. No scaling/public count change.
 See `agent_notes/loose_notes/2026-09-13_03-41-15_compiled_support_bounds_and_temporal_gradient_noise.md`.
 
+September 13 centered temporal adjoint: STAR `f98b288` evaluates and
+accumulates the envelope as lambda*(t-t0)^2. The fitted 2048-tube world now
+passes F4 image/all-world-gradient and slicing gates; raw temporal-precision
+error falls 3.24e-5 -> 3.14e-7 at unchanged 1e-5 tolerance. Repeated identical
+backward variation falls to ~1.26e-7. Warmed median compile/forward/backward
+is 4.23/0.37/8.62 s versus 0.078 s total replay, so speed remains negative.
+Next test batched UVT lowering against the same retained world and atlas.
+No full scaling/public count change. See `agent_notes/loose_notes/2026-09-13_04-06-51_centered_temporal_adjoint_and_fitted_world_timing.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

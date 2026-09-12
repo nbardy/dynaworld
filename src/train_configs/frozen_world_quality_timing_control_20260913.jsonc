@@ -1,0 +1,21 @@
+{
+  // Fixed four-time diagnostic: separate warmed repeated cost from first-use cost.
+  // One frame count cannot establish sublinear scaling.
+  "source_run": "outputs/benchmarks/2026-09-12_world_tubes_sampling_ablation/random_2048_balanced_depth9_footprint_matched_800/world_tubes",
+  "expected_checkpoint_sha256": "da6eac63e2497a47fe7bcfa5be645b7b665199c318e17384b31cbf493f4e0c77",
+  "expected_world_state_sha256": "2ac9be4f45e1304d9ed2e8208303d3ed2ccf3a1713d3cd1ab89be6b46233434e",
+  "expected_tube_count": 2048,
+  "full_frames": 32,
+  "image_size": [96, 128],
+  "frames": 4,
+  "camera_projection": "dataset_lens",
+  "verify_selected_time_slice_parity": true,
+  "timing_warmups": 1,
+  "timing_repeats": 3,
+  "resource_protocol": "src/train_configs/paper_protocols/coffee_martini_local_capacity2048_800step_20260913.jsonc",
+  "output_dir": "outputs/benchmarks/2026-09-13_frozen_quality_warm_timing",
+  "wandb_enabled": true,
+  "wandb_project": "dynaworld",
+  "wandb_mode": "offline",
+  "wandb_tags": ["world_tubes", "local_diagnostic", "frozen_world", "quality_checkpoint", "2048_tubes", "centered_temporal_envelope", "warmed_timing"]
+}
