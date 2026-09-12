@@ -69,6 +69,16 @@ Replay also improves to 0.045 s, so this remains slower than replay. CPU
 profiling locates the next cost in visibility pair checks and scalar depth
 sorting. No scaling/public count change. See `agent_notes/loose_notes/2026-09-13_04-18-45_batched_uvt_lowering_and_metadata_profile.md`.
 
+September 13 visibility/density result: STAR `e1c33c1` preserves the exact
+F4 atlas while reducing compilation 1.67 -> 0.98 s. The fixed-world F4/8/16/32
+sweep completes under the same guards; three rows pass, F32 fails one pixel
+at 6.17e-4. A source-alpha cutoff crossing explains that pixel; old/new
+visibility cells are exact. Eightfold frame growth costs 8.19x compilation
+and 10.50x backward, so no sublinear speed claim follows. The shared forward
+jump above F8 includes measured eight-frame-LRU decoding. Next repair source
+alpha-branch compatibility, then separate target-loading timing. Public counts
+stay unchanged. See `agent_notes/loose_notes/2026-09-13_04-49-00_visibility_bookkeeping_density_and_alpha_cutoff.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

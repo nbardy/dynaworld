@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Local density sweep (2026-09-13): visibility bookkeeping cuts F4 compile
+  1.67 -> 0.98 s with exact atlas bytes. F4/8/16 pass; F32 exposes one alpha-
+  cutoff pixel failure. Backward grows 10.50x for 8x more frames; no sublinear
+  speed claim. [Measurements, cache confound and next numerical fix](agent_notes/loose_notes/2026-09-13_04-49-00_visibility_bookkeeping_density_and_alpha_cutoff.md).
 - [x] Batched UVT lowering (2026-09-13): same fitted-world atlas and passing
   image/gradient/slicing checks, with warmed forward/backward 8.98 -> 0.575 s
   and compile 4.23 -> 1.67 s. Replay remains faster at 0.045 s.

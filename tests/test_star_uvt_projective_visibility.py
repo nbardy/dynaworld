@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import sys
 from pathlib import Path
 
@@ -224,6 +225,34 @@ def test_projective_cell_visibility_event_stratifier_isolates_exact_root_sample(
         (2, 4, False),
     ]
     assert stats.fallback_tile_samples == 1
+
+
+def test_visibility_root_filter_keeps_single_sample_contributors_and_ties() -> None:
+    times = torch.tensor([-2., 0., 3., 5.])
+    atlas = _cell_atlas_from_depth_coeffs(
+        torch.tensor([[2., .25, 0.], [2., -.25, 0.], [1., 0., 0.],
+                      [1., 0., 0.], [2., 0., 0.]]), frame_count=4,
+    )
+    atlas = replace(atlas, active_start=(0, 0, 0, 3, 1), active_stop=(4, 4, 1, 4, 2),
+                    color=torch.tensor([[1., 0., 0.], [0., 0., 1.], [0., 1., 0.],
+                                        [1., 1., 0.], [0., 1., 1.]]))
+    stratified = stratify_projective_trace_cell_atlas_visibility_events(atlas, times)
+    assert [(cell.start, cell.stop, cell.ordered_primitive_ids) for cell in stratified.cells] == [
+        (0, 1, (2, 0, 1)), (1, 2, (0, 1, 4)),
+        (2, 3, (1, 0)), (3, 4, (1, 3, 0)),
+    ]
+    reference = replace(atlas, cells=[
+        replace(atlas.cells[0], start=start, stop=stop, primitive_ids=(trace,),
+                ordered_primitive_ids=(trace,), depth_intervals=((0., 1.),),
+                fallback=True, fallback_reasons=("reference_live_sort",))
+        for trace, (start, stop) in enumerate(zip(atlas.active_start, atlas.active_stop))
+    ])
+    args = dict(image_width=8, image_height=8, tile_size=8, sigma_px=1., allow_fallback_cells=True)
+    torch.testing.assert_close(
+        render_projective_trace_cell_atlas_reference(stratified, times, **args),
+        render_projective_trace_cell_atlas_reference(reference, times, **args),
+        rtol=0, atol=0,
+    )
 
 
 def _depth_affine_order_flip_atlas(
