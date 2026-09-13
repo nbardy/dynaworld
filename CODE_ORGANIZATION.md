@@ -1,5 +1,11 @@
 # DynaWorld Code Organization Roadmap
 
+Frozen device-batching control (2026-09-13): the report has an explicit
+resident_chunk_frames override; default behavior is unchanged. The native
+interval packer unions candidates across the execution chunk, independently
+of the configured tile_t field. See compare_frozen_world_device_chunks.py and
+its retained frozen_world_device_chunks.patch for the capacity-bounded control.
+
 Paper target provider (2026-09-13): `src/train/paper_multicam_targets.py` owns
 bounded CPU decode/cache and grouped selected-frame lookahead. Both frozen
 consumers use the same loader inside their measured target-loading phase;

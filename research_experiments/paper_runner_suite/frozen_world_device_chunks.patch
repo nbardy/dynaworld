@@ -1,0 +1,31 @@
+--- a/variants/star_uvt_v0/research_project/benchmarks/multicam_heldout_compare.py
++++ b/variants/star_uvt_v0/research_project/benchmarks/multicam_heldout_compare.py
+@@ -5117,6 +5117,7 @@
+     camera_projection: str,
+     out_dir: Path,
+     max_frames: int = 0,
++    resident_chunk_frames: int | None = None,
+     checkpoint: dict[str, Any] | None = None,
+     verify_selected_time_slice_parity: bool = False,
+     timing_warmups: int = 0,
+@@ -5216,10 +5217,16 @@
+         for frame in frame_indices
+     )
+     config = replace(render_config, frames=frame_count)
+-    resident_chunk_frames = max(
+-        1,
+-        min(int(render_config.tile_t), frame_count),
+-    )
++    if resident_chunk_frames is None:
++        resident_chunk_frames = max(1, int(render_config.tile_t))
++    if (
++        isinstance(resident_chunk_frames, bool)
++        or not isinstance(resident_chunk_frames, int)
++        or resident_chunk_frames < 1
++    ):
++        raise ValueError("frozen-world device chunk size must be a positive integer")
++    # Keep configured tile size unchanged; native interval bins still span the chunk.
++    resident_chunk_frames = min(resident_chunk_frames, frame_count)
+
+     def load_target_chunk(chunk_start: int, chunk_stop: int) -> Tensor:
+         selected_indices = frame_indices[chunk_start:chunk_stop]

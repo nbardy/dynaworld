@@ -1,5 +1,13 @@
 # DynaWorld Experiment Registry
 
+September 13 device batching: five capacity-safe Metal layouts pass existing
+image/world-gradient/atlas checks; three requested layouts are capacity-negative.
+F32 chunk1->4 cuts evaluator+backward 1.88->1.22 s and full cost 4.85->4.24 s,
+with 2.00-GiB peak RSS and zero new swap. Native interval bins span the whole
+chunk despite configured tile_t=1: sparse F4/chunk4 needs 334 slots, F32/chunk8
+needs 260, over unchanged 256. Replay remains faster; no sublinear/public claim.
+Next profile valid F32/chunk4 with bounded Python tools. See `agent_notes/loose_notes/2026-09-13_09-14-23_frozen_world_device_batching_and_interval_capacity.md`.
+
 September 13 grouped CPU targets: both frozen consumers now prefetch bounded
 selected-frame groups inside target-loading timing, preserving LRU8 and one-frame
 Metal residency. All 189 tests and four fitted-world rows pass with exact atlases.

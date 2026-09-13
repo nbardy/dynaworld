@@ -181,6 +181,14 @@ multi-frame residency from temporal bin size under unchanged memory caps.
 See `agent_notes/loose_notes/2026-09-13_08-49-34_grouped_cpu_targets_and_frozen_metal_timing.md`. Provider/test are owned; the STAR hook is a retained patch against
 the archived streaming worktree, not a clean-HEAD reproduction claim.
 
+September 13 device batching: five capacity-safe Metal layouts pass existing
+image/world-gradient/atlas checks; three requested layouts are capacity-negative.
+F32 chunk1->4 cuts evaluator+backward 1.88->1.22 s and full cost 4.85->4.24 s,
+with 2.00-GiB peak RSS and zero new swap. Native interval bins span the whole
+chunk despite configured tile_t=1: sparse F4/chunk4 needs 334 slots, F32/chunk8
+needs 260, over unchanged 256. Replay remains faster; no sublinear/public claim.
+Next profile valid F32/chunk4 with bounded Python tools. See `agent_notes/loose_notes/2026-09-13_09-14-23_frozen_world_device_batching_and_interval_capacity.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

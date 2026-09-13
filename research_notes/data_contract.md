@@ -5,8 +5,10 @@ schema changes, and README claims aligned with this file.
 
 Grouped paper targets (2026-09-13) use the canonical CPU float32 decoder and
 preserve selected-frame order, duplicates, calibration and train/heldout split.
-Frozen lookahead is bounded by the existing CPU cache; the current Metal
-consumer still receives one frame at a time. Account for decoded batches,
+Frozen lookahead is bounded by the existing CPU cache. Default Metal residency
+remains one frame; the September 13 execution control validates up to four dense
+frames per chunk at the same cache 8, without changing logical targets. Wider
+physical-time chunks can overflow interval bins even when device memory fits. Account for decoded batches,
 cache clones and returned stacks separately from the eight-frame cache cap.
 No full-video tensor or extra training target is introduced by lookahead.
 

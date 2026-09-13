@@ -131,6 +131,11 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Device-batching control (2026-09-13): five Metal layouts pass; three
+  capacity-negative cases retained. F32 chunk4 cuts E+B 1.88->1.22 s with
+  unchanged images/gradients, 2.00-GiB RSS and no new swap. Replay remains faster.
+  Details: `agent_notes/loose_notes/2026-09-13_09-14-23_frozen_world_device_batching_and_interval_capacity.md`.
+
 - [x] Grouped CPU target loading (2026-09-13): unchanged target/atlas bytes and
   all four Metal rows pass; F32 full cost 10.55 -> 4.97 s, with LRU8 and
   one-frame device residency. Shared replay also improves; no sublinear claim.

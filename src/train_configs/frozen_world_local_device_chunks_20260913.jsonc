@@ -1,0 +1,13 @@
+{
+  // Same world, sample times and CPU LRU. Native interval bins union the chunk.
+  "frozen_config": "src/train_configs/frozen_world_local_density_control_20260913.jsonc",
+  "device_chunk_sizes": [1, 2, 4, 8],
+  // F4 also checks non-unit selected-time slicing; F32 measures the full interval.
+  "frame_counts": [4, 32],
+  "temporal_tile_size": 1,
+  "cpu_cache_frames": 8,
+  // Exact CPU packing found F4/chunk4 and F32/chunk8 over capacity256.
+  // Keep those negative rows; do not rerun them or silently enlarge capacity.
+  "capacity_report": "outputs/benchmarks/2026-09-13_frozen_device_chunks/chunk_capacity.json",
+  "output_dir": "outputs/benchmarks/2026-09-13_frozen_device_chunks_capacity_checked"
+}
