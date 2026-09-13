@@ -131,6 +131,11 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Exact slice-record construction (2026-09-13): paired CPU slicing improves
+  12%; all 189 tests and five Metal layouts pass. F32/chunk4 full cost
+  4.24 -> 4.18 s, with unchanged atlas/image/gradient contracts and no new swap.
+  Details: `agent_notes/loose_notes/2026-09-13_09-33-11_chunk4_profile_and_direct_slice_cell_construction.md`.
+
 - [x] Device-batching control (2026-09-13): five Metal layouts pass; three
   capacity-negative cases retained. F32 chunk4 cuts E+B 1.88->1.22 s with
   unchanged images/gradients, 2.00-GiB RSS and no new swap. Replay remains faster.

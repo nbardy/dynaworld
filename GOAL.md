@@ -189,6 +189,14 @@ chunk despite configured tile_t=1: sparse F4/chunk4 needs 334 slots, F32/chunk8
 needs 260, over unchanged 256. Replay remains faster; no sublinear/public claim.
 Next profile valid F32/chunk4 with bounded Python tools. See `agent_notes/loose_notes/2026-09-13_09-14-23_frozen_world_device_batching_and_interval_capacity.md`.
 
+September 13 direct slice records: STAR `9943865` removes measured generic
+copy overhead. Paired CPU F32/chunk4 slicing falls 0.307->0.270 s with every field
+exact. All 189 tests and five Metal layouts pass; capacity rejections stay intact.
+F32/chunk4 E+B 1.217->1.187 s, full 4.239->4.181 s; smaller layouts are mixed.
+RSS 2.08 GiB, zero new swap; no sublinear or quality/public-count change. Next audit
+native batched UVT as a stronger same-world static-camera control before another
+small compiler optimization. See `agent_notes/loose_notes/2026-09-13_09-33-11_chunk4_profile_and_direct_slice_cell_construction.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

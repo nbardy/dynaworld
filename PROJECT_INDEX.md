@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+September 13 direct slice records: STAR `9943865` removes measured generic
+copy overhead. Paired CPU F32/chunk4 slicing falls 0.307->0.270 s with every field
+exact. All 189 tests and five Metal layouts pass; capacity rejections stay intact.
+F32/chunk4 E+B 1.217->1.187 s, full 4.239->4.181 s; smaller layouts are mixed.
+RSS 2.08 GiB, zero new swap; no sublinear or quality/public-count change. Next audit
+native batched UVT as a stronger same-world static-camera control before another
+small compiler optimization. See `agent_notes/loose_notes/2026-09-13_09-33-11_chunk4_profile_and_direct_slice_cell_construction.md`.
+
 September 13 device batching: five capacity-safe Metal layouts pass existing
 image/world-gradient/atlas checks; three requested layouts are capacity-negative.
 F32 chunk1->4 cuts evaluator+backward 1.88->1.22 s and full cost 4.85->4.24 s,
