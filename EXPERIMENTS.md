@@ -1,12 +1,12 @@
 # DynaWorld Experiment Registry
 
-September 13 selected-time control: all F4/8/16/32 native/replay pairs pass
-independent value, world-gradient, identity, work-count and resource checks.
-Native always renders 32: E+B is 48/43/60/64 ms versus replay 35/65/163/332 ms.
-It loses at F4 and wins from F8; RSS 1.07 GiB, zero new swap. Nearly flat cost
-comes with fixed rendered R=32, so it is not new sublinear-in-F evidence.
-Next isolate MSE versus robust-L1 fitting at fixed capacity/init/sampling.
-Public counts stay 0/7 and 0/21. See `agent_notes/loose_notes/2026-09-13_10-21-04_native_selected_time_loss_and_fixed_render_budget.md`.
+September 13 matched loss control: both 800-update Metal runs independently
+pass source/initial-state/loss-gradient/schedule/artifact/resource checks.
+Robust L1 gives 20.91/15.35 dB train/heldout; MSE gives 20.93/14.69 with worse
+SSIM. Both remain blurry, with zero overflow and new swap; RSS peaks 1.30 GiB.
+Keep robust L1. Next isolate a single-training-camera world fit and compare
+cam04 metrics explicitly, recording initialization and target exposure.
+Local loss controls 2/2; public counts remain 0/7 and 0/21. See `agent_notes/loose_notes/2026-09-13_10-48-50_matched_world_tube_mse_vs_robust_l1.md`.
 
 September 13 native UVT control: the same frozen world passes all three
 native batches (1/4/32). At F32, projection/render/backward falls 0.330 -> 0.060 s;

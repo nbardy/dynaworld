@@ -375,6 +375,29 @@ Caveats:
   features themselves. Re-running the unconditioned recipe at 250 steps with
   wall-clock recorded would establish a faster, encoder-free fallback.
 
+## Local shared-world loss controls — 2026-09-13
+
+One-seed diagnostic pair, not public quality standings. Config:
+`src/train_configs/world_tube_loss_control_20260913.jsonc`; runner:
+`research_experiments/paper_runner_suite/run_world_tube_loss_control.py`.
+Coffee Martini cam04/cam09 -> exploratory cam06, 32 frames, 2048 final tubes,
+800 updates/1600 target images/19,292,160 target pixels, 48x64 -> 96x128.
+Both real Metal runs pass the independent loss-control verifier with identical
+initial state/residual, bound sources and sample schedule. Only the photometric
+formula changes; unchanged regularization has different relative strength.
+
+| Loss | Train PSNR | Heldout PSNR | Train SSIM | Heldout SSIM | Heldout LPIPS | Train loop s | Offline W&B |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| robust_l1 | 20.91387 | 15.35368 | 0.68091 | 0.34544 | 0.74335 | 361.34 | pa370e31d5ffa7 |
+| mse | 20.93021 | 14.68559 | 0.65377 | 0.32552 | 0.74651 | 369.31 | paf91acfd3f77e |
+
+Time is training-loop only; full launch wall was not retained. Both enclosing
+600-second guards include startup, evaluation and offline W&B finalization.
+Zero overflow/new swap; peak tree/launcher RSS 1.30 GiB. This rejects MSE as a
+simple quality fix for this recipe, not every possible MSE tuning. Atomic
+backward is nondeterministic. Keep robust L1. Raw and verified artifacts:
+`outputs/benchmarks/2026-09-13_world_tube_loss_control/comparison.json`. [Notes](agent_notes/loose_notes/2026-09-13_10-48-50_matched_world_tube_mse_vs_robust_l1.md).
+
 ## Local frozen-world execution controls
 
 These are measured phases of one frozen 2048-tube, F32, 96x128 Coffee Martini

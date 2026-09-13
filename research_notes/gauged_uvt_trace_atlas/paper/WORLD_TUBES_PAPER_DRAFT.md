@@ -1589,7 +1589,7 @@ per-frame replay with the compiled projective atlas. Evidence schema v2 is
 source-complete but not yet runtime-verified. It binds exact schedule, raw and
 decoded data, canonical evaluation, runtime/native binaries, retained
 artifacts, and finalized W&B files. None of the seven core or 21 full-breadth
-rows is currently accepted. The canonical evaluator clamps predictions to
+rows is currently accepted. The canonical evaluator clamps predictions to [0,1], computes
 L1/MSE over all RGB elements, derives PSNR once from the global MSE, averages
 SSIM/LPIPS over the full declared image set, and uses a fixed black background
 with no color calibration. The seven core rows must be rerun for the minimum

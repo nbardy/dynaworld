@@ -206,6 +206,12 @@ train2-holdout1 records also include `train_cameras`, `heldout_cameras`,
 
 ## Unified Paper Space-Time Contract
 
+The September 13 local loss controls optimize only cam04/cam09 and evaluate
+all declared frames. Cam06 has been inspected during development; its local
+metrics are exploratory validation, not an untouched final test. A future
+first_only optimizer control must distinguish unoptimized cameras from cameras
+whose pixels were excluded from initialization as well as optimization.
+
 The Coffee Martini full-temporal row lives at
 `src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl`.
 It declares 300 synchronized frames at 30 fps from time zero, trains on

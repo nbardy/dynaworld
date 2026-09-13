@@ -1,0 +1,7 @@
+{
+  // Matched current-source 800-update runs; all other recipe settings are inherited.
+  "sampling_config": "src/train_configs/world_tubes_local_sampling_ablation_20260912.jsonc",
+  "variant": "random_2048_balanced_depth9_footprint_matched_800",
+  "photometric_losses": ["robust_l1", "mse"],
+  "output_dir": "outputs/benchmarks/2026-09-13_world_tube_loss_control"
+}

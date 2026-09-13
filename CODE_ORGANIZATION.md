@@ -1,5 +1,11 @@
 # DynaWorld Code Organization Roadmap
 
+Local world-loss control: `run_world_tube_loss_control.py` in the paper runner
+suite wraps the existing guarded benchmark with a module-local loss substitution
+and captures the initial world/first derivative. Its one independent verifier,
+`verify_world_tube_loss_control.py`, checks those tensors, sampler replay and
+retained quality/resource/W&B artifacts. Production loss code is unchanged.
+
 Native UVT execution control (2026-09-13):
 `research_experiments/paper_runner_suite/compare_native_uvt_batches.py` owns
 the fixed-checkpoint batching comparison and F4/8/16/32 selected-time losses,

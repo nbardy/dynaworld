@@ -131,6 +131,10 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Matched 800-update loss control (2026-09-13): MSE leaves training PSNR
+  near 20.9 dB and lowers heldout 15.35 -> 14.69 dB; retain robust L1.
+  Both real Metal runs and independent artifact checks pass. [Notes](agent_notes/loose_notes/2026-09-13_10-48-50_matched_world_tube_mse_vs_robust_l1.md).
+
 - [x] Native selected-time control (2026-09-13): all four native/replay pairs
   pass. Rendering 32 loses for four requested frames, wins from eight, and
   keeps a fixed output budget; this is not a new sublinear scaling result.
