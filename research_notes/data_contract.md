@@ -208,9 +208,11 @@ train2-holdout1 records also include `train_cameras`, `heldout_cameras`,
 
 The September 13 local loss controls optimize only cam04/cam09 and evaluate
 all declared frames. Cam06 has been inspected during development; its local
-metrics are exploratory validation, not an untouched final test. A future
-first_only optimizer control must distinguish unoptimized cameras from cameras
-whose pixels were excluded from initialization as well as optimization.
+metrics are exploratory validation, not an untouched final test. The first_only
+control retains both cameras in initialization but optimizes only cam04. Its
+cam09 images are therefore initialization-exposed, not clean heldout targets.
+At fixed total image budget, cam04 exposure doubles; compare per-camera
+metrics and report actual sample counts rather than the declared-train mean.
 
 The Coffee Martini full-temporal row lives at
 `src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl`.

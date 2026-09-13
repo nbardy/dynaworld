@@ -1,0 +1,9 @@
+{
+  // Preserve two-camera initialization; only cam04 contributes optimizer targets.
+  "sampling_config": "src/train_configs/world_tubes_local_sampling_ablation_20260912.jsonc",
+  "variant": "random_2048_balanced_depth9_footprint_matched_800",
+  "photometric_losses": ["robust_l1"],
+  "optimizer_train_views": "first_only",
+  "reference_run": "outputs/benchmarks/2026-09-13_world_tube_loss_control/robust_l1",
+  "output_dir": "outputs/benchmarks/2026-09-13_world_tube_single_view_control"
+}

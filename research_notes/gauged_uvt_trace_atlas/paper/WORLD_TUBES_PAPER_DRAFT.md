@@ -1579,6 +1579,12 @@ public controls and scene breadth.
 
 ### 6.4 Public representation and cost context
 
+When optimizer views are a subset of declared training cameras, a global
+training-camera mean is not the fitting metric for the optimized subset.
+Report per-camera quality, optimizer image counts and initialization exposure
+separately. Development views inspected during these diagnostics are not an
+untouched final test set.
+
 The shared progressive, fixed, and global-shuffle protocols, evidence schema,
 and matrix generator are implemented, pending focused behavior verification.
 These rows train World Tubes with

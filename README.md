@@ -131,6 +131,11 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Single-camera world fit (2026-09-13): cam04 improves 20.63 -> 23.30 dB
+  and 0.686 -> 0.833 SSIM with twice its image exposure; other-camera PSNR
+  falls. Full checkpoint re-evaluation and independent raw-pixel/exposure
+  checks pass. [Notes](agent_notes/loose_notes/2026-09-13_11-12-24_single_camera_world_tube_fit_and_exposure_confound.md).
+
 - [x] Matched 800-update loss control (2026-09-13): MSE leaves training PSNR
   near 20.9 dB and lowers heldout 15.35 -> 14.69 dB; retain robust L1.
   Both real Metal runs and independent artifact checks pass. [Notes](agent_notes/loose_notes/2026-09-13_10-48-50_matched_world_tube_mse_vs_robust_l1.md).

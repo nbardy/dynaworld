@@ -69,17 +69,12 @@ def loss_probe(path, name):
         "gradient_relative_l2_error": gradient_error, "sha256": sha(path)}
 
 
-def offline_backing(path, report, source):
+def offline_records(path):
     from wandb.proto import wandb_internal_pb2
     from wandb.sdk.internal.datastore import DataStore
 
-    identity = read(path)
-    assert identity["mode"] == "offline" and identity["remote_identity"]["finish_called"]
-    assert identity["comparison_report_sha256"] == json_hash(report)
-    assert identity["source_digest"] == json_hash(source)
-    assert sha(identity["run_file"]["path"]) == identity["run_file"]["sha256"]
     store = DataStore()
-    store.open_for_scan(identity["run_file"]["path"])
+    store.open_for_scan(path)
     config, history = {}, {}
     try:
         while (data := store.scan_data()) is not None:
@@ -91,6 +86,16 @@ def offline_backing(path, report, source):
                 history[item.key or "/".join(item.nested_key)] = json.loads(item.value_json)
     finally:
         store.close()
+    return config, history
+
+
+def offline_backing(path, report, source):
+    identity = read(path)
+    assert identity["mode"] == "offline" and identity["remote_identity"]["finish_called"]
+    assert identity["comparison_report_sha256"] == json_hash(report)
+    assert identity["source_digest"] == json_hash(source)
+    assert sha(identity["run_file"]["path"]) == identity["run_file"]["sha256"]
+    config, history = offline_records(identity["run_file"]["path"])
     assert config["comparison_report_sha256"] == json_hash(report)
     assert config["source"]["bound_files"] == source["bound_files"]
     assert config["paper_evaluator"] == report["meta"]["paper_evaluator"]
@@ -129,7 +134,8 @@ def verify(config_path):
         command = read(folder / "command.json")
         command[command.index("--out-dir") + 1] = "<output>"
         for path, digest in source["bound_files"].items():
-            assert sha(path) == digest, f"Bound source changed: {path}"
+            archived = out / "after" / path
+            assert sha(archived if archived.exists() else path) == digest, f"Missing or changed execution source: {path}"
         native = meta["star_uvt_native_extension"]
         assert native["sha256"] == sha(native["path"])
         initial = world(diagnostic["initial_world"])
@@ -202,6 +208,7 @@ def verify(config_path):
         "scope": "one-seed fixed-budget loss substitution; final metrics are retained evaluator output, not an independent re-render",
         "shared_initial_world_sha256": initials[0]["world_state_sha256"],
         "same_initial_residual_exact": True, "same_bound_sources": sources[0]["bound_files"],
+        "live_source_differences_from_archive": [p for p, digest in sources[0]["bound_files"].items() if sha(p) != digest],
         "sample_schedule": reports[0]["star_uvt"]["paper_protocol"]["sample_schedule"],
         "metric_delta_mse_minus_robust_l1": {key: rows[1]["metrics"][key] - rows[0]["metrics"][key]
             for key in ("eval_psnr", "eval_mse", "eval_ssim", "heldout_eval_psnr", "heldout_eval_mse", "heldout_eval_ssim", "heldout_eval_lpips")},

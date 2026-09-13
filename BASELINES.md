@@ -398,6 +398,31 @@ simple quality fix for this recipe, not every possible MSE tuning. Atomic
 backward is nondeterministic. Keep robust L1. Raw and verified artifacts:
 `outputs/benchmarks/2026-09-13_world_tube_loss_control/comparison.json`. [Notes](agent_notes/loose_notes/2026-09-13_10-48-50_matched_world_tube_mse_vs_robust_l1.md).
 
+## Local single-camera shared-world control — 2026-09-13
+
+Config: `src/train_configs/world_tube_single_view_control_20260913.jsonc`.
+Same two-camera initial world, 800 updates, 2048 tubes, 32 frames and fixed
+1600-image / 19,292,160-pixel budget; first_only restricts optimizer targets
+to cam04. Each cam04 frame appears 50 times versus 25 in the two-camera run.
+Cam09 remains initialization-exposed. Both exact final checkpoints were
+re-evaluated on identical images; independent raw cam04 MSE/L1/PSNR and
+sampler/exposure/source/checkpoint/W&B/resource checks pass.
+
+| Optimized cameras | cam04 PSNR | cam04 SSIM | cam09 PSNR | cam06 PSNR | cam06 LPIPS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| two_camera | 20.62914 | 0.68586 | 21.21857 | 15.35368 | 0.74335 |
+| cam04_only | 23.29674 | 0.83284 | 9.66767 | 11.92116 | 0.55803 |
+
+Training: offline `pac4b80cd5b0c3`, 276.17 s train loop;
+paired frozen evaluation: offline `9bj7qq7w`.
+Full launch wall is bounded by 600 seconds but not retained exactly.
+Peak tree/launcher RSS 1.22 GiB, zero new swap/overflow. One seed; cam06 is
+exploratory validation. Cam04 gains 2.67 dB, but its exposure doubles. Other-
+camera PSNR falls despite better cam06 LPIPS; this is source-fit evidence,
+not a broad quality ranking. Do not use the 12.49 dB declared-train average
+as the optimized-camera score. [Notes](agent_notes/loose_notes/2026-09-13_11-12-24_single_camera_world_tube_fit_and_exposure_confound.md).
+Accepted artifacts: `outputs/benchmarks/2026-09-13_world_tube_single_view_control/comparison.json`.
+
 ## Local frozen-world execution controls
 
 These are measured phases of one frozen 2048-tube, F32, 96x128 Coffee Martini

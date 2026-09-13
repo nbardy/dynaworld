@@ -1,12 +1,13 @@
 # DynaWorld TODO Index
 
-September 13 matched loss control: both 800-update Metal runs independently
-pass source/initial-state/loss-gradient/schedule/artifact/resource checks.
-Robust L1 gives 20.91/15.35 dB train/heldout; MSE gives 20.93/14.69 with worse
-SSIM. Both remain blurry, with zero overflow and new swap; RSS peaks 1.30 GiB.
-Keep robust L1. Next isolate a single-training-camera world fit and compare
-cam04 metrics explicitly, recording initialization and target exposure.
-Local loss controls 2/2; public counts remain 0/7 and 0/21. See `agent_notes/loose_notes/2026-09-13_10-48-50_matched_world_tube_mse_vs_robust_l1.md`.
+September 13 single-camera fit: the shared-world model reaches 23.30 dB /
+0.833 SSIM on cam04 versus 20.63 dB / 0.686 in the two-camera fit. Both frozen
+worlds are re-evaluated; raw-pixel, sampler/exposure, source, checkpoint, W&B
+and resource checks pass. Cam04 exposure doubles at fixed total budget;
+cam09 was initialization-exposed. Other-camera PSNR falls. Peak RSS 1.22 GiB,
+zero new swap/overflow. Next keep cam04 exposure fixed and remove only the
+cam09 photometric gradient, preserving its existing cam04 loss weight.
+Local view control 1/1; public 0/7 and 0/21 unchanged. See `agent_notes/loose_notes/2026-09-13_11-12-24_single_camera_world_tube_fit_and_exposure_confound.md`.
 
 September 13 native UVT control: the same frozen world passes all three
 native batches (1/4/32). At F32, projection/render/backward falls 0.330 -> 0.060 s;

@@ -4,7 +4,12 @@ Local world-loss control: `run_world_tube_loss_control.py` in the paper runner
 suite wraps the existing guarded benchmark with a module-local loss substitution
 and captures the initial world/first derivative. Its one independent verifier,
 `verify_world_tube_loss_control.py`, checks those tensors, sampler replay and
-retained quality/resource/W&B artifacts. Production loss code is unchanged.
+retained quality/resource/W&B artifacts. The same runner now retains named
+per-camera metrics and supports first_only optimization.
+`evaluate_world_tube_view_control.py` reloads both frozen worlds and retains
+raw cam04 pixels; `verify_world_tube_view_control.py` checks per-camera quality
+and actual exposure, sharing the existing hashing/loss/W&B helpers.
+Production loss code is unchanged.
 
 Native UVT execution control (2026-09-13):
 `research_experiments/paper_runner_suite/compare_native_uvt_batches.py` owns

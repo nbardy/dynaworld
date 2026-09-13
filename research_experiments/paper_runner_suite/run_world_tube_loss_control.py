@@ -27,6 +27,8 @@ def write(path, data):
 
 def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
     cfg = load_config_file(config_path)
+    cfg.setdefault("optimizer_train_views", "all")
+    assert cfg["optimizer_train_views"] in {"all", "first_only"}
     assert loss_name in cfg["photometric_losses"] and loss_name in {"robust_l1", "mse"}
     base = load_config_file(cfg["sampling_config"])
     variant = next(v for v in base["variants"] if v["name"] == cfg["variant"])
@@ -46,6 +48,7 @@ def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
             backward_policy=base["backward_policy"], device=base["device"], only_lane="world_tubes",
             allow_local_mps_execution=True)
         command[command.index("--uvt-init-sampling")+1] = variant["init_sampling"]
+        command.extend(["--uvt-optimizer-train-views", cfg["optimizer_train_views"]])
         for key, flag in [("tile_capacity", "--uvt-tile-capacity"), ("tile_t", "--uvt-tile-t"),
                           ("init_depth", "--init-depth"), ("init_precision_xy", "--uvt-init-precision-xy")]:
             command.extend([flag, str(variant[key])])
@@ -82,6 +85,8 @@ def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
     initial = []
     original_init = c.WorldTubeModel.__init__
     original_loss = c.robust_l1
+    original_eval = c.eval_world_tubes
+    evaluations = []
     calls = 0
 
     def capture_initial(model, *args, **kwargs):
@@ -101,14 +106,25 @@ def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
                 "gradient": grad.detach().cpu(), "loss_name": loss_name}, out / "first_loss_probe.pt")
         return value
 
+    def capture_evaluation(model, bundle, **kwargs):
+        result = original_eval(model, bundle, **kwargs)
+        evaluations.append({"metrics": result["metrics"], **{
+            split: dict(zip(getattr(bundle, split + "_camera_names"), result[split + "_view_metrics"], strict=True))
+            for split in ("train", "heldout")}})
+        return result
+
     c.WorldTubeModel.__init__ = capture_initial
     c.robust_l1 = photometric
+    c.eval_world_tubes = capture_evaluation
     command = json.loads((out / "command.json").read_text())
     sys.argv = command[1:]
     c.main()
     report = json.loads((lane / "comparison_report.json").read_text())
     assert report["star_uvt"]["steps"] == protocol.steps == calls
     assert report["star_uvt"]["stopped_reason"] is None
+    assert report["star_uvt"]["optimizer_train_views"] == cfg["optimizer_train_views"]
+    assert len(evaluations) == 1 and evaluations[0]["metrics"] == report["star_uvt"]["metrics"]
+    report["diagnostic_view_evaluation"] = evaluations[0]
     for name in ["multiscale_loss_weight", "crop_loss_weight", "sequence_consistency_weight"]:
         assert report["star_uvt"][name] == 0
     report["diagnostic_photometric_loss"] = {
@@ -117,6 +133,7 @@ def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
         "substitution_scope": "module-local robust_l1 symbol; auxiliary photometric weights are zero",
         "formula": "mean(sqrt(residual^2+1e-6))" if loss_name == "robust_l1" else "mean(residual^2)",
         "publication_eligible": False,
+        "optimizer_train_views": cfg["optimizer_train_views"],
     }
     write(lane / "comparison_report.json", report)
     identity = _comparison_wandb_log(report, protocol, lane_name="world_tubes", seed=base["seed"],
