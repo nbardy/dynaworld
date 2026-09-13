@@ -1,5 +1,12 @@
 # DynaWorld Code Organization Roadmap
 
+Paper target provider (2026-09-13): `src/train/paper_multicam_targets.py` owns
+bounded CPU decode/cache and grouped selected-frame lookahead. Both frozen
+consumers use the same loader inside their measured target-loading phase;
+GPU residency remains a consumer control. The small STAR hookup is retained in
+`research_experiments/paper_runner_suite/grouped_frozen_target_loading.patch`
+against the archived streaming worktree; it is not a clean-HEAD harness export.
+
 This roadmap exists so cleanup work improves the codebase instead of moving
 complexity around. Prefer small shared helpers and explicit contracts over a
 large trainer framework.

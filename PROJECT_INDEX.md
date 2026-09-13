@@ -1,5 +1,15 @@
 # DynaWorld Project Index
 
+September 13 grouped CPU targets: both frozen consumers now prefetch bounded
+selected-frame groups inside target-loading timing, preserving LRU8 and one-frame
+Metal residency. All 189 tests and four fitted-world rows pass with exact atlases.
+F32 target loading falls 6.30 -> 1.12 s; full cost 10.55 -> 4.97 s. Peak RSS
+1.85 GiB, zero new swap. Replay also benefits; compiled E+B still grows 14.47x
+for 8x frames. No sublinear, quality or public evidence-count change. Next isolate
+multi-frame residency from temporal bin size under unchanged memory caps.
+See `agent_notes/loose_notes/2026-09-13_08-49-34_grouped_cpu_targets_and_frozen_metal_timing.md`. Provider/test are owned; the STAR hook is a retained patch against
+the archived streaming worktree, not a clean-HEAD reproduction claim.
+
 September 13 visibility reuse: STAR `f735898` retains exact midpoint depths per
 trace/interval within one compilation. All 184 tests and four fitted-world rows
 pass with byte-identical atlases. Paired CPU visibility falls 1.470 -> 1.014 s;

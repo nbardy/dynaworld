@@ -1,0 +1,24 @@
+--- a/variants/star_uvt_v0/research_project/benchmarks/multicam_heldout_compare.py
++++ b/variants/star_uvt_v0/research_project/benchmarks/multicam_heldout_compare.py
+@@ -50,7 +50,7 @@
+ from common import prefix_metrics, robust_l1, save_preview_strip, save_side_by_side_mp4, video_metrics, write_json  # noqa: E402
+ from device_memory import DeviceMemorySampler, device_memory_stats  # noqa: E402
+ from multicam_video_data import load_multicam_video_bundle  # noqa: E402
+-from paper_multicam_targets import PaperMulticamTargetProvider  # noqa: E402
++from paper_multicam_targets import PaperMulticamTargetProvider, load_grouped_frozen_target_frames  # noqa: E402
+ from paper_training_protocol import (  # noqa: E402
+     PaperCostTracker,
+     PaperPhaseTimer,
+@@ -5224,9 +5224,9 @@
+     def load_target_chunk(chunk_start: int, chunk_stop: int) -> Tensor:
+         selected_indices = frame_indices[chunk_start:chunk_stop]
+         if heldout_target_provider is not None:
+-            target_frames = heldout_target_provider.select_view_frames(
+-                (0,) * len(selected_indices),
+-                selected_indices,
++            target_frames = load_grouped_frozen_target_frames(
++                heldout_target_provider, frame_indices,
++                start=chunk_start, stop=chunk_stop, chunk_frames=resident_chunk_frames,
+             )
+         else:
+             if bundle.heldout_frames.device.type == "meta":

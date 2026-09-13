@@ -131,6 +131,11 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Grouped CPU target loading (2026-09-13): unchanged target/atlas bytes and
+  all four Metal rows pass; F32 full cost 10.55 -> 4.97 s, with LRU8 and
+  one-frame device residency. Shared replay also improves; no sublinear claim.
+  Details: `agent_notes/loose_notes/2026-09-13_08-49-34_grouped_cpu_targets_and_frozen_metal_timing.md`.
+
 - [x] Exact visibility midpoint reuse (2026-09-13): 184 tests and four Metal
   rows pass; F32 compile 2.40 -> 1.84 s, full cost 11.12 -> 10.55 s.
   [Profile, exact metadata and measured target-loading opportunity](agent_notes/loose_notes/2026-09-13_08-13-52_visibility_midpoint_reuse_and_target_loading.md).
