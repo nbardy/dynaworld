@@ -162,6 +162,15 @@ full cost 11.53 -> 11.12 s. RSS 1.91 GiB; new swap 0 bytes.
 No sublinear or quality claim changes. Next refresh the existing bounded
 Python profile. See `agent_notes/loose_notes/2026-09-13_07-55-22_batched_quadratic_support_bounds.md`. Public counts unchanged.
 
+September 13 visibility reuse: STAR `f735898` retains exact midpoint depths per
+trace/interval within one compilation. All 184 tests and four fitted-world rows
+pass with byte-identical atlases. Paired CPU visibility falls 1.470 -> 1.014 s;
+F32 compile 2.40 -> 1.84 s, full cost 11.12 -> 10.55 s. RSS 1.89 GiB, zero swap growth.
+A separate exact-byte CPU probe cuts F32 target loading 6.22 -> 1.12 s using
+requests of eight with the same LRU8. Next integrate that into both consumers,
+inside timing and with one-frame Metal residency. No sublinear/public count change.
+See `agent_notes/loose_notes/2026-09-13_08-13-52_visibility_midpoint_reuse_and_target_loading.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;

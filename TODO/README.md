@@ -1,5 +1,14 @@
 # DynaWorld TODO Index
 
+September 13 visibility reuse: STAR `f735898` retains exact midpoint depths per
+trace/interval within one compilation. All 184 tests and four fitted-world rows
+pass with byte-identical atlases. Paired CPU visibility falls 1.470 -> 1.014 s;
+F32 compile 2.40 -> 1.84 s, full cost 11.12 -> 10.55 s. RSS 1.89 GiB, zero swap growth.
+A separate exact-byte CPU probe cuts F32 target loading 6.22 -> 1.12 s using
+requests of eight with the same LRU8. Next integrate that into both consumers,
+inside timing and with one-frame Metal residency. No sublinear/public count change.
+See `agent_notes/loose_notes/2026-09-13_08-13-52_visibility_midpoint_reuse_and_target_loading.md`.
+
 September 13 batched bounds: STAR `48148ac` batches quadratic support extrema
 with exact float32 values and double-precision vertex inclusion. All 184
 CPU/Metal tests and four fitted-world rows pass with byte-identical atlases.

@@ -229,15 +229,21 @@ def test_projective_cell_visibility_event_stratifier_isolates_exact_root_sample(
 
 def test_visibility_preserves_distinct_roots_and_depth_ranges_across_tile_spans() -> None:
     # The same pair crosses at -1 and +1, in different spatial tile windows.
-    # Repeated queries must not reuse a result from a different time span.
+    # Reuse must handle partly overlapping ID sets, different spans and edits.
     times = torch.arange(-2., 3.)
     atlas = _cell_atlas_from_depth_coeffs(
-        torch.tensor([[-1., 0., 1.], [0., 0., 0.]]), frame_count=5,
+        torch.tensor([[-1., 0., 1.], [0., 0., 0.], [.25, -.1, .05]]), frame_count=5,
     )
     atlas = replace(atlas, cells=[
-        replace(atlas.cells[0], tile_u=0, start=0, stop=3),
-        replace(atlas.cells[0], tile_u=1, start=2, stop=5),
-        replace(atlas.cells[0], tile_u=2, start=0, stop=5),
+        replace(
+            atlas.cells[0], tile_u=tile_u, start=start, stop=stop,
+            primitive_ids=ids, ordered_primitive_ids=ids,
+            depth_intervals=tuple(atlas.cells[0].depth_intervals[i] for i in ids),
+        )
+        for tile_u, start, stop, ids in [
+            (0, 0, 3, (0, 1)), (1, 0, 3, (1, 2)),
+            (2, 2, 5, (0, 1, 2)), (3, 0, 5, (0, 1, 2)),
+        ]
     ])
     for offset in [0., .5]:
         changed = replace(atlas, coeffs=atlas.coeffs.clone())

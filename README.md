@@ -131,6 +131,9 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Exact visibility midpoint reuse (2026-09-13): 184 tests and four Metal
+  rows pass; F32 compile 2.40 -> 1.84 s, full cost 11.12 -> 10.55 s.
+  [Profile, exact metadata and measured target-loading opportunity](agent_notes/loose_notes/2026-09-13_08-13-52_visibility_midpoint_reuse_and_target_loading.md).
 - [x] Exact batched support bounds (2026-09-13): 184 tests and four Metal rows
   pass; F32 compile 2.89 -> 2.40 s, full cost 11.53 -> 11.12 s.
   [Numerical contract, measurements and limits](agent_notes/loose_notes/2026-09-13_07-55-22_batched_quadratic_support_bounds.md).
