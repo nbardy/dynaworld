@@ -1,0 +1,9 @@
+{
+  "frozen_config": "src/train_configs/frozen_world_local_density_control_20260913.jsonc",
+  // Preserve the existing nonuniform integer selections over the full 32-frame interval.
+  "frame_counts": [4, 8, 16, 32],
+  // Native batch32 renders all 32 images; only selected images enter the loss.
+  "frame_batch_sizes": [1, 32],
+  "cpu_target_cache_frames": 8,
+  "output_dir": "outputs/benchmarks/2026-09-13_native_uvt_selected_times"
+}

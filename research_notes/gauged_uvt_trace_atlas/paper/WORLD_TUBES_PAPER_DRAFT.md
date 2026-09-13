@@ -1059,6 +1059,19 @@ stronger baseline where its camera/time assumptions apply. An event atlas
 must demonstrate a benefit beyond ordinary projection sharing and batching;
 the static affine result does not establish that benefit.
 
+The selected-time variant makes a second confound explicit. Let R be the
+full rendered lattice and F the requested loss frames. A native render of all
+R=32 images followed by a fixed linear selector S_J preserves the selected
+loss and its world adjoint, D_theta I^T S_J^T grad ell, even for nonuniform
+integer selections. The local F={4,8,16,32} control passes image/world-gradient
+checks while keeping R fixed. Native projection/render/backward costs
+48/43/60/64 ms versus selected-frame replay 35/65/163/332 ms; over-rendering
+loses at F4 and wins from F8. Its 1.33x timing growth for 8x selected F is
+available without an event atlas because the rendered workload remains 32.
+These are three-trial local diagnostics, not publication scaling evidence.
+Report requested F and rendered R separately, including unused output work;
+when R grows, this baseline must pay for the additional rendered samples.
+
 For timing, compile cost must be reported separately. If `c_replay` is the
 median per-time replay cost and `c_eval` the median per-time atlas-evaluation
 cost under the same frozen world, the idealized amortization point is

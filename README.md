@@ -131,6 +131,11 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Native selected-time control (2026-09-13): all four native/replay pairs
+  pass. Rendering 32 loses for four requested frames, wins from eight, and
+  keeps a fixed output budget; this is not a new sublinear scaling result.
+  Details: `agent_notes/loose_notes/2026-09-13_10-21-04_native_selected_time_loss_and_fixed_render_budget.md`.
+
 - [x] Native UVT batching control (2026-09-13): three layouts independently
   pass on the same fitted world. F32 evaluator/backward 330 -> 60 ms; full
   measured phases 1.46 -> 1.18 s, RSS 1.03 GiB and zero new swap. This strengthens

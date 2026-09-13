@@ -403,6 +403,31 @@ retain more rendered outputs and loss residuals. Public evidence counts stay
 0/7 contexts and 0/21 lanes. Future static-affine compiler timing comparisons
 must include a native batched control where its camera/time assumptions apply.
 
+### Selected-time losses on the same frozen world — 2026-09-13
+
+Config: `src/train_configs/frozen_world_native_selected_times_20260913.jsonc`.
+All eight routes independently pass unchanged image/loss/world-gradient gates,
+with exact selected target/camera identities and explicit rendered-work counts.
+Native32 renders 32 images at every F; replay renders only the selected F.
+These are warmed phase medians, not optimizer wall times or publication rows.
+The four rows used sequential F values and three alternating route trials each.
+The warmed targets fit CPU LRU8 at F4/F8; F16/F32 include repeated decoding.
+
+| Selected F | Replay E+B, ms | Native32 E+B, ms | Replay full, ms | Native32 full, ms | Offline W&B |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 4 | 35.13 | 48.07 | 37.46 | 48.88 | j0qlwycs |
+| 8 | 65.01 | 42.55 | 69.73 | 43.59 | y2knefe4 |
+| 16 | 162.57 | 60.45 | 769.61 | 663.09 | dhavo0h0 |
+| 32 | 332.40 | 63.98 | 1471.27 | 1189.84 | 8bmiezac |
+
+All selected images are exact against the preceding full-sequence artifact;
+maximum global/per-parameter normalized VJP errors are 7.52e-6/5.74e-6.
+Peak tree/launcher RSS 1.068 GiB, zero new swap. Native over-rendering loses at
+F4, wins from F8. Its rendered lattice stays fixed, so the curve is not a
+sublinear-renderer claim. Verifier: `verify_native_uvt_control.py`; artifacts:
+`outputs/benchmarks/2026-09-13_native_uvt_selected_times/report_validation.json`.
+[Session notes](agent_notes/loose_notes/2026-09-13_10-21-04_native_selected_time_loss_and_fixed_render_budget.md). Public counts and quality standings are unchanged.
+
 ## Reruns needed (priority-ordered TODOs)
 
 These are the runs missing from this file. They are listed roughly in

@@ -2,8 +2,10 @@
 
 Native UVT execution control (2026-09-13):
 `research_experiments/paper_runner_suite/compare_native_uvt_batches.py` owns
-the fixed-checkpoint 1/4/32 batching comparison, bounded target loading, raw
-correctness tensors and phased timings. It uses existing ordinary native UVT
+the fixed-checkpoint batching comparison and F4/8/16/32 selected-time losses,
+bounded target loading, raw correctness tensors, actual rendered-frame work
+and phased timings. `verify_native_uvt_control.py` is its independent retained-
+tensor checker, extended from the original local verification script. It uses existing ordinary native UVT
 projection/rendering; the interval-atlas runner remains separate.
 
 Frozen device-batching control (2026-09-13): the report has an explicit

@@ -205,6 +205,14 @@ This is a stronger static affine baseline, not a sublinear-in-F result. Next
 test selected-time losses with full-native rendering, charging unused outputs.
 Public counts remain 0/7 and 0/21. See `agent_notes/loose_notes/2026-09-13_10-00-00_native_uvt_batching_stronger_frozen_world_control.md`.
 
+September 13 selected-time control: all F4/8/16/32 native/replay pairs pass
+independent value, world-gradient, identity, work-count and resource checks.
+Native always renders 32: E+B is 48/43/60/64 ms versus replay 35/65/163/332 ms.
+It loses at F4 and wins from F8; RSS 1.07 GiB, zero new swap. Nearly flat cost
+comes with fixed rendered R=32, so it is not new sublinear-in-F evidence.
+Next isolate MSE versus robust-L1 fitting at fixed capacity/init/sampling.
+Public counts stay 0/7 and 0/21. See `agent_notes/loose_notes/2026-09-13_10-21-04_native_selected_time_loss_and_fixed_render_budget.md`.
+
 One lead owns new run configs, narrowly necessary source fixes, commits, and
 shared status updates; no subagents. Accelerator jobs and native builds remain
 sequential. Retain the existing small-playground host/RSS/MPS/swap/disk gates;
