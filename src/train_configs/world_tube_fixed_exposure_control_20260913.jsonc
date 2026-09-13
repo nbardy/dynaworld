@@ -1,0 +1,11 @@
+{
+  // Render/sample both cameras, but keep only cam04's photometric term at its original weight.
+  "sampling_config": "src/train_configs/world_tubes_local_sampling_ablation_20260912.jsonc",
+  "variant": "random_2048_balanced_depth9_footprint_matched_800",
+  "photometric_losses": ["robust_l1"],
+  "optimizer_train_views": "all",
+  "photometric_gradient_view_indices": [0],
+  "control_label": "cam04_fixed_exposure",
+  "reference_run": "outputs/benchmarks/2026-09-13_world_tube_loss_control/robust_l1",
+  "output_dir": "outputs/benchmarks/2026-09-13_world_tube_fixed_exposure_control"
+}

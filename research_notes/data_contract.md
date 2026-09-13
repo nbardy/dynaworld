@@ -213,6 +213,13 @@ control retains both cameras in initialization but optimizes only cam04. Its
 cam09 images are therefore initialization-exposed, not clean heldout targets.
 At fixed total image budget, cam04 exposure doubles; compare per-camera
 metrics and report actual sample counts rather than the declared-train mean.
+The fixed-exposure follow-up samples/renders both cameras on the original
+schedule while masking cam09's photometric term with the original full-batch
+denominator. Each cam04 frame still contributes 25 times, and its first residual
+derivative is bit-identical to the two-camera reference. Record sampled,
+rasterized and gradient-bearing images separately; cam09 remains initialized
+and geometry regularization is unchanged. This local control passes its
+independent checks and is distinct from the doubled-exposure first_only fit.
 
 The Coffee Martini full-temporal row lives at
 `src/dataset_configs/neural3d_coffee_martini_train2_holdout1_full_300f_manifest.jsonl`.

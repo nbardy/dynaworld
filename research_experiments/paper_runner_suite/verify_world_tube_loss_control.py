@@ -61,6 +61,11 @@ def loss_probe(path, name):
     else:
         terms = residual * residual
         gradient = 2 * residual / residual.size
+    if "gradient_view_mask" in probe:
+        mask = np.asarray(probe["gradient_view_mask"], dtype=np.bool_).reshape(-1, 1, 1, 1)
+        assert mask.shape[0] == residual.shape[0] and probe["full_batch_rgb_elements"] == residual.size
+        terms = terms * mask
+        gradient = gradient * mask
     actual = probe["gradient"].numpy().astype(np.float64)
     value_error = abs(float(probe["value"]) - float(terms.mean()))
     gradient_error = float(np.linalg.norm(actual - gradient) / np.linalg.norm(gradient))

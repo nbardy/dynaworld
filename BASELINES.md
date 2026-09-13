@@ -423,6 +423,36 @@ not a broad quality ranking. Do not use the 12.49 dB declared-train average
 as the optimized-camera score. [Notes](agent_notes/loose_notes/2026-09-13_11-12-24_single_camera_world_tube_fit_and_exposure_confound.md).
 Accepted artifacts: `outputs/benchmarks/2026-09-13_world_tube_single_view_control/comparison.json`.
 
+## Local fixed-exposure camera-gradient control — 2026-09-13
+
+Config: `src/train_configs/world_tube_fixed_exposure_control_20260913.jsonc`.
+Same two-camera initial world, exact 800-update sampler schedule, 2048 tubes
+and original cam04 per-image loss weight. Both cameras still supply 800 sampled
+images each; cam09's photometric derivative is zero. Each cam04 frame supplies
+25 image-gradient contributions. Cam09 remains initialization-exposed and
+cam06 remains exploratory validation.
+
+| Photometric cameras | cam04 PSNR | cam04 SSIM | cam09 PSNR | cam06 PSNR | cam06 LPIPS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| cam04 + cam09 reference | 20.62914 | 0.68586 | 21.21857 | 15.35368 | 0.74335 |
+| cam04 only, fixed exposure/weight | 21.67876 | 0.76450 | 9.51642 | 11.75457 | 0.67966 |
+
+Cam04 gains 1.05 dB and MSE falls 21.47%, while other-camera quality degrades.
+This effect survives fixing cam04 exposure but does not identify a geometric
+cause or isolate optimization from representation limits. The earlier 23.30-dB
+first_only result also changes exposure/batch structure/normalization; the
+difference between these gains is not an exposure-only estimate.
+
+Training: 427.13 s train loop, offline `pa3f35a15ef47a`; paired frozen evaluation
+offline `clfevmny`. Peak tree/launcher RSS 1.20 GiB, zero new swap/overflow;
+all original host/accelerator/wall guards hold. Independent world, initial
+residual/gradient, all-batch exposure, full raw cam04 PSNR/MSE/L1, source,
+checkpoint and offline W&B checks pass. Re-evaluated per-camera scalars permit
+four float64 ULPs after reproducing a two-ULP CPU reduction difference on
+identical pixels; the failed exact-equality verifier is retained.
+Accepted local artifacts: `outputs/benchmarks/2026-09-13_world_tube_fixed_exposure_control/comparison.json`.
+[Notes](agent_notes/loose_notes/2026-09-13_11-38-29_fixed_exposure_camera_gradient_control.md). Public acceptance counts are unchanged.
+
 ## Local frozen-world execution controls
 
 These are measured phases of one frozen 2048-tube, F32, 96x128 Coffee Martini

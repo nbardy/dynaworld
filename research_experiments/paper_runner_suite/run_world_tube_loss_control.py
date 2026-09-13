@@ -28,7 +28,11 @@ def write(path, data):
 def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
     cfg = load_config_file(config_path)
     cfg.setdefault("optimizer_train_views", "all")
+    cfg.setdefault("photometric_gradient_view_indices", None)
     assert cfg["optimizer_train_views"] in {"all", "first_only"}
+    if cfg["photometric_gradient_view_indices"] is not None:
+        assert cfg["photometric_gradient_view_indices"] == [0]
+        assert cfg["optimizer_train_views"] == "all" and loss_name == "robust_l1"
     assert loss_name in cfg["photometric_losses"] and loss_name in {"robust_l1", "mse"}
     base = load_config_file(cfg["sampling_config"])
     variant = next(v for v in base["variants"] if v["name"] == cfg["variant"])
@@ -87,6 +91,8 @@ def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
     original_loss = c.robust_l1
     original_eval = c.eval_world_tubes
     evaluations = []
+    observed_batches = []
+    original_next_batch = c.SpacetimeEpochSampler.next_batch
     calls = 0
 
     def capture_initial(model, *args, **kwargs):
@@ -99,12 +105,34 @@ def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
     def photometric(residual):
         nonlocal calls
         calls += 1
-        value = original_loss(residual) if loss_name == "robust_l1" else residual.square().mean()
+        probe_metadata = {}
+        if cfg["photometric_gradient_view_indices"] is None:
+            value = original_loss(residual) if loss_name == "robust_l1" else residual.square().mean()
+        else:
+            assert len(observed_batches) == calls
+            batch = observed_batches[-1]
+            selected = [i for i, view in enumerate(batch["view_indices"])
+                if view in cfg["photometric_gradient_view_indices"]]
+            assert len(selected) == 1 and len(batch["view_indices"]) == residual.shape[0] == 2
+            batch["residual_shape"] = list(residual.shape)
+            batch["gradient_view_mask"] = [i in selected for i in range(residual.shape[0])]
+            value = original_loss(residual.index_select(0, torch.tensor(selected, device=residual.device)))
+            value = value * (len(selected) / residual.shape[0])
+            probe_metadata = {"gradient_view_mask": batch["gradient_view_mask"],
+                "sample_view_indices": batch["view_indices"], "sample_frame_indices": batch["frame_indices"],
+                "full_batch_rgb_elements": residual.numel()}
         if calls == 1:
             grad = torch.autograd.grad(value, residual, retain_graph=True)[0]
             torch.save({"residual": residual.detach().cpu(), "value": value.detach().cpu(),
-                "gradient": grad.detach().cpu(), "loss_name": loss_name}, out / "first_loss_probe.pt")
+                "gradient": grad.detach().cpu(), "loss_name": loss_name, **probe_metadata}, out / "first_loss_probe.pt")
         return value
+
+    def capture_batch(sampler, *args, **kwargs):
+        batch = original_next_batch(sampler, *args, **kwargs)
+        assert sampler.view_count == 2
+        observed_batches.append({"view_indices": [s.view_index for s in batch.samples],
+            "frame_indices": [s.frame_index for s in batch.samples]})
+        return batch
 
     def capture_evaluation(model, bundle, **kwargs):
         result = original_eval(model, bundle, **kwargs)
@@ -116,6 +144,8 @@ def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
     c.WorldTubeModel.__init__ = capture_initial
     c.robust_l1 = photometric
     c.eval_world_tubes = capture_evaluation
+    if cfg["photometric_gradient_view_indices"] is not None:
+        c.SpacetimeEpochSampler.next_batch = capture_batch
     command = json.loads((out / "command.json").read_text())
     sys.argv = command[1:]
     c.main()
@@ -135,6 +165,16 @@ def main(config_path: str, loss_name: str, *, worker: bool = False) -> None:
         "publication_eligible": False,
         "optimizer_train_views": cfg["optimizer_train_views"],
     }
+    if cfg["photometric_gradient_view_indices"] is not None:
+        assert len(observed_batches) == calls
+        write(out / "photometric_batches.json", observed_batches)
+        report["diagnostic_photometric_loss"].update({
+            "formula": "sum(mask * sqrt(residual^2+1e-6)) / full_batch_rgb_elements",
+            "photometric_gradient_view_indices": cfg["photometric_gradient_view_indices"],
+            "photometric_batches_sha256": hashlib.sha256((out / "photometric_batches.json").read_bytes()).hexdigest(),
+            "sampled_images": sum(len(b["view_indices"]) for b in observed_batches),
+            "photometric_gradient_images": sum(sum(b["gradient_view_mask"]) for b in observed_batches),
+        })
     write(lane / "comparison_report.json", report)
     identity = _comparison_wandb_log(report, protocol, lane_name="world_tubes", seed=base["seed"],
         report_dir=out, wandb_mode="offline", execution_source=json.loads((out / "source_identity.json").read_text()))

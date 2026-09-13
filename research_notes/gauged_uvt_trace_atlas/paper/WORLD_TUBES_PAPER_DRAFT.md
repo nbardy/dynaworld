@@ -1583,7 +1583,10 @@ When optimizer views are a subset of declared training cameras, a global
 training-camera mean is not the fitting metric for the optimized subset.
 Report per-camera quality, optimizer image counts and initialization exposure
 separately. Development views inspected during these diagnostics are not an
-untouched final test set.
+untouched final test set. A camera-loss ablation must also retain each remaining
+camera's sample exposure and original per-image loss normalization; an equal
+total update budget alone does not provide that control. Report sampled and
+rendered images separately from images supplying photometric gradients.
 
 The shared progressive, fixed, and global-shuffle protocols, evidence schema,
 and matrix generator are implemented, pending focused behavior verification.

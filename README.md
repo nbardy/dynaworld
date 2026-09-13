@@ -131,6 +131,11 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Fixed-exposure camera gradient control (2026-09-13): cam04 improves
+  20.63 -> 21.68 dB with its original sample schedule and loss weight while
+  cam09's photometric gradient is zero; heldout falls 15.35 -> 11.75 dB.
+  Checkpoint/raw-pixel/gradient/exposure checks pass. [Notes](agent_notes/loose_notes/2026-09-13_11-38-29_fixed_exposure_camera_gradient_control.md).
+
 - [x] Single-camera world fit (2026-09-13): cam04 improves 20.63 -> 23.30 dB
   and 0.686 -> 0.833 SSIM with twice its image exposure; other-camera PSNR
   falls. Full checkpoint re-evaluation and independent raw-pixel/exposure

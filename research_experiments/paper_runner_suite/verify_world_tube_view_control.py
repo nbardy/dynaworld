@@ -16,7 +16,13 @@ from research_experiments.paper_runner_suite.verify_world_tube_loss_control impo
 
 def verify(config_path, evaluation_dir=None):
     cfg = load_config_file(config_path)
-    assert cfg["optimizer_train_views"] == "first_only" and cfg["photometric_losses"] == ["robust_l1"]
+    cfg.setdefault("control_label", "cam04_only")
+    cfg.setdefault("photometric_gradient_view_indices", None)
+    masked = cfg["photometric_gradient_view_indices"] is not None
+    assert cfg["optimizer_train_views"] == ("all" if masked else "first_only")
+    assert cfg["photometric_losses"] == ["robust_l1"]
+    assert not masked or cfg["photometric_gradient_view_indices"] == [0]
+    control = cfg["control_label"]
     base = load_config_file(cfg["sampling_config"])
     variant = next(v for v in base["variants"] if v["name"] == cfg["variant"])
     protocol = resolve_paper_training_protocol(load_config_file(variant["protocol"]))
@@ -24,30 +30,50 @@ def verify(config_path, evaluation_dir=None):
     evaluation_path = Path(evaluation_dir) if evaluation_dir else out / "evaluation"
     reference, trained = Path(cfg["reference_run"]), out / "robust_l1"
     reports = {name: read(folder / "world_tubes/comparison_report.json")
-        for name, folder in (("two_camera", reference), ("cam04_only", trained))}
+        for name, folder in (("two_camera", reference), (control, trained))}
     evaluation = read(evaluation_path / "report.json")
     sources = {name: read(folder / "source_identity.json")
-        for name, folder in (("two_camera", reference), ("cam04_only", trained))}
-    shared = sources["two_camera"]["bound_files"].keys() & sources["cam04_only"]["bound_files"].keys()
-    changes = [p for p in shared if sources["two_camera"]["bound_files"][p] != sources["cam04_only"]["bound_files"][p]]
+        for name, folder in (("two_camera", reference), (control, trained))}
+    shared = sources["two_camera"]["bound_files"].keys() & sources[control]["bound_files"].keys()
+    changes = [p for p in shared if sources["two_camera"]["bound_files"][p] != sources[control]["bound_files"][p]]
     assert changes == ["research_experiments/paper_runner_suite/run_world_tube_loss_control.py"]
     commands = [read(folder / "command.json") for folder in (reference, trained)]
     for command in commands:
         command[command.index("--out-dir") + 1] = "<output>"
         if "--uvt-optimizer-train-views" in command:
             index = command.index("--uvt-optimizer-train-views")
-            assert command[index + 1] == "first_only"
+            assert command[index + 1] == cfg["optimizer_train_views"]
             del command[index:index + 2]
     assert commands[0] == commands[1]
     initial = [world(reports[name]["diagnostic_photometric_loss"]["initial_world"]) for name in reports]
     assert initial[0]["world_state_sha256"] == initial[1]["world_state_sha256"]
     assert all(torch.equal(v, initial[1]["state_dict"][k]) for k, v in initial[0]["state_dict"].items())
-    _, probe = loss_probe(trained / "first_loss_probe.pt", "robust_l1")
-    assert probe["sha256"] == reports["cam04_only"]["diagnostic_photometric_loss"]["first_probe_sha256"]
-    exposures, raw, metrics = {}, {}, {}
+    probe_tensors, probe = loss_probe(trained / "first_loss_probe.pt", "robust_l1")
+    assert probe["sha256"] == reports[control]["diagnostic_photometric_loss"]["first_probe_sha256"]
+    mask_checks, observed_batches = None, None
+    if masked:
+        diagnostic = reports[control]["diagnostic_photometric_loss"]
+        assert diagnostic["photometric_gradient_view_indices"] == [0]
+        assert diagnostic["sampled_images"] == 1600 and diagnostic["photometric_gradient_images"] == 800
+        assert sha(trained / "photometric_batches.json") == diagnostic["photometric_batches_sha256"]
+        observed_batches = read(trained / "photometric_batches.json")
+        assert len(observed_batches) == 800
+        original_probe = torch.load(reference / "first_loss_probe.pt", map_location="cpu", weights_only=True)
+        assert torch.equal(original_probe["residual"], probe_tensors["residual"])
+        mask = torch.tensor(probe_tensors["gradient_view_mask"])
+        assert probe_tensors["sample_view_indices"] == observed_batches[0]["view_indices"]
+        assert probe_tensors["sample_frame_indices"] == observed_batches[0]["frame_indices"]
+        assert mask.tolist() == [v == 0 for v in observed_batches[0]["view_indices"]]
+        assert torch.equal(original_probe["gradient"][mask], probe_tensors["gradient"][mask])
+        assert torch.count_nonzero(probe_tensors["gradient"][~mask]) == 0
+        mask_checks = {"initial_residual_exact": True, "retained_cam04_derivative_bit_identical": True,
+            "excluded_cam09_derivative_exactly_zero": True, "observed_batch_count": 800,
+            "first_batch_views": observed_batches[0]["view_indices"], "normalization": "original full two-image batch"}
+    exposures, gradient_exposures, raw, metrics = {}, {}, {}, {}
+    reevaluation_metric_roundoff = {}
     for name, report in reports.items():
         lane, row = report["star_uvt"], evaluation["rows"][name]
-        expected_views = [0, 1] if name == "two_camera" else [0]
+        expected_views = [0, 1] if name == "two_camera" or masked else [0]
         assert lane["optimizer_train_view_indices"] == expected_views
         assert lane["steps"] == protocol.steps == lane["paper_protocol"]["cost"]["optimizer_steps"] == 800
         assert lane["stopped_reason"] is None and report["diagnostic_photometric_loss"]["calls"] == 800
@@ -71,12 +97,22 @@ def verify(config_path, evaluation_dir=None):
             stage = paper_stage_for_step(protocol.stages, step)
             batch = sampler.next_batch(stage.frames_per_step)
             digest.record(step=step, stage=stage, batch=batch)
+            if masked and name == control:
+                observed = observed_batches[step]
+                assert observed["view_indices"] == [s.view_index for s in batch.samples]
+                assert observed["frame_indices"] == [s.frame_index for s in batch.samples]
+                assert observed["gradient_view_mask"] == [s.view_index == 0 for s in batch.samples]
+                assert observed["residual_shape"] == [2, *stage.image_size.as_list(), 3]
             for sample in batch.samples:
                 counts[expected_views[sample.view_index], sample.frame_index] += 1
         assert digest.snapshot() == lane["paper_protocol"]["sample_schedule"]
         assert counts.sum() == lane["paper_protocol"]["cost"]["target_frames"] == 1600
         assert lane["paper_protocol"]["cost"]["target_pixels"] == 19292160
         exposures[name] = counts.tolist()
+        active_counts = counts.copy()
+        if masked and name == control:
+            active_counts[1] = 0
+        gradient_exposures[name] = active_counts.tolist()
         assert sha(row["raw_cam04"]["path"]) == row["raw_cam04"]["sha256"]
         raw[name] = torch.load(row["raw_cam04"]["path"], map_location="cpu", weights_only=True)
         assert all(list(t.shape) == [32, 96, 128, 3] and t.dtype == torch.float32 and torch.isfinite(t).all()
@@ -93,10 +129,26 @@ def verify(config_path, evaluation_dir=None):
                 assert abs(value - lane["metrics"][key]) < 1e-6, (name, key)
         metrics[name] = row["per_camera"]
     assert np.array_equal(exposures["two_camera"], np.full((2, 32), 25))
-    assert np.array_equal(exposures["cam04_only"], np.stack([np.full(32, 50), np.zeros(32)]))
-    assert torch.equal(raw["two_camera"]["target"], raw["cam04_only"]["target"])
-    assert reports["cam04_only"]["diagnostic_view_evaluation"]["train"] == metrics["cam04_only"]["train"]
+    expected_control = np.full((2, 32), 25) if masked else np.stack([np.full(32, 50), np.zeros(32)])
+    assert np.array_equal(exposures[control], expected_control)
+    assert np.array_equal(gradient_exposures[control], np.stack([np.full(32, 25 if masked else 50), np.zeros(32)]))
+    if masked:
+        assert reports["two_camera"]["star_uvt"]["paper_protocol"]["sample_schedule"] == reports[control]["star_uvt"]["paper_protocol"]["sample_schedule"]
+    assert torch.equal(raw["two_camera"]["target"], raw[control]["target"])
+    for split in ("train", "heldout"):
+        recorded = reports[control]["diagnostic_view_evaluation"][split]
+        assert recorded.keys() == metrics[control][split].keys()
+        for camera, values in recorded.items():
+            assert values.keys() == metrics[control][split][camera].keys()
+            for key, value in values.items():
+                repeated = metrics[control][split][camera][key]
+                # CPU parallel float64 reduction differs by two ULPs on identical
+                # retained pixels. Permit scalar roundoff, not a changed image fit.
+                ulps = abs(repeated - value) / max(math.ulp(value), math.ulp(repeated))
+                assert math.isfinite(ulps) and ulps <= 4, (split, camera, key, ulps)
+                reevaluation_metric_roundoff[f"{split}/{camera}/{key}"] = ulps
     resources = {}
+    live_source_differences = set()
     for name, folder in (("training", trained), ("evaluation", evaluation_path)):
         receipt = read(folder / "resource_receipt.json")
         assert receipt["guard_tripped"] is False and receipt["local_resources"]["limits"] == protocol.local_resources
@@ -106,14 +158,16 @@ def verify(config_path, evaluation_dir=None):
         resources[name] = receipt
         source = read(folder / "source_identity.json")
         for path, value in source["bound_files"].items():
-            assert sha(path) == value
             archive = out / "after" / path
+            assert sha(archive if archive.exists() else path) == value
+            if sha(path) != value:
+                live_source_differences.add(path)
             archive.parent.mkdir(parents=True, exist_ok=True)
             if archive.exists():
                 assert sha(archive) == value
             else:
                 archive.write_bytes(Path(path).read_bytes())
-    train_id = offline_backing(trained / "world_tubes/wandb_identity.json", reports["cam04_only"], sources["cam04_only"])
+    train_id = offline_backing(trained / "world_tubes/wandb_identity.json", reports[control], sources[control])
     identity = read(evaluation_path / "wandb_identity.json")
     assert identity["finish_called"] and identity["mode"] == "offline"
     assert identity["report_sha256"] == sha(evaluation_path / "report.json")
@@ -125,9 +179,13 @@ def verify(config_path, evaluation_dir=None):
             for camera, values in cameras.items():
                 assert all(history[f"{name}/{camera}/{key}"] == value for key, value in values.items())
     summary = {"accepted": True, "publication_eligible": False, "metrics": metrics,
-        "scope": "single-seed fixed-total-budget view restriction; cam04 exposure doubles and cam09 remains initialization-exposed",
-        "cam04_psnr_gain": metrics["cam04_only"]["train"]["cam04"]["eval_psnr"] - metrics["two_camera"]["train"]["cam04"]["eval_psnr"],
+        "scope": ("single-seed cam09 photometric-gradient removal with exact original sample schedule and cam04 normalization"
+            if masked else "single-seed fixed-total-budget view restriction; cam04 exposure doubles and cam09 remains initialization-exposed"),
+        "cam04_psnr_gain": metrics[control]["train"]["cam04"]["eval_psnr"] - metrics["two_camera"]["train"]["cam04"]["eval_psnr"],
         "same_initial_world_sha256": initial[0]["world_state_sha256"], "per_camera_frame_exposures": exposures,
+        "per_camera_photometric_gradient_exposures": gradient_exposures, "photometric_mask_checks": mask_checks,
+        "reevaluation_metric_roundoff_ulps": reevaluation_metric_roundoff,
+        "live_source_differences_from_archive": sorted(live_source_differences),
         "changed_common_bound_files": changes, "independent_loss_probe": probe, "resources": resources,
         "wandb_offline": {"training": train_id, "evaluation": identity["run_id"]},
         "evaluation_dir": str(evaluation_path),

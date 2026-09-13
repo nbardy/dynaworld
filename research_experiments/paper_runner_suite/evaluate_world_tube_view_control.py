@@ -32,13 +32,14 @@ def sha(path):
 
 def main(config_path, *, worker=False, output_dir=None):
     cfg = load_config_file(config_path)
+    cfg.setdefault("control_label", "cam04_only")
     base = load_config_file(cfg["sampling_config"])
     variant = next(v for v in base["variants"] if v["name"] == cfg["variant"])
     raw_protocol = load_config_file(variant["protocol"])
     protocol = resolve_paper_training_protocol(raw_protocol)
     out = (Path(output_dir) if output_dir else Path(cfg["output_dir"]) / "evaluation").resolve()
     runs = {"two_camera": Path(cfg["reference_run"]),
-        "cam04_only": Path(cfg["output_dir"]) / "robust_l1"}
+        cfg["control_label"]: Path(cfg["output_dir"]) / "robust_l1"}
     if not worker:
         if out.exists():
             raise FileExistsError(f"Preserve previous evaluation: {out}")
@@ -46,7 +47,7 @@ def main(config_path, *, worker=False, output_dir=None):
         require_live_resources(snapshot, protocol)
         out.mkdir(parents=True)
         write(out / "preflight.json", snapshot)
-        paths = set(read(runs["cam04_only"] / "source_identity.json")["bound_files"])
+        paths = set(read(runs[cfg["control_label"]] / "source_identity.json")["bound_files"])
         paths.update([str(Path(__file__).resolve().relative_to(Path.cwd())), str(Path(config_path)),
             "src/train/paper_local_resources.py", "src/train/losses.py", "src/train/perceptual_metrics.py"])
         write(out / "source_identity.json", {**source_provenance(), "bound_files": {p: sha(p) for p in paths}})
@@ -116,11 +117,12 @@ def main(config_path, *, worker=False, output_dir=None):
                 result[split + "_view_metrics"], strict=True)) for split in ("train", "heldout")},
             "metal_stats": stats, "raw_cam04": {"path": str(raw_path), "sha256": sha(raw_path)},
             "source_report": str(folder / "world_tubes/comparison_report.json"),
+            "training_diagnostic": original["diagnostic_photometric_loss"],
             "source_report_sha256": sha(folder / "world_tubes/comparison_report.json")}
         del model, result, target, rendered
         gc.collect()
         torch.mps.empty_cache()
-    report = {"scope": "fixed final checkpoints; cam04-only vs two-camera optimization with shared two-camera initialization",
+    report = {"scope": "fixed final checkpoints; per-camera quality with explicit optimizer/photometric views and shared initialization",
         "publication_eligible": False, "rows": rows, "dataset_identity": dataset,
         "evaluator": c.paper_evaluator_contract(), "native_library_sha256": native["sha256"],
         "source": read(out / "source_identity.json")}

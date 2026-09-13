@@ -1,13 +1,15 @@
 # DynaWorld Project Index
 
-September 13 single-camera fit: the shared-world model reaches 23.30 dB /
-0.833 SSIM on cam04 versus 20.63 dB / 0.686 in the two-camera fit. Both frozen
-worlds are re-evaluated; raw-pixel, sampler/exposure, source, checkpoint, W&B
-and resource checks pass. Cam04 exposure doubles at fixed total budget;
-cam09 was initialization-exposed. Other-camera PSNR falls. Peak RSS 1.22 GiB,
-zero new swap/overflow. Next keep cam04 exposure fixed and remove only the
-cam09 photometric gradient, preserving its existing cam04 loss weight.
-Local view control 1/1; public 0/7 and 0/21 unchanged. See `agent_notes/loose_notes/2026-09-13_11-12-24_single_camera_world_tube_fit_and_exposure_confound.md`.
+September 13 fixed-exposure camera control: removing cam09's photometric
+gradient while preserving the exact sample schedule and cam04 loss weight
+raises cam04 20.63 -> 21.68 dB / 0.686 -> 0.765 SSIM; MSE falls 21.5%.
+Cam06 PSNR falls 15.35 -> 11.75 dB. Initial world/residual and cam04 derivative
+are exact; cam09 derivative is zero. Both frozen checkpoints, raw pixels,
+all 800 batches, offline W&B and resource checks pass; peak RSS 1.20 GiB,
+zero new swap/overflow. This is one recipe's source-fit tradeoff, not proof
+of a representation ceiling. Next test the existing full-SPD4 spatial footprint
+under the bounded two-camera recipe. Fixed-exposure control 1/1; prior view
+control 1/1 and loss pair 2/2; public 0/7 and 0/21 unchanged. See `agent_notes/loose_notes/2026-09-13_11-38-29_fixed_exposure_camera_gradient_control.md`.
 
 September 13 native UVT control: the same frozen world passes all three
 native batches (1/4/32). At F32, projection/render/backward falls 0.330 -> 0.060 s;
