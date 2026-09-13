@@ -1,5 +1,11 @@
 # DynaWorld Code Organization Roadmap
 
+Native UVT execution control (2026-09-13):
+`research_experiments/paper_runner_suite/compare_native_uvt_batches.py` owns
+the fixed-checkpoint 1/4/32 batching comparison, bounded target loading, raw
+correctness tensors and phased timings. It uses existing ordinary native UVT
+projection/rendering; the interval-atlas runner remains separate.
+
 Frozen device-batching control (2026-09-13): the report has an explicit
 resident_chunk_frames override; default behavior is unchanged. The native
 interval packer unions candidates across the execution chunk, independently

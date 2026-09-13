@@ -375,6 +375,34 @@ Caveats:
   features themselves. Re-running the unconditioned recipe at 250 steps with
   wall-clock recorded would establish a faster, encoder-free fallback.
 
+## Local frozen-world execution controls
+
+These are measured phases of one frozen 2048-tube, F32, 96x128 Coffee Martini
+cam06 render/loss/backward workload on Metal. They are not optimizer wall times,
+quality improvements, asymptotic scaling results or publication-eligible rows.
+Full measured phases include target loading, transfer and loss; startup, W&B
+logging and artifact verification are excluded. All routes use one warmup,
+three rotating-order trials, CPU LRU8 and the same checkpoint/targets/camera.
+Config: `src/train_configs/frozen_world_native_uvt_control_20260913.jsonc`;
+runner: `research_experiments/paper_runner_suite/compare_native_uvt_batches.py`.
+Successful runtime config, raw tensors, resource receipts and independent
+`report_validation.json` are in
+`outputs/benchmarks/2026-09-13_native_uvt_batch_control/attempt03/`.
+Offline W&B `3kk2mb2v`; [notes](agent_notes/loose_notes/2026-09-13_10-00-00_native_uvt_batching_stronger_frozen_world_control.md).
+
+| Recorded | Native frame batch | Evaluator + backward median | Full measured phases median | Correctness |
+| --- | ---: | ---: | ---: | --- |
+| 2026-09-13 | 1 | 0.33040 s | 1.46145 s | reference, all seven world gradients present |
+| 2026-09-13 | 4 | 0.16795 s | 1.28540 s | image/loss/world-gradient parity passes |
+| 2026-09-13 | 32 | 0.05955 s | 1.18075 s | image/loss/world-gradient parity passes |
+
+Maximum image error 2.98e-7, global normalized gradient error 7.29e-6,
+per-parameter error 5.55e-6, all within unchanged 1e-5 thresholds. Peak
+process-tree/launcher RSS 1.034 GiB, zero new swap. Larger batches intentionally
+retain more rendered outputs and loss residuals. Public evidence counts stay
+0/7 contexts and 0/21 lanes. Future static-affine compiler timing comparisons
+must include a native batched control where its camera/time assumptions apply.
+
 ## Reruns needed (priority-ordered TODOs)
 
 These are the runs missing from this file. They are listed roughly in

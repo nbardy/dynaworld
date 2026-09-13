@@ -1,5 +1,13 @@
 # DynaWorld Project Index
 
+September 13 native UVT control: the same frozen world passes all three
+native batches (1/4/32). At F32, projection/render/backward falls 0.330 -> 0.060 s;
+all measured phases fall 1.461 -> 1.181 s. Independent pixel/world-VJP, target,
+camera, identity, timing and resource checks pass; RSS 1.03 GiB, zero new swap.
+This is a stronger static affine baseline, not a sublinear-in-F result. Next
+test selected-time losses with full-native rendering, charging unused outputs.
+Public counts remain 0/7 and 0/21. See `agent_notes/loose_notes/2026-09-13_10-00-00_native_uvt_batching_stronger_frozen_world_control.md`.
+
 September 13 direct slice records: STAR `9943865` removes measured generic
 copy overhead. Paired CPU F32/chunk4 slicing falls 0.307->0.270 s with every field
 exact. All 189 tests and five Metal layouts pass; capacity rejections stay intact.

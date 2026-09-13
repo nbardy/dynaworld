@@ -131,6 +131,12 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
 
 ### Baselines
 
+- [x] Native UVT batching control (2026-09-13): three layouts independently
+  pass on the same fitted world. F32 evaluator/backward 330 -> 60 ms; full
+  measured phases 1.46 -> 1.18 s, RSS 1.03 GiB and zero new swap. This strengthens
+  the static baseline and does not prove sublinear frame scaling.
+  Details: `agent_notes/loose_notes/2026-09-13_10-00-00_native_uvt_batching_stronger_frozen_world_control.md`.
+
 - [x] Exact slice-record construction (2026-09-13): paired CPU slicing improves
   12%; all 189 tests and five Metal layouts pass. F32/chunk4 full cost
   4.24 -> 4.18 s, with unchanged atlas/image/gradient contracts and no new swap.

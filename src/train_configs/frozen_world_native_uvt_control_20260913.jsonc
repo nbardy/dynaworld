@@ -1,0 +1,7 @@
+{
+  "frozen_config": "src/train_configs/frozen_world_local_density_control_20260913.jsonc",
+  // Contiguous full-duration lattice only; this is not a sparse-time or orbit test.
+  "frame_batch_sizes": [1, 4, 32],
+  "cpu_target_cache_frames": 8,
+  "output_dir": "outputs/benchmarks/2026-09-13_native_uvt_batch_control"
+}

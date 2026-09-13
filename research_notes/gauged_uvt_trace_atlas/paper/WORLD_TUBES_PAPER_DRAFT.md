@@ -1042,6 +1042,23 @@ claim is conditional frame amortization of world-side work, not sublinear
 materialization of images and not end-to-end sublinear training through
 topology changes.
 
+Per-frame replay is a diagnostic reference, not a lower bound on a strong
+baseline. When the world already projects to an affine UVT sequence under a
+static camera, ordinary native UVT batching can project once for each batch of
+`B` frames. Its projection count is `ceil(F/B)`; native binning, compositing,
+output writes and loss/backward still incur their own frame-dependent work.
+A local frozen-world control (2048 tubes, 32 frames, 96x128) verifies all-world
+gradient and image parity for `B={1,4,32}`. Increasing B from 1 to 32 reduces
+median projection/bin/render/backward from 0.3304 to 0.05955 seconds and all
+measured phases, including target loading, from 1.4614 to 1.1807 seconds.
+These one-warmup/three-trial diagnostic results are recorded in BASELINES.md
+and `outputs/benchmarks/2026-09-13_native_uvt_batch_control/attempt03/`;
+they are not publication timing evidence. F is fixed in this experiment, so
+no scaling exponent in F follows. Compiler experiments must include this
+stronger baseline where its camera/time assumptions apply. An event atlas
+must demonstrate a benefit beyond ordinary projection sharing and batching;
+the static affine result does not establish that benefit.
+
 For timing, compile cost must be reported separately. If `c_replay` is the
 median per-time replay cost and `c_eval` the median per-time atlas-evaluation
 cost under the same frozen world, the idealized amortization point is
