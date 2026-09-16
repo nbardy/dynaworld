@@ -21,8 +21,11 @@ table, unless all required evidence components are publication eligible:
    dirty schema-v1 178/179-degree diagnostic is excluded;
 3. frozen_world_scaling: requires the frozen identical-world F sweep with raw
    warmed/repeated timing and route-scoped peak-memory samples;
-4. public_context: requires all seven core schema-v2 rows;
-5. venue_package: requires the official ICLR style, portable figure assets,
+4. moving_camera_density: requires the checkpoint-only bounded-yaw
+   F={8,16,32,64} sweep under its predeclared gate; a mechanically complete
+   negative is retained and labelled but blocks submission readiness;
+5. public_context: requires all seven core schema-v2 rows;
+6. venue_package: requires the official ICLR style, portable figure assets,
    an author-approved AI-use statement, and a clean rendered-PDF audit.
 
 Do not replace a missing component with "NOT SUBMISSION-READY", zero-filled
@@ -484,7 +487,26 @@ total, break-even F, and uncertainty. Do not use historical single-shot fixture
 timings or logical tensor volume as a memory surrogate.
 -->
 
-### 5.3 Public evaluation contract
+### 5.3 Bounded moving-camera density
+
+The moving-camera extension is not a renamed renderer. It loads the exact
+accepted learned-world checkpoint from the static causal sweep, decodes the
+heldout target directly at $256\times256$, and compares exact per-pose replay
+against one single-midpoint first-order projective chart over a bounded
+$-22.5^\circ$ to $+22.5^\circ$ yaw program. This is an open-path camera-gauge
+experiment, not closed-loop holonomy and not a multi-chart orbit claim.
+
+<!-- ARTIFACT-GATE:moving_camera_density
+Replace this gate with moving_camera_density_table.tex only after the isolated
+runner produces mechanically valid F={8,16,32,64} rows with one shared loaded
+checkpoint/world hash, direct 256 decode, selected-time slice parity, exact
+compiled-versus-replay image/loss/world-VJP metrics, topology-inclusive
+interaction bytes, event/fallback density, one warmup, and five paired timing
+repeats. Preserve a complete_negative verdict and its failed predeclared gates;
+never retune thresholds after observing the result.
+-->
+
+### 5.4 Public evaluation contract
 
 Neural 3D Video supplies the positive calibrated multiview setting
 [@li2022_neural3dvideo]; D-NeRF is a labelled posed-frame control
@@ -504,7 +526,7 @@ triplets, Neural3D scenes, and D-NeRF controls belong in the supplement. Never
 render partial rows or schema-v1 values in this source.
 -->
 
-### 5.4 Central ablations
+### 5.5 Central ablations
 
 The bounded evidence separates three mechanisms from a generic “faster STAR”
 result. Retaining the gauge Jacobian changes value and gradient invariance by

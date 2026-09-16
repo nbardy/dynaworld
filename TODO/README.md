@@ -230,6 +230,12 @@ before increasing breadth or treating remaining error as a renderer limit.
 The active renewed scope is in `GOAL.md`; retained measurements and caveats are
 in the September 12 initialization-fix loose note. Paper counts remain unchanged.
 
+Local Metal status (2026-09-11): all three small 80-step/32-frame baselines
+completed under the playground budget. The separate frozen compiler smoke
+failed image/VJP/fallback gates; the next scientific step is diagnosis, not a
+larger scaling sweep. Details are in `EXPERIMENTS.md` and the small-playground
+section of the paper `REPRODUCE.md`.
+
 This folder is the active backlog. Use this index to route work before opening
 individual TODO files. The execution handoff for the next quota run is
 [`../GOAL.md`](../GOAL.md) (thin pointer — read it first, then the plans below).
@@ -256,6 +262,22 @@ The Paper B plan is [`worldfoam_memory_light_native4d.md`](worldfoam_memory_ligh
 submission-shaped draft, not evidence that ICLR has been selected.
 
 ## Current Project State
+
+2026-08-25 Paper-A execution handoff: theorem/correctness and bounded
+variable-camera closure/death are accepted. Three runtime components remain:
+the static identical-world frozen scaling sweep, the checkpoint-only bounded
+moving-camera-density sweep, and all seven Coffee Martini submission contexts
+(`0/21` lane rows). The disk-backed target provider, selected-ray/evaluation
+streaming, bounded WorldFoam video initialization, isolated child-process RSS
+guard, and both frozen runners are source-complete and have no remaining
+source-review P0/P1, but are behavior/runtime-unverified in the current dirty
+worktree. Run the focused gates and commit one clean superproject/STAR pair,
+then execute the nine sequential jobs in
+[`unified_paper_ablation_pipeline.md`](unified_paper_ablation_pipeline.md).
+A quiet 16-GB host is a candidate, not a promise: the live memory/swap/disk/load
+gate and the per-child RSS ceiling decide whether each job may start or
+continue. No new mathematics, renderer lane, or audit belongs ahead of those
+evidence runs.
 
 2026-07-28 evidence-integrity correction: the selected-time trainer now emits
 evidence schema v2. It binds one canonical ordered sample schedule, all raw
@@ -3371,6 +3393,15 @@ Use these as the default "what next" list unless the user says otherwise:
    put ordinary progress and failed attempts in loose notes.
 
 ## TODO Map
+
+- Browser World Tubes (2026-09-06): actual affine UVT compiler/world adjoint,
+  conditional-depth rendering, worker paging and 4x continuation are integrated
+  and fixture-tested. Next: rerun the real SPA progressive transition after the
+  overview/page preload fix; stress dense preview fallback; measure matched
+  throughput and time-to-quality on an idle GPU. Concurrent unrelated MPS
+  training blocked timings. Do not infer a speedup or projective-atlas parity
+  from the 205 Node tests or the small fitting gate. Details and retained
+  evidence: `../web/dynaworld_browser_trainer/README.md`.
 
 - Browser trainer status: `multicam67` closes the calibrated-demo bridge by
   reusing the canonical Coffee Martini train2/holdout1 contract, exporting

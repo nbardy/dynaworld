@@ -1,0 +1,680 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage[margin=0.73in,headheight=14pt,headsep=16pt,footskip=24pt]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amsthm,mathtools}
+\usepackage{newtxtext,newtxmath,microtype}
+\usepackage{booktabs,array,tabularx,multicol,enumitem,fancyhdr,xcolor}
+\usepackage[hidelinks,pdfauthor={Research prepared for Nicholas Bardy},pdftitle={Transported Geometry and Reusable Differentiable Ray Operators}]{hyperref}
+\definecolor{ink}{HTML}{14364A}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small\sffamily TRANSPORTED GEOMETRY / REUSABLE RENDERING}
+\fancyhead[R]{\small\sffamily Research note / 08 Sep 2026}
+\fancyfoot[L]{\small\sffamily Proofs are conditional; numerical checks are CPU-only.}
+\fancyfoot[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.35pt}
+\setlength{\parindent}{0pt}\setlength{\parskip}{5pt}
+\setlength{\abovedisplayskip}{7pt}\setlength{\belowdisplayskip}{7pt}
+\setlist{nosep,leftmargin=1.3em}
+\newcommand{\R}{\mathbb R}\newcommand{\1}{\mathbf 1}
+\newcommand{\dd}{\,\mathrm d}\newcommand{\supp}{\operatorname{supp}}
+\newcommand{\diag}{\operatorname{diag}}\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\sgn}{\operatorname{sgn}}\newcommand{\sinc}{\operatorname{sinc}}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\status}[1]{\textsf{\textbf{[#1]}}}
+\newcommand{\pagehead}[2]{\newpage\section*{#1}\vspace{-3pt}{\small\sffamily\color{ink}#2}\par\vspace{4pt}}
+\newcommand{\mini}[1]{\paragraph{#1}}
+\newtheorem{prop}{Proposition}
+\newtheorem{lemma}[prop]{Lemma}
+\newtheorem{cor}[prop]{Corollary}
+\newcommand{\briefproof}[1]{\textit{Proof.} #1\hfill$\square$\par}
+\begin{document}
+\thispagestyle{fancy}
+{\sffamily\color{ink}\small MATHEMATICAL RESEARCH / FIVE DIRECTIONS / REPRODUCIBLE DIAGNOSTICS}\par
+\vspace{5pt}
+{\LARGE\bfseries Transported Geometry and Reusable\\Differentiable Ray Operators}\par
+{\large Starting from spacetime Gaussian splatting, without committing to splats}\par
+\vspace{3pt}
+\textbf{Main conclusion.} The strongest candidate is not a new kernel. It is a small, transported material representation with an exact interval renderer, coupled to a \emph{geometry-backed, derivative-checked ray operator}. The first makes the direct calculation explicit and inexpensive; the second can replace repeated scene evaluation and its reverse pass by interpolation and its transpose. This is a conditional research result, not a measured speedup over spacetime Gaussian splatting (STGS).
+
+\textbf{What survives investigation.} A compiled STGS control is practical but retains per-ray overlap work. Transported constant-density regions permit exact overlapping-medium integration, although that static idea already exists in EVER. Kinetic algebraic solids admit finite visibility schedules under bounded algebraic motion, but construction can be prohibitively expensive. A Fourier/line-integral shortcut is rejected for general colored occlusion. Geometry-backed ray operators achieve the clearest separation between expensive scene work and unavoidable dense query work, provided both radiance and its parameter derivatives are compressible.
+
+\mini{Precisely what grows with time samples}
+Fix a physical interval $[0,L]$, spatial resolution $P$, reconstruction tolerance, motion complexity, and a compact camera-query domain. Let $T$ increase by sampling this \emph{same} problem more densely. Write $M=TPQ$, where $Q$ is the number of spatial/exposure ray samples per pixel. $Q=1$ is a point-ray diagnostic, not automatic antialiasing. Let $D_\theta$ be trainable state size, $N$ primitive count, $d$ trajectory degree, $H$ tested ray--primitive interactions, $C$ compiled records, $E$ visibility events, and $R$ cached ray evaluations. These are different quantities, not interchangeable constants.
+\begin{equation}
+ W_{\rm total}=W_{\rm compile}+W_{\rm query}+W_{\rm loss}+W_{\rm reverse},\qquad
+ W_{\rm output}=\Omega(TP).
+ \label{eq:accounting}
+\end{equation}
+The proposed operator has conditional cost
+\begin{equation}
+ W_{f+b}=O\!\left(R(C_f+C_b)+Mr+W_{\rm certify}+W_{\rm loss}\right),
+ \quad S_{\rm reusable}=O(D_\theta+R+S_{\rm index}),
+ \label{eq:headline}
+\end{equation}
+where $C_f,C_b$ are direct scene evaluation/reverse costs at one node and $r$ is the interpolation stencil size. Dense interpolation, gradient scatter, camera evaluation, boundary handling, and output are \emph{not} included in the supposedly sublinear term. Output images occupy $\Theta(TP)$ memory if all are retained; streaming changes peak memory, not this output volume.
+
+\mini{Evidence and reading map}
+\status{Established} marks literature-backed ingredients; \status{Proved} marks claims proved here under stated assumptions; \status{Approximation} marks changed rendering laws or numerical surrogates; \status{Conjecture} marks untested advantages; \status{Measured} is restricted to the supplied CPU checks. Proofs here establish correctness of propositions, not priority of invention. Pages 3--5 develop the control; 6--9 interval media; 10--12 algebraic solids; 13 the spectral rejection; 14--16 ray operators; 17--20 joint design, comparison, numerical evidence, and falsification. Sources follow. No GPU or public-dataset training benchmark was run.
+
+\pagehead{1. Motion, support, and the limits of reuse}{FOUNDATIONS / GEOMETRY IS NOT TEMPORAL BRIGHTNESS}
+A persistent material point has label $q$ and location $x=\Phi_t(q;\theta)$. For a $C^1$ orientation-preserving map and reference density $\rho_0$, define
+\begin{equation}
+ \mu_t=(\Phi_t)_\#(a_t\mu_0),\quad
+ \rho(\Phi_t(q),t)=\frac{a(q,t)\rho_0(q)}{J(q,t)},\quad
+ J=\det D_q\Phi_t>0. \label{eq:transport}
+\end{equation}
+Here $a$ changes material amount or optical cross-section; $\Phi$ moves support. Provided $a>0$, $\supp\mu_t=\Phi_t(\supp\mu_0)$. With $v=\partial_t\Phi_t\circ\Phi_t^{-1}$, differentiation against a smooth test function and change of variables give
+\begin{equation}
+ \partial_t\rho+\nabla\!\cdot(\rho v)=s,\qquad
+ s(\Phi_t(q),t)=\rho(\Phi_t(q),t)\,\partial_t\log a(q,t).
+ \label{eq:continuity}
+\end{equation}
+\status{Proved} For $a=1$, total material mass is constant: substituting $x=\Phi_t(q)$ cancels $J$ in the integral. Equation \eqref{eq:continuity} follows by integrating $\partial_t[\psi(\Phi_t(q))a\rho_0]$ and integrating the velocity term by parts. This is the standard pushforward/change-of-variables argument, not a new transport theorem.
+
+\mini{A decisive amplitude counterexample}
+For $f(x,t)=a(t)e^{-\norm{x-b}^2/(2s^2)}$, the centroid remains $b$, but its $\varepsilon$-threshold radius is
+\begin{equation}
+ r_\varepsilon(t)=s\sqrt{2\log(a(t)/\varepsilon)}\quad(a>\varepsilon).
+\end{equation}
+Thus a fade can mimic expansion of \emph{apparent} support. In contrast, a translating density has $\partial_t\rho=-v\cdot\nabla\rho$ and a moving centroid. Uniform amplitude has $\partial_t\rho=(a'/a)\rho$. These cannot describe the same nonzero translation of a finite-mass nonconstant density: their normalized centroids have different time derivatives. Reweighting many fixed atoms may imitate motion in images, but supplies no persistent material correspondence by itself.
+
+\mini{Lower bounds and the correct asymptotic}
+\begin{prop}[Dense adjoints cannot be skipped]
+Given arbitrary upstream pixel gradients $g\in\R^{TP}$, exact reverse evaluation can require $\Omega(TP)$ reads even when the scene has one parameter.
+\end{prop}
+\briefproof{Take $I_j(\theta)=\theta$ for every pixel. Then $J^Tg=\sum_jg_j$. An algorithm that does not inspect one entry cannot distinguish two inputs differing only there. The scene can be a uniformly emissive enclosure, so the argument does not depend on splats.}
+Arbitrary $T$ camera poses similarly require $\Omega(T)$ input work. No assumption here compresses unrestricted camera inputs, arbitrary independent motion trajectories, or target images. A family whose temporal bandwidth increases with $T$ is not the fixed-scene asymptotic. Smoothness alone without derivative bounds is insufficient.
+
+\mini{Gradient accuracy contract}
+Compare an accelerated renderer to a direct renderer of \emph{the same representation}, with scaled parameters $\vartheta$ and identical pixel/exposure filters. Test
+\begin{equation}
+ \norm{\widehat I-I}_\infty\le\varepsilon_I,\qquad
+ \norm{(\widehat J-J)^Tg}_2\le\varepsilon_J\norm g_1.
+ \label{eq:accuracy}
+\end{equation}
+Latent gradients of two unrelated representations are not comparable. Across representations, compare images and derivatives under shared physical perturbations (translation, camera pose, deformation, density), or compare each implementation with its own reference. Silhouette derivatives require the boundary terms developed on page 12.
+
+\pagehead{2A. The practical control: what STGS actually computes}{DIRECTION A / ESTABLISHED MODEL, NEW ACCOUNTING AND COMPILATION ANALYSIS}
+\status{Established} Li et al.'s STGS uses cubic positions, linear polynomial quaternions, fixed spatial scales, Gaussian temporal opacity, and splatted features decoded per pixel. Its published Neural 3D Video table reports 32.05 dB PSNR, 140 FPS at $1352\times1014$, and 200 MB for 300 frames. These are the authors' reported aggregate results, not measurements here and not a matched benchmark against the candidates. The formula below summarizes the model, with a unit-normalized quaternion used when constructing rotations \cite{stgs,gs}.
+\begin{align}
+ \delta_i&=t-\tau_i,&
+ b_i(t)&=\sum_{k=0}^{3}b_{ik}\delta_i^k,&
+ q_i(t)&=q_{i0}+q_{i1}\delta_i,\\
+ \Sigma_i(t)&=R(\bar q_i)S_i^2R(\bar q_i)^T,&
+ o_i(t)&=o_i^0e^{-\beta_i\delta_i^2},&
+ \bar q_i&=q_i/\norm{q_i}. \label{eq:stgs}
+\end{align}
+For a camera transform $V_t$ and perspective projection $\pi$, set $m_i=\pi(V_tb_i)$ and $K_i=J_\pi V_t^{3\times3}\Sigma_i(V_t^{3\times3})^TJ_\pi^T$ (including the baseline's specified image filter). Then
+\begin{align}
+ \alpha_i(u,t)&=o_i(t)\exp[-\tfrac12(u-m_i)^TK_i^{-1}(u-m_i)],\\
+ F(u,t)&=\sum_i f_i(t)\alpha_i\prod_{j<i}(1-\alpha_j),\\
+ I(u,t)&=F_{\rm base}+\Psi(F_{\rm dir},F_{\rm time},d(u,t)). \label{eq:stgsrender}
+\end{align}
+Depth order, clipping, opacity caps, early termination, and pixel filtering must be fixed when saying ``same as STGS.'' The projection is an approximation, and these implementation choices define its gradient target. Its opacity parameter is not automatically conserved mass density.
+
+\mini{Baseline complexity, without a straw man}
+Let $L_t$ be primitive--tile memberships and $H_t$ the actual blend interactions in frame $t$. With a fixed-width radix sort, fixed feature width $f$, and degree $d$,
+\begin{equation}
+ W_A=O\!\left(TNd+\sum_tL_t+\sum_tH_tf+TPc_\Psi\right).
+ \label{eq:Acost}
+\end{equation}
+Comparison sorting instead costs $\sum_tO(L_t\log L_t)$. Use active $N_t$ in place of $N$ where culling really avoids evaluation. Reverse work is comparable in order; repeated trajectory pullbacks may add $O(TNd)$. The persistent model already has $O(Nd)$ state, \emph{not} necessarily $O(TN)$. Processing one frame at a time or replaying it makes working state independent of $T$. Batching and streaming are mandatory controls.
+
+\mini{A native 4D Gaussian is not a general deformation law}
+For a joint Gaussian over $(x,t)$, conditioning yields
+\begin{equation}
+ \mathbb E[x\mid t]=\mu_x+\Sigma_{xt}\Sigma_{tt}^{-1}(t-\mu_t),\quad
+ \Sigma_{x\mid t}=\Sigma_{xx}-\Sigma_{xt}\Sigma_{tt}^{-1}\Sigma_{tx}. \label{eq:conditional}
+\end{equation}
+The cross-covariance gives genuine linear centroid motion; the conditional spatial covariance is constant. The temporal marginal changes amplitude. Thus a single native 4D Gaussian does not by itself produce arbitrary rotating or deforming material support. Native 4DGS is a distinct literature baseline, not a synonym for polynomial STGS \cite{native4d}. SplineGS and DynMF already exploit compact trajectories or shared motion bases; such compression is not a new contribution here \cite{spline,dynmf}.
+
+\pagehead{2B. Compiling a Gaussian control across time}{DIRECTION A / CERTIFIED DESCRIPTORS, MEMBERSHIPS, AND ORDER EVENTS}
+On a time chart $I_c=[t_c-h_c,t_c+h_c]$, collect the smooth rendering descriptors
+\begin{equation}
+ z_i(t)=(m_i(t),K_i(t)^{-1},\log o_i(t),z_i^{\rm depth}(t),f_i(t)),\quad
+ \widehat z_i(t)=\sum_{k=0}^{p}z_{ick}(t-t_c)^k. \label{eq:chart}
+\end{equation}
+The coefficients are derived from the shared world state, not free per-frame fitted images. A chart requires positive camera depth, nondegenerate covariance, nonzero quaternion norm, and known derivative bounds. Conservatively bound its whole projected support, insert each affected tile with its \emph{time interval}, and query an interval index. A single huge screen-space swept box is safe but often inefficient. Support here means the specified baseline cutoff; Gaussian mathematical support is infinite. Tail and cutoff derivatives require separate accuracy accounting.
+
+\begin{prop}[Conditional descriptor approximation]
+For each component and scaled parameter direction $a$, suppose $z_i$ and $D_\vartheta z_i[a]$ have $(p+1)$st time derivatives bounded by $M_i$ and $M_i^{(J)}\norm a_2$ on $I_c$. Taylor coefficients at $t_c$ satisfy
+\begin{equation}
+ \norm{z_i-\widehat z_i}_\infty\le\frac{M_ih_c^{p+1}}{(p+1)!},\quad
+ \norm{D_\vartheta z_i-D_\vartheta\widehat z_i}_{2\to\infty}
+ \le\frac{M_i^{(J)}h_c^{p+1}}{(p+1)!}. \label{eq:taylor}
+\end{equation}
+\end{prop}
+\briefproof{Apply the scalar Taylor integral remainder to each component. The parameter-direction derivative commutes with the finite Taylor operator when the mixed derivatives exist. Apply the same remainder to that derivative and take the supremum over unit directions.}
+Radiance error still needs propagation through blending, and boundary/order changes are not covered by this smooth theorem. With fixed ordering and colors in $[0,1]$, the scalar derivative of the blend with respect to any opacity is at most one in magnitude: it is front transmittance times the difference between that color and the remaining ray color. Consequently, opacity errors contribute at most $\sum_i|\Delta\alpha_i|$ per color channel. Gradient error requires derivative bounds too.
+
+\mini{Visibility certificates and real costs}
+A tile order may be reused only while its depth-order predicates remain valid. If each pairwise depth difference is a nonzero degree-$p$ polynomial, it changes sign at most $p$ times. This bounds \emph{events}, not the cost of discovering them. General perspective/quaternion descriptors are rational or approximated; intervals must also split at poles and approximation failures. A tile-level ordering reproduces only the chosen baseline's order, not exact volumetric occlusion.
+\begin{equation}
+ W_{A,\rm compiled}=O\!\left(Cp+W_{\rm event}+W_{\rm bounds}
+       +Hpf+TPc_\Psi\right). \label{eq:Acompiled}
+\end{equation}
+$C$ counts compiled primitive--tile--time records; $H$ counts candidate evaluation and blend interactions across all queried images. If coefficients, coverage records, and order events are fixed at the prescribed tolerance, their construction is $O(1)$ in $T$. The $H$ term generally grows linearly with $T$ and remains scene-dependent. Thus this direction reduces repeated global preprocessing, not all rendering work beyond pixel writes.
+
+\mini{A useful success case and a precise failure}
+An orthographic camera viewing a translating Gaussian with constant covariance needs a linear center descriptor and fixed conic. Its tile-crossing schedule is finite over $[0,L]$. Conversely, a nearly camera-touching primitive has $m_x=fX/Z$; derivatives contain powers of $1/Z$. As $Z\downarrow0$, chart count or error explodes. A rapidly changing, independently specified camera can force essentially one chart per frame. There is no universal sublinear compilation theorem for that input family.
+
+\pagehead{2C. Gaussian gradients and what a 4D integral does not solve}{DIRECTION A / ANALYTIC PULLBACK, CAMERA GAUGES, AND HONEST LIMITS}
+For $y=u-m$, $Q=K^{-1}$, and an uncapped opacity, direct differentials are
+\begin{align}
+ \dd\alpha&=\alpha\bigl(\dd\log o+(Qy)^T\dd m-\tfrac12y^T(\dd Q)y\bigr),\\
+ \frac{\partial\log o}{\partial\beta}&=-\delta^2,&
+ \frac{\partial\log o}{\partial\tau}&=2\beta\delta,&
+ \dd\bar q&=\frac{I-\bar q\bar q^T}{\norm q}\dd q. \label{eq:agrad}
+\end{align}
+The temporal center also changes trajectory evaluation: $\partial_\tau b=-\sum_{k\ge1}k b_k\delta^{k-1}$. Omitting this path gives a wrong gradient. If $D_i$ is the blended color behind primitive $i$ and $T_i$ the front transmittance, then
+\begin{equation}
+ \frac{\partial C}{\partial\alpha_i}=T_i(c_i-D_i),\qquad
+ \bar z_{ick}=\sum_{\text{hits in }(i,c)}(t-t_c)^k\bar{\widehat z}_i(t).
+ \label{eq:Aadj}
+\end{equation}
+The last equation avoids a $T\times N$ descriptor-adjoint array. It still performs $O(Hp)$ sample-dependent multiply-adds. Coefficient construction is reversed once per chart; that limited saving must not be described as a sublinear total backward pass. The feature decoder remains per pixel unless separately compressed.
+
+\mini{An exact local fiber integral, with a narrow interpretation}
+Suppose a 4D Gaussian density is $g(z)=w\exp[-(z-\mu)^TQ(z-\mu)/2]$ and an \emph{affine, parallel} ray family is $z=b+Ay+sv$, $y=(u,v,t)$. Put $h=b+Ay-\mu$, $a=v^TQv>0$. Completing the square gives
+\begin{equation}
+ \int_{-\infty}^{\infty}g(b+Ay+sv)\dd s
+ =w\sqrt{\frac{2\pi}{a}}
+ \exp\!\left[-\frac12h^T\left(Q-\frac{Qvv^TQ}{a}\right)h\right]. \label{eq:fiber}
+\end{equation}
+\status{Proved} Expand the quadratic as $as^2+2s v^TQh+h^TQh$, shift $s$ by $(v^TQh)/a$, and integrate the one-dimensional Gaussian. Finite near/far limits add a difference of Gaussian CDFs. Differentiation follows from the displayed analytic expression.
+
+This is an optical-depth integral, not a solution for the ordered colors of overlapping densities. Perspective rays vary with both pixel and depth; a moving-camera map generally contains products of depth and time. Treating those terms as affine is an approximation whose error must be bounded. Equation \eqref{eq:fiber} therefore does not justify a single global screen-time Gaussian for an arbitrary 360-degree orbit. It is a local computation chart.
+
+\mini{Novel viewpoints and prior art}
+All coefficients remain functions of world geometry and a specified camera chart. A new viewpoint can be rendered from the same world state; an uncovered path requires new charts. Storing only chart coefficients and discarding the world would instead produce a path-limited cache. Persistent Gaussian motion itself is established by Dynamic 3D Gaussians \cite{dynamic}.
+
+\textbf{Verdict A.} Retain as the engineering control and gradient-reference lane. Expect savings only where repeated projection, binning, and trajectory-graph work are a material fraction of runtime. A conventional grouped-transform implementation or batched STGS may already realize much of that saving. Without an actual stage profile, assigning a numerical speedup would be speculation.
+
+\pagehead{3A. Transported interval media: a small non-splat state}{DIRECTION B / MATERIAL REGIONS, NO PROJECTED KERNEL OR ASSUMED COMPOSITOR}
+Choose one canonical compact convex region $K\subset\R^3$ of volume $V_K$ for the entire model. It may be a cube or a ball; do not introduce a different primitive type for each scene feature. For region $i$, store a persistent material label $(i,q)$, motion/deformation coefficients, positive optical mass $m_i$, and directional color coefficients:
+\begin{align}
+ x_i(q,t)&=A_i(t)q+b_i(t),\\
+ A_i(t)&=\sum_{k=0}^{d}A_{ik}B_k(t),\qquad
+ b_i(t)=\sum_{k=0}^{d}b_{ik}B_k(t),\quad\det A_i(t)\ge j_{\min}>0,\\
+ \sigma_i(x,t)&=\frac{m_i a_i(t)}{V_K\det A_i(t)}\,
+              \1\{A_i(t)^{-1}(x-b_i(t))\in K\}. \label{eq:Bmodel}
+\end{align}
+$m_i$ includes the fixed mass-specific extinction coefficient, so it is optical mass rather than a claim about kilograms. Setting $a_i=1$ conserves it. Density-changing sources have their own parameterization. Appearance may use a fixed low-degree directional polynomial; its cost is included in each hit, and high-frequency specularity is not free.
+
+The representation has $O(Nd)$ geometric parameters, independent of $T$. Material support translates through $b_i$ and deforms through $A_i$. Pointwise opacity is not stored. Overlap is allowed, with
+\begin{equation}
+ \sigma(x,t)=\sum_i\sigma_i(x,t),\qquad
+ j(x,d,t)=\sum_i\sigma_i(x,t)c_i(d,t). \label{eq:sumfields}
+\end{equation}
+This law models non-scattering emission and absorption. It is not a general light-transport solution with multiple scattering, refraction, or relighting. It nevertheless defines persistent geometry and a camera-independent 3D field.
+
+\mini{Pull back the camera ray, rather than project the object}
+For a world ray $x(s)=o(t)+s d(u,t)$ with $\norm d=1$, compute
+\begin{equation}
+ q(s)=q_0+s q_d,\qquad q_0=A_i^{-1}(o-b_i),\quad q_d=A_i^{-1}d. \label{eq:raypullback}
+\end{equation}
+The world distance $s$ is preserved as the integration parameter; $q_d$ must \emph{not} be renormalized without a Jacobian correction. For $K=[-1,1]^3$, its interval is
+\begin{equation}
+ s_i^- =\max_k\min\!\left\{\frac{-1-q_{0k}}{q_{dk}},\frac{1-q_{0k}}{q_{dk}}\right\},\quad
+ s_i^+ =\min_k\max\!\left\{\frac{-1-q_{0k}}{q_{dk}},\frac{1-q_{0k}}{q_{dk}}\right\}. \label{eq:slab}
+\end{equation}
+Parallel directions require the usual slab containment test, and near/far clipping is explicit. This is established ray--box mathematics \cite{raybox}. For a ball, solve $\norm{q_0+s q_d}^2=1$ instead.
+
+\mini{The novelty check}
+Constant-density ellipsoids with exact overlap integration are EVER's central construction \cite{ever}; movable volumetric regions are also established by MVP \cite{mvp}, and linear volumetric primitives by LinPrim \cite{linprim}. The proposal worth testing is \emph{transport-aware temporal compilation and reverse reduction}, not renaming those static primitives. Cube and sphere supports are used separately in the CPU diagnostics to test the common interval law, not mixed into a branching primitive zoo.
+
+\pagehead{3B. Exact rendering is an interval sweep}{DIRECTION B / DERIVING THE COMPOSITION LAW FROM RADIATIVE TRANSFER}
+For nonnegative extinction and bounded emitted radiance, define the instantaneous ray color
+\begin{equation}
+ C=\int_0^{s_f}\exp\!\left[-\int_0^s\sigma(r)\dd r\right]j(s)\dd s
+       +\exp\!\left[-\int_0^{s_f}\sigma(r)\dd r\right]C_{\rm bg}. \label{eq:rte}
+\end{equation}
+This is the established emission--absorption rendering law \cite{max}. It is chosen here explicitly, rather than assuming alpha blending is fundamental.
+
+Intersect candidate regions, sort \emph{all entry and exit distances}, and merge equal events. On the segment $[s_k,s_{k+1}]$, both $\sigma_k$ and $j_k$ are constant. Let
+\begin{equation}
+ \ell_k=s_{k+1}-s_k,\quad a_k=e^{-\sigma_k\ell_k},\quad
+ \phi(\sigma,\ell)=\begin{cases}(1-e^{-\sigma\ell})/\sigma&\sigma\ne0,\\\ell&\sigma=0.\end{cases}
+ \label{eq:phi}
+\end{equation}
+The segment maps incoming far-side radiance $L$ to $j_k\phi_k+a_kL$. A back-to-front evaluation is therefore
+\begin{equation}
+ L_k=j_k\phi_k+a_kL_{k+1},\qquad L_{K}=C_{\rm bg},\qquad C=L_0. \label{eq:Brecurrence}
+\end{equation}
+\begin{prop}[Exact overlap law]
+For the piecewise-constant fields \eqref{eq:sumfields}, the event sweep and recurrence \eqref{eq:Brecurrence} evaluate \eqref{eq:rte} exactly up to numerical arithmetic, regardless of the number or order of overlapping regions.
+\end{prop}
+\briefproof{Every support indicator is constant between successive entry/exit events. Integrating the exponential attenuation on one such segment gives $j_k\phi_k$. The attenuation of all farther segments is $a_k$. Induction from the far endpoint yields the integral for the complete ray. Simultaneous events are summed before proceeding; zero-length intervals contribute zero.}
+
+If $\sigma_k>0$, set $c_k=j_k/\sigma_k$ and $\alpha_k=1-e^{-\sigma_k\ell_k}$. Then $L_k=\alpha_kc_k+(1-\alpha_k)L_{k+1}$. \textbf{Alpha compositing reappears as an algebraic consequence}, over disjoint \emph{ray intervals}, not projected primitive centers. Claiming this completely avoids compositing would be false. What disappears is the inconsistent assignment of one opacity and one depth to an overlapping 3D region.
+
+\mini{A worked overlap calculation}
+Two coincident media have $\sigma_1=\sigma_2=1$, $c_1=(1,0,0)$ and $c_2=(0,0,1)$ across a unit segment. With black background, the true color is
+\begin{equation}
+ C=\frac{1-e^{-2}}2(1,0,1)\approx(0.43233,0,0.43233).
+\end{equation}
+Treating each whole primitive as a single layer gives $(1-e^{-1})(1,0,e^{-1})$ or its reversed version, approximately $(0.63212,0,0.23254)$ or $(0.23254,0,0.63212)$. Neither is the interval result. Sorting centers more accurately cannot repair this modeling discrepancy.
+
+\mini{Forward cost and numerical details}
+With $k$ intersected regions and $v$ hierarchy visits per ray, the direct cost is $O(v+k\log k+kf)$, where $f$ is appearance width. There are at most $2k$ endpoints. Event density/emission increments are accumulated by a prefix sum. Evaluate $\phi$ using \texttt{expm1} and its series near zero. Bounded-density early termination controls forward color error via remaining transmittance; it does not by itself bound parameter-gradient error.
+
+\pagehead{3C. A full analytic reverse pass}{DIRECTION B / DENSITY, DEFORMATION, POSITIONS, AND MOVING CAMERAS}
+Let $g=\partial\mathcal L/\partial C\in\R^3$ and $T_k=\prod_{h<k}a_h$. Store or replay the interval state and the radiance $L_{k+1}$ behind it. Differentiating \eqref{eq:Brecurrence} gives
+\begin{align}
+ \bar j_k&=T_k\phi_k g,\\
+ \bar\sigma_k&=T_k\,g^T\!\left(j_k\phi_{\sigma,k}-\ell_ka_kL_{k+1}\right),\\
+ \bar\ell_k&=T_k\,g^Ta_k\left(j_k-\sigma_kL_{k+1}\right),\\
+ \phi_\sigma&=\frac{(1+\sigma\ell)e^{-\sigma\ell}-1}{\sigma^2},\qquad
+ \phi_\sigma(0,\ell)=-\ell^2/2. \label{eq:Breverse}
+\end{align}
+Add $-\bar\ell_k$ to $\bar s_k$ and $+\bar\ell_k$ to $\bar s_{k+1}$. At event $e$, primitive $i$ enters or exits with sign $\epsilon_e=\pm1$, so $\Delta\sigma_e=\epsilon_e\rho_i$ and $\Delta j_e=\epsilon_e\rho_ic_i$. The transpose of a prefix sum is a suffix sum:
+\begin{align}
+ \overline{\Delta\sigma}_e&=\sum_{k\ge e}\bar\sigma_k,&
+ \overline{\Delta j}_e&=\sum_{k\ge e}\bar j_k,\\
+ \bar\rho_i&\mathrel{+}=\epsilon_e\left(\overline{\Delta\sigma}_e+
+                 \overline{\Delta j}_e^Tc_i\right),&
+ \bar c_i&\mathrel{+}=\epsilon_e\rho_i\overline{\Delta j}_e. \label{eq:eventsadj}
+\end{align}
+This is $O(kf)$ reverse work after the ordering is known, not a dense interval-by-region calculation.
+
+\mini{Endpoint and affine-map derivatives}
+A unique active cube face gives $s=(\eta-q_{0h})/q_{dh}$, $\eta\in\{-1,1\}$, hence
+\begin{equation}
+ \dd s=-\frac{\dd q_{0h}}{q_{dh}}-\frac{s}{q_{dh}}\dd q_{dh}.
+ \label{eq:endpoint}
+\end{equation}
+With $u=A^{-T}\bar q_0$, $w=A^{-T}\bar q_d$, ray pullback and conserved density yield
+\begin{align}
+ \bar o&\mathrel{+}=u,&\bar b&\mathrel{-}=u,&\bar d&\mathrel{+}=w,\\
+ \bar A&\mathrel{-}=u q_0^T+wq_d^T+\bar\rho\rho A^{-T},&
+ \overline{\log m}&\mathrel{+}=\bar\rho\rho. \label{eq:affineadj}
+\end{align}
+These follow from $\dd A^{-1}=-A^{-1}(\dd A)A^{-1}$ and $\dd\log\det A=\tr(A^{-1}\dd A)$. For a raw camera direction $v$, normalize it via $d=v/\norm v$ and use $\bar v=(I-dd^T)\bar d/\norm v$. Camera position and orientation are therefore trainable from the same state as geometry.
+
+\mini{Temporal reduction and restrictions}
+For $A(t)=\sum_r A_rB_r(t)$, accumulate $\bar A_r=\sum_{\rm hits}B_r(t)\bar A(t)$, and analogously for $b$, density sources and appearance. The accumulation costs $O(Hd)$, with $O(Nd)$ persistent adjoint storage. It removes expanded frame state, not dense data dependence. Face ties, endpoint-order changes and tangency are excluded from these pointwise formulas; their filtered-image boundary treatment is on pages 9 and 12. The supplied implementation tests all paths in \eqref{eq:Breverse}--\eqref{eq:affineadj}, including camera direction normalization, against finite differences.
+
+\pagehead{3D. When interval media are genuinely simpler}{DIRECTION B / TRANSPORT TESTS, ACCELERATION, ERROR, AND FAILURE REGIMES}
+\mini{Two deformation experiments that opacity-only models confuse}
+Start with a uniform unit-radius ball of optical mass $m$, and scale it by $A=\lambda I$. Then $\rho=3m/(4\pi\lambda^3)$ and a central ray has length $2\lambda$, so
+\begin{equation}
+ \tau_{\rm center}=\frac{3m}{2\pi\lambda^2},\qquad
+ \partial_\lambda\tau_{\rm center}=-\frac{3m}{\pi\lambda^3}. \label{eq:dilation}
+\end{equation}
+The geometry grows while its central opacity \emph{decreases}. Under a stretch only along the viewing ray, $A=\diag(1,1,\lambda)$, density falls by $\lambda^{-1}$ and chord length rises by $\lambda$, so central optical depth stays constant. Under a shear $A=I+\gamma e_1e_3^T$, determinant is one, but the support and off-axis chord lengths change. None of these are reducible to a universal time-opacity multiplier.
+
+\mini{Coherent motion, independent motion, and moving-camera/static-world}
+For one rigid group $x=R_g(t)q+b_g(t)$, build its canonical hierarchy once and transform rays into that hierarchy. This is standard instancing/coherent ray tracing, not a new asymptotic discovery \cite{coherent,grt}. For $G$ groups, a top-level hierarchy must still cull groups; blindly tracing every group costs $O(MG)$. Static-world/moving-camera queries reuse a world BVH without rebuilding geometry at all. This is a particularly strong conventional baseline.
+
+For independent affine motion, build conservative swept bounds on $S$ physical time slabs, where $S$ is selected by support displacement/shape bounds rather than frame count. A hierarchy over region--slab records costs, for example, $O(NS\log(NS))$ construction and $O(NS)$ storage. Query visits $v$ are a measured variable: $v=O(\log(NS)+k)$ is an \emph{assumption about hierarchy quality}, not a worst-case guarantee. Swept bounds may all overlap, giving $v=\Theta(NS)$.
+\begin{equation}
+ W_B=O\!\left(NS\log(NS)+\sum_{m=1}^{M}[v_m+k_m\log k_m+k_m(d+f)]\right).
+ \label{eq:Bcost}
+\end{equation}
+Replay provides the same-order reverse cost and working storage $O(NS+Nd+Bk_{\max})$ for a block of $B$ rays. Stored images and targets are additional. This alone achieves fixed scene/index storage and removes global $TN$ realization, but \textbf{does not make the per-ray scene work sublinear}. Direction E addresses that remaining term.
+
+\mini{Representation and filtering error}
+Piecewise-constant regions are exact for their own law, not necessarily a compact approximation to an arbitrary scene. If two emission--absorption fields satisfy $\int|\Delta\sigma|\le e_\sigma$, $\int\norm{\Delta j}\le e_j$, and $\int\norm j\le J_1$, then, since $|e^{-a}-e^{-b}|\le|a-b|$ for nonnegative $a,b$,
+\begin{equation}
+ \norm{\Delta C}\le e_j+(J_1+\norm{C_{\rm bg}})e_\sigma. \label{eq:fieldbound}
+\end{equation}
+This proves a forward bound, not a gradient bound. High-frequency textures, thin sheets, highly anisotropic supports, tangency, and high opacity can demand many regions or difficult boundary integration. For a hard-faced box, even finite-density point-ray radiance can jump at a silhouette. Finite pixel integration and its boundary derivative are essential. For nonlinear material deformation, local affine residual is $O(h^2\norm{D_q^2\Phi})$ on a patch of radius $h$; converting it into color/gradient error still requires non-grazing and visibility assumptions.
+
+\pagehead{4A. Algebraic solids and a first-event renderer}{DIRECTION C / OPAQUE GEOMETRY WITHOUT SPLATS, DENSITY LAYERS, OR A MESH}
+A different ontology is a material solid
+\begin{equation}
+ S_i(t)=\{A_i(t)q+b_i(t):F_i(q;\eta_i)\le0\},\qquad
+ F_i(q;\eta_i)=\sum_{|\alpha|\le d_s}\eta_{i\alpha}q^\alpha. \label{eq:Csolid}
+\end{equation}
+Assume a compact regular boundary, $\nabla_qF_i\ne0$, and invertible $A_i$. The material coordinates persist even if the polynomial coefficients are trained; temporal motion resides in $A_i,b_i$. A general shape-changing $F_i(q,t)$ without a material map would lose this correspondence and is not the proposed model. Large non-affine deformation requires multiple material charts or a separately invertible deformation, with its cost charged. A sphere uses $F(q)=\norm q^2-1$; low-degree coefficients can represent other regular implicit solids.
+
+Along a ray, form
+\begin{equation}
+ f_i(s,t)=F_i\!\left(A_i(t)^{-1}(o(t)+s d(u,t)-b_i(t));\eta_i\right).
+ \label{eq:Croot}
+\end{equation}
+Intersect a conservative hierarchy, solve for real roots, clip them to the ray domain, and select the nearest admissible boundary. Cameras begin outside the solids in the following analysis. For a union, roots lying in another solid's interior are discarded. At a selected root $s_*$, let $q_*=A_i^{-1}(o+s_*d-b_i)$ and
+\begin{equation}
+ n_* = \frac{A_i^{-T}\nabla F_i(q_*)}{\norm{A_i^{-T}\nabla F_i(q_*)}},\qquad
+ I(u,t)=c_i(q_*,n_*,-d;\gamma_i). \label{eq:Cshade}
+\end{equation}
+A miss returns the background. A small polynomial texture/directional model is sufficient to define a trainable renderer; richer appearance raises state and evaluation costs. This is a first-hit law, not the infinite-density approximation silently imposed on Direction B. It does not model transparency.
+
+\mini{Derivatives inside one visibility region}
+For a simple root with $|f_s|\ge\kappa>0$, implicit differentiation gives
+\begin{equation}
+ \dd s_*=-\frac{\dd f_i|_{s=s_*}}{f_{i,s}},\qquad
+ \dd q_*=A_i^{-1}(\dd o+s_*\dd d+d\,\dd s_*-\dd b_i-\dd A_i\,q_*).
+ \label{eq:Cderiv}
+\end{equation}
+Here $\dd f|_s$ includes shape, affine motion and camera parameters, but holds $s$ fixed. Differentiate the unnormalized normal $w=A_i^{-T}\nabla F_i(q_*)$ and use $\dd n=(I-nn^T)\dd w/\norm w$. Then
+\begin{equation}
+ \dd I=c_q\dd q_*+c_n\dd n_*-c_{\omega}\dd d+c_\gamma\dd\gamma.
+ \label{eq:Ccolorgrad}
+\end{equation}
+These expressions give a complete local reverse implementation. The bound $\kappa$ explicitly controls conditioning; at a tangency it vanishes. Choosing the nearest root is piecewise smooth, not globally differentiable.
+
+\mini{Worked example: translating spheres}
+For an orthographic ray through $(u,v)$ in the positive $z$ direction and a sphere centered at $b_i(t)$ with radius $r_i$, the front depth is
+\begin{equation}
+ z_i(t)=b_{iz}(t)-\sqrt{r_i^2-(u-b_{ix}(t))^2-(v-b_{iy}(t))^2}. \label{eq:spherefront}
+\end{equation}
+The radicand's zero marks a silhouette. Affine center motion makes it quadratic in time. Within its positive region the root is analytic, but $\partial_u z=(u-b_x)/\sqrt{\cdot}$ diverges at the silhouette. Compact motion does not imply uniformly easy differentiation.
+
+\pagehead{4B. Compile visibility events, not frames}{DIRECTION C / A CONDITIONAL FINITE-SCHEDULE THEOREM AND ITS REAL CONSTRUCTION COST}
+Suppose, for one fixed pixel path, camera and object trajectories are rational functions of $t$. Use an unnormalized ray direction for algebraic intersection and normalize only for appearance. Clear denominators in \eqref{eq:Croot}; exclude and split at their zeros. Let the resulting nonzero polynomials have degree at most $D$ in each variable $(s,t)$. Near/far bounds are constant or rational and included in the same degree accounting. The following is an elementary specialization of kinetic-certificate ideas \cite{guibas}, not a claim to have invented kinetic rendering.
+
+\begin{prop}[Finite point-ray visibility schedule]
+Assume square-free ray polynomials, nonidentically-zero pair resultants, and no roots at a denominator pole. There are $E=O(N^2D^2)$ candidate event times over a bounded interval, outside of which root count, root order and first-hit identity are constant on each open time cell.
+\end{prop}
+\briefproof{Include zeros of leading coefficients; discriminants $\operatorname{Res}_s(f_i,\partial_s f_i)$; near/far predicates; and pair resultants $\operatorname{Res}_s(f_i,f_j)$. A resultant has a Sylvester determinant with at most $2D$ rows, whose entries have time degree at most $D$, so its time degree is at most $2D^2$. There are $O(N^2)$ such nonzero predicates. Each has at most its degree many real zeros. Between them, simple roots continue by the implicit-function theorem, cannot enter from infinity or cross clipping boundaries, and cannot exchange order without coinciding. Occupancy and first admissible hit therefore remain fixed.}
+Shared algebraic components and coincident solids can make a resultant identically zero. They require symbolic preprocessing or direct fallback and are outside this bound. The degree $D$ includes camera rationalization and matrix inverses; it is not just the original surface degree.
+
+\mini{An executable, deliberately conservative compilation algorithm}
+For each sampled pixel trajectory, isolate all real predicate roots, sort them, and choose an interior time in every event cell. At that time solve all $N$ ray polynomials, determine occupancy, and label the winning surface/root branch. Retain brackets or root labels for continuation. With $C_{\rm res}(D)$ denoting resultant construction plus real-root isolation and $C_{\rm root}(D)$ one ray-polynomial solve,
+\begin{equation}
+ W_{C,\rm build}=O\!\left(P\left[N^2 C_{\rm res}(D)+
+ E\{N C_{\rm root}(D)+\log(E+1)\}\right]\right). \label{eq:Cbuild}
+\end{equation}
+Arithmetic precision, coefficient bit length and minimum root separation are arguments of these costs, suppressed only for readability. Small separation can be expensive. This naive algorithm may be quartic-like in $N$ after substituting $E$; a finite event theorem is \emph{not} an efficient preprocessing theorem. Adjacent-certificate kinetic sweeps could improve construction, but no implementation or better universal bound is claimed here.
+
+For sorted $T$ time queries, advance a cursor through each schedule and evaluate the selected root and shade. At fixed $Q=1$,
+\begin{equation}
+ W_{C,\rm query}=O\!\left(P(T+E)+TP\{C_{\rm root}(D)+C_{\rm shade}\}\right),
+ \quad S_C=O(D_\theta+PE). \label{eq:Cquery}
+\end{equation}
+Arbitrary time order adds $O(TP\log(E+1))$ lookup unless queries are sorted. Reverse evaluation still reads every pixel adjoint and differentiates its root. Compilation must be redone or certified after a parameter update. $PE$ is a camera-path-specific cache, not world state. A new viewpoint can query the same solids directly, but cannot inherit an unrelated visibility schedule for free.
+
+\pagehead{4C. Visibility derivatives decide whether it trains}{DIRECTION C / FILTERED PIXELS, FAILURE EXAMPLES, AND A NARROW VERDICT}
+A raster pixel is an integral, not necessarily a central ray. Let $h(u)$ be its normalized reconstruction filter and let an image discontinuity divide the footprint into $\Omega_+(\theta)$ and $\Omega_-(\theta)$. With outward normal from $\Omega_+$ and signed outward boundary speed $v_n$,
+\begin{equation}
+ \partial_\theta I_p=
+ \int_{\Omega_+}h\,\partial_\theta I_+\dd u+
+ \int_{\Omega_-}h\,\partial_\theta I_-\dd u+
+ \int_{\Gamma}h(I_+-I_-)v_n\dd\ell. \label{eq:boundary}
+\end{equation}
+If $\Omega_+=\{F(u,\theta)<0\}$, differentiating $F=0$ gives $v_n=-F_\theta/\norm{\nabla_uF}$. Equation \eqref{eq:boundary} follows by adding the two moving-domain transport formulas; their internal boundary normals have opposite signs. Edge sampling and reparameterization are established ways of addressing these terms in differentiable rendering \cite{edge,reparam}.
+
+\mini{Counterexample to ordinary sample-wise automatic differentiation}
+An opaque edge at $u=a\in(0,1)$ covers a white interval in a black unit pixel:
+\begin{equation}
+ I(a)=\int_0^1\1\{u<a\}\dd u=a,\qquad I'(a)=1.
+ \label{eq:edgecounter}
+\end{equation}
+Every fixed point sample has derivative zero away from its crossing. Differentiating a finite sample average therefore gives zero almost everywhere, however accurately that average approximates the forward pixel value. More samples do not fix this interchange-of-derivative failure. Point-ray implicit derivatives and finite event schedules do not eliminate the boundary term. A finite-density box can have the same problem at a face-aligned silhouette; smooth spherical chords instead have singular derivatives that require careful integrability control.
+
+To claim filtered-image accuracy, add analytic footprint clipping, explicit boundary quadrature, or a valid reparameterized estimator. Charge its sample and bookkeeping costs in $Q$ or a separate $W_\partial$. Temporal exposure introduces an analogous crossing term in time. Point-ray checks in this note intentionally do not claim to validate those terms.
+
+\mini{A lower-bound family for event-based reuse}
+Put alternating opaque slats in front of a colored background and translate the foreground or orbit the camera. Each slat boundary can cause a distinct visibility transition along a ray. Increasing slat count increases event count even at fixed physical duration. Independent solids permit pairwise depth equalities; the pair-predicate set can be quadratic in $N$, although many pairs never become frontmost. A schedule that stores only actual frontmost changes may be much smaller, but discovering that lower envelope is additional work. High-frequency textures or specular appearance can require many temporal samples even while the winning surface remains unchanged.
+
+Coherently moving simple solids are the favorable case: transform rays to their common material frame and the root polynomials and hierarchy are shared. That is also the best conventional instancing case. In a static world with moving cameras, ordinary ray tracing already has $T$-independent geometry storage and BVH construction. A kinetic compiler must beat that strong baseline after its event construction and camera-path coverage costs are counted.
+
+\textbf{Verdict C.} Viable for small numbers of simple opaque solids, limited camera-path families, and deterministic occlusion diagnostics. Not selected as the general photorealistic replacement. Its useful contribution to the joint design is the explicit identification of visibility event sets and non-smooth regions, not an unsupported assertion that event processing is cheap. Its retained geometry supports arbitrary views; its compiled schedule only accelerates the views for which it was built.
+
+\pagehead{5. Spectral material density: an exact shortcut with a fatal limit}{DIRECTION D / A DECISIVE REJECTION FOR GENERAL COLORED OCCLUSION}
+Take a nonnegative canonical Fourier density on a compact material region,
+\begin{equation}
+ \rho_0(q)=\sum_{k=1}^{K}a_ke^{\mathrm i\kappa_k^Tq},\qquad
+ \rho(x,t)=\frac{\rho_0(A^{-1}(x-b))}{\det A}\,\1_{AK_0+b}(x). \label{eq:fourier}
+\end{equation}
+Here $K_0$ is the canonical support and $K$ counts modes. Conjugate coefficients make the density real. A DC coefficient dominating the sum of magnitudes of non-DC coefficients is a sufficient, restrictive positivity condition. Fixed material coefficients plus $A,b$ give genuine transported support. Arbitrarily fading unrelated world modes would not supply the same correspondence.
+
+On a known clipped material interval $[s_-,s_+]$, write $q=q_0+s q_d$, $\ell=s_+-s_-$ and $\bar s=(s_-+s_+)/2$. Integrating each exponential gives
+\begin{equation}
+ \tau=\frac{\ell}{\det A}\sum_k a_k e^{\mathrm i\kappa_k^T(q_0+\bar s q_d)}
+ \sinc\!\left(\frac{\ell\kappa_k^Tq_d}{2}\right),\qquad\sinc z=\frac{\sin z}{z}. \label{eq:sinc}
+\end{equation}
+This is exact, with the continuous value $\sinc0=1$. A pure absorber gives $I=B e^{-\tau}$; a common constant source color gives $I=c+(B-c)e^{-\tau}$. All parameters are differentiable through \eqref{eq:sinc}, with
+\begin{equation}
+ \dd I=e^{-\tau}\dd B+(1-e^{-\tau})\dd c-(B-c)e^{-\tau}\dd\tau,
+ \quad\sinc z=1-z^2/6+O(z^4). \label{eq:fouriergrad}
+\end{equation}
+Endpoint, determinant and camera derivatives must all be included. General ray families cost $O(MK)$ forward and reverse; a global FFT only helps special structured parallel queries. Mode storage $O(K+\dim A+\dim b)$ is fixed in $T$, but dense ray--mode evaluation is not.
+
+\mini{Why total optical depth and integrated emission are insufficient}
+Place a red homogeneous layer and a blue homogeneous layer along a ray, each with optical depth $\log2$, before a black background. Red first yields $(1/2,0,1/4)$; blue first yields $(1/4,0,1/2)$. Both arrangements have identical total extinction $2\log2$ and identical integrated RGB emission. Therefore no renderer whose sufficient statistics are just those order-insensitive integrals can reproduce both images. The difference is $1/4$ in a color channel, not an arbitrarily small approximation error.
+
+A Fourier field can still represent these layers approximately and render their \emph{ordered} emission--absorption integral. That requires additional integration of $j(s)\exp[-\int^s\sigma]$, whose nonlinear exponential generally destroys the finite Fourier closure. Thus the rejection concerns the proposed cheap sufficient-statistic renderer, not Fourier representations as such. High-frequency sharp support also demands many modes and can make positivity hard to maintain.
+
+\textbf{Verdict D.} Keep only for absorption/transmission imaging or effectively common-color media. It has an elegant analytic line operator but fails the general dynamic-scene requirement once distinct colored occlusion is demanded. No further implementation effort is justified before that restriction matches the intended application.
+
+\pagehead{6A. Geometry-backed ray operators}{DIRECTION E / A DIFFERENT REPRESENTATION OF THE RENDERING CALCULATION}
+Retain a canonical world model $\theta$, such as Direction B or C. Replace repeated evaluation of its ray-response map $f_\theta(\xi)$ by a small sampled operator that is \emph{derived from that world}. The scene is not replaced by a video. Editing a material point changes the world state, from which all covered and novel viewpoints are evaluated consistently.
+
+\mini{Choose the domain without hiding camera dimensions}
+Assume vacuum outside a convex scene bound and near/far clipping that encloses its full ray segment. For exterior cameras, an oriented line has four degrees of freedom. Its radiance plus time is a five-dimensional function. Use a finite collection of local line charts (for example, two-plane coordinates with valid directional ranges); a 360-degree orbit is not one globally nonsingular chart. Cameras inside participating media require the ray origin along the line as well, increasing the generic domain to six dimensions including time. A specified camera path induces a cheaper three-dimensional map $(u,v,t)\mapsto f_\theta(r(u,v,t),t)$, but an unrelated path requires new samples. Sampled light fields and single-evaluation ray representations are established ideas \cite{light,lfn}.
+
+Let a fixed chart have dimension $s$ and axis-aligned cells of widths $h_1,\ldots,h_s$. Store direct scene values at its $R$ vertices, $z_j=f_\theta(\xi_j)$. A query in a cell uses multilinear basis weights:
+\begin{equation}
+ \widehat f_\theta(\xi)=\sum_{j\in\mathcal V(\xi)}B_j(\xi)z_j,
+ \quad B_j\ge0,\quad\sum_j B_j=1,\quad |\mathcal V|=r=2^s. \label{eq:operator}
+\end{equation}
+Thus $r=8$ for a path chart and $r=32$ for a generic exterior-camera ray--time chart. A full uniform grid has $R=O(h^{-s})$, the principal curse of dimensionality. Sparse/adaptive charts may help, but are not assumed to avoid it universally.
+
+\mini{Rasterization and pixel filters}
+Generate camera rays for the requested pixels and times, locate each ray in its chart, interpolate, and reduce spatial/exposure samples. With weights $w_{pq}$ summing to one,
+\begin{equation}
+ \widehat I_{p,t}=\sum_{q=1}^{Q}w_{pq}\widehat f_\theta(\xi_{p,t,q}). \label{eq:pixelfilter}
+\end{equation}
+This is a sample-to-raster algorithm, not object splatting. Its optical law is the direct world's law, approximated by the ray operator. Caching the already filtered pixel response is another option, but then its footprint and exposure parameters are part of the domain. A central-ray cache alone does not certify a finite pixel integral or its visibility derivative.
+
+The compiler evaluates nodes with the direct renderer, subdivides cells whose \emph{value or parameter-derivative} error exceeds tolerance, and routes unresolved cells to direct evaluation. Derivative bounds give certificates; sample probes only give diagnostics. Cross-chart selection must be fixed and seam-consistent, or blended with a partition of unity whose derivative is included. The simplest safe implementation uses fixed routing and direct fallback in seam bands. Construction is repeated or revalidated when $\theta$ changes. A full finite-difference node Jacobian costs $O(RD_\theta C_f)$; it is not cheap certification. Offline/online operator reduction itself is established, including empirical interpolation methods \cite{eim}; novelty of this particular combination is not asserted.
+
+\pagehead{6B. An exact transpose and two error theorems}{DIRECTION E / THE MAIN FORWARD--BACKWARD REUSE RESULT}
+With fixed nodes and fixed query coordinates, flatten all raster samples into $\widehat I=Bz(\theta)$, incorporating the pixel weights into $B$. For arbitrary upstream adjoints $g$,
+\begin{equation}
+ \bar z=B^Tg,\qquad \nabla_\theta\mathcal L=(D_\theta z)^T\bar z. \label{eq:transpose}
+\end{equation}
+\status{Proved} The differential is $\dd\widehat I=B(D_\theta z)\dd\theta$; transposition yields \eqref{eq:transpose}. Accumulate $\bar z$ in $O(Mr)$ time, then replay each node's direct renderer once with its accumulated adjoint. No $R\times D_\theta$ Jacobian need be stored. This is exact reverse mode \emph{for the interpolated renderer}, not automatically for the original world.
+
+If a camera or a material-frame chart makes $\xi_m=\xi_m(\theta)$, the additional path is
+\begin{equation}
+ \nabla_\theta\mathcal L=(D_\theta z)^TB^Tg+
+ \sum_m (D_\theta\xi_m)^T(D_\xi\widehat f(\xi_m))^Tg_m. \label{eq:movingchart}
+\end{equation}
+Node positions that depend on $\theta$ require their own corresponding chain rule. Holding adaptive topology fixed defines a local surrogate; it is not permission to omit continuous camera-coordinate derivatives or to use stale node values after an optimizer step.
+
+\begin{prop}[Value and scene-derivative interpolation bounds]
+On a cell, suppose $f$ is twice continuously differentiable in each coordinate, and each scaled-parameter directional derivative has the same regularity. If
+$M_{jj}=\sup|\partial_{jj}f|$ and
+$M_{jj,\theta}=\sup_{\norm v=1}|\partial_{jj}(D_\theta f[v])|$, then
+\begin{equation}
+ \norm{f-L_hf}_\infty\le\frac18\sum_jh_j^2M_{jj}=\varepsilon_I,
+ \quad
+ \norm{D_\theta f-D_\theta L_hf}_{2\to\infty}
+ \le\frac18\sum_jh_j^2M_{jj,\theta}=\varepsilon_J. \label{eq:Ebound}
+\end{equation}
+\end{prop}
+\briefproof{One-dimensional linear interpolation has remainder $f''(\zeta)(x-a)(x-b)/2$, bounded by $h^2\sup|f''|/8$. Tensor interpolation is a product of one-dimensional positive norm-one interpolation operators. Telescope this product and apply the one-dimensional bound to each term. Fixed interpolation commutes with parameter differentiation. Apply the identical argument to every unit parameter direction.}
+Consequently $\norm{(\widehat J-J)^Tg}_2\le\varepsilon_J\norm g_1$ for scalar flattened output channels. This proves the contract in \eqref{eq:accuracy}. It requires a uniform bound over directions, not just a few convenient gradient probes.
+
+For trainable query coordinates and bounded mixed third derivatives,
+\begin{equation}
+ \norm{\partial_jf-\partial_jL_hf}_\infty
+ \le\frac{h_j}{2}M_{jj}+\frac18\sum_{k\ne j}h_k^2M_{kkj}. \label{eq:querybound}
+\end{equation}
+To see the first term, the derivative of a linear interpolant is the average derivative over its interval, whose difference from any point derivative is at most $h_jM_{jj}/2$. Interpolate the remaining coordinates and telescope again. Combine this bound with $\norm{D_\theta\xi}$ in \eqref{eq:movingchart}. Fixed-coordinate scene-gradient accuracy alone does not certify camera training.
+
+\pagehead{6C. What can actually be sublinear in the frame count}{DIRECTION E / COSTS, A TRAINING COUNTEREXAMPLE, AND THE BREAK-EVEN CONDITION}
+Suppose a fixed-domain compiler produces $R$ nodes with the bounds on page 15 at the prescribed tolerances. Let $C_f,C_b$ be direct node costs and $W_{\rm cert}$ include all subdivision, derivative bounds, hierarchy construction, and chart routing preparation. A full forward--backward evaluation has
+\begin{align}
+ W_{E,f+b}&=O\!\left(R(C_f+C_b)+Mr+W_{\rm cert}+W_{\rm loss}+W_\partial\right), \\
+ S_{E,\rm reusable}&=O(D_\theta+R+S_{\rm index}),\quad
+ S_{\rm peak}=S_{E,\rm reusable}+O(BQ+S_{\rm node\ replay})+S_{\rm retained\ images}.
+ \label{eq:Ecost}
+\end{align}
+The expensive scene evaluations and reversals are independent of $T$ under those assumptions. Dense interpolation, camera arithmetic, adjoint scatter, and loss reads still scale with $T$. Data images and retained output arrays occupy $\Theta(TP)$. No streaming method removes their total information volume. Replay trades repeated node arithmetic for reduced activation storage.
+
+If a fraction $\alpha$ of queries falls back to the direct renderer, add $\alpha M(C_f+C_b)$. A fixed positive $\alpha$ destroys a claim of strictly sublinear \emph{all expensive scene work}. It may still offer a useful constant-factor gain. Differentiating an adaptively interpolated pixel filter also requires the visibility treatment in \eqref{eq:boundary} or an explicitly smoothed target law.
+
+\mini{A forward-perfect, backward-wrong cache}
+Consider a static textured plane whose ray response is
+\begin{equation}
+ f_\theta(x)=\tfrac12+\theta\sin(16\pi x),\qquad x_j=j/16,\quad j=0,\ldots,16. \label{eq:tangenttrap}
+\end{equation}
+At $\theta=0$, the cached and true images both equal $1/2$ everywhere. Nevertheless every node has parameter derivative zero, so $D_\theta\widehat f=0$, while $D_\theta f=\sin(16\pi x)$. Gradient relative error is one on a nondegenerate sample set. The scene is perfectly persistent and the forward error is exactly zero. Thus value-based refinement cannot certify useful training gradients. Arbitrary fixed probe sets can similarly miss an oscillatory perturbation chosen to vanish at those probes.
+
+\mini{A worked success case and the limits of the theorem}
+A translated, dilated, finite-density sphere away from silhouettes has smooth chord lengths and analytic radiance. Over a small ray--time patch, $R$ can stay fixed while $T$ grows. Page 19 measures this situation, including mass-conserving dilation. In contrast, thin moving occluders, near-tangent rays and view-dependent texture can make $M_{jj,\theta}$ large or undefined. A full five-dimensional chart may need more nodes than there are requested rays. Enlarging the novel-view domain is not the same asymptotic as resampling a fixed domain.
+
+With no fallback or certification overhead, a scalar work model gives the break-even test
+\begin{equation}
+ R(C_f+C_b)+Mr < M(C_f+C_b),\quad\text{hence}\quad
+ \frac RM < 1-\frac r{C_f+C_b}. \label{eq:breakeven}
+\end{equation}
+Actual GPU constants, bandwidth and contention must replace operation counts. If a direct node is already extremely cheap, interpolation can lose. If scene-update frequency is high, rebuilding nodes may erase inference gains. \textbf{Verdict E:} strongest conditional amortization mechanism, but only derivative-compressible ray responses warrant it; it is not a universal dynamic-scene compression theorem.
+
+\pagehead{7. A temporal operator induced by the geometry}{DEEPENING B + E / MORE THAN AN ARBITRARY IMAGE CACHE}
+There is a useful regime where the interval geometry itself gives the operator basis. Assume constant region densities and colors, fixed affine shapes, linearly translating region centers, and orthographic rays whose origins move linearly while their directions stay fixed. Within a time cell with fixed active faces and endpoint order, every interval length is affine in time. This includes independently translating regions, not only a shared rigid motion. Rotating cameras and time-varying deformation generally violate these assumptions.
+
+Write $c_k=j_k/\sigma_k$ on interval $k$, with arbitrary $c_k$ on vacuum intervals, and cumulative optical depth
+\begin{equation}
+ U_j(t)=\sum_{k<j}\sigma_k\ell_k(t)=\alpha_j+\beta_jt.
+\end{equation}
+For $K$ intervals the exact ordered color is an exponential sum:
+\begin{align}
+ C(t)&=\sum_{k=0}^{K-1}c_k\left(e^{-U_k(t)}-e^{-U_{k+1}(t)}\right)+C_{\rm bg}e^{-U_K(t)} \\
+ &=\sum_{j=0}^{K}\gamma_j e^{-U_j(t)},\quad
+ \gamma_0=c_0,\quad\gamma_j=c_j-c_{j-1},\quad\gamma_K=C_{\rm bg}-c_{K-1}.
+ \label{eq:expsum}
+\end{align}
+This follows directly by regrouping the exact interval law. It preserves colored occlusion; unlike Direction D, order is already encoded in the cumulative optical depths. Vacuum contributions cancel.
+
+\mini{Compile coefficients; reduce adjoints to temporal moments}
+At a fixed cell center $t_c$, let $h=t-t_c$, $w_j=\gamma_je^{-U_j(t_c)}$, and $|h|\le H_c$. Approximate the exponential sum by
+\begin{equation}
+ \widehat C(t)=\sum_{n=0}^{p}a_nh^n,\quad
+ a_n=\frac1{n!}\sum_jw_j(-\beta_j)^n,\quad
+ \bar a_n=\sum_{\text{queries in cell}}h^n g(t). \label{eq:expmoments}
+\end{equation}
+Constructing all coefficients and reversing that construction costs $O(Kp)$ per ray--time cell. Evaluating colors and accumulating arbitrary adjoints costs $O(p)$ per ray query. No per-query interval sweep is needed. Query moments are still dense reads; there is no claim of skipping the $TP$ data.
+
+\begin{prop}[A joint value and gradient bound for the temporal operator]
+Let $X\ge\max_j|\beta_j|H_c$, $p\ge1$, and $E_p(X)=e^XX^{p+1}/(p+1)!$. Within fixed event topology, for one color channel,
+\begin{align}
+ |C-\widehat C|&\le\sum_j|w_j|E_p(X), \\
+ \norm{D_\theta C-D_\theta\widehat C}_2
+ &\le\sum_j\left[\norm{D_\theta w_j}_2 E_p(X)
+ +|w_j|\norm{D_\theta\beta_j}_2 H_c E_{p-1}(X)\right]. \label{eq:expbounds}
+\end{align}
+\end{prop}
+\briefproof{Taylor's exponential remainder bounds each term by $E_p(X)$. Differentiate the truncated series. Its derivative with respect to $\beta_j$ is $-h$ times the degree-$(p-1)$ series, whereas the exact derivative is $-he^{-\beta_jh}$. Apply the remainder again and the product rule for $w_j$. Sum the absolute/directional bounds.}
+
+With at most $E$ cells per pixel, $Q=1$, and $K$ intervals per cell, the conditional total forward--backward work is $O(W_{\rm events}+W_{\rm bounds}+PEKp+TPp)$ and stored coefficients are $O(PEp+D_\theta)$. Event discovery and derivative-bound construction are charged, not assumed free. Large $X$, many crossings, cancellation or large parameter sensitivities can make $p$ or $E$ large. Training updates require rebuilding coefficients and validating event cells. Novel views still use the same world, but require their own ray coefficients. \textbf{This is a proved special-case compiler, not a measured speedup or a novelty claim.} General moving-camera/deforming scenes return to the sampled operator or direct interval renderer.
+
+\pagehead{8. Compare total work, not only the reusable term}{FAIR EXPERIMENT DESIGN / FIX QUALITY, GRADIENT TARGET, AND CAMERA COVERAGE}
+The baseline is the actual STGS model and its trained weights, not $T$ independently stored Gaussian scenes. Profile native trajectory evaluation, projection, binning/sorting, feature accumulation, decoder, loss, reverse and optimizer separately. Include a streamed/batched implementation, shared-rigid-transform control, and inference-only as well as training timings. Modern Gaussian ray tracing and non-Gaussian ray renderers must also be considered: EVER, 3DGRT, GRay and the recent VoroTracing preprint prevent treating ray-based rendering itself as a new advantage \cite{ever,grt,gray,voro}. Their published FPS values are not interchangeable across datasets, quality settings or hardware.
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+Direction & Reusable preparation/state & Remaining query and reverse work \\
+\midrule
+A: compiled STGS & $C$ chart/coverage records; event and bound construction & $O(Hpf+TPc_\Psi)$; temporal gradient reductions still visit hits \\
+B: interval media & $O(NS\log(NS))$ build; $O(NS+Nd)$ state & $\sum_m O(v_m+k_m\log k_m+k_m(d+f))$ \\
+C: kinetic solids & Eq.\ \eqref{eq:Cbuild}; $O(D_\theta+PE)$ state & $O(P(T+E)+TP(C_{\rm root}+C_{\rm shade}))$, plus boundary work \\
+D: Fourier shortcut & $O(K+d)$ coefficient state & $O(MK)$; inadequate colored-occlusion law \\
+E: ray operator & $R(C_f+C_b)+W_{\rm cert}$; $O(D_\theta+R+S_{\rm index})$ & $O(Mr+W_{\rm loss}+W_\partial)$ plus direct fallback \\
+\bottomrule
+\end{tabularx}
+\end{center}
+All rows additionally materialize $TP$ pixels. Table entries are assumption-dependent asymptotic costs, not measured rankings. $H,k,v,C,E,R,S$ must be recorded, not held constant by declaration while the scene or camera domain gets harder. $W_\partial$ accounts for any boundary treatment not already in direct node costs.
+
+\mini{Two separate quality comparisons}
+\textbf{Renderer acceleration:} freeze one world's parameters and compare its direct and accelerated renderers with the same pixel/exposure filter, camera model, background and stopping tolerances. Report maximum/mean image error, parameter-scaled Jacobian-vector and vector-Jacobian errors, worst tested direction, and error near occlusion boundaries. Validate reverse against a trusted analytic reference or step-size-converged finite differences, using filtered-image boundary references where appropriate.
+
+\textbf{Representation replacement:} fit STGS and the candidate to the same training views, then compare held-out viewpoints and held-out times. Require matched PSNR/SSIM/LPIPS ranges, inspect temporal flicker and thin occluders, and report time-to-quality and peak training memory. Do not demand equal primitive count: one box, ellipsoid, polynomial solid, Fourier mode and Gaussian have different expressive power. Compare gradients only under common physical perturbations or against each representation's own reference. A small but visibly inferior model is not evidence for a faster equally useful renderer.
+
+\mini{Concrete gates, chosen before a GPU run}
+For a frozen normalized-color diagnostic, use $\varepsilon_I=10^{-4}$ and a parameter-scaled row-Jacobian bound of $10^{-3}$; report the entire error curve rather than only passing samples. On a reconstruction benchmark, predeclare a quality band such as within 0.1 dB PSNR and 0.002 LPIPS of STGS, together with common-perturbation gradient tolerance and temporal tests. These bands are proposed experimental choices, not universal perceptual equivalence. Any claim of acceleration requires \emph{end-to-end} forward plus backward time below the strongest matched baseline, including amortized rebuilding, filtering and loss. No such external-data comparison has been completed here.
+
+\pagehead{9. Numerical evidence obtained in this investigation}{MEASURED / CPU FLOAT64 MATHEMATICAL CHECKS, NOT A GPU PERFORMANCE CLAIM}
+The accompanying Python checks and JSON results are reproducible. The checks use NumPy in float64, fixed seeds recorded in the executables, no public reconstruction dataset and no training run. No hardware GPU was available. They test specific mathematical components rather than the full proposed system.
+
+\mini{B: complete analytic reverse of moving, deforming regions}
+Two overlapping affine boxes, three time queries, and a linear RGB objective exercise 62 parameters: two affine trajectories, two translations/velocities, optical masses, colors, camera origin and normalized camera direction. Every parameter is checked, away from ties and silhouettes.
+\begin{center}\small
+\begin{tabular}{@{}rrr@{}}
+\toprule
+Central-difference step & Maximum absolute gradient error & Relative gradient $\ell_2$ error\\
+\midrule
+$10^{-4}$ & $6.30\times10^{-9}$ & $6.29\times10^{-9}$\\
+$10^{-5}$ & $4.78\times10^{-11}$ & $7.36\times10^{-11}$\\
+$10^{-6}$ & $2.78\times10^{-10}$ & $6.97\times10^{-10}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+An independent uniform midpoint integration with 131,072 depth samples agrees with the interval color within $3.03\times10^{-6}$ maximum RGB error. The nonmonotone finite-difference tail is compatible with floating-point cancellation; these results validate neither silhouette derivatives nor large-scene performance.
+
+\mini{E: matched image and gradient error on a transported sphere}
+Use a uniform sphere with $b_x(t)=0.03+0.12t$, $R(t)=0.9(1+0.12t)$, $m=1.4$, color $c=\operatorname{sigmoid}(0.7)$ and black background. Orthographic rays have $y=0.1$, $x\in[-0.249,0.249]$; $t\in[0.001,0.999]$. All rays stay strictly inside the projected silhouette. The six parameters are $b_x(0)$, velocity, $\log R(0)$, dilation rate, $\log m$ and color logit. Compare analytic direct values and all six derivatives against a bilinear $(x,t)$ node operator at $64\times256=16{,}384$ queries.
+\begin{center}\small
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+Cells/axis & Nodes $R$ & Max image error & Max row-$\ell_2$ $J$ error & Max tested VJP rel. error\\
+\midrule
+8 & 81 & $1.81\,10^{-4}$ & $1.08\,10^{-3}$ & $2.21\,10^{-3}$\\
+16 & 289 & $4.62\,10^{-5}$ & $2.83\,10^{-4}$ & $4.14\,10^{-4}$\\
+32 & 1,089 & $1.15\,10^{-5}$ & $7.20\,10^{-5}$ & $1.69\,10^{-4}$\\
+64 & 4,225 & $2.27\,10^{-6}$ & $1.23\,10^{-5}$ & $5.08\,10^{-5}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+VJP relative errors use 16 deterministic random unit-$\ell_2$ upstream vectors and each reference VJP's norm; they are tests, not worst-direction certificates. At the first tested grid meeting the proposed image and row-Jacobian gates, 289 direct nodes replace 16,384 direct ray evaluations. That is $56.7\times$ fewer \emph{node evaluations}, not a $56.7\times$ speedup: 65,536 interpolation-weight terms remain in each dense pass. This is a two-dimensional interior patch, not full five-dimensional novel-view coverage.
+
+\mini{Geometry-induced temporal compiler}
+A second executable, \texttt{temporal\_operator.py}, uses 24 independently translating overlapping slabs, 47 ray intervals and 2,048 times with fixed event order. A quadratic (three coefficients per channel) gives maximum RGB error $5.91\times10^{-8}$ and coefficient-space row-Jacobian error $2.38\times10^{-5}$. The analytic uniform bounds are $9.50\times10^{-6}$ and $9.25\times10^{-4}$. Its 192-dimensional coefficient/slopes reverse agrees with finite differences to $2.97\times10^{-11}$ relative error. This checks the $w_j,\beta_j$ adjoints, not their full pullback to slab motion, boundary events or rendering speed.
+
+The interpolation transpose identity has relative discrepancy $1.06\times10^{-15}$. The forward-perfect counterexample \eqref{eq:tangenttrap} has zero image error and relative parameter-derivative error $1.0$. The supplied $T$-sweep keeps 289 nodes while query work grows linearly. Camera-coordinate interpolation derivatives, filtered silhouettes, training convergence and STGS speed remain unmeasured.
+
+\pagehead{10. The smallest experiments that can kill the advantage}{FALSIFICATION / STOP EARLY WHEN A CLAIM FAILS}
+\mini{Test 1: one ray, two moving regions, and one moving edge}
+Extend the supplied two-region test to entry/exit swaps, near-zero density, nearly parallel rays, a deforming support and camera translations/rotations. Compare interval integration to high-accuracy quadrature and gradients to converged differences. Separately use the analytic unit-pixel edge \eqref{eq:edgecounter}, including temporal exposure. A missing boundary term or a failure to converge under refinement kills any claim of accurate differentiable rendering before a GPU is needed. 
+
+\mini{Test 2: fixed physical scene, more time samples}
+Render a small textured rigid assembly with $N=256$ and $P=128^2$, at $T=8,32,128,512$ on exactly the same interval and camera path. Compare streamed STGS, grouped-transform STGS, direct interval tracing, value-only caching, and derivative-aware caching. Repeat with the world static and a full camera orbit. Log compile time, node count, traversal visits, intersections, raster/filter work, reverse time, cache bytes and peak memory. Fail the reuse claim if $R$ or chart construction grows approximately linearly with $T$ at fixed accuracy. Fail the performance claim if total forward--backward time does not beat the strongest matched baseline. 
+
+\mini{Test 3: break coherence and attack visibility}
+Keep $N$, interval and image size fixed, but give the objects independent bounded trajectories. Add a thin foreground comb and sharp directional texture. Evaluate held-out rays/times between all cache nodes. Test worst physical-direction VJPs near disocclusion. Stop pursuing E for this regime if derivative-aware refinement forces $R\gtrsim M$, certification dominates direct evaluation, or a substantial direct-fallback fraction persists. Stop pursuing C if predicate construction costs more than direct tracing of the requested sequence. 
+
+\mini{Test 4: update the scene, then request a new viewpoint}
+Take a gradient step large enough to shift one silhouette by a pixel. Rebuild or rigorously revalidate the caches and repeat the same error measurements; count every rebuild. Query a previously uncovered view and a new time. It must agree with the canonical world's direct renderer after paying any new compilation cost. Silent reuse of stale colors or a camera-path-only scene fails the shared-world requirement. Measure both one optimizer step and a short optimization trajectory: fewer node reversals are irrelevant if inaccurate gradients increase time-to-quality.
+
+\mini{Only then: one external STGS scene}
+Use the official STGS split and resolution for one published dynamic scene, then additional held-out cameras/times that expose occlusion. Train or fit the candidate under the page-18 quality protocol. Report median and tail latency after warmup, both inference-only and full optimization-step timing, plus a stage breakdown. Keep the published 140-FPS figure as context only; the actual baseline is the locally measured, matched-quality STGS run. 
+
+\mini{Final research judgment}
+\textbf{A is the control. B is the clean direct model. E is the strongest amortization hypothesis.} Persistent transported geometry defines the world; a small derivative-accurate ray operator can reuse expensive forward and reverse evaluations; raster work and arbitrary adjoint accumulation remain linear in output size. The decomposition is proved under explicit derivative and coverage assumptions, not validated for general photorealistic scenes. C remains a narrow alternative; D's cheap order-insensitive renderer fails colored occlusion. The decisive question is whether realistic visibility permits a small derivative-accurate operator \emph{after rebuild costs are counted}. The tests above address that before a large renderer rewrite.
+
+\newpage
+\section*{Primary sources and provenance}
+{\small The baseline model, published measurements and prior-method claims were checked against the primary sources below on 8 September 2026. The 2026 works are included as current comparison targets, not as evidence that this proposal is faster. The numerical evidence on page 19 comes only from the accompanying executable and JSON output.}
+\begingroup\small
+\begin{thebibliography}{21}
+\setlength{\itemsep}{5pt}
+\bibitem{stgs} Zhan Li, Zhang Chen, Zhong Li and Yi Xu. \textit{Spacetime Gaussian Feature Splatting for Real-Time Dynamic View Synthesis}. CVPR, 2024. \href{https://arxiv.org/html/2312.16812}{arXiv:2312.16812, full text}. Model: \S4--5; published baseline: Table 1 and \S6.1.
+\bibitem{gs} Bernhard Kerbl, Georgios Kopanas, Thomas Leimk\"uhler and George Drettakis. \textit{3D Gaussian Splatting for Real-Time Radiance Field Rendering}. ACM TOG 42(4), 2023. \href{https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/}{Author project and paper}.
+\bibitem{native4d} Zeyu Yang, Zijie Pan, Xiatian Zhu, Li Zhang, Yu-Gang Jiang and Philip H. S. Torr. \textit{4D Gaussian Splatting: Modeling Dynamic Scenes with Native 4D Primitives}. 2024 preprint. \href{https://arxiv.org/abs/2412.20720}{arXiv:2412.20720}. Distinct from STGS's polynomial-trajectory construction.
+\bibitem{spline} Jongmin Park et al. \textit{SplineGS: Robust Motion-Adaptive Spline for Real-Time Dynamic 3D Gaussians from Monocular Video}. CVPR, 2025. \href{https://arxiv.org/abs/2412.09982}{arXiv:2412.09982}. Compact continuous cubic-Hermite motion is existing work.
+\bibitem{dynmf} Agelos Kratimenos, Jiahui Lei and Kostas Daniilidis. \textit{DynMF: Neural Motion Factorization for Real-time Dynamic View Synthesis with 3D Gaussian Splatting}. \href{https://arxiv.org/abs/2312.00112}{arXiv:2312.00112}, 2023; revised 2024. Shared motion bases are existing work.
+\bibitem{dynamic} Jonathon Luiten, Georgios Kopanas, Bastian Leibe and Deva Ramanan. \textit{Dynamic 3D Gaussians: Tracking by Persistent Dynamic View Synthesis}. \href{https://arxiv.org/abs/2308.09713}{arXiv:2308.09713}, 2023. Persistent moving Gaussian geometry.
+\bibitem{ever} Alexander Mai et al. \textit{EVER: Exact Volumetric Ellipsoid Rendering for Real-time View Synthesis}. ICCV, 2025. \href{https://arxiv.org/html/2410.01804}{arXiv:2410.01804, full text}. Constant-density ellipsoids, exact overlapping intervals, differentiable tracing and replay.
+\bibitem{mvp} Stephen Lombardi et al. \textit{Mixture of Volumetric Primitives for Efficient Neural Rendering}. ACM TOG 40(4), 2021. \href{https://arxiv.org/abs/2103.01954}{arXiv:2103.01954}. Existing movable local volumetric regions.
+\bibitem{linprim} Nicolas von L\"utzow and Matthias Nie\ss ner. \textit{LinPrim: Linear Primitives for Differentiable Volumetric Rendering}. NeurIPS, 2025. \href{https://papers.nips.cc/paper_files/paper/2025/file/1f135570d413e483ffb7528ae7fbf5e1-Paper-Conference.pdf}{Official proceedings paper}. Existing non-Gaussian linear volumetric primitives.
+\bibitem{max} Nelson Max. \textit{Optical Models for Direct Volume Rendering}. IEEE TVCG 1(2), 1995, pp. 99--108. \href{https://doi.org/10.1109/2945.468400}{doi:10.1109/2945.468400}. Emission--absorption optical law.
+\bibitem{raybox} Amy Williams, Steve Barrus, R. Keith Morley and Peter Shirley. \textit{An Efficient and Robust Ray--Box Intersection Algorithm}. Journal of Graphics Tools 10(1), 2005, pp. 49--54. \href{https://doi.org/10.1080/2151237X.2005.10129188}{doi:10.1080/2151237X.2005.10129188}.
+\newpage
+\bibitem{coherent} Ingo Wald, Philipp Slusallek, Carsten Benthin and Markus Wagner. \textit{Interactive Rendering with Coherent Ray Tracing}. Computer Graphics Forum, 2001. \href{https://www.sci.utah.edu/~wald/Publications/2001/CRT/CRT.pdf}{Author-hosted paper}. Conventional coherence is a necessary control.
+\bibitem{grt} Nicolas Moenne-Loccoz et al. \textit{3D Gaussian Ray Tracing: Fast Tracing of Particle Scenes}. SIGGRAPH Asia, 2024. \href{https://gaussiantracer.github.io/}{Author project and paper}. Gaussian ray tracing and flexible camera queries already exist.
+\bibitem{guibas} Leonidas J. Guibas. \textit{Kinetic Data Structures: A State of the Art Report}. \href{https://graphics.stanford.edu/courses/cs428-03-spring/Papers/readings/CollaborativeProcessing/g-kds.pdf}{Stanford-hosted report}. Certificate/event framework; not a rendering-performance result.
+\bibitem{edge} Tzu-Mao Li, Miika Aittala, Fr\'edo Durand and Jaakko Lehtinen. \textit{Differentiable Monte Carlo Ray Tracing through Edge Sampling}. ACM TOG 37(6), 2018. \href{https://people.csail.mit.edu/tzumao/diffrt/}{Author project and paper}. Visibility-boundary gradients.
+\bibitem{reparam} Guillaume Loubet, Nicolas Holzschuch and Wenzel Jakob. \textit{Reparameterizing Discontinuous Integrands for Differentiable Rendering}. ACM TOG 38(6), 2019. \href{https://rgl.epfl.ch/publications/Loubet2019Reparameterizing}{Author publication page}. Reparameterization of discontinuous image integrals.
+\bibitem{light} Marc Levoy and Pat Hanrahan. \textit{Light Field Rendering}. SIGGRAPH, 1996. \href{https://graphics.stanford.edu/papers/light/}{Stanford project and paper}. Sampling/interpolating a four-dimensional ray function is established.
+\bibitem{lfn} Vincent Sitzmann et al. \textit{Light Field Networks: Neural Scene Representations with Single-Evaluation Rendering}. NeurIPS, 2021. \href{https://www.vincentsitzmann.com/lfns/}{Author project and paper}. Direct ray-to-radiance evaluation is prior art; no neural network is required by Direction E.
+\bibitem{eim} Maxime Barrault, Yvon Maday, Ngoc Cuong Nguyen and Anthony T. Patera. \textit{An `empirical interpolation' method: application to efficient reduced-basis discretization of partial differential equations}. C. R. Math. 339(9), 2004, pp. 667--672. \href{https://www.numdam.org/item/CRMATH_2004__339_9_667_0/}{Primary article}; \href{https://doi.org/10.1016/j.crma.2004.08.006}{doi:10.1016/j.crma.2004.08.006}. Offline/online operator factorization.
+\bibitem{gray} Yohan Poirier-Ginter, Jean-Fran\c{c}ois Lalonde and George Drettakis. \textit{GRay: Ray Tracing 3D Gaussians Near the Speed of Splats}. 2026. \href{https://arxiv.org/html/2606.30869v1}{arXiv:2606.30869}; \href{https://doi.org/10.1145/3804496}{doi:10.1145/3804496}. Current Gaussian ray-tracing comparison target.
+\bibitem{voro} Bernardo Taveira, Carl Lindstr\"om, Joakim Johnander and Fredrik Kahl. \textit{Differentiable Voronoi Ray Tracing Beyond Rasterization Speeds}. Preprint, 18 August 2026. \href{https://arxiv.org/abs/2608.17682}{arXiv:2608.17682}. Abstract verified; no independent reproduction or matched cross-paper timing is claimed.
+\end{thebibliography}
+\endgroup
+\end{document}

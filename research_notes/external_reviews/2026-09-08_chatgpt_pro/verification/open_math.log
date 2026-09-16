@@ -1,0 +1,126 @@
+{
+  "scope": "CPU mathematical diagnostics only: no training, no GPU benchmark, no external dataset",
+  "environment": {
+    "python": "3.11.13",
+    "numpy": "2.4.4",
+    "platform": "macOS-15.5-arm64-arm-64bit"
+  },
+  "box_manual_reverse": {
+    "parameters": 62,
+    "rays": 3,
+    "finite_differences": [
+      {
+        "step": 0.0001,
+        "max_abs_error": 6.297253385412205e-09,
+        "relative_l2_error": 6.286876699407955e-09
+      },
+      {
+        "step": 1e-05,
+        "max_abs_error": 4.780797979719864e-11,
+        "relative_l2_error": 8.051250037663274e-11
+      },
+      {
+        "step": 1e-06,
+        "max_abs_error": 2.877531893319407e-10,
+        "relative_l2_error": 6.741968159557224e-10
+      }
+    ],
+    "interval_rgb": [
+      0.48679177013870223,
+      0.2011981846318128,
+      0.371813186158994
+    ],
+    "independent_midpoint_samples": 131072,
+    "midpoint_rgb": [
+      0.48679204075024607,
+      0.20119765208297521,
+      0.37181016230484193
+    ],
+    "max_midpoint_rgb_discrepancy": 3.023854152073291e-06
+  },
+  "ray_operator_smooth_2D_slice": [
+    {
+      "cells_per_axis": 8,
+      "node_ray_evaluations": 81,
+      "query_rays": 16384,
+      "max_image_error": 0.00018118287352508755,
+      "max_row_jacobian_l2_error": 0.0010792368092617482,
+      "jacobian_spectral_relative_error": 0.0008469231105351046,
+      "max_16_random_vjp_relative_error": 0.0022117517713104553
+    },
+    {
+      "cells_per_axis": 16,
+      "node_ray_evaluations": 289,
+      "query_rays": 16384,
+      "max_image_error": 4.622288482158954e-05,
+      "max_row_jacobian_l2_error": 0.0002833193437651972,
+      "jacobian_spectral_relative_error": 0.0002123827928867844,
+      "max_16_random_vjp_relative_error": 0.0004142115696525952
+    },
+    {
+      "cells_per_axis": 32,
+      "node_ray_evaluations": 1089,
+      "query_rays": 16384,
+      "max_image_error": 1.148937715317322e-05,
+      "max_row_jacobian_l2_error": 7.195969129793707e-05,
+      "jacobian_spectral_relative_error": 5.3653206851347014e-05,
+      "max_16_random_vjp_relative_error": 0.0001693288198428392
+    },
+    {
+      "cells_per_axis": 64,
+      "node_ray_evaluations": 4225,
+      "query_rays": 16384,
+      "max_image_error": 2.269409657640331e-06,
+      "max_row_jacobian_l2_error": 1.2305662903456835e-05,
+      "jacobian_spectral_relative_error": 1.4281001472776763e-05,
+      "max_16_random_vjp_relative_error": 5.08012671229325e-05
+    }
+  ],
+  "interpolant_transpose_relative_error": 1.0639154721343225e-15,
+  "tangent_blind_aliasing": {
+    "image_error_at_theta_zero": 0.0,
+    "derivative_relative_l2_error": 0.9999999999999999
+  },
+  "order_loss_counterexample": {
+    "red_front": [
+      0.5,
+      0.0,
+      0.25
+    ],
+    "blue_front": [
+      0.25,
+      0.0,
+      0.5
+    ]
+  },
+  "scaling_counts_n16": [
+    {
+      "T": 16,
+      "P": 64,
+      "scene_node_evaluations": 289,
+      "ray_queries": 1024,
+      "query_stencil_terms": 4096
+    },
+    {
+      "T": 64,
+      "P": 64,
+      "scene_node_evaluations": 289,
+      "ray_queries": 4096,
+      "query_stencil_terms": 16384
+    },
+    {
+      "T": 256,
+      "P": 64,
+      "scene_node_evaluations": 289,
+      "ray_queries": 16384,
+      "query_stencil_terms": 65536
+    },
+    {
+      "T": 1024,
+      "P": 64,
+      "scene_node_evaluations": 289,
+      "ray_queries": 65536,
+      "query_stencil_terms": 262144
+    }
+  ]
+}

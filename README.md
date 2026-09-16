@@ -256,6 +256,11 @@ with `PROJECT_INDEX.md`, `EXPERIMENTS.md`, and `CODE_ORGANIZATION.md`.
   / 14.96 dB heldout at 400 updates, with zero tile overflow and new swap.
   [Measurements and limits](agent_notes/loose_notes/2026-09-13_00-44-03_world_tube_duration_and_camera_depth_controls.md).
   These are one-seed diagnostics; compiled parity and scaling remain unproven.
+- [x] Small local Metal playground (2026-09-11): all three 80-step/32-frame
+  representation runs complete, with peak sampled process-tree RSS 1.75 GiB
+  and no new swap. [Command and measured limits](research_notes/gauged_uvt_trace_atlas/paper/REPRODUCE.md#small-local-metal-playground).
+  These are low-quality diagnostics, not accepted paper rows; the separate
+  four-frame replay/compiled check failed its parity/fallback thresholds.
 - [x] Top-level video to splat baseline, reproducing TokenGS as the reference baseline.
 - [x] Implicit camera baseline, extending the TokenGS baseline.
 - [x] First real Neural3D `coffee_martini` train2/holdout1 protocol executes

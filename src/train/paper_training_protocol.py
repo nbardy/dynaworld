@@ -213,6 +213,8 @@ def paper_stage_for_step(stages: tuple[PaperStage, ...], step: int) -> PaperStag
 
 
 def resolve_paper_training_protocol(raw: Mapping[str, Any]) -> PaperTrainingProtocol:
+    from paper_local_resources import normalize_local_resources
+
     if not bool(raw.get("enabled", False)):
         raise ValueError("paper protocol requires enabled=true")
     dataset_raw = raw.get("dataset")
@@ -253,6 +255,7 @@ def resolve_paper_training_protocol(raw: Mapping[str, Any]) -> PaperTrainingProt
         local_time_radius=int(raw.get("local_time_radius", 0)),
         sampler_seed_offset=int(raw.get("sampler_seed_offset", 7001)),
         stages=stages,
+        local_resources=normalize_local_resources(raw.get("local_resources")),
     )
 
 
@@ -848,8 +851,21 @@ def paper_native_module_identity(
     *,
     runtime_source_root: str | Path,
 ) -> dict[str, Any]:
-    module = importlib.import_module(str(module_name))
-    path = Path(str(module.__file__)).resolve()
+    try:
+        module = importlib.import_module(str(module_name))
+        path = Path(str(module.__file__)).resolve()
+    except ImportError as error:
+        # TORCH_LIBRARY-only extensions register operators when the shared
+        # library loads, without exporting a CPython PyInit function. Their
+        # bytes still need exactly the same native provenance as pybind modules.
+        if "does not define module export function (PyInit_" not in str(error):
+            raise
+        spec = importlib.util.find_spec(str(module_name))
+        if spec is None or spec.origin is None:
+            raise
+        path = Path(spec.origin).resolve()
+        import torch
+        torch.ops.load_library(str(path))
     if not path.is_file():
         raise FileNotFoundError(
             f"loaded paper native module is missing: {module_name} at {path}"

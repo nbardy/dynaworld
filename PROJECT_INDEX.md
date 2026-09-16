@@ -234,6 +234,21 @@ pass. These are one-seed diagnostics, not paper acceptance. Next: isolate
 training duration with this corrected initialization. See
 `agent_notes/loose_notes/2026-09-12_15-32-00_world_tube_overfit_controls_and_initialization_fix.md`.
 
+Local Metal update (2026-09-11): the new bounded Coffee Martini playground
+completed World Tubes, dynamic 3DGS, and WorldFoam at 80 steps/32 frames. Peak
+sampled process-tree RSS was 1.75 GiB, reported MPS driver peak 1.08 GiB, with
+zero new swap. Heldout quality remains poor. The separate four-frame learned
+world replay/compiled smoke failed image/VJP/fallback gates; public paper
+acceptance counts remain unchanged. See the small-playground section of
+`research_notes/gauged_uvt_trace_atlas/paper/REPRODUCE.md` and `EXPERIMENTS.md`.
+
+Browser update (2026-09-06): `World Tubes (affine STAR)` now compiles shared
+SPD(4) world atoms to camera/time traces in WGSL and differentiates through the
+compiler. Independent RGB/world-VJP and worker lifecycle smokes pass. This is
+an affine browser subset, not projective-atlas or paper acceptance. Speed
+comparison and the repaired SPA progressive-preload path await an idle GPU.
+See `web/dynaworld_browser_trainer/README.md` and its retained integration JSON.
+
 This is the first operational index after `AGENTS.md`. It is for a new agent
 that has no thread context and needs to know where the project state, active
 experiments, logs, TODOs, and code-organization rules live.
@@ -300,20 +315,21 @@ As of 2026-07-28, the submission-critical World Tubes distinction is:
   the same world at `F={4,8,16,32,64,128,full}` using ordered samples across
   one fixed full interval. Non-unit selected-time atlas-slice parity and
   warmed/repeated timings remain runtime gates.
-- The bounded variable-camera closure/death runner is also implemented and
-  contract-tested. Its current 15-row CPU artifact closes through `178°` and
-  reaches a certified death boundary at `179°`, but it is publication-invalid
-  solely because the superproject and STAR source were dirty. It must be rerun
-  from the preserved clean Paper-A revisions before entering the ledger.
+- The bounded variable-camera closure/death component is accepted. Its retained
+  clean 12-row artifact closes through `170°` and reaches a certified death
+  boundary at `179.5°`; the later dirty 15-row `178°/179°` diagnostic is not
+  the accepted input. The schema-v2 generator revalidates the pinned source
+  and acceptance contract before admitting it to the ledger.
 - The submission artifact generator now fails closed: its current hashed
   bundle exports placeholders, accepts theorem evidence only, and identifies
   ten unresolved evidence records—the canonical matrix summary, seven public
-  rows, the frozen report, and the variable-camera report. These require nine
-  runtime jobs because the matrix summary is produced by the seven-row matrix.
-- Submission P0 is therefore: clean static/CPU verification, the frozen
-  fixed-interval causal sweep on an adequate host, one bounded
-  variable-camera closure/death curve, the seven schema-v2 Coffee
-  progressive/control rows, and regenerated paper artifacts.
+  rows, the frozen report, and the checkpoint-only moving-camera-density
+  report. These require nine runtime jobs because the matrix summary is
+  produced by the seven-row matrix.
+- Submission P0 is therefore: the frozen fixed-interval causal sweep on an
+  adequate host, the checkpoint-only bounded moving-camera-density sweep, the
+  seven schema-v2 Coffee progressive/control rows, and regenerated paper
+  artifacts.
 - Ordered Ray Transfer, SPD(4)/Beer, and the complementary WorldFoam M3/M5
   result are bounded extension or second-paper evidence. The memory-light
   WorldFoam lane has two distinct routes: a restricted fixed-SPD(4) native

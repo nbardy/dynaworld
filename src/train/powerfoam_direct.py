@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 import torch
 from torch import nn
@@ -302,15 +302,19 @@ def initialize_full_powerfoam_from_video(
     sv_axis_init: float,
     image_init_jitter: float = 0.0,
     generator: torch.Generator | None = None,
+    image_init_uv: tuple[torch.Tensor, torch.Tensor, int, int] | None = None,
 ) -> PowerFoamInitialization:
     if init_frames.dim() != 4 or init_frames.size(1) != 3:
         raise ValueError("init_frames must be [T,3,H,W]")
     frame_count, _, height, width = init_frames.shape
-    center_x01, center_y01, rows, cols = make_image_init_uv(
-        cell_count,
-        jitter_fraction=image_init_jitter,
-        generator=generator,
-    )
+    if image_init_uv is None:
+        center_x01, center_y01, rows, cols = make_image_init_uv(
+            cell_count,
+            jitter_fraction=image_init_jitter,
+            generator=generator,
+        )
+    else:
+        center_x01, center_y01, rows, cols = image_init_uv
     points, _ = initialize_powerfoam_from_video(
         init_frames,
         cell_count=cell_count,
@@ -373,6 +377,147 @@ def initialize_full_powerfoam_from_video(
         texel_sv_rgb=texel_sv_rgb,
         texel_height=texel_height,
     )
+
+
+def initialize_powerfoam_from_video_chunks(
+    frame_chunks: Iterable[torch.Tensor],
+    *,
+    frame_count: int,
+    cell_count: int,
+    xy_extent: float,
+    z_min: float,
+    z_max: float,
+    fov_degrees: float,
+    image_init_depth: float | None,
+    image_init_jitter: float = 0.0,
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Initialize from bounded RGB chunks with eager-equivalent sampling."""
+
+    if frame_count < 1:
+        raise ValueError("frame_count must be positive")
+    image_init_uv = make_image_init_uv(
+        cell_count,
+        jitter_fraction=image_init_jitter,
+        generator=generator,
+    )
+    points = torch.empty(frame_count, cell_count, 3, dtype=torch.float32)
+    colors = torch.empty(frame_count, cell_count, 3, dtype=torch.float32)
+    offset = 0
+    image_shape: tuple[int, int] | None = None
+    for chunk in frame_chunks:
+        if chunk.ndim != 4 or int(chunk.shape[1]) != 3:
+            raise ValueError("video initialization chunks must be [T,3,H,W]")
+        chunk_frames = int(chunk.shape[0])
+        if chunk_frames < 1 or offset + chunk_frames > frame_count:
+            raise ValueError("video initialization chunks exceed frame_count")
+        current_image_shape = (int(chunk.shape[2]), int(chunk.shape[3]))
+        if image_shape is None:
+            image_shape = current_image_shape
+        elif current_image_shape != image_shape:
+            raise ValueError("video initialization chunk dimensions drifted")
+        chunk_points, chunk_colors = initialize_powerfoam_from_video(
+            chunk,
+            cell_count=cell_count,
+            xy_extent=xy_extent,
+            z_min=z_min,
+            z_max=z_max,
+            fov_degrees=fov_degrees,
+            image_init_depth=image_init_depth,
+            image_init_uv=image_init_uv,
+        )
+        points[offset : offset + chunk_frames].copy_(chunk_points)
+        colors[offset : offset + chunk_frames].copy_(chunk_colors)
+        offset += chunk_frames
+    if offset != frame_count:
+        raise ValueError(
+            f"video initialization yielded {offset} frames, expected {frame_count}"
+        )
+    return points, colors
+
+
+def initialize_full_powerfoam_from_video_chunks(
+    frame_chunks: Iterable[torch.Tensor],
+    *,
+    frame_count: int,
+    cell_count: int,
+    xy_extent: float,
+    z_min: float,
+    z_max: float,
+    fov_degrees: float,
+    image_init_depth: float | None,
+    radius_min: float,
+    radius_scale: float,
+    num_texel_sites: int,
+    sv_dof: int,
+    sv_axis_init: float,
+    image_init_jitter: float = 0.0,
+    generator: torch.Generator | None = None,
+) -> PowerFoamInitialization:
+    """Build full video initialization without retaining decoded source video."""
+
+    if frame_count < 1:
+        raise ValueError("frame_count must be positive")
+    image_init_uv = make_image_init_uv(
+        cell_count,
+        jitter_fraction=image_init_jitter,
+        generator=generator,
+    )
+    destination: dict[str, torch.Tensor] | None = None
+    offset = 0
+    image_shape: tuple[int, int] | None = None
+    for chunk in frame_chunks:
+        if chunk.ndim != 4 or int(chunk.shape[1]) != 3:
+            raise ValueError("video initialization chunks must be [T,3,H,W]")
+        chunk_frames = int(chunk.shape[0])
+        if chunk_frames < 1 or offset + chunk_frames > frame_count:
+            raise ValueError("video initialization chunks exceed frame_count")
+        current_image_shape = (int(chunk.shape[2]), int(chunk.shape[3]))
+        if image_shape is None:
+            image_shape = current_image_shape
+        elif current_image_shape != image_shape:
+            raise ValueError("video initialization chunk dimensions drifted")
+        initialized = initialize_full_powerfoam_from_video(
+            chunk,
+            cell_count=cell_count,
+            xy_extent=xy_extent,
+            z_min=z_min,
+            z_max=z_max,
+            fov_degrees=fov_degrees,
+            image_init_depth=image_init_depth,
+            radius_min=radius_min,
+            radius_scale=radius_scale,
+            num_texel_sites=num_texel_sites,
+            sv_dof=sv_dof,
+            sv_axis_init=sv_axis_init,
+            image_init_uv=image_init_uv,
+        )
+        fields = {
+            "points": initialized.points,
+            "radii": initialized.radii,
+            "quaternions": initialized.quaternions,
+            "texel_sites": initialized.texel_sites,
+            "texel_sv_axis": initialized.texel_sv_axis,
+            "texel_sv_rgb": initialized.texel_sv_rgb,
+            "texel_height": initialized.texel_height,
+        }
+        if destination is None:
+            destination = {
+                name: torch.empty(
+                    (frame_count, *value.shape[1:]),
+                    dtype=value.dtype,
+                    device=value.device,
+                )
+                for name, value in fields.items()
+            }
+        for name, value in fields.items():
+            destination[name][offset : offset + chunk_frames].copy_(value)
+        offset += chunk_frames
+    if destination is None or offset != frame_count:
+        raise ValueError(
+            f"video initialization yielded {offset} frames, expected {frame_count}"
+        )
+    return PowerFoamInitialization(**destination)
 
 
 def initialize_random_full_powerfoam(

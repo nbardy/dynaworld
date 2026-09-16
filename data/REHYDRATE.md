@@ -388,3 +388,56 @@ Source index:
 The output under `data/multicam_val/clip_sets/` is generated and ignored. It is
 safe to delete and rebuild as long as the selected source videos/inventories are
 present or re-downloadable.
+
+## Reclaimed 2026-08-27 (9.09 GB) and how to restore it
+
+Local disk was at 89% full. These trees were deleted **after** verifying every
+upstream source still returns HTTP 200. Nothing irreplaceable was touched.
+
+| Removed | Size | Restore |
+|---|---|---|
+| `data/external/vivo` | 5.8 GB | `src/dataset_configs/vivo_seed.jsonc` -> project page <https://vivo-bvicr.github.io/>, code <https://github.com/azzarelli/ViVo-DataProcessing>. **Manual step:** raw scenes come from a Google Drive folder, so this is the one restore that is not scripted end-to-end. Then `./src/dataset_scripts/inspect_vivo_seed.sh` |
+| `data/external/deepview_video` | 1.5 GB | `./src/dataset_scripts/deepview_video_seed.sh all` (defaults to `03_Dog` + `15_Branches`; config holds all 15 official `storage.googleapis.com` scene URLs) |
+| `data/external/ex4dgs_pretrained` | 379 MB | `./src/dataset_scripts/ex4dgs_pretrained_val_seed.sh` |
+| `data/external/camxtime` | 289 MB | HF dataset <https://huggingface.co/datasets/zhening/CamxTime>, page <http://zheninghuang.github.io/camxtime_dataset>. Extract to `data/external/camxtime/extracted/CamxTime_eval/` |
+| `data/external/aist_dance_db` | 74 MB | `./src/dataset_scripts/multicam_val_v1_seed.sh` |
+| `neural_3d_video/raw/flame_steak.zip` | 1.1 GB | Redundant - `extracted/flame_steak/` already present. Re-fetch via `./src/dataset_scripts/download_neural_3d_video_seed.sh` only if the extracted tree is lost |
+
+**Kept deliberately:**
+
+- `data/external/neural_3d_video/extracted` (4.4 GB) - touched 2026-08-26, actively in use.
+- `data/youtube_scene_distinct` (119 MB) and `data/youtube_curated_spans` (59 MB) -
+  the only genuinely irreplaceable media in this tree. Everything else here is a
+  published dataset with a stable upstream; these are yt-dlp pulls that vanish if
+  the source video is taken down. **They are 178 MB total - back them up off-machine.**
+
+## Known-bad curated span: `ODmhPsgqGgQ`
+
+`data/youtube_curated_spans/raw/ODmhPsgqGgQ_seg_000_s01354000_e01362000.mp4.part`
+sat at **0 bytes from 2026-04-24 to 2026-08-27** without anyone noticing.
+
+It is not data loss and not a network problem - it is a **hand-entry error** in
+`../corrective_splat_trainer/manual_list.jsonl` record 0, which asks for
+`22:34-22:42` (1354-1362 s) of a video that is **41 seconds long**. yt-dlp
+therefore fails deterministically with `ffmpeg exited with code 222`
+("Nothing was written into output file"), and always will. Either correct the
+timestamp against the real source video or drop the record; re-running the
+download stage cannot fix it.
+
+It was the only one of 27 span records requesting an out-of-range offset.
+
+## Hygiene: run the validators after any cleanup
+
+A 0-byte `.part` hid for four months because nothing checked. Both validators are
+network-free and take seconds:
+
+```bash
+./src/dataset_scripts/local_data_status.sh
+uv run python src/dataset_pipeline/youtube_ingest.py validate-local \
+  --config src/dataset_configs/youtube_scene_distinct_30_64_4fps_16f.jsonc
+uv run python src/dataset_pipeline/youtube_curated_spans.py validate-local \
+  --config src/dataset_configs/youtube_curated_spans_64_4fps_16f.jsonc
+```
+
+`yt-dlp` is required by the ingest pipeline but is **not** a declared dependency -
+install with `uv pip install yt-dlp` before any download stage.

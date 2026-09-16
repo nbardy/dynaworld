@@ -161,7 +161,7 @@ test("SPA exposes packed-FP16 checkpoints and sends the selected precision to th
 	assert.ok(htmlSource.indexOf('value="packed-f16"') < htmlSource.indexOf('value="f32"'));
 	assert.match(appSource, /checkpointPrecision:\s*controls\.precision\.value/);
 	assert.match(appSource, /controls\.precision\.disabled\s*=\s*sampledBackendSelected\(\)/);
-	assert.match(appSource, /sampledBackendSelected\(\)\s*\?\s*2048\s*:\s*4096/);
+	assert.match(appSource, /controls\.backend\.value === "sampled3d"\s*\?\s*2048\s*:\s*4096/);
 });
 
 test("SPA defaults to the complete seed bank, stable 8K reserve, and opt-in loss ablations", async () => {

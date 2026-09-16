@@ -1,0 +1,56 @@
+{
+  "scope": "CPU float64 mathematical test; one ray; no reconstruction training or GPU timing",
+  "construction": "Translating constant-width, constant-density overlapping slabs; fixed event topology",
+  "scene": {
+    "slabs": 24,
+    "ray_intervals": 47,
+    "exponential_terms": 48,
+    "time_interval": [
+      -0.5,
+      0.5
+    ],
+    "minimum_event_gap": 0.0028391002119446673,
+    "max_abs_beta_times_halfwidth": 0.04108343054529494
+  },
+  "time_queries": 2048,
+  "approximations": [
+    {
+      "degree": 1,
+      "coefficients_per_color": 2,
+      "max_image_error": 8.542734586114431e-06,
+      "max_row_jacobian_l2_error": 0.0021423244615655025,
+      "random_vjp_relative_l2_error": 0.00014864986747554243,
+      "analytic_truncation_image_bound_excluding_roundoff": 0.000693220073609065,
+      "analytic_truncation_jacobian_bound_excluding_roundoff": 0.059080710678187515
+    },
+    {
+      "degree": 2,
+      "coefficients_per_color": 3,
+      "max_image_error": 5.911233763589152e-08,
+      "max_row_jacobian_l2_error": 2.3782605334027208e-05,
+      "random_vjp_relative_l2_error": 3.179258143626098e-06,
+      "analytic_truncation_image_bound_excluding_roundoff": 9.49328624890742e-06,
+      "analytic_truncation_jacobian_bound_excluding_roundoff": 0.0009246161035061714
+    },
+    {
+      "degree": 3,
+      "coefficients_per_color": 4,
+      "max_image_error": 4.291847988113773e-10,
+      "max_row_jacobian_l2_error": 2.129325576439295e-07,
+      "random_vjp_relative_l2_error": 1.4281555239706258e-08,
+      "analytic_truncation_image_bound_excluding_roundoff": 9.75041915633979e-08,
+      "analytic_truncation_jacobian_bound_excluding_roundoff": 1.0683261148477686e-05
+    },
+    {
+      "degree": 4,
+      "coefficients_per_color": 5,
+      "max_image_error": 2.706390667128744e-12,
+      "max_row_jacobian_l2_error": 1.5824516648986997e-09,
+      "random_vjp_relative_l2_error": 1.617750351159541e-10,
+      "analytic_truncation_image_bound_excluding_roundoff": 8.011613363939979e-10,
+      "analytic_truncation_jacobian_bound_excluding_roundoff": 9.753142263448595e-08
+    }
+  ],
+  "coefficient_reverse_fd_parameters": 192,
+  "coefficient_reverse_fd_relative_l2_error": 2.948030951458865e-11
+}

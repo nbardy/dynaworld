@@ -9,7 +9,8 @@ checkpoints, dataset inputs, native binaries/source trees, and current source:
 * a completed canonical matrix ``matrix_summary.json`` and its exact retained
   schema-v2 unified paper ``run_summary.json`` files;
 * the accepted frozen-world replay/compiled wrapper summary;
-* the verified variable-camera closure/death report; and
+* the verified variable-camera closure/death report;
+* the verified frozen learned-world bounded moving-camera density summary; and
 * the theorem-table summary, rederived from byte-pinned retained reports.
 
 The default command writes an evidence ledger even when inputs are missing,
@@ -58,6 +59,7 @@ for import_root in (ROOT, TRAIN_SRC, VARIABLE_CAMERA_REPORTS):
         sys.path.insert(0, str(import_root))
 
 from config_utils import load_config_file  # noqa: E402
+from paper_training_protocol import resolve_paper_training_protocol  # noqa: E402
 from paper_training_types import expected_paper_pose_source  # noqa: E402
 from projective_variable_camera_closure_death_curve import (  # noqa: E402
     verify_current_implementation,
@@ -65,6 +67,9 @@ from projective_variable_camera_closure_death_curve import (  # noqa: E402
 )
 from research_experiments.paper_runner_suite import (  # noqa: E402
     run_frozen_world_replay_compiled as frozen_runner,
+)
+from research_experiments.paper_runner_suite import (  # noqa: E402
+    run_frozen_world_moving_camera as moving_camera,
 )
 from research_experiments.paper_runner_suite import (  # noqa: E402
     run_unified_paper_ablation as single_runner,
@@ -175,6 +180,15 @@ DEFAULT_VARIABLE_CAMERA_SUMMARY = (
     / "2026-07-28_world_tubes_variable_camera_closure_death_curve"
     / "summary.json"
 )
+DEFAULT_MOVING_CAMERA_DENSITY_SUMMARY = (
+    ROOT
+    / "outputs"
+    / "benchmarks"
+    / "world_tubes_frozen_world_moving_camera_v1"
+    / "coffee_martini_full_300f_progressive_512_v1"
+    / "seed_17"
+    / "summary.json"
+)
 DEFAULT_THEOREM_SUMMARY = (
     ROOT
     / "outputs"
@@ -264,6 +278,7 @@ MANUSCRIPT_TABLE_INPUTS = tuple(
         "theorem_table.tex",
         "frozen_scaling_table.tex",
         "variable_camera_table.tex",
+        "moving_camera_density_table.tex",
         "public_context_table.tex",
     )
 )
@@ -1893,6 +1908,389 @@ def collect_variable_camera_evidence(
     }
 
 
+def _validate_moving_camera_artifact_bindings(
+    summary_path: Path,
+    summary: Mapping[str, Any],
+) -> list[str]:
+    """Reopen the checkpoint-only child, progress, source, and W&B receipts."""
+
+    errors: list[str] = []
+    protocol_path = moving_camera.DEFAULT_PROTOCOL.resolve()
+    expected_paths = {
+        "comparison_report": summary_path.parent / "comparison_report.json",
+        "child_progress": (
+            summary_path.parent / "frozen_world_moving_camera_progress.json"
+        ),
+        "execution_identity": summary_path.parent / "execution_identity.json",
+    }
+    resolved_paths: dict[str, Path] = {}
+    for key, expected_path in expected_paths.items():
+        recorded_path = _resolve_recorded_path(summary.get(key))
+        if recorded_path != expected_path.resolve() or not expected_path.is_file():
+            errors.append(
+                f"moving-camera {key} is not bound to the summary sibling"
+            )
+        else:
+            resolved_paths[key] = expected_path.resolve()
+    attempt_path = summary_path.parent / "moving_camera_attempt.json"
+    if not attempt_path.is_file():
+        errors.append("moving-camera completion attempt is missing")
+    if errors:
+        return sorted(set(errors))
+
+    try:
+        protocol = resolve_paper_training_protocol(
+            load_config_file(protocol_path)
+        )
+        current_manifest = single_runner.validate_manifest(protocol)
+        current_source = single_runner.source_provenance()
+        single_runner.require_clean_provenance(current_source)
+
+        static_input = summary.get("static_checkpoint_input")
+        if not isinstance(static_input, Mapping):
+            raise ValueError("moving-camera static checkpoint input is missing")
+        static_summary_path = _resolve_recorded_path(static_input.get("summary"))
+        if static_summary_path is None:
+            raise ValueError("moving-camera static summary path is missing")
+        expected_static_input = moving_camera.validate_static_checkpoint_input(
+            static_summary_path,
+            protocol_name=protocol.name,
+            seed=int(summary.get("seed", -1)),
+            expected_dataset_input_identity=current_manifest["input_identity"],
+        )
+        if dict(static_input) != expected_static_input:
+            raise ValueError("moving-camera static checkpoint receipt drifted")
+
+        child_report = _load_json(resolved_paths["comparison_report"])
+        progress = moving_camera.validate_child_progress(
+            resolved_paths["child_progress"],
+            checkpoint=expected_static_input["checkpoint"],
+        )
+        validated_sweep, validated_gate, validated_native = (
+            moving_camera.validate_report(
+                child_report,
+                protocol=protocol,
+                seed=int(summary["seed"]),
+                checkpoint=expected_static_input["checkpoint"],
+            )
+        )
+        execution_identity = _load_json(resolved_paths["execution_identity"])
+        command = execution_identity.get("command")
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(value, str) for value in command)
+        ):
+            raise ValueError("moving-camera execution command is invalid")
+        python = Path(command[0])
+        if not python.is_absolute() or not python.is_file():
+            raise ValueError("moving-camera execution Python identity is invalid")
+        device = str(child_report["meta"]["device"])
+        expected_command = moving_camera.build_command(
+            protocol_path,
+            protocol,
+            seed=int(summary["seed"]),
+            out_dir=summary_path.parent,
+            checkpoint=expected_static_input["checkpoint"],
+            device=device,
+            allow_local_mps_execution=device.lower() == "mps",
+        )
+        expected_command[0] = command[0]
+        if command != expected_command:
+            raise ValueError("moving-camera execution command drifted")
+        moving_camera.validate_execution_identity(
+            execution_identity,
+            protocol_path=protocol_path,
+            command=expected_command,
+            report_path=resolved_paths["comparison_report"],
+            progress_path=resolved_paths["child_progress"],
+            expected_source=current_source,
+            expected_dataset_input_identity=current_manifest["input_identity"],
+            expected_static_input=expected_static_input,
+            expected_native_extension=validated_native,
+        )
+
+        expected_summary_fields = {
+            "protocol": protocol.as_dict(),
+            "source": execution_identity["source_start"],
+            "source_finish": execution_identity["source_finish"],
+            "dataset_input_identity": current_manifest["input_identity"],
+            "decoded_dataset_bundle": child_report["meta"][
+                "paper_dataset_bundle"
+            ],
+            "evaluator": child_report["meta"]["paper_evaluator"],
+            "runtime": child_report["meta"]["paper_runtime"],
+            "static_checkpoint_input": expected_static_input,
+            "star_uvt_native_extension": validated_native,
+            "moving_camera_sweep": validated_sweep,
+            "publication_gate": validated_gate,
+        }
+        drifted = [
+            key
+            for key, expected in expected_summary_fields.items()
+            if summary.get(key) != expected
+        ]
+        if drifted:
+            raise ValueError(
+                "moving-camera wrapper bindings drifted: "
+                + ", ".join(drifted)
+            )
+        row_artifacts = progress.get("row_artifacts")
+        if not isinstance(row_artifacts, list):
+            raise ValueError("moving-camera durable row receipts are missing")
+        for artifact, row in zip(
+            row_artifacts,
+            validated_sweep["rows"],
+            strict=True,
+        ):
+            artifact_path = Path(str(artifact["path"])).resolve()
+            if _load_json(artifact_path) != row:
+                raise ValueError(
+                    "moving-camera durable row drifted from the canonical sweep"
+                )
+
+        wandb_identity = summary.get("wandb")
+        wandb_contract = moving_camera.moving_camera_wandb_contract(
+            child_report,
+            protocol=protocol,
+            seed=int(summary["seed"]),
+            execution_source=current_source,
+            gate=validated_gate,
+            static_input=expected_static_input,
+        )
+        if not isinstance(wandb_identity, Mapping) or wandb_identity.get(
+            "mode"
+        ) != "online":
+            raise ValueError("moving-camera publication evidence requires online W&B")
+        single_runner.validate_wandb_identity(
+            wandb_identity,
+            run_id=wandb_contract["run_id"],
+            mode="online",
+            source_digest=wandb_contract["source_digest"],
+            report_digest=wandb_contract["report_digest"],
+            config_digest=wandb_contract["config_digest"],
+        )
+
+        attempt = _load_json(attempt_path)
+        if (
+            attempt.get("status") != "complete"
+            or attempt.get("phase") != "summary_written"
+            or attempt.get("attempt_id") != summary.get("attempt_id")
+            or attempt.get("summary_sha256") != _file_sha256(summary_path)
+            or _resolve_recorded_path(attempt.get("summary"))
+            != summary_path.resolve()
+        ):
+            raise ValueError("moving-camera authoritative completion receipt drifted")
+    except Exception as error:
+        errors.append(f"moving-camera learned-world deep validation failed: {error}")
+    return sorted(set(errors))
+
+
+def collect_moving_camera_density_evidence(path: Path) -> dict[str, Any]:
+    """Re-derive the bounded learned-world moving-camera verdict.
+
+    A mechanically complete failed gate is retained as negative evidence, but
+    it never makes the submission bundle accepted.
+    """
+
+    empty = {
+        "accepted": False,
+        "verified": False,
+        "input": _display_path(path),
+        "errors": [],
+        "rows": [],
+    }
+    if not path.is_file():
+        return {"status": "missing", **empty}
+    try:
+        report = _load_json(path)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        return {"status": "invalid", **empty, "errors": [str(error)]}
+
+    errors = _validate_moving_camera_artifact_bindings(path, report)
+    if int(report.get("schema_version", -1)) != 1:
+        errors.append("moving-camera wrapper schema is stale")
+    if report.get("status") not in {"accepted", "complete_negative"}:
+        errors.append("moving-camera wrapper status is invalid")
+    _validate_source(report, errors)
+    if int(report.get("seed", -1)) != 17:
+        errors.append("moving-camera evidence must use seed 17")
+    protocol = report.get("protocol")
+    if (
+        not isinstance(protocol, Mapping)
+        or protocol.get("name")
+        != "coffee_martini_full_300f_progressive_512_v1"
+    ):
+        errors.append("moving-camera protocol identity drifted")
+    if list(report.get("frame_counts", ())) != list(moving_camera.FRAME_COUNTS):
+        errors.append("moving-camera frame-count sweep drifted")
+    for key in ("image_size", "decoded_image_size", "render_image_size"):
+        if list(report.get(key, ())) != list(moving_camera.IMAGE_SIZE):
+            errors.append(f"moving-camera {key} must be 256x256")
+    if report.get("target_resize_mode") != moving_camera.TARGET_RESIZE_MODE:
+        errors.append("moving-camera targets were not decoded directly at 256")
+    if report.get("target_semantics") != moving_camera.TARGET_SEMANTICS:
+        errors.append("moving-camera residual-target semantics drifted")
+    if report.get("parity_metric_semantics") != moving_camera.PARITY_METRIC_SEMANTICS:
+        errors.append("moving-camera parity metric semantics drifted")
+    expected_program = moving_camera.camera_program_contract()
+    if (
+        report.get("camera_program") != expected_program
+        or report.get("camera_program_sha256")
+        != moving_camera.canonical_json_sha256(expected_program)
+        or report.get("compiler_chart_policy")
+        != moving_camera.COMPILER_CHART_POLICY
+        or report.get("multi_chart_gauge_compiler")
+        is not moving_camera.MULTI_CHART_GAUGE_COMPILER
+    ):
+        errors.append("moving-camera camera-program contract drifted")
+
+    sweep = report.get("moving_camera_sweep")
+    rows: list[Mapping[str, Any]] = []
+    if not isinstance(sweep, Mapping):
+        errors.append("moving-camera sweep is missing")
+    else:
+        if (
+            int(sweep.get("schema_version", -1)) != 1
+            or sweep.get("status") != "complete"
+            or sweep.get("camera_program") != expected_program
+            or sweep.get("camera_program_sha256")
+            != report.get("camera_program_sha256")
+            or list(sweep.get("resolved_frame_counts", ()))
+            != list(moving_camera.FRAME_COUNTS)
+            or list(sweep.get("decoded_image_size", ()))
+            != list(moving_camera.IMAGE_SIZE)
+            or list(sweep.get("render_image_size", ()))
+            != list(moving_camera.IMAGE_SIZE)
+            or sweep.get("target_resize_mode")
+            != moving_camera.TARGET_RESIZE_MODE
+            or sweep.get("target_semantics") != moving_camera.TARGET_SEMANTICS
+            or sweep.get("parity_metric_semantics")
+            != moving_camera.PARITY_METRIC_SEMANTICS
+            or sweep.get("compiler_chart_policy")
+            != moving_camera.COMPILER_CHART_POLICY
+            or sweep.get("multi_chart_gauge_compiler")
+            is not moving_camera.MULTI_CHART_GAUGE_COMPILER
+            or sweep.get("checkpoint_shared_across_rows") is not True
+            or sweep.get("world_state_shared_across_rows") is not True
+            or sweep.get("all_rows_mechanically_valid") is not True
+            or sweep.get("all_rows_selected_time_slice_parity_accepted")
+            is not True
+            or sweep.get("all_rows_timing_publication_ready") is not True
+            or sweep.get("checkpoint_loaded_not_trained") is not True
+            or sweep.get("evidence_complete") is not True
+        ):
+            errors.append("moving-camera sweep contract is incomplete or drifted")
+        raw_rows = sweep.get("rows")
+        if not isinstance(raw_rows, list) or len(raw_rows) != len(
+            moving_camera.FRAME_COUNTS
+        ):
+            errors.append("moving-camera sweep rows are missing")
+        else:
+            rows = [row for row in raw_rows if isinstance(row, Mapping)]
+            if len(rows) != len(raw_rows):
+                errors.append("moving-camera sweep contains invalid rows")
+
+    for index, (row, frame_count) in enumerate(
+        zip(rows, moving_camera.FRAME_COUNTS)
+    ):
+        if (
+            int(row.get("schema_version", -1)) != 2
+            or row.get("status") != "complete"
+            or not isinstance(row.get("accepted"), bool)
+            or row.get("mechanically_valid") is not True
+            or int(row.get("frame_count", 0)) != frame_count
+            or list(row.get("decoded_image_size", ()))
+            != list(moving_camera.IMAGE_SIZE)
+            or list(row.get("render_image_size", ()))
+            != list(moving_camera.IMAGE_SIZE)
+            or row.get("target_resize_mode") != moving_camera.TARGET_RESIZE_MODE
+            or row.get("target_semantics") != moving_camera.TARGET_SEMANTICS
+            or row.get("parity_metric_semantics")
+            != moving_camera.PARITY_METRIC_SEMANTICS
+            or row.get("camera_program_mode") != moving_camera.CAMERA_PROGRAM_MODE
+            or row.get("camera_program_sha256")
+            != report.get("camera_program_sha256")
+            or row.get("compiler_chart_policy")
+            != moving_camera.COMPILER_CHART_POLICY
+            or row.get("multi_chart_gauge_compiler")
+            is not moving_camera.MULTI_CHART_GAUGE_COMPILER
+        ):
+            errors.append(
+                f"moving-camera row {index} identity or mechanical status drifted"
+            )
+        checks = row.get("checks")
+        mechanical_checks = row.get("mechanical_checks")
+        selected_parity = row.get("selected_time_slice_parity")
+        if (
+            not isinstance(checks, Mapping)
+            or not checks
+            or any(not isinstance(value, bool) for value in checks.values())
+            or row.get("accepted") is not all(checks.values())
+            or any(
+                checks.get(key) is not True
+                for key in moving_camera.REQUIRED_MECHANICAL_ROW_CHECKS
+            )
+            or not isinstance(mechanical_checks, Mapping)
+            or not mechanical_checks
+            or any(value is not True for value in mechanical_checks.values())
+            or not isinstance(selected_parity, Mapping)
+            or selected_parity.get("status") != "complete"
+            or selected_parity.get("accepted") is not True
+        ):
+            errors.append(
+                f"moving-camera row {index} mechanical evidence contract failed"
+            )
+        _validate_frozen_timing(
+            row=row,
+            row_index=index,
+            expected_warmups=moving_camera.TIMING_WARMUPS,
+            expected_repeats=moving_camera.TIMING_REPEATS,
+            errors=errors,
+        )
+    if isinstance(sweep, Mapping) and rows and sweep.get(
+        "all_rows_accepted"
+    ) is not all(row.get("accepted") is True for row in rows):
+        errors.append("moving-camera legacy row-acceptance aggregate is inconsistent")
+
+    gate: dict[str, Any] = {}
+    if rows:
+        try:
+            gate = moving_camera.derive_publication_gate(list(rows))
+        except (KeyError, TypeError, ValueError) as error:
+            errors.append(f"moving-camera publication gate is invalid: {error}")
+    if gate and report.get("publication_gate") != gate:
+        errors.append("moving-camera publication gate was not rederived exactly")
+    publication_eligible = bool(gate.get("accepted", False))
+    if report.get("publication_eligible") is not publication_eligible:
+        errors.append("moving-camera publication eligibility is inconsistent")
+    expected_status = "accepted" if publication_eligible else "complete_negative"
+    if report.get("status") != expected_status:
+        errors.append("moving-camera result status is inconsistent")
+
+    verified = not errors
+    return {
+        "status": expected_status if verified else "invalid",
+        "accepted": verified and publication_eligible,
+        "verified": verified,
+        "input": _display_path(path),
+        "input_sha256": _file_sha256(path),
+        "errors": sorted(set(errors)),
+        "thresholds": dict(moving_camera.PUBLICATION_THRESHOLDS),
+        "publication_gate": gate if verified else {},
+        "failure_reasons": list(gate.get("failure_reasons", ())) if verified else [],
+        "camera_program": expected_program,
+        "rows": (
+            sorted(
+                (dict(row) for row in rows),
+                key=lambda row: int(row["frame_count"]),
+            )
+            if verified
+            else []
+        ),
+    }
+
+
 def build_bundle(
     *,
     matrix_path: Path,
@@ -1901,6 +2299,7 @@ def build_bundle(
     theorem_summary: Path,
     frozen_summary: Path,
     variable_camera_summary: Path,
+    moving_camera_density_summary: Path,
     verify_current_variable_camera_source: bool = True,
 ) -> dict[str, Any]:
     components = {
@@ -1914,6 +2313,9 @@ def build_bundle(
         "variable_camera_closure_death": collect_variable_camera_evidence(
             variable_camera_summary,
             verify_current_source=verify_current_variable_camera_source,
+        ),
+        "moving_camera_density": collect_moving_camera_density_evidence(
+            moving_camera_density_summary,
         ),
     }
     accepted = all(component["accepted"] is True for component in components.values())
@@ -1963,6 +2365,7 @@ def build_bundle(
     for component_name in (
         "frozen_world_scaling",
         "variable_camera_closure_death",
+        "moving_camera_density",
     ):
         component = components[component_name]
         if component["accepted"] is not True:
@@ -1991,16 +2394,35 @@ def build_bundle(
                     ],
                 }
                 if component_name == "frozen_world_scaling"
-                else {
-                    "benchmark": (
-                        "world_tubes_variable_camera_closure_death_curve"
-                    ),
-                    "schema_version": 1,
-                    "required_acceptance_label": (
-                        "accepted_bounded_closure_death_gate"
-                    ),
-                    "required_regimes": ["closure", "death"],
-                }
+                else (
+                    {
+                        "benchmark": (
+                            "world_tubes_variable_camera_closure_death_curve"
+                        ),
+                        "schema_version": 1,
+                        "required_acceptance_label": (
+                            "accepted_bounded_closure_death_gate"
+                        ),
+                        "required_regimes": ["closure", "death"],
+                    }
+                    if component_name == "variable_camera_closure_death"
+                    else {
+                        "benchmark": "world_tubes_frozen_world_moving_camera_v1",
+                        "protocol": (
+                            "coffee_martini_full_300f_progressive_512_v1"
+                        ),
+                        "seed": 17,
+                        "frame_counts": list(moving_camera.FRAME_COUNTS),
+                        "image_size": list(moving_camera.IMAGE_SIZE),
+                        "camera_program": moving_camera.camera_program_contract(),
+                        "timing_warmups": moving_camera.TIMING_WARMUPS,
+                        "timing_repeats": moving_camera.TIMING_REPEATS,
+                        "publication_thresholds": dict(
+                            moving_camera.PUBLICATION_THRESHOLDS
+                        ),
+                        "complete_negative_is_retained": True,
+                    }
+                )
             )
             missing_runtime_inputs.append(
                 {
@@ -2033,7 +2455,9 @@ def build_bundle(
         "missing_runtime_inputs": missing_runtime_inputs,
         "publication_boundary": (
             "Numeric component artifacts are emitted only when that entire "
-            "component is verifier-accepted; partial numbers remain absent."
+            "component is verifier-accepted. Missing/invalid partial numbers "
+            "remain absent; a verified moving-camera complete_negative is "
+            "retained and labelled but blocks submission readiness."
         ),
     }
     payload["ledger_sha256"] = _canonical_json_sha256(payload)
@@ -2373,6 +2797,111 @@ def _write_variable_table(
         latex.append(
             " & ".join(_latex_escape(cell) for cell in cells) + r" \\"
         )
+    latex.extend((r"\bottomrule", r"\end{tabular}"))
+    markdown_path.write_text("\n".join(markdown) + "\n", encoding="utf-8")
+    latex_path.write_text("\n".join(latex) + "\n", encoding="utf-8")
+
+
+def _write_moving_camera_density_table(
+    component: Mapping[str, Any],
+    markdown_path: Path,
+    latex_path: Path,
+) -> None:
+    if component.get("verified") is not True:
+        reason = (
+            "The frozen learned-world bounded moving-camera density sweep "
+            "is missing or invalid."
+        )
+        markdown_path.write_text(
+            _placeholder_markdown("Moving-camera density scaling", reason),
+            encoding="utf-8",
+        )
+        latex_path.write_text(
+            _placeholder_latex("Moving-camera density scaling", reason),
+            encoding="utf-8",
+        )
+        return
+
+    gate_label = (
+        "ACCEPTED"
+        if component["accepted"] is True
+        else "VERIFIED NEGATIVE — NOT SUBMISSION-READY"
+    )
+    markdown = [
+        "# Frozen learned-world bounded moving-camera density scaling",
+        "",
+        f"Predeclared gate: **{gate_label}**.",
+        "",
+        "| F | Parity PSNR | LPIPS | p999 abs. | Loss delta | VJP g/max "
+        "| Charts/events | Continuous/sliced refs | Interaction MiB | "
+        "Replay F+B (s) | Compile+F+B (s) | Speedup |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    latex = [
+        r"\begin{tabular}{rrrrrrrrrrrr}",
+        r"\toprule",
+        (
+            r"$F$ & PSNR & LPIPS & p999 & Loss $\Delta$ & VJP g/max "
+            r"& Charts/events & Refs C/S & MiB & Replay F+B "
+            r"& Compile+F+B & Speedup \\"
+        ),
+        r"\midrule",
+    ]
+    for row in component["rows"]:
+        metrics = row["publication_metrics"]
+        timing = row["timing_benchmark"]["summary_s"]
+        replay = float(timing["replay_total_forward_backward"]["median"])
+        compiled = float(
+            timing["compiled_compile_plus_forward_backward"]["median"]
+        )
+        speedup = replay / compiled if compiled > 0.0 else math.inf
+        cells = (
+            str(int(row["frame_count"])),
+            f"{float(metrics['image_psnr_db']):.2f}",
+            f"{float(metrics['lpips_delta']):.4g}",
+            f"{float(metrics['image_p999_abs_error']):.4g}",
+            f"{float(metrics['loss_absolute_delta']):.3g}",
+            (
+                f"{float(metrics['world_vjp_global_normalized_l2_error']):.3g}/"
+                f"{float(metrics['world_vjp_max_parameter_normalized_l2_error']):.3g}"
+            ),
+            f"{int(metrics['chart_count'])}/{int(metrics['event_count'])}",
+            (
+                f"{int(metrics['continuous_candidate_reference_count'])}/"
+                f"{int(metrics['summed_sliced_candidate_reference_count'])}"
+            ),
+            (
+                f"{float(metrics['interaction_memory_bytes_excluding_outputs_residuals']) / (1024.0 ** 2):.3f}"
+            ),
+            f"{replay:.4f}",
+            f"{compiled:.4f}",
+            f"{speedup:.3f}x",
+        )
+        markdown.append("| " + " | ".join(cells) + " |")
+        latex.append(" & ".join(_latex_escape(cell) for cell in cells) + r" \\")
+    failures = component.get("failure_reasons", [])
+    if failures:
+        markdown.extend(
+            (
+                "",
+                "Failed predeclared gates: "
+                + ", ".join(f"`{name}`" for name in failures)
+                + ".",
+            )
+        )
+    markdown.extend(
+        (
+            "",
+            "PSNR and LPIPS are compiled-versus-replay parity metrics. The "
+            "static heldout RGB supplies a deterministic nonzero residual; it "
+            "is not ground-truth quality for the synthetic yaw poses. This "
+            "learned-world row uses the production single-midpoint first-order "
+            "chart, not the synthetic multi-chart tan-half-angle compiler. "
+            "Interaction bytes include atlas values and packed topology but "
+            "exclude outputs, residuals, gradients, native scratch, and "
+            "allocator overhead.",
+        )
+    )
     latex.extend((r"\bottomrule", r"\end{tabular}"))
     markdown_path.write_text("\n".join(markdown) + "\n", encoding="utf-8")
     latex_path.write_text("\n".join(latex) + "\n", encoding="utf-8")
@@ -2722,6 +3251,81 @@ def _write_variable_svg(component: Mapping[str, Any], path: Path) -> None:
     path.write_text("\n".join(elements) + "\n", encoding="utf-8")
 
 
+def _write_moving_camera_density_svg(
+    component: Mapping[str, Any],
+    path: Path,
+) -> None:
+    if component.get("verified") is not True:
+        path.write_text(
+            _placeholder_svg(
+                "Frozen learned-world moving-camera density scaling",
+                "The verified bounded-yaw density sweep is missing.",
+            ),
+            encoding="utf-8",
+        )
+        return
+    rows = component["rows"]
+    width, height = 900, 460
+    verdict = "accepted" if component["accepted"] is True else "verified negative"
+    elements, (left, top, plot_width, plot_height) = _svg_axes(
+        width=width,
+        height=height,
+        title=f"Frozen learned-world bounded-yaw scaling ({verdict})",
+        y_label="Median forward+backward wall time (s)",
+        x_label="Full-interval camera-program samples (F)",
+    )
+    series = (
+        ("replay_total_forward_backward", "Exact per-pose replay", "#dc2626"),
+        (
+            "compiled_compile_plus_forward_backward",
+            "Compiled incl. compile",
+            "#2563eb",
+        ),
+    )
+    values = [
+        float(row["timing_benchmark"]["summary_s"][key]["median"])
+        for row in rows
+        for key, _label, _color in series
+    ]
+    upper = max(values) * 1.12 if values else 1.0
+    min_frame = min(int(row["frame_count"]) for row in rows)
+    max_frame = max(int(row["frame_count"]) for row in rows)
+    log_min = math.log2(min_frame)
+    log_span = max(1.0, math.log2(max_frame) - log_min)
+    for series_index, (key, label, color) in enumerate(series):
+        points: list[str] = []
+        for row in rows:
+            frame_count = int(row["frame_count"])
+            value = float(row["timing_benchmark"]["summary_s"][key]["median"])
+            x = left + (math.log2(frame_count) - log_min) / log_span * plot_width
+            y = top + plot_height - value / upper * plot_height
+            points.append(f"{x:.2f},{y:.2f}")
+            elements.append(
+                f'<circle cx="{x:.2f}" cy="{y:.2f}" r="4" fill="{color}"/>'
+            )
+            if series_index == 0:
+                elements.append(
+                    f'<text x="{x:.2f}" y="{top + plot_height + 20:.2f}" '
+                    f'text-anchor="middle" font-size="10">{frame_count}</text>'
+                )
+        elements.append(
+            f'<polyline class="data-line" points="{" ".join(points)}" '
+            f'fill="none" stroke="{color}" stroke-width="3"/>'
+        )
+        legend_x = left + 15 + 235 * series_index
+        elements.extend(
+            (
+                f'<line x1="{legend_x}" y1="{top - 18}" '
+                f'x2="{legend_x + 28}" y2="{top - 18}" '
+                f'stroke="{color}" stroke-width="3"/>',
+                f'<text x="{legend_x + 35}" y="{top - 13}" font-size="11">'
+                f"{html.escape(label)}</text>",
+            )
+        )
+    elements.append("</svg>")
+    path.write_text("\n".join(elements) + "\n", encoding="utf-8")
+
+
 def _write_ledger_markdown(bundle: Mapping[str, Any], path: Path) -> None:
     lines = [
         "# World Tubes submission evidence ledger",
@@ -2831,6 +3435,9 @@ ARTIFACT_FILENAMES = (
     "variable_camera_table.md",
     "variable_camera_table.tex",
     "variable_camera_closure_death.svg",
+    "moving_camera_density_table.md",
+    "moving_camera_density_table.tex",
+    "moving_camera_density_scaling.svg",
 )
 
 
@@ -2840,6 +3447,7 @@ def write_bundle(bundle: Mapping[str, Any], out_dir: Path) -> dict[str, Any]:
     theorem = bundle["components"]["theorem_correctness"]
     frozen = bundle["components"]["frozen_world_scaling"]
     variable = bundle["components"]["variable_camera_closure_death"]
+    moving_density = bundle["components"]["moving_camera_density"]
 
     (out_dir / "evidence_ledger.json").write_bytes(_json_bytes(bundle))
     _write_ledger_markdown(bundle, out_dir / "evidence_ledger.md")
@@ -2894,6 +3502,15 @@ def write_bundle(bundle: Mapping[str, Any], out_dir: Path) -> dict[str, Any]:
     _write_variable_svg(
         variable,
         out_dir / "variable_camera_closure_death.svg",
+    )
+    _write_moving_camera_density_table(
+        moving_density,
+        out_dir / "moving_camera_density_table.md",
+        out_dir / "moving_camera_density_table.tex",
+    )
+    _write_moving_camera_density_svg(
+        moving_density,
+        out_dir / "moving_camera_density_scaling.svg",
     )
 
     artifacts = []
@@ -3124,6 +3741,11 @@ def main() -> None:
         type=Path,
         default=DEFAULT_VARIABLE_CAMERA_SUMMARY,
     )
+    parser.add_argument(
+        "--moving-camera-density-summary",
+        type=Path,
+        default=DEFAULT_MOVING_CAMERA_DENSITY_SUMMARY,
+    )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
         "--allow-incomplete",
@@ -3181,6 +3803,9 @@ def main() -> None:
         theorem_summary=args.theorem_summary.resolve(),
         frozen_summary=args.frozen_summary.resolve(),
         variable_camera_summary=args.variable_camera_summary.resolve(),
+        moving_camera_density_summary=(
+            args.moving_camera_density_summary.resolve()
+        ),
     )
     out_dir = args.out_dir.resolve()
     write_bundle(bundle, out_dir)

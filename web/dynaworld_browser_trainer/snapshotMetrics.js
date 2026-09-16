@@ -1,3 +1,4 @@
+import { compileWorldTubeCpu, sliceWorldTube } from "./worldTubesMath.js";
 import {
 	SPLAT_FLOATS,
 	projectAnisotropicGaussianCpu,
@@ -151,7 +152,12 @@ function resolveSplatCount(params, requested) {
 	return count;
 }
 
-function temporalGate(params, base, time, temporalSigma) {
+export function temporalGate(params, base, time, temporalSigma, modelMode = 0) {
+	if (modelMode === 2) {
+		const sigma = Math.exp(clamp(params[base + 3], -4, 0));
+		const delta = time - clamp(params[base + 7], 0, 1);
+		return Math.exp(-0.5 * delta * delta / (sigma * sigma));
+	}
 	const sigma = clamp(temporalSigma, 0.12, 0.36);
 	const floor = clamp(sigma * 0.30, 0.035, 0.12);
 	const delta = time - clamp(params[base + 7], 0, 1);
@@ -162,6 +168,7 @@ function temporalGate(params, base, time, temporalSigma) {
 export function summarizeSplatParameters(params, {
 	splatCount: requestedSplatCount,
 	temporalSigma = DEFAULT_TEMPORAL_SIGMA,
+	modelMode = 0,
 	frameCount = 1,
 	maxAspectRatio = 3,
 	alphaThreshold = DEFAULT_ALPHA_THRESHOLD,
@@ -195,14 +202,19 @@ export function summarizeSplatParameters(params, {
 			Math.exp(params[base + 13]),
 			Math.exp(params[base + 14]),
 		];
-		const staticMix = clamp(params[base + 3], 0, 1);
+		// For world atoms this diagnostic means interval persistence, not a
+		// nonexistent static-mixture parameter.
+		const staticMix = modelMode === 2
+			? Math.min(temporalGate(params, base, 0, temporalSigma, modelMode),
+				temporalGate(params, base, 1, temporalSigma, modelMode))
+			: clamp(params[base + 3], 0, 1);
 		const aspectRatio = Math.max(...scales) / Math.max(1e-8, Math.min(...scales));
 		const radius = Math.cbrt(scales[0] * scales[1] * scales[2]);
 		let peakAlpha = 0;
 		for (let frame = 0; frame < frameCount; frame += 1) {
 			peakAlpha = Math.max(peakAlpha,
-				opacity * temporalGate(params, base,
-					frameCount <= 1 ? 0 : frame / (frameCount - 1), temporalSigma));
+					opacity * temporalGate(params, base,
+						frameCount <= 1 ? 0 : frame / (frameCount - 1), temporalSigma, modelMode));
 		}
 		opacitySum += opacity;
 		radiusSum += radius;
@@ -216,8 +228,8 @@ export function summarizeSplatParameters(params, {
 		activeVelocities.push(Math.hypot(params[base + 4], params[base + 5], params[base + 6]));
 		activeHarmonics.push(Math.hypot(params[base + 8], params[base + 9], params[base + 10]));
 		edgeSupportSum += 0.5 * (
-			temporalGate(params, base, 0, temporalSigma)
-			+ temporalGate(params, base, 1, temporalSigma)
+			temporalGate(params, base, 0, temporalSigma, modelMode)
+			+ temporalGate(params, base, 1, temporalSigma, modelMode)
 		);
 		if (staticMix < 0.5) dynamicSplats += 1;
 		if (staticMix >= 0.9) persistentSplats += 1;
@@ -326,6 +338,17 @@ function projectFrame(dataset, params, {
 	const aspect = width / height;
 	return Array.from({ length: splatCount }, (_, index) => {
 		const base = index * SPLAT_FLOATS;
+		if (modelMode === 2) {
+			const trace = compileWorldTubeCpu(params.subarray(base, base + SPLAT_FLOATS),
+				renderCamera, aspect, (0.3 / height) ** 2);
+			const slice = sliceWorldTube(trace, time);
+			const peakAlpha = slice.peakAlpha ?? 0;
+			return { index, projection: { ...slice, cameraPoint: [0, 0,
+				slice.valid ? slice.depthAt(...slice.center) : 0] },
+				depthAt: slice.depthAt, peakAlpha, geometryPeakAlpha: peakAlpha,
+				rasterPeakAlpha: peakAlpha, mipCompensation: 1,
+				color: Array.from(trace.slice(16, 19)) };
+		}
 		const projection = projectAnisotropicGaussianCpu({
 			center: worldCenter(params, base, time, modelMode),
 			logScales: [params[base + 12], params[base + 13], params[base + 14]],
@@ -335,7 +358,7 @@ function projectFrame(dataset, params, {
 			height,
 		});
 		const legacyPeakAlpha = sigmoid(params[base + 23])
-			* temporalGate(params, base, time, temporalSigma);
+			* temporalGate(params, base, time, temporalSigma, modelMode);
 		const mipCompensation = pixelFilterMode === "mip-2d-compensated"
 			? mip2dOpacityCompensation(projection, height) : 1;
 		const geometryPeakAlpha = pixelFilterMode === "legacy-floor"
@@ -477,6 +500,9 @@ export function renderSnapshotFrame(dataset, params, {
 			const tile = tiles[Math.floor(y / tileSize) * tilesX + Math.floor(x / tileSize)];
 			const pointX = (x + 0.5) / height;
 			const pointY = (y + 0.5) / height;
+			const ordered = modelMode === 2 ? tile.slice().sort((left, right) =>
+				left.depthAt(pointX, pointY) - right.depthAt(pointX, pointY)
+				|| left.index - right.index) : tile;
 			let red = 0;
 			let green = 0;
 			let blue = 0;
@@ -488,8 +514,9 @@ export function renderSnapshotFrame(dataset, params, {
 			let nearContribution = 0;
 			let largeFootprintContribution = 0;
 			const depthContributions = collectGeometryDiagnostics ? [] : null;
-			for (const splat of tile) {
+			for (const splat of ordered) {
 				primitiveEvaluations += 1;
+				if (splat.depthAt && splat.depthAt(pointX, pointY) <= 0.1) continue;
 				const dx = pointX - splat.projection.center[0];
 				const dy = pointY - splat.projection.center[1];
 				const [a, b, c] = splat.projection.conic;
@@ -507,7 +534,7 @@ export function renderSnapshotFrame(dataset, params, {
 					const geometryAlpha = rawGeometryAlpha >= alphaThreshold
 						? Math.min(0.99, rawGeometryAlpha) : 0;
 					const geometryContribution = geometryTransmittance * geometryAlpha;
-					const depth = splat.projection.cameraPoint[2];
+					const depth = splat.depthAt?.(pointX, pointY) ?? splat.projection.cameraPoint[2];
 					depthWeight += geometryContribution;
 					depthFirstMoment += geometryContribution * depth;
 					depthSecondMoment += geometryContribution * depth * depth;
@@ -847,7 +874,7 @@ export function computeSnapshotMetrics(dataset, params, {
 	};
 }
 
-export function snapshotUpdateRatios(before, after, { epsilon = 1e-12 } = {}) {
+export function snapshotUpdateRatios(before, after, { epsilon = 1e-12, modelMode = 0 } = {}) {
 	if ((!ArrayBuffer.isView(before) && !Array.isArray(before))
 		|| (!ArrayBuffer.isView(after) && !Array.isArray(after))
 		|| before.length !== after.length || before.length % SPLAT_FLOATS !== 0) {
@@ -857,7 +884,10 @@ export function snapshotUpdateRatios(before, after, { epsilon = 1e-12 } = {}) {
 		throw new RangeError("epsilon must be finite and positive.");
 	}
 	const splatCount = before.length / SPLAT_FLOATS;
-	return Object.fromEntries(Object.entries(SNAPSHOT_PARAMETER_FAMILIES).map(([name, components]) => {
+	const families = Object.entries(SNAPSHOT_PARAMETER_FAMILIES)
+		.filter(([name]) => modelMode !== 2 || !["harmonic", "materialOpacity"].includes(name));
+	return Object.fromEntries(families.map(([family, components]) => {
+		const name = modelMode === 2 && family === "staticMix" ? "temporalLogSigma" : family;
 		let parameterSquares = 0;
 		let updateSquares = 0;
 		for (let splat = 0; splat < splatCount; splat += 1) {

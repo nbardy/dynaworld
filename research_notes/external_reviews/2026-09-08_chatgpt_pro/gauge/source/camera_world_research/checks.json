@@ -1,0 +1,31 @@
+{
+  "scope": "CPU float64 algebra and local VJP checks only; no GPU timings, training, kinetic visibility implementation, or conic-boundary quadrature.",
+  "seed": 71293,
+  "max_relative_errors": {
+    "coupled_SE3_gauge_invariance_24_cases": 3.030309739652762e-16,
+    "quadric_object_matrix_VJP_24_cases": 4.623764742334934e-10,
+    "quadric_camera_matrix_VJP_24_cases": 3.7660155106780497e-10,
+    "quadric_regular_root_VJP_80_cases": 6.90382009422857e-10,
+    "shared_vs_direct_coefficient_VJP_65_times": 1.717907308654702e-16,
+    "shared_coefficient_VJP_vs_finite_difference": 7.95955572545197e-11,
+    "triangle_linear_solve_VJP_30_cases": 3.4453686873977203e-10,
+    "box_filtered_moving_edge_VJP": 1.0761907275480747e-11,
+    "optical_transfer_composition_VJP_30_cases": 1.7373401793502296e-10
+  },
+  "occlusion_counterexample": {
+    "opacity_each_layer": 0.99,
+    "red_in_front_RGB": [
+      0.99,
+      0.0,
+      0.00990000000000001
+    ],
+    "blue_in_front_RGB": [
+      0.00990000000000001,
+      0.0,
+      0.99
+    ],
+    "L_infinity_image_difference": 0.9801
+  },
+  "criteria": "Every reported normalized error must be below 2e-7.",
+  "passed": true
+}

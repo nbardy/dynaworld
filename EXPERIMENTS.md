@@ -270,6 +270,43 @@ Purpose: turn the World Tubes and WorldFoam paper ideas into reproducible
 runner artifacts that can feed ablation tables, quality comparisons, and
 failure-mode figures without hand-curated claims.
 
+- 2026-09-11 bounded playground follow-through: the user's new 8-GB-RAM /
+  16-GB-disk target is an opt-in smaller protocol, with the original publication
+  gates preserved. All three lanes completed 80 steps and 32 frames on Metal
+  using `src/train_configs/paper_protocols/coffee_martini_local_playground.jsonc`.
+  Train cameras are `cam04/cam09`, heldout `cam06`, corrected LLFF v2 poses,
+  two samples/update, 1,597,440 target pixels, and 128-to-256 active primitives.
+  Summary: `outputs/benchmarks/2026-09-11_local_playground/coffee_martini_local_playground/seed_17/run_summary.json`.
+  World Tubes / dynamic 3DGS / WorldFoam heldout PSNR is
+  `6.5045 / 5.9612 / 6.6436 dB`; SSIM `0.01481 / 0.00736 / 0.02003`;
+  L1 `0.41712 / 0.45664 / 0.40020`. Offline W&B ids are
+  `paec86cd509ed7 / pac019dcd46dc7 / pf0ec2d4e6f9de`. Online upload was rejected
+  by automatic approval review; the local logs include metrics/media/config.
+  Peak sampled tree/launcher RSS is `1.56 / 1.25 / 1.75 GiB`; all show zero new
+  swap. Required installed paths total 4.73 GiB and final run outputs about
+  11.2 MB. Physical host has 24 GiB: the 8-GiB target is a bounded job budget.
+  The worktree remains dirty; these are diagnostics, not accepted standings.
+  The separate two-step/four-frame frozen learned-world check is negative:
+  image max error `4.69e-4` versus `1e-5`, global normalized VJP error `5.28e-4`
+  and max-parameter error `3.82e-3` versus `1e-5`, fallback `38.9%` versus `20%`.
+  Its cold compiled forward was `12.606s` (including `11.500s` compilation)
+  versus replay `0.0734s`. One un-warmed F=4 point is not scaling evidence.
+  Larger compiler sweeps should await diagnosis. The smoke also reproduced and
+  fixed native operator-library provenance loading and a resolved-config key
+  mismatch after WorldFoam training. Public paper evidence counts stay unchanged.
+
+- 2026-09-11 earlier local Metal retry after authorized app cleanup: the user closed
+  Hearthstone; Chrome was quit normally and the two remaining Chrome sessions
+  were terminated after verifying their executables. Neither application
+  remained in the final process list; GPU utilization sampled at 0%. The
+  existing Paper-A guard still rejected execution: available memory
+  `9.781 GiB < 10 GiB`, swap `7.555 GiB > 2 GiB`, and one-minute load per
+  logical CPU `1.035 > 0.75`. The swap reading was obtained outside the sandbox,
+  so this is observed usage rather than the earlier unavailable-probe sentinel.
+  No training/build was launched and no evidence counts changed. Stop this
+  runtime attempt until the host state changes; do not weaken the guard or
+  terminate unrelated applications to force a run.
+
 - 2026-08-15 WorldFoam G0/G3 synthetic result: the float64 CPU ordered-transfer
   suite at
   `outputs/benchmarks/2026-08-15_worldfoam_synthetic_visibility_cpu/summary.json`
@@ -342,6 +379,16 @@ Current decision:
 	  processes keep it in severe compression/resource pressure. Run this
 	  lane-isolated gate on a clean adequate host before any schema-v2
 	  selected-time rerun; do not infer success from source implementation.
+- 2026-08-25 Paper-A execution status: theorem/correctness and bounded
+  variable-camera closure/death are accepted. The remaining runtime evidence
+  is one static frozen identical-world sweep, one checkpoint-only bounded
+  moving-camera-density sweep, and seven Coffee Martini schema-v2 contexts
+  (`21` isolated lane rows). The streaming/residency and child-RSS paths are
+  source-complete, have no remaining source-review P0/P1, and are deliberately
+  behavior/runtime-unverified. Run the focused gates, commit one clean
+  superproject/STAR revision, then execute sequentially under the live resource
+  gates. Exact order and commands are in
+  `TODO/unified_paper_ablation_pipeline.md`.
 - 2026-07-28 evidence-schema-v2 audit: the public selected-time matrix has
   `0/7` accepted minimum controls and `0/21` accepted full-breadth rows. The
   three completed progressive rows and
@@ -351,9 +398,10 @@ Current decision:
   required. The audit also found a real train-metric aggregation mismatch
   (per-view PSNR averaging versus PSNR from global MSE) and a seed-17
 	  WorldFoam W&B ID that resolves to an older non-clean run. The remaining
-	  queue is the frozen causal sweep, one bounded variable-camera
-	  closure/death curve, and the seven Coffee Martini schema-v2
-	  submission-control rows. The executor now trains/saves once and evaluates
+	  queue is the frozen causal sweep, the checkpoint-only bounded
+	  moving-camera-density sweep, and the seven Coffee Martini schema-v2
+	  submission-control rows. The variable-camera closure/death component has
+	  since been accepted. The executor now trains/saves once and evaluates
 	  `F={4,8,16,32,64,128,full}` from one world using ordered samples across
 	  the same full interval. Non-unit atlas-slice parity and warmed/repeated
 	  timing remain quiet-host runtime gates. The other 14 selected-time rows
@@ -376,20 +424,21 @@ Current decision:
   while increasing a bounded yaw program. It records chart/event/trace
   complexity, fallback and invalid fractions, image parity, and fixed-topology
   world VJPs against an exact rational, per-sample live-depth-order oracle.
-  Source hashes and structured failure artifacts are fail-closed. The
-  contract tests pass, but the Torch CPU sweep has not run on this pressured
-  host, so no camera-motion boundary is yet a paper result.
+  Source hashes and structured failure artifacts are fail-closed. Its retained
+  clean 12-row artifact is accepted: closure holds through `170°`, with the
+  certified compiler death boundary reached at `179.5°`. The later dirty
+  15-row `178°/179°` diagnostic is not the accepted input.
 - 2026-07-28 paper artifact pipeline: the Torch-free generator at
   `research_experiments/paper_runner_suite/generate_world_tubes_paper_artifacts.py`
   consumes verified theorem, frozen-world, variable-camera, and schema-v2
   matrix evidence and emits deterministic JSON/CSV, Markdown/TeX tables, SVGs,
   and a hash manifest. An incomplete component receives an explicit
   `NOT SUBMISSION-READY` placeholder rather than partial numbers. The current
-  generated ledger accepts theorem correctness only and names ten unresolved
-  evidence records: the canonical matrix summary, seven public rows, one
-  frozen sweep, and one variable-camera report. These correspond to nine
-  runtime jobs because the matrix summary is generated after the seven public
-  rows validate.
+  generated ledger now accepts theorem correctness and bounded variable-camera
+  closure/death, and names ten unresolved evidence records: the canonical
+  matrix summary, seven public rows, one frozen sweep, and one checkpoint-only
+  moving-camera density report. These correspond to nine runtime jobs because
+  the matrix summary is generated after the seven public rows validate.
 - Retain the Gauged UVT camera-ray bundle framework. Close only open-ended
   theory/name proliferation without a replayable failure. The invariant
   `UVT trace = pi_* Gamma^* world_primitive`, projective gauge domains,
@@ -5680,6 +5729,34 @@ Current decision:
   preview-sort isolation, and storage-only FP16 packet experiments. A native
   4DGS or World Tubes browser backend remains a separate representation
   experiment and must not be inferred from these kernel results.
+
+## Browser World Tubes affine integration — 2026-09-06
+
+The browser's `world-tubes` selector now uses a WGSL SPD(4)-to-UVT compiler,
+time-shared bins, per-ray conditional-depth order, source-over reverse replay,
+analytic compiler VJP into shared world atoms, and Adam. It replaces the prior
+temporal-gated 3DGS implementation rather than renaming that implementation.
+The browser STAR prototype supplied the trace/compositing contract; the source
+world and VJP are checked against `spd4_world_tubes.compiler` and Torch
+autograd, not a per-camera fit. The ordinary 3DGS paths remain selectable.
+
+Retained mechanical smoke:
+`web/dynaworld_browser_trainer/benchmark_results/2026-09-06_world_tubes_integration.json`.
+Apple WebGPU RGB max error `1.288e-7`, world gradient max error `4.999e-8`,
+64-step fixture loss `0.054926 -> 0.021999`; orbit/preview, exact parameter and
+Adam restore, OffscreenCanvas, temporal paging, 4x resolution continuation and
+heldout worker validation passed. W&B is intentionally not used for this local
+mechanical browser smoke. No public quality or speed baseline is promoted.
+
+The real Coffee UI loaded and trained 4,096 atoms and advanced temporal pages.
+It exposed an existing progressive-preload bug: a streamed coarse page was
+compared against fine overview frame IDs. Validation now occurs after selecting
+the corresponding fine page; failed transitions latch and pause instead of
+retrying every animation tick. This final SPA correction awaits browser rerun.
+Another active MPS training job blocked a clean timing lane; no speed comparison
+was launched. Affine pinhole charts, peak-preserving splat opacity and detached
+visibility are explicit limits; nonlinear projective atlas, retained fibers,
+growth and matched time-to-quality remain outside this accepted smoke.
 
 ## Adding A New Experiment
 

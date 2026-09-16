@@ -676,7 +676,7 @@ def _frozen_report(
             "same_precision": True,
             "same_alpha_mode": True,
             "bounded_device_frame_residency": True,
-            "host_target_storage": "eager_cpu_selected_frames",
+            "host_target_storage": "bounded_video_seek_chunks",
             "resident_chunk_frames": resident_chunk_frames,
             "timing_excludes_parity_replay": True,
         },
@@ -1083,6 +1083,15 @@ def test_frozen_world_execution_identity_binds_current_source_and_native_binary(
         "source_finish": source,
         "star_uvt_native_extension": native,
         "dataset_input_identity": dataset_input_identity,
+        "execution_safety": {"safety_limit_bytes": 4096},
+        "process_memory": {
+            "schema_version": 1,
+            "measurement": "direct_child_process_rss_polled_via_ps",
+            "poll_interval_s": 0.25,
+            "peak_rss_bytes": 1024,
+            "rss_limit_bytes": 4096,
+            "guard_tripped": False,
+        },
     }
 
     validate_execution_identity(

@@ -17,6 +17,7 @@ MODEL_DEFAULTS = {
     "neighbor_count": 16,
     "adjacency_mode": "cech_aabb",
     "init_from_video": True,
+    "init_video_chunk_frames": 4,
     "color_init_mode": "image",
     "image_init_depth": 2.0,
     "image_init_jitter": 0.2,
@@ -216,6 +217,8 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("model.adjacency_mode must be 'knn', 'overlap', 'cech_aabb', or 'regular_triangulation'")
     if str(cfg["model"]["color_init_mode"]) not in {"image", "random"}:
         raise ValueError("model.color_init_mode must be 'image' or 'random'")
+    if int(cfg["model"]["init_video_chunk_frames"]) < 1:
+        raise ValueError("model.init_video_chunk_frames must be positive")
     if str(cfg["model"]["feature_mode"]) not in {
         "constant",
         "linear",

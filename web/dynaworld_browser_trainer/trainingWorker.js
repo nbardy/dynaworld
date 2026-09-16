@@ -2,8 +2,8 @@ import {
 	resolveActiveSplatCount,
 	resolveCamerasPerStep,
 	resolveRenderViewIndices,
-} from "./trainerWebGpu3d.js?v=20260826-dense-scenes-1";
-import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260826-dense-scenes-1";
+} from "./trainerWebGpu3d.js?v=20260906-affine-star-2";
+import { loadTrainerBackend } from "./trainerBackendRegistry.js?v=20260906-affine-star-2";
 import {
 	assertProtocolMessage, protocolMessage, publishSharedStatus, StatusFlag, TrainerState,
 	WorkerCommand, WorkerEvent, WORKER_PROTOCOL_VERSION,
@@ -64,6 +64,10 @@ let completionProbePending = false;
 let stepsPerSecond = 0;
 let flags = StatusFlag.VALIDATION_WORKER;
 let stageTransitionPending = false;
+
+function effectiveModelMode() {
+	return backendDescriptor?.fixedModelMode ?? trainOptions.modelMode;
+}
 
 function status(state = running ? TrainerState.RUNNING : TrainerState.PAUSED) {
 	return { state, step: trainer?.stepCount ?? 0, stepsPerSecond, loss: latestLoss, psnr: latestPsnr,
@@ -149,7 +153,7 @@ function requestValidation(options = {}) {
 	trainer.readParams().then((params) => {
 		validationWorker.postMessage({ version: WORKER_PROTOCOL_VERSION, type: "validate", step,
 			options: { splatCount: resolveActiveSplatCount(trainer.splatCount, trainer.activeSplatCount),
-				modelMode: trainOptions.modelMode,
+				modelMode: effectiveModelMode(),
 				temporalSigma: trainOptions.temporalSigma,
 				totalRecycled: trainer.totalRecycled,
 				maxAspectRatio: backendDescriptor?.maxAspectRatio ?? 3,
@@ -166,7 +170,8 @@ function requestValidation(options = {}) {
 }
 
 function renderTrainer() {
-	trainer.render(renderOptions.time, renderOptions.modelMode, renderOptions.temporalSigma,
+	trainer.render(renderOptions.time, backendDescriptor?.fixedModelMode ?? renderOptions.modelMode,
+		renderOptions.temporalSigma,
 		renderOptions.renderMode, renderOptions.viewIndex, renderOptions.viewIndices,
 		renderOptions.previewCameras);
 }
@@ -179,7 +184,7 @@ function render(now) {
 }
 
 function initializeValidationWorker(dataset, initialParams) {
-	validationWorker = new Worker(new URL("./validationWorker.js?v=20260821-stablegs-ablation-1", import.meta.url),
+	validationWorker = new Worker(new URL("./validationWorker.js?v=20260906-affine-star-2", import.meta.url),
 		{ type: "module" });
 	return new Promise((resolve, reject) => {
 		let ready = false;

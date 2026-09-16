@@ -1,0 +1,143 @@
+{
+  "scope": "Independent CPU rerun of downloaded Pro diagnostics; no GPU, training, or paper-evidence promotion",
+  "python": "3.11.13 (main, Jun  3 2025, 18:38:25) [Clang 17.0.0 (clang-1700.0.13.3)]",
+  "platform": "macOS-15.5-arm64-arm-64bit",
+  "source_hashes": [
+    {
+      "branch": "open",
+      "file": "README.md",
+      "matches": true,
+      "sha256": "b182742667ed6fc90582e72c66534f947767915ee745e2192bd4bed4049375de"
+    },
+    {
+      "branch": "open",
+      "file": "research.tex",
+      "matches": true,
+      "sha256": "71f5c4d41fa6f6b5b5389766fe7b2d987b4d398fe8682b102562a5b785b3cc7d"
+    },
+    {
+      "branch": "open",
+      "file": "checks.py",
+      "matches": true,
+      "sha256": "83ae6769c38357298f11f9dbd8f2d8ae4f8436d676f94a1e0320d1c821dfb93b"
+    },
+    {
+      "branch": "open",
+      "file": "results.json",
+      "matches": true,
+      "sha256": "599dccb7e124766c20934cb156ee8b8501b99a03731175cf5bb33688fffda78e"
+    },
+    {
+      "branch": "open",
+      "file": "temporal_operator.py",
+      "matches": true,
+      "sha256": "c3b8256c8864e88716c3460667eacf0f5c2fed4a315e96c7e527f85c9206f8eb"
+    },
+    {
+      "branch": "open",
+      "file": "temporal_results.json",
+      "matches": true,
+      "sha256": "40b9a3a5b5b0791dea23b33283474bda4228e9716efd8e1081effa31c57ff87f"
+    },
+    {
+      "branch": "gauge",
+      "file": "README.md",
+      "matches": true,
+      "sha256": "4267ec8921c4359c38900457d8ed5e153fb972b71a2c67033d88bee9f273bbc7"
+    },
+    {
+      "branch": "gauge",
+      "file": "manuscript.pdf",
+      "matches": true,
+      "sha256": "8a6b8e5cc229a6de9058353f92a4b3e68ec38b1f69ddf07819101c888145b8a7"
+    },
+    {
+      "branch": "gauge",
+      "file": "manuscript.tex",
+      "matches": true,
+      "sha256": "d22a0a1fae754037a98559400af1d9fea88a56b9b024b5983b3b98cd646256cb"
+    },
+    {
+      "branch": "gauge",
+      "file": "checks.py",
+      "matches": true,
+      "sha256": "339c89e58f766bf4e8e5aa960f62da511d3cca353677ff642a153c03d1fbd211"
+    },
+    {
+      "branch": "gauge",
+      "file": "checks.json",
+      "matches": true,
+      "sha256": "d7ca4db7ec2e47daf974c287f47a1d6f33f60e858d1c6ba55a2f0685fb3cda57"
+    },
+    {
+      "branch": "gauge",
+      "file": "ellipse_coverage.py",
+      "matches": true,
+      "sha256": "3695f9cbce2ecd0a175e3778bbe850f8c36a1d8034789f5e293a28a49b4fdb4b"
+    },
+    {
+      "branch": "gauge",
+      "file": "ellipse_checks.json",
+      "matches": true,
+      "sha256": "998fdbb5e4d5bca7610528daa79a3ba6c4ad2543859d0c3b60768bf01374153b"
+    },
+    {
+      "branch": "gauge",
+      "file": "requirements.txt",
+      "matches": true,
+      "sha256": "1978c5330a34a48fac00c1107de3949b8c8da3bd11517f59ca9b4510363c6c8a"
+    },
+    {
+      "branch": "gauge",
+      "file": "environment.json",
+      "matches": true,
+      "sha256": "de4e23404dd9796e69074e6c191a2b466324562a3527b4cec6c7f14163cb76c2"
+    }
+  ],
+  "runs": [
+    {
+      "name": "open_math",
+      "command": [
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/.venv/bin/python",
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/external_reviews/2026-09-08_chatgpt_pro/open/source/checks.py",
+        "--out",
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/external_reviews/2026-09-08_chatgpt_pro/verification/open_math.json"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.254
+    },
+    {
+      "name": "open_temporal",
+      "command": [
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/.venv/bin/python",
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/external_reviews/2026-09-08_chatgpt_pro/open/source/temporal_operator.py",
+        "--out",
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/external_reviews/2026-09-08_chatgpt_pro/verification/open_temporal.json"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.066
+    },
+    {
+      "name": "gauge_math",
+      "command": [
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/.venv/bin/python",
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/external_reviews/2026-09-08_chatgpt_pro/gauge/source/camera_world_research/checks.py",
+        "--output",
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/external_reviews/2026-09-08_chatgpt_pro/verification/gauge_math.json"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.086
+    },
+    {
+      "name": "gauge_ellipse",
+      "command": [
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/.venv/bin/python",
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/external_reviews/2026-09-08_chatgpt_pro/gauge/source/camera_world_research/ellipse_coverage.py",
+        "--output",
+        "/Users/nicholasbardy/git/gsplats_browser/dynaworld/research_notes/external_reviews/2026-09-08_chatgpt_pro/verification/gauge_ellipse.json"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 5.29
+    }
+  ]
+}

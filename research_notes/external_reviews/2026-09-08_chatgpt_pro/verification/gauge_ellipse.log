@@ -1,0 +1,11 @@
+{
+  "scope": "CPU one bounded ellipse intersected with one fixed box; exact arc-area formula plus analytic arc-moment conic gradient. Not a kinetic or multi-object renderer and not a production robust-predicate implementation.",
+  "seed": 612431,
+  "ellipse_box_cases": 80,
+  "conic_directional_checks": 240,
+  "max_absolute_area_error_against_independent_adaptive_1D_integration": 3.910760604242114e-14,
+  "max_normalized_conic_VJP_error_against_finite_difference": 1.864512313987099e-08,
+  "max_absolute_homogeneous_scale_null_gradient": 4.440892098500626e-16,
+  "max_normalized_camera_quadric_coverage_VJP_error": 3.625371031157343e-09,
+  "passed": true
+}

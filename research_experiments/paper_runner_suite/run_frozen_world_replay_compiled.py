@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import statistics
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -297,6 +296,15 @@ def validate_execution_identity(
         expected_dataset_input_identity
     ):
         raise ValueError("frozen-world raw dataset identity drifted")
+    execution_safety = identity.get("execution_safety")
+    if not isinstance(execution_safety, Mapping):
+        raise ValueError("frozen-world execution safety receipt is missing")
+    single.validate_process_memory(
+        identity.get("process_memory"),
+        expected_rss_limit_bytes=int(
+            execution_safety.get("safety_limit_bytes", 0)
+        ),
+    )
     validate_native_extension_identity(expected_native_extension)
 
 
@@ -1478,6 +1486,10 @@ def main() -> None:
     parser.add_argument("--allow-high-risk-local-mps", action="store_true")
     args = parser.parse_args()
 
+    if args.execute and args.wandb_mode != "online":
+        raise ValueError(
+            "frozen-world publication execution requires --wandb-mode online"
+        )
     if args.max_frames < 0:
         raise ValueError("--max-frames must be nonnegative")
     validate_timing_controls(
@@ -1522,7 +1534,11 @@ def main() -> None:
         ),
         "total_timing_route_pairs": len(resolved_frame_counts)
         * (args.timing_warmups + args.timing_repeats),
-        "execution_safety": single.local_mps_safety_estimate(protocol),
+        "execution_safety": single.local_mps_safety_estimate(
+            protocol,
+            frozen_world_replay_compiled=True,
+            frozen_world_max_frames=args.max_frames,
+        ),
         "live_resources": live_resource_snapshot(),
         "live_resource_thresholds": LIVE_RESOURCE_THRESHOLDS,
         "clean_source_policy": "always_required_for_execute",
@@ -1654,6 +1670,8 @@ def main() -> None:
                     allow_high_risk_local_mps=(
                         args.allow_high_risk_local_mps
                     ),
+                    frozen_world_replay_compiled=True,
+                    frozen_world_max_frames=args.max_frames,
                 )
             )
         except BaseException as error:
@@ -1676,7 +1694,11 @@ def main() -> None:
             live_resources_at_launch=live_resources,
         )
         try:
-            subprocess.run(command, cwd=ROOT, check=True)
+            child_process_memory = single.run_checked_with_peak_rss(
+                command,
+                cwd=ROOT,
+                rss_limit_bytes=int(execution_safety["safety_limit_bytes"]),
+            )
         except BaseException as error:
             write_attempt_status(
                 attempt_status_path,
@@ -1724,7 +1746,9 @@ def main() -> None:
                 "dataset_input_identity": manifest_validation[
                     "input_identity"
                 ],
+                "execution_safety": execution_safety,
                 "live_resources_at_launch": live_resources,
+                "process_memory": child_process_memory,
                 "attempt_id": attempt_id,
             }
             single.write_json(execution_identity_path, execution_identity)

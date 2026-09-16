@@ -8,13 +8,22 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from numbers import Real
 from pathlib import Path
 from typing import Any, Mapping
 
 from config_utils import load_config_file, serialize_config_value
+from paper_local_resources import (
+    LocalResourceMonitor,
+    check_running_limits,
+    directory_bytes,
+    process_tree_rss,
+    require_local_host,
+)
 from paper_training_protocol import (
     PAPER_DATASET_BUNDLE_SCHEMA_VERSION,
     PAPER_EVALUATOR_SCHEMA_VERSION,
@@ -24,6 +33,7 @@ from paper_training_protocol import (
     PAPER_SAMPLE_SCHEDULE_SCHEMA_VERSION,
     apply_paper_dataset_contract,
     paper_evaluator_contract,
+    lpips_alex_asset_status,
     resolve_paper_training_protocol,
     validate_paper_runtime_source_tree_identity,
 )
@@ -83,12 +93,14 @@ DEFAULT_UVT_RETAINED_DEPTH_SAMPLES = 48
 DEFAULT_UVT_RETAINED_SIGMA_EXTENT = 6.0
 DEFAULT_UVT_ORDER_CERTIFICATE_SIGMA = 6.0
 DEFAULT_UVT_ORDER_CERTIFICATE_MIN_GAP = 0.0
+PAPER_TARGET_CACHE_FRAMES = 8
+PAPER_TARGET_IDENTITY_CHUNK_FRAMES = 16
 PAPER_EVIDENCE_SCHEMA_VERSION = 2
 GIB = 1024**3
 LIVE_RESOURCE_THRESHOLDS = {
     "available_memory_bytes": 10 * GIB,
     "maximum_swap_used_bytes": 2 * GIB,
-    "disk_free_bytes": 32 * GIB,
+    "disk_free_bytes": 8 * GIB,
     "maximum_load_1m_per_logical_cpu": 0.75,
 }
 FROZEN_WORLD_ACCEPTANCE = {
@@ -554,6 +566,32 @@ def validate_wandb_identity(
         )
     except (FileNotFoundError, ValueError) as error:
         raise ValueError("W&B run-file identity is invalid") from error
+    validate_wandb_remote_identity(identity, mode=mode)
+
+
+def validate_wandb_remote_identity(
+    identity: Mapping[str, Any],
+    *,
+    mode: str,
+) -> None:
+    """Require an explicit remote receipt for online publication logging."""
+
+    remote = identity.get("remote_identity")
+    if not isinstance(remote, Mapping):
+        raise ValueError("W&B remote identity is missing")
+    if remote.get("finish_called") is not True:
+        raise ValueError("W&B run was not finalized")
+    if mode == "offline":
+        return
+    if mode != "online":
+        raise ValueError(f"unsupported W&B mode: {mode}")
+    entity = str(remote.get("entity", "")).strip()
+    project = str(remote.get("project", "")).strip()
+    url = str(remote.get("url", "")).strip()
+    if not entity or project != "dynaworld" or not url.startswith(
+        f"https://wandb.ai/{entity}/{project}/runs/"
+    ):
+        raise ValueError("online W&B remote identity is incomplete")
 
 
 def finalize_worldfoam_wandb_identity(
@@ -599,6 +637,7 @@ def finalize_worldfoam_wandb_identity(
             raise ValueError(
                 "WorldFoam W&B run-file identity is invalid"
             ) from error
+        validate_wandb_remote_identity(identity, mode=expected_mode)
         return identity
     if (
         identity.get("run_id") != expected_run_id
@@ -610,11 +649,16 @@ def finalize_worldfoam_wandb_identity(
         **identity,
         **expected,
         "finalized": True,
+        "remote_identity": {
+            **dict(identity.get("remote_identity", {})),
+            "finish_called": True,
+        },
         "run_file": wandb_file_identity(
             str(identity["run_dir"]),
             expected_run_id,
         ),
     }
+    validate_wandb_remote_identity(finalized, mode=expected_mode)
     write_json(identity_path, finalized)
     return finalized
 
@@ -710,14 +754,39 @@ def host_physical_memory_bytes() -> int:
     raise RuntimeError("cannot determine host physical memory for paper-run safety preflight")
 
 
-def local_mps_safety_estimate(protocol: PaperTrainingProtocol) -> dict[str, Any]:
-    """Retain the incident-calibrated eager upper bound as a fail-closed guard.
+def local_mps_safety_estimate(
+    protocol: PaperTrainingProtocol,
+    *,
+    frozen_world_replay_compiled: bool = False,
+    frozen_world_max_frames: int = 0,
+) -> dict[str, Any]:
+    """Conservative source-derived peak for the sequential streamed design.
 
-    Lane isolation now releases allocator state between representations, but it
-    has not been profiled safely at full scale. Until streaming or off-machine
-    evidence replaces this bound, keep the older combined estimate so the code
-    change cannot silently authorize the workload that crashed the host.
+    The legacy eager number remains in the report for incident provenance, but
+    no longer controls execution: targets, evaluation, Metal statistics, and
+    renderer lanes now have explicit bounded residency contracts.  The large
+    fixed reserve covers Python/Torch, MPS allocator retention, backend scratch,
+    and the separately launched WorldFoam child.  This is still source-derived,
+    not runtime validation; the first full row must retain measured peaks.
     """
+
+    if protocol.local_resources is not None:
+        limits = protocol.local_resources
+        host_bytes = host_physical_memory_bytes()
+        job_bytes = limits["process_tree_rss_limit_bytes"] + limits["mps_allocator_limit_bytes"]
+        return {
+            "definition": "enforced playground budgets; not a measured peak",
+            "execution_model": "one_child_process_per_representation",
+            "runtime_validation_status": "pending_measured_receipts",
+            "estimated_peak_bytes": job_bytes,
+            "estimated_peak_gib": job_bytes / GIB,
+            "host_physical_memory_bytes": host_bytes,
+            "host_physical_memory_gib": host_bytes / GIB,
+            "safety_limit_bytes": limits["process_tree_rss_limit_bytes"],
+            "high_risk": job_bytes + limits["host_memory_reserve_bytes"] > host_bytes,
+            "peak_process_rss_required": True,
+            "local_resources": limits,
+        }
 
     float_bytes = 4
     rgb_channels = 3
@@ -727,26 +796,122 @@ def local_mps_safety_estimate(protocol: PaperTrainingProtocol) -> dict[str, Any]
     total_views = train_views + len(protocol.dataset.heldout_cameras)
     final_pixels = protocol.final_stage.image_size.pixels
     stage_pixels = sum(stage.image_size.pixels for stage in protocol.stages)
+    max_batch_frames = max(stage.frames_per_step for stage in protocol.stages)
     bundle_bytes = total_views * frames * final_pixels * rgb_channels * float_bytes
     stage_cache_bytes_per_lane = train_views * frames * stage_pixels * rgb_channels * float_bytes
     eval_bytes_per_lane = total_views * frames * final_pixels * rendered_channels * float_bytes
     raw_combined_bytes = bundle_bytes + 2 * stage_cache_bytes_per_lane + 2 * eval_bytes_per_lane
-    estimated_peak_bytes = math.ceil(1.75 * raw_combined_bytes)
+    legacy_eager_estimated_peak_bytes = math.ceil(1.75 * raw_combined_bytes)
+
+    frame_rgb_bytes = final_pixels * rgb_channels * float_bytes
+    provider_transient_bytes = (
+        2 * PAPER_TARGET_CACHE_FRAMES
+        + 3 * PAPER_TARGET_IDENTITY_CHUNK_FRAMES
+    ) * frame_rgb_bytes
+    train_batch_bytes = max_batch_frames * final_pixels * (
+        rgb_channels + rendered_channels
+    ) * float_bytes
+    eval_chunk_bytes = max_batch_frames * final_pixels * (
+        rgb_channels + rendered_channels
+    ) * float_bytes
+    retained_media_bytes = (
+        2
+        * 32
+        * final_pixels
+        * (rgb_channels + rendered_channels)
+        * float_bytes
+    )
+    resolved_frozen_frames = (
+        min(
+            frames,
+            frames if int(frozen_world_max_frames) == 0 else int(frozen_world_max_frames),
+        )
+        if frozen_world_replay_compiled
+        else 0
+    )
+    if resolved_frozen_frames < 0:
+        raise ValueError("frozen_world_max_frames must be nonnegative")
+    # Frozen same-world evidence is now chunked, including selected-time parity
+    # and the exact p99.9 accumulator.  Reserve four target/render chunks plus
+    # 384 MiB for the compiled atlas, gradients, timing copies, and allocator
+    # cadence.  This is deliberately charged only to the World Tubes child.
+    frozen_chunk_frames = min(
+        resolved_frozen_frames,
+        max(PAPER_TARGET_IDENTITY_CHUNK_FRAMES, max_batch_frames),
+    )
+    frozen_evidence_reserve_bytes = (
+        4
+        * frozen_chunk_frames
+        * final_pixels
+        * (rgb_channels + rendered_channels)
+        * float_bytes
+        + 384 * 1024**2
+        if frozen_world_replay_compiled
+        else 0
+    )
+    # Model/Adam/checkpoint state is small at 1,024 primitives, but retain a
+    # full GiB so future bounded protocol variants cannot silently consume it.
+    representation_optimizer_checkpoint_reserve_bytes = 1 * GIB
+    # Empirical native/MPS scratch is not statically knowable.  Six GiB is a
+    # deliberate fixed reserve for framework RSS, allocator retention, native
+    # renderer scratch, and the maximum sequential WorldFoam child footprint.
+    framework_native_scratch_reserve_bytes = 6 * GIB
+    streamed_accounted_bytes = (
+        provider_transient_bytes
+        + train_batch_bytes
+        + eval_chunk_bytes
+        + retained_media_bytes
+        + frozen_evidence_reserve_bytes
+        + representation_optimizer_checkpoint_reserve_bytes
+    )
+    estimated_peak_bytes = math.ceil(
+        1.20 * streamed_accounted_bytes
+        + framework_native_scratch_reserve_bytes
+    )
     host_bytes = host_physical_memory_bytes()
     safety_limit_bytes = math.floor(0.60 * host_bytes)
     return {
-        "definition": "incident-calibrated legacy combined eager upper bound; intentionally not relaxed by unprofiled lane isolation",
+        "definition": (
+            "source-derived streamed sequential-lane upper bound with fixed "
+            "framework/native/MPS reserve"
+        ),
         "execution_model": "one_child_process_per_representation",
-        "bundle_bytes": bundle_bytes,
-        "stage_cache_bytes_per_lane": stage_cache_bytes_per_lane,
-        "eval_bytes_per_lane": eval_bytes_per_lane,
-        "raw_combined_bytes": raw_combined_bytes,
+        "runtime_validation_status": "source_complete_runtime_unverified",
+        "target_residency": "bounded_video_seek_lru",
+        "evaluation_residency": "bounded_frame_chunks_view0_media_only",
+        "metal_stats_residency": "bounded_tile_aligned_frame_chunks",
+        "provider_transient_bytes": provider_transient_bytes,
+        "train_batch_bytes": train_batch_bytes,
+        "eval_chunk_bytes": eval_chunk_bytes,
+        "retained_media_bytes": retained_media_bytes,
+        "frozen_world_replay_compiled": bool(frozen_world_replay_compiled),
+        "resolved_frozen_world_frames": resolved_frozen_frames,
+        "frozen_world_chunk_frames": frozen_chunk_frames,
+        "frozen_evidence_reserve_bytes": frozen_evidence_reserve_bytes,
+        "representation_optimizer_checkpoint_reserve_bytes": (
+            representation_optimizer_checkpoint_reserve_bytes
+        ),
+        "framework_native_scratch_reserve_bytes": (
+            framework_native_scratch_reserve_bytes
+        ),
+        "streamed_accounted_bytes": streamed_accounted_bytes,
         "estimated_peak_bytes": estimated_peak_bytes,
         "host_physical_memory_bytes": host_bytes,
         "safety_limit_bytes": safety_limit_bytes,
         "estimated_peak_gib": estimated_peak_bytes / float(1 << 30),
         "host_physical_memory_gib": host_bytes / float(1 << 30),
         "high_risk": estimated_peak_bytes > safety_limit_bytes,
+        "peak_process_rss_required": True,
+        "legacy_eager_reference": {
+            "bundle_bytes": bundle_bytes,
+            "stage_cache_bytes_per_lane": stage_cache_bytes_per_lane,
+            "eval_bytes_per_lane": eval_bytes_per_lane,
+            "raw_combined_bytes": raw_combined_bytes,
+            "estimated_peak_bytes": legacy_eager_estimated_peak_bytes,
+            "estimated_peak_gib": legacy_eager_estimated_peak_bytes
+            / float(1 << 30),
+            "controls_execution": False,
+        },
         "incident_reference": "agent_notes/loose_notes/2026-07-22_19-26-04_mps_memory_pressure_kernel_task_incident.md",
     }
 
@@ -803,7 +968,12 @@ def live_resource_snapshot() -> dict[str, Any]:
     return snapshot
 
 
-def require_live_resources(snapshot: Mapping[str, Any]) -> None:
+def require_live_resources(
+    snapshot: Mapping[str, Any], protocol: PaperTrainingProtocol | None = None,
+) -> None:
+    if protocol is not None and protocol.local_resources is not None:
+        require_local_host(snapshot, protocol.local_resources)
+        return
     if snapshot.get("platform") != "darwin":
         raise RuntimeError("MPS paper execution requires a macOS resource audit")
     failures = []
@@ -836,8 +1006,14 @@ def require_execution_safety_acknowledgement(
     device: str,
     allow_local_mps_execution: bool,
     allow_high_risk_local_mps: bool,
+    frozen_world_replay_compiled: bool = False,
+    frozen_world_max_frames: int = 0,
 ) -> dict[str, Any]:
-    estimate = local_mps_safety_estimate(protocol)
+    estimate = local_mps_safety_estimate(
+        protocol,
+        frozen_world_replay_compiled=frozen_world_replay_compiled,
+        frozen_world_max_frames=frozen_world_max_frames,
+    )
     if str(device).lower() != "mps":
         return {
             **estimate,
@@ -857,12 +1033,160 @@ def require_execution_safety_acknowledgement(
             "--allow-high-risk-local-mps."
         )
     live_resources = live_resource_snapshot()
-    require_live_resources(live_resources)
+    require_live_resources(live_resources, protocol)
     return {
         **estimate,
         "live_resources": live_resources,
-        "live_resource_thresholds": LIVE_RESOURCE_THRESHOLDS,
+        "live_resource_thresholds": protocol.local_resources or LIVE_RESOURCE_THRESHOLDS,
     }
+
+
+def _process_rss_bytes(pid: int) -> int:
+    """Return direct-child RSS bytes, failing closed while the child is live."""
+
+    try:
+        output = subprocess.check_output(
+            ("ps", "-o", "rss=", "-p", str(int(pid))),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError("could not read paper child RSS via ps") from error
+    if not output:
+        raise RuntimeError("paper child RSS probe returned no value")
+    try:
+        rss_kib = int(output.splitlines()[-1].strip())
+    except ValueError as error:
+        raise RuntimeError("could not parse child RSS for paper resource guard") from error
+    if rss_kib < 0:
+        raise RuntimeError("child RSS cannot be negative")
+    return rss_kib * 1024
+
+
+def validate_process_memory(
+    payload: Any,
+    *,
+    expected_rss_limit_bytes: int | None = None,
+) -> None:
+    """Validate the independent direct-child RSS receipt fail-closed."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("paper child process-memory receipt is missing")
+    peak = payload.get("peak_rss_bytes")
+    limit = payload.get("rss_limit_bytes")
+    poll_interval = payload.get("poll_interval_s")
+    if (
+        int(payload.get("schema_version", -1)) != 1
+        or payload.get("measurement")
+        != "direct_child_process_rss_polled_via_ps"
+        or payload.get("guard_tripped") is not False
+        or isinstance(peak, bool)
+        or not isinstance(peak, int)
+        or peak <= 0
+        or isinstance(poll_interval, bool)
+        or not isinstance(poll_interval, (int, float))
+        or not math.isfinite(float(poll_interval))
+        or float(poll_interval) <= 0.0
+    ):
+        raise ValueError("paper child process-memory receipt is invalid")
+    if limit is not None and (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit <= 0
+        or peak > limit
+    ):
+        raise ValueError("paper child RSS limit receipt is invalid")
+    if expected_rss_limit_bytes is not None and limit != int(
+        expected_rss_limit_bytes
+    ):
+        raise ValueError("paper child RSS limit drifted")
+
+
+def run_checked_with_peak_rss(
+    command: list[str],
+    *,
+    cwd: Path,
+    rss_limit_bytes: int | None,
+    poll_interval_s: float = 0.25,
+    protocol: PaperTrainingProtocol | None = None,
+    output_root: Path | None = None,
+) -> dict[str, Any]:
+    """Run one isolated lane and retain a host-RSS guard/measurement.
+
+    The native renderer's allocator counters remain the device-side evidence;
+    this independent process measurement covers Python, OpenCV, CPU tensors,
+    and other allocations invisible to those counters.
+    """
+
+    if poll_interval_s <= 0.0:
+        raise ValueError("RSS polling interval must be positive")
+    if rss_limit_bytes is not None and int(rss_limit_bytes) <= 0:
+        raise ValueError("RSS limit must be positive when provided")
+    local_monitor = (
+        LocalResourceMonitor(protocol.local_resources, output_root, live_resource_snapshot)
+        if protocol is not None and protocol.local_resources is not None else None
+    )
+    process = subprocess.Popen(command, cwd=cwd, start_new_session=local_monitor is not None)
+    peak_rss_bytes = 0
+    guard_tripped = False
+    try:
+        while process.poll() is None:
+            try:
+                current_rss = _process_rss_bytes(process.pid)
+            except RuntimeError:
+                # A child can exit between poll() and ps. Only that confirmed
+                # exit race is benign; a live child with an unreadable RSS is
+                # immediately terminated by the finally block below.
+                if process.poll() is None:
+                    raise
+                break
+            peak_rss_bytes = max(peak_rss_bytes, current_rss)
+            if local_monitor is not None:
+                local_monitor.sample(process.pid)
+            if rss_limit_bytes is not None and current_rss > int(rss_limit_bytes):
+                guard_tripped = True
+                raise RuntimeError(
+                    "paper child exceeded its process-RSS safety limit: "
+                    f"{current_rss} > {int(rss_limit_bytes)} bytes"
+                )
+            time.sleep(poll_interval_s)
+        return_code = int(process.returncode or 0)
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, command)
+        if peak_rss_bytes <= 0:
+            raise RuntimeError(
+                "paper child completed without a positive RSS measurement"
+            )
+    finally:
+        if process.poll() is None:
+            if local_monitor is not None:
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+            try:
+                process.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                if local_monitor is not None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+                process.wait()
+    receipt = {
+        "schema_version": 1,
+        "measurement": "direct_child_process_rss_polled_via_ps",
+        "poll_interval_s": float(poll_interval_s),
+        "peak_rss_bytes": int(peak_rss_bytes),
+        "rss_limit_bytes": (
+            None if rss_limit_bytes is None else int(rss_limit_bytes)
+        ),
+        "guard_tripped": guard_tripped,
+        **({"local_resources": local_monitor.receipt()} if local_monitor is not None else {}),
+    }
+    validate_process_memory(
+        receipt,
+        expected_rss_limit_bytes=rss_limit_bytes,
+    )
+    return receipt
 
 
 def effective_uvt_backward_policy(
@@ -1202,6 +1526,10 @@ def comparison_command(
         str(max(stage.frames_per_step for stage in protocol.stages)),
         "--eval-media-max-frames",
         "32",
+        "--paper-target-cache-frames",
+        str(PAPER_TARGET_CACHE_FRAMES),
+        "--paper-target-identity-chunk-frames",
+        str(PAPER_TARGET_IDENTITY_CHUNK_FRAMES),
         "--camera-rig-init",
         camera_rig_init,
         "--out-dir",
@@ -2027,7 +2355,7 @@ def validate_frozen_world_evidence(
         if frozen["contract"].get(key) is not True:
             raise ValueError(f"frozen-world contract failed: {key}")
     if frozen["contract"].get("host_target_storage") != (
-        "eager_cpu_selected_frames"
+        "bounded_video_seek_chunks"
     ):
         raise ValueError("frozen-world host target storage contract drifted")
     resident_chunk_frames = int(
@@ -2384,6 +2712,218 @@ def validate_frozen_world_evidence(
         raise ValueError("frozen-world accepted status does not match checks")
 
 
+def validate_paper_target_streaming(
+    report: Mapping[str, Any],
+    *,
+    manifest_validation: Mapping[str, Any],
+) -> None:
+    """Reject hidden eager video residency in publication Neural3D rows."""
+
+    def exact_integer(value: Any) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    meta = report.get("meta")
+    if not isinstance(meta, Mapping):
+        raise ValueError("comparison report metadata is missing")
+    contract = meta.get("paper_target_streaming")
+    if not isinstance(contract, Mapping) or contract.get("schema_version") != 1:
+        raise ValueError("comparison report target-streaming contract is missing")
+    expected_streaming = manifest_validation.get("dataset") != "dnerf"
+    if bool(contract.get("enabled")) != expected_streaming:
+        raise ValueError("comparison target-streaming mode drifted from dataset family")
+    if expected_streaming:
+        expected_contract = {
+            "source_kind": "paper_video_seek_bounded_lru",
+            "cache_capacity_frames_per_split": PAPER_TARGET_CACHE_FRAMES,
+            "identity_chunk_frames": PAPER_TARGET_IDENTITY_CHUNK_FRAMES,
+            "stage_resize_after_decode": True,
+            "full_video_tensor_materialization_allowed": False,
+            "dense_fallback_reason": None,
+        }
+        drift = [
+            key
+            for key, expected in expected_contract.items()
+            if contract.get(key) != expected
+        ]
+        if drift:
+            raise ValueError(
+                "comparison target-streaming contract drifted: "
+                + ", ".join(drift)
+            )
+    elif (
+        contract.get("source_kind") != "eager_dataset_adapter"
+        or contract.get("dense_fallback_reason")
+        != "dnerf_image_sequence_adapter"
+        or contract.get("full_video_tensor_materialization_allowed") is not True
+    ):
+        raise ValueError("D-NeRF target fallback is not explicitly declared")
+
+    for lane_name, report_key in LANE_REPORT_KEYS.items():
+        lane = report.get(report_key)
+        if not isinstance(lane, Mapping):
+            raise ValueError(f"comparison report is missing {lane_name}")
+        accounting = lane.get("target_streaming")
+        if not isinstance(accounting, Mapping):
+            raise ValueError(f"{lane_name} target-streaming accounting is missing")
+        if bool(accounting.get("enabled")) != expected_streaming:
+            raise ValueError(f"{lane_name} target-streaming accounting drifted")
+        if not expected_streaming:
+            continue
+        for split in ("train", "heldout"):
+            row = accounting.get(split)
+            if not isinstance(row, Mapping):
+                raise ValueError(f"{lane_name} {split} streaming row is missing")
+            checks = {
+                "schema": row.get("schema_version") == 1,
+                "source": row.get("source_kind")
+                == "paper_video_seek_bounded_lru",
+                "disk_lazy": row.get("disk_lazy_decode") is True,
+                "not_full_resident": row.get("full_source_resident") is False,
+                "no_full_materialization": row.get(
+                    "full_video_tensor_materialization_count"
+                )
+                == 0,
+                "cache_capacity": exact_integer(
+                    row.get("cache_capacity_frames")
+                )
+                == PAPER_TARGET_CACHE_FRAMES,
+                "cache_peak_bounded": (
+                    (peak := exact_integer(row.get("peak_cache_resident_frames")))
+                    is not None
+                    and 0 <= peak <= PAPER_TARGET_CACHE_FRAMES
+                ),
+                "identity_completed": (
+                    (identity_passes := exact_integer(row.get("identity_pass_count")))
+                    is not None
+                    and identity_passes >= 1
+                ),
+                "order_preserved": row.get(
+                    "preserves_logical_order_and_duplicates"
+                )
+                is True,
+                "transient_bound_declared": (
+                    (
+                        transient_bound := exact_integer(
+                            row.get("peak_transient_cpu_bytes_conservative_bound")
+                        )
+                    )
+                    is not None
+                    and transient_bound > 0
+                ),
+            }
+            failed = [name for name, passed in checks.items() if not passed]
+            if failed:
+                raise ValueError(
+                    f"{lane_name} {split} target-streaming checks failed: "
+                    + ", ".join(failed)
+                )
+
+
+def validate_worldfoam_memory_policy(
+    summary: Mapping[str, Any],
+    *,
+    expected_config: Mapping[str, Any],
+    expected_frame_count: int,
+) -> None:
+    """Require the paper WorldFoam lane to honor its bounded-memory contract."""
+
+    policy = summary.get("memory_policy")
+    if not isinstance(policy, Mapping):
+        raise ValueError("WorldFoam paper memory policy is missing")
+    if (
+        policy.get("targets") != "selected_target_provider"
+        or policy.get("rays") != "sampled_on_demand"
+        or policy.get("evaluation") != "chunked"
+    ):
+        raise ValueError("WorldFoam paper lane used an eager target/ray/eval policy")
+    target_residency = policy.get("target_residency")
+    if not isinstance(target_residency, Mapping):
+        raise ValueError("WorldFoam target-residency evidence is missing")
+    for split in ("train", "heldout"):
+        row = target_residency.get(split)
+        if not isinstance(row, Mapping):
+            raise ValueError(f"WorldFoam {split} target residency is missing")
+        checks = {
+            "disk_lazy": row.get("disk_lazy_decode") is True,
+            "not_full_resident": row.get("full_source_resident") is False,
+            "source_resident_zero": row.get("resident_bytes") == 0,
+            "compatibility_resident_zero": row.get(
+                "compatibility_tensor_resident_bytes"
+            )
+            == 0,
+            "accelerator_full_target_zero": row.get(
+                "full_target_accelerator_resident_bytes"
+            )
+            == 0,
+            "selected_batch_only": row.get("selection_mode")
+            == "selected_batch_only",
+        }
+        failed = [name for name, passed in checks.items() if not passed]
+        if failed:
+            raise ValueError(
+                f"WorldFoam {split} residency checks failed: "
+                + ", ".join(failed)
+            )
+
+    model_cfg = expected_config.get("model")
+    if not isinstance(model_cfg, Mapping):
+        raise ValueError("WorldFoam expected model config is missing")
+    expects_video_init = bool(model_cfg.get("init_from_video")) and not bool(
+        model_cfg.get("init_point_cloud_path")
+    )
+    init = policy.get("init_frames_residency")
+    if not isinstance(init, Mapping):
+        raise ValueError("WorldFoam initialization residency is missing")
+    if not expects_video_init:
+        return
+    numeric_keys = (
+        "selected_chunk_output_bytes",
+        "peak_source_visible_decode_bytes_conservative_bound",
+        "initializer_destination_bytes",
+        "initializer_chunk_result_bytes",
+        "accounted_peak_logical_bytes",
+    )
+    if any(
+        isinstance(init.get(key), bool)
+        or not isinstance(init.get(key), int)
+        or int(init[key]) <= 0
+        for key in numeric_keys
+    ):
+        raise ValueError("WorldFoam bounded video-init byte accounting is invalid")
+    expected_accounted = sum(
+        int(init[key])
+        for key in (
+            "peak_source_visible_decode_bytes_conservative_bound",
+            "initializer_destination_bytes",
+            "initializer_chunk_result_bytes",
+        )
+    )
+    checks = {
+        "mode": init.get("mode") == "bounded_target_provider",
+        "resident_source_zero": init.get("resident_bytes") == 0,
+        "condition_view": isinstance(init.get("condition_view"), int)
+        and not isinstance(init.get("condition_view"), bool),
+        "logical_frames": init.get("logical_frame_count")
+        == int(expected_frame_count),
+        "chunk_frames": init.get("chunk_frames")
+        == int(model_cfg["init_video_chunk_frames"]),
+        "decode_staging_charged": int(
+            init["peak_source_visible_decode_bytes_conservative_bound"]
+        )
+        >= 2 * int(init["selected_chunk_output_bytes"]),
+        "accounting_sums": int(init["accounted_peak_logical_bytes"])
+        == expected_accounted,
+        "not_process_bound": init.get("process_rss_bound") is False,
+        "no_full_video": init.get("full_condition_video_materialization")
+        is False,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise ValueError(
+            "WorldFoam bounded video-init checks failed: " + ", ".join(failed)
+        )
+
+
 def validate_comparison_report(
     report: Mapping[str, Any],
     protocol: PaperTrainingProtocol,
@@ -2535,6 +3075,10 @@ def validate_comparison_report(
         schema_version=PAPER_DATASET_BUNDLE_SCHEMA_VERSION,
     )
     validate_comparison_pose_source(meta, manifest_validation)
+    validate_paper_target_streaming(
+        report,
+        manifest_validation=manifest_validation,
+    )
     validate_hashed_contract(
         "paper evaluator",
         meta.get("paper_evaluator"),
@@ -2637,6 +3181,7 @@ def merge_comparison_lane_reports(
         "eval_media_max_frames",
         "star_uvt_native_extension",
         "paper_dataset_bundle",
+        "paper_target_streaming",
         "paper_evaluator",
         "paper_runtime",
     )
@@ -2830,6 +3375,7 @@ def materialize_isolated_comparison_report(
     frozen_world_replay_compiled: bool = False,
     frozen_world_max_frames: int = 0,
     allow_local_mps_execution: bool = False,
+    rss_limit_bytes: int | None = None,
     expected_dataset_input_identity: Mapping[str, Any] | None = None,
     python: str = sys.executable,
 ) -> Path:
@@ -2962,7 +3508,16 @@ def materialize_isolated_comparison_report(
                 if lane_identity_path.exists()
                 else None
             )
-            if (
+            try:
+                validate_process_memory(
+                    lane_identity.get("process_memory")
+                    if isinstance(lane_identity, Mapping)
+                    else None,
+                    expected_rss_limit_bytes=rss_limit_bytes,
+                )
+            except ValueError:
+                lane_report = None
+            if lane_report is not None and (
                 not isinstance(lane_identity, Mapping)
                 or lane_identity.get("source_start")
                 != expected_source_identity
@@ -2992,8 +3547,14 @@ def materialize_isolated_comparison_report(
             lane_live_resources = None
             if str(device).lower() == "mps":
                 lane_live_resources = live_resource_snapshot()
-                require_live_resources(lane_live_resources)
-            subprocess.run(command, cwd=ROOT, check=True)
+                require_live_resources(lane_live_resources, protocol)
+            process_memory = run_checked_with_peak_rss(
+                command,
+                cwd=ROOT,
+                rss_limit_bytes=rss_limit_bytes,
+                protocol=protocol,
+                output_root=comparison_dir.parent,
+            )
             source_finish = source_provenance()
             if source_start != source_finish:
                 raise RuntimeError(
@@ -3012,10 +3573,16 @@ def materialize_isolated_comparison_report(
                     "source_finish": source_finish,
                     "dataset_input_identity": expected_dataset_identity,
                     "live_resources_at_launch": lane_live_resources,
+                    "process_memory": process_memory,
                     "comparison_report": display_path(lane_report_path),
                     "comparison_report_sha256": file_sha256(lane_report_path),
                 },
             )
+        lane_identity = load_json(lane_identity_path)
+        validate_process_memory(
+            lane_identity.get("process_memory"),
+            expected_rss_limit_bytes=rss_limit_bytes,
+        )
         if not report_matches_identity(
             lane_report,
             expect_frozen_world=expect_frozen_world,
@@ -3291,7 +3858,14 @@ def _comparison_wandb_log(
     run.log(payload, step=protocol.steps)
     run_dir = str(run.dir)
     actual_run_id = str(run.id)
+    remote_identity = {
+        "entity": None if run.entity is None else str(run.entity),
+        "project": None if run.project is None else str(run.project),
+        "url": None if run.url is None else str(run.url),
+        "finish_called": False,
+    }
     run.finish()
+    remote_identity["finish_called"] = True
     provenance = {
         "schema_version": 1,
         "project": "dynaworld",
@@ -3302,8 +3876,10 @@ def _comparison_wandb_log(
         "source_digest": source_digest,
         "comparison_report_sha256": report_digest,
         "config_sha256": config_digest,
+        "remote_identity": remote_identity,
         "run_file": wandb_file_identity(run_dir, actual_run_id),
     }
+    validate_wandb_remote_identity(provenance, mode=wandb_mode)
     write_json(identity_path, provenance)
     return provenance
 
@@ -3348,7 +3924,11 @@ def build_dry_run_manifest(
     comparison_dir = seed_dir / "world_tubes_dynamic_3dgs"
     return {
         "status": "dry_run",
-        "execution_safety": local_mps_safety_estimate(protocol),
+        "execution_safety": local_mps_safety_estimate(
+            protocol,
+            frozen_world_replay_compiled=frozen_world_replay_compiled,
+            frozen_world_max_frames=frozen_world_max_frames,
+        ),
         "protocol_path": display_path(protocol_path),
         "protocol": protocol.as_dict(),
         "uvt_world_representation": uvt_world_representation,
@@ -3455,6 +4035,8 @@ def execute(
         device=device,
         allow_local_mps_execution=allow_local_mps_execution,
         allow_high_risk_local_mps=allow_high_risk_local_mps,
+        frozen_world_replay_compiled=frozen_world_replay_compiled,
+        frozen_world_max_frames=frozen_world_max_frames,
     )
     provenance = source_provenance()
     if require_clean_source:
@@ -3464,6 +4046,36 @@ def execute(
     worldfoam_dir = seed_dir / "worldfoam"
     comparison_report_path = comparison_dir / "comparison_report.json"
     manifest_validation = validate_manifest(protocol)
+    if protocol.local_resources is not None:
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["WANDB_DIR"] = str(seed_dir.resolve())
+        # Count installed dependencies and the complete selected scene, including
+        # conservative extras in the backend checkout. Historical project outputs
+        # and unrelated datasets are not part of a fresh playground installation.
+        paths = {
+            "environment": ROOT / ".venv", "python_runtime": Path(sys.base_prefix),
+            "training_source": ROOT / "src", "launcher": Path(__file__).parent,
+            "world_tubes_backend": ROOT / "third_party/fast-mac-gsplat/variants/star_uvt_v0",
+            "gsplat_rgb_backend": ROOT / "third_party/fast-mac-gsplat/variants/v5",
+            "gsplat_feature_backend": ROOT / "third_party/fast-mac-gsplat/variants/v5_features",
+            "worldfoam_backend": ROOT / "third_party/powerfoam-metal",
+            "lpips_trunk": Path(lpips_alex_asset_status()["assets"]["alexnet_trunk"]["path"]),
+        }
+        for index, path in enumerate(sorted({
+            resolve_root_path(path).parent for path in manifest_validation["camera_inputs"].values()
+        })):
+            paths[f"scene_{index}"] = path
+        sizes = {name: directory_bytes(path) for name, path in paths.items()}
+        installation_bytes = sum(sizes.values())
+        if installation_bytes + protocol.local_resources["output_limit_bytes"] > protocol.local_resources["disk_budget_bytes"]:
+            raise RuntimeError("playground installation plus reserved outputs exceeds disk budget")
+        execution_safety["local_disk_footprint"] = {
+            "components": {name: {"path": str(paths[name]), "bytes": size} for name, size in sizes.items()},
+            "installation_bytes": installation_bytes,
+            "output_reserve_bytes": protocol.local_resources["output_limit_bytes"],
+            "disk_budget_bytes": protocol.local_resources["disk_budget_bytes"],
+        }
+        write_json(seed_dir / "local_resource_preflight.json", execution_safety)
     materialize_isolated_comparison_report(
         protocol_path,
         protocol,
@@ -3484,6 +4096,11 @@ def execute(
         frozen_world_replay_compiled=frozen_world_replay_compiled,
         frozen_world_max_frames=frozen_world_max_frames,
         allow_local_mps_execution=allow_local_mps_execution,
+        rss_limit_bytes=(
+            int(execution_safety["safety_limit_bytes"])
+            if str(device).lower() == "mps"
+            else None
+        ),
         expected_source=provenance,
         expected_dataset_input_identity=manifest_validation[
             "input_identity"
@@ -3597,6 +4214,18 @@ def execute(
                 for name, path in powerfoam_artifacts.items()
             )
         )
+        if reuse_powerfoam:
+            try:
+                validate_process_memory(
+                    powerfoam_identity.get("process_memory"),
+                    expected_rss_limit_bytes=(
+                        int(execution_safety["safety_limit_bytes"])
+                        if str(device).lower() == "mps"
+                        else None
+                    ),
+                )
+            except ValueError:
+                reuse_powerfoam = False
     if not reuse_powerfoam:
         source_start = source_provenance()
         if source_start != provenance:
@@ -3604,8 +4233,18 @@ def execute(
         powerfoam_live_resources = None
         if str(device).lower() == "mps":
             powerfoam_live_resources = live_resource_snapshot()
-            require_live_resources(powerfoam_live_resources)
-        subprocess.run(powerfoam_command, cwd=ROOT, check=True)
+            require_live_resources(powerfoam_live_resources, protocol)
+        powerfoam_process_memory = run_checked_with_peak_rss(
+            powerfoam_command,
+            cwd=ROOT,
+            protocol=protocol,
+            output_root=worldfoam_dir.parent,
+            rss_limit_bytes=(
+                int(execution_safety["safety_limit_bytes"])
+                if str(device).lower() == "mps"
+                else None
+            ),
+        )
         source_finish = source_provenance()
         if source_start != source_finish:
             raise RuntimeError("source changed while the WorldFoam paper lane executed")
@@ -3644,12 +4283,22 @@ def execute(
                 "initializer_identity": powerfoam_init_identity,
                 "resolved_config_binding": powerfoam_config_binding,
                 "live_resources_at_launch": powerfoam_live_resources,
+                "process_memory": powerfoam_process_memory,
                 "artifacts": {
                     name: file_identity(path, role=f"worldfoam:{name}")
                     for name, path in powerfoam_artifacts.items()
                 },
             },
         )
+    powerfoam_identity = load_json(powerfoam_identity_path)
+    validate_process_memory(
+        powerfoam_identity.get("process_memory"),
+        expected_rss_limit_bytes=(
+            int(execution_safety["safety_limit_bytes"])
+            if str(device).lower() == "mps"
+            else None
+        ),
+    )
     if powerfoam_config_binding is None:
         powerfoam_config_binding = worldfoam_resolved_config_binding(
             powerfoam_expected_config,
@@ -3666,6 +4315,13 @@ def execute(
         resolved_config_path=powerfoam_resolved_config_path,
     )
     powerfoam_summary = load_json(powerfoam_summary_path)
+    validate_worldfoam_memory_policy(
+        powerfoam_summary,
+        # The binding above checks every runner-owned value. Residency also
+        # needs defaults filled by the trainer's canonical config normalizer.
+        expected_config=load_json(powerfoam_resolved_config_path),
+        expected_frame_count=protocol.dataset.frame_count,
+    )
     if int(powerfoam_summary["cost"]["serialized_checkpoint_bytes"]) != int(
         powerfoam_final_checkpoint_path.stat().st_size
     ):
@@ -3843,6 +4499,21 @@ def execute(
         "execution_safety": execution_safety,
         "lanes": lanes,
     }
+    if protocol.local_resources is not None:
+        final_host = live_resource_snapshot()
+        final_output_bytes = directory_bytes(seed_dir)
+        check_running_limits(
+            protocol.local_resources,
+            tree_rss=process_tree_rss(os.getpid()),
+            output_bytes=final_output_bytes + len(json.dumps(serialize_config_value(summary), indent=2).encode()),
+            initial_swap=execution_safety["live_resources"]["swap_used_bytes"],
+            snapshot=final_host,
+        )
+        execution_safety["local_completion_resources"] = {
+            "output_bytes_before_summary": final_output_bytes,
+            "host": final_host,
+            "scope": "includes final offline W&B files; summary size reserved by the disk check",
+        }
     write_json(seed_dir / "run_summary.json", summary)
     return summary
 

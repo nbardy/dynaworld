@@ -122,6 +122,7 @@ class PaperTrainingProtocol:
     local_time_radius: int
     sampler_seed_offset: int
     stages: tuple[PaperStage, ...]
+    local_resources: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -171,6 +172,7 @@ class PaperTrainingProtocol:
     def as_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            **({"local_resources": self.local_resources} if self.local_resources is not None else {}),
             "dataset": self.dataset.as_dict(),
             "steps": self.steps,
             "max_train_seconds": self.max_train_seconds,

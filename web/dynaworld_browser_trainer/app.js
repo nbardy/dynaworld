@@ -3,7 +3,7 @@ import {
 	loadPresetDataset,
 	loadTemporalPageDataset,
 } from "./dataset.js?v=20260828-deep3d-jump-2";
-import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260826-dense-scenes-1";
+import { createNonblockingTrainer } from "./nonblockingTrainerClient.js?v=20260906-affine-star-2";
 import {
 	createOrbitCameraState,
 	orbitPreviewCamera,
@@ -131,6 +131,7 @@ let progressiveDatasetPromise = null;
 let progressiveDataset = null;
 let resolutionTransitionPending = false;
 let resolutionTransitionComplete = false;
+let resolutionTransitionFailed = false;
 let temporalPagingPlan = null;
 let temporalPageCursor = -1;
 let temporalPageLastSwitchStep = 0;
@@ -145,6 +146,7 @@ function currentStep() {
 }
 
 function currentModelMode() {
+	if (controls.backend.value === "world-tubes") return 2;
 	return controls.mode.value === "dynamic_splats" ? 1 : 0;
 }
 
@@ -166,7 +168,7 @@ function effectiveMotionMix() {
 }
 
 function sampledBackendSelected() {
-	return controls.backend.value === "sampled3d";
+	return controls.backend.value === "sampled3d" || controls.backend.value === "world-tubes";
 }
 
 function fastTiledBackendSelected() {
@@ -296,8 +298,8 @@ function updateControlLabels() {
 		|| controls.resolution.value === RESOLUTION_MODE_PROGRESSIVE;
 	const sampledOption = controls.backend.querySelector('option[value="sampled3d"]');
 	if (sampledOption) sampledOption.disabled = highResolution;
-	if (highResolution && sampledBackendSelected()) controls.backend.value = "tiled3d-fast";
-	const splatLimit = sampledBackendSelected() ? 2048 : 4096;
+	if (highResolution && controls.backend.value === "sampled3d") controls.backend.value = "tiled3d-fast";
+	const splatLimit = controls.backend.value === "sampled3d" ? 2048 : 4096;
 	controls.splats.max = String(splatLimit);
 	if (Number(controls.splats.value) > splatLimit) controls.splats.value = String(splatLimit);
 	const step = currentStep();
@@ -340,6 +342,18 @@ function updateControlLabels() {
 	controls.pixelDepthScaling.disabled = sampledBackendSelected();
 	$("pixelDepthScalingField").toggleAttribute("data-disabled", sampledBackendSelected());
 	const shaderAblationsDisabled = !fastTiledBackendSelected();
+	const worldTubesSelected = controls.backend.value === "world-tubes";
+	for (const control of [controls.temporal, controls.temporalSchedule, controls.motionMix,
+		controls.staticMix, controls.supportGuard]) {
+		if (worldTubesSelected) control.disabled = true;
+	}
+	if (!worldTubesSelected) controls.temporalSchedule.disabled = false;
+	controls.resultView.querySelector('option[value="dynamic_residual"]').disabled = worldTubesSelected;
+	if (worldTubesSelected && controls.resultView.value === "dynamic_residual") controls.resultView.value = "rgb";
+	controls.mode.disabled = worldTubesSelected;
+	controls.mode.title = worldTubesSelected
+		? "Shared SPD(4) world atoms compiled to affine camera/time traces; temporal width is learned per atom."
+		: "Choose harmonic or linear trajectory 3DGS.";
 	for (const control of [controls.pixelFilter, controls.opacityModel, controls.geometryColorWeight,
 		controls.crossViewDepth, controls.geometryConsistencyEvery, controls.geometryDepthWeight]) {
 		control.disabled = shaderAblationsDisabled;
@@ -365,6 +379,12 @@ function updateControlLabels() {
 		values.temporalSchedule.textContent = `narrowing ${progress}% · target 0.26`;
 	} else {
 		values.temporalSchedule.textContent = "settled · target 0.26";
+	}
+	$("staticMixP50Label").textContent = worldTubesSelected ? "Interval Persistence p50" : "Static Mix p50";
+	if (worldTubesSelected) {
+		values.temporalLabel.textContent = "Initial Temporal Width";
+		values.temporal.textContent = "0.300";
+		values.temporalSchedule.textContent = "learned per world atom";
 	}
 }
 
@@ -596,10 +616,10 @@ function consumeValidation({ step, metrics }) {
 	const updates = metrics.parameterUpdateRatios ?? {};
 	setMetricText(values.centerUpdate, updates.center?.updateRms, (value) => value.toExponential(1));
 	setMetricText(values.motionUpdate, Math.max(
-		updates.staticMix?.updateRms ?? Number.NaN,
+		updates.temporalLogSigma?.updateRms ?? updates.staticMix?.updateRms ?? Number.NaN,
 		updates.velocity?.updateRms ?? Number.NaN,
 		updates.timeCenter?.updateRms ?? Number.NaN,
-		updates.harmonic?.updateRms ?? Number.NaN,
+		updates.harmonic?.updateRms ?? 0,
 	), (value) => value.toExponential(1));
 	setMetricText(values.scaleUpdate, updates.logScale?.updateRms, (value) => value.toExponential(1));
 	setMetricText(values.rotationUpdate, updates.rotation?.updateRms, (value) => value.toExponential(1));
@@ -798,13 +818,13 @@ async function maybeAdvanceTemporalPage(step) {
 function preloadProgressiveDataset() {
 	if (resolutionMode !== RESOLUTION_MODE_PROGRESSIVE) return null;
 	if (!progressiveDatasetPromise) {
-		const coarseDataset = dataset;
 		progressiveDatasetPromise = loadPresetDataset({
 			datasetId: controls.dataset.value, preset: "384x288", computeSamples: false,
 			onProgress: reportDatasetProgress,
 		})
 			.then((fineDataset) => {
-				assertResolutionContinuationCompatible(coarseDataset, fineDataset);
+				// This is the fine overview, not necessarily the resident temporal
+				// page. Validate only after selecting matching frame identities below.
 				progressiveDataset = fineDataset;
 				return fineDataset;
 			});
@@ -814,7 +834,8 @@ function preloadProgressiveDataset() {
 
 async function beginProgressiveResolutionTransition() {
 	if (!workerClient || resolutionMode !== RESOLUTION_MODE_PROGRESSIVE
-		|| resolutionTransitionPending || resolutionTransitionComplete) return;
+		|| temporalPageSwitchPending || resolutionTransitionPending
+		|| resolutionTransitionComplete || resolutionTransitionFailed) return;
 	resolutionTransitionPending = true;
 	const sourcePageIndex = temporalPageCursor;
 	stopTemporalPagePreload();
@@ -855,6 +876,8 @@ async function beginProgressiveResolutionTransition() {
 		setStatus(`Progressive stage ready: 384x288 from step ${ready.step}; `
 			+ `parameters, Adam moments, topology, and global step preserved.`);
 	} catch (error) {
+		resolutionTransitionFailed = true;
+		setRunning(false);
 		setStatus(`Progressive resolution switch failed: ${error?.message ?? String(error)}`);
 		console.error(error);
 		configureTemporalPaging({ currentPageIndex: sourcePageIndex });
@@ -869,6 +892,7 @@ async function initWorkerTrainer() {
 	const ready = await workerClient.init({
 		dataset, canvas: renderCanvas,
 		trainerOptions: { backend: controls.backend.value, splatCount: Number(controls.splats.value),
+			temporalSigma: 0.30,
 			growthCapacity: sampledBackendSelected() ? null : Number(controls.growthCapacity.value),
 			checkpointPrecision: controls.precision.value,
 			pixelFilterMode: controls.pixelFilter.value,
@@ -889,7 +913,7 @@ async function initWorkerTrainer() {
 	values.gpu.textContent = ready.adapter ?? "WebGPU";
 	values.runtime.textContent = ready.capabilities.offscreenRender
 		? `${ready.backend?.label ?? "worker"} + render` : `${ready.backend?.label ?? "worker"} optimizer`;
-	values.representation.textContent = `Trajectory 3DGS · ${shaderAblationDescription()}`;
+	values.representation.textContent = ready.backend?.representation ?? "trajectory-gated dynamic 3DGS";
 	values.representation.title = ready.backend?.representation ?? "trajectory-gated dynamic 3DGS";
 	$("motionCoverageLabel").textContent = ready.backend?.sampledControls ? "Motion Cov" : "Train Cov";
 	values.shared.textContent = ready.capabilities.sharedStatus ? "atomic SAB" : "messages";
@@ -1046,7 +1070,7 @@ function frameLoop(now) {
 		}
 		const resolutionStage = resolutionStageForStep(resolutionMode, workerStep);
 		if (resolutionStage.progressive && resolutionStage.preset !== resolutionPreset
-			&& !resolutionTransitionPending && !resolutionTransitionComplete) {
+			&& !resolutionTransitionPending && !resolutionTransitionComplete && !resolutionTransitionFailed) {
 			void beginProgressiveResolutionTransition();
 		}
 		void maybeAdvanceTemporalPage(status?.step ?? 0);

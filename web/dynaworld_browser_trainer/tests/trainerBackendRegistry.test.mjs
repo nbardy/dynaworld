@@ -57,7 +57,15 @@ test("registry descriptors and schedules are immutable and reject unknown ids", 
 		assert.ok(descriptor.defaultSchedule.burstSteps > 0);
 		assert.ok(descriptor.defaultSchedule.maxQueuedSteps >= descriptor.defaultSchedule.burstSteps);
 	}
-	assert.throws(() => resolveTrainerBackend("world-tubes"), /Unknown browser trainer backend/);
+	assert.throws(() => resolveTrainerBackend("unknown"), /Unknown browser trainer backend/);
+});
+
+test("World Tubes is an opt-in sampled WebGPU learning and rendering backend", () => {
+	const tubes = resolveTrainerBackend("world-tubes");
+	assert.equal(tubes.parameterSchema, "world-tube-affine-star-24f/v2");
+	assert.equal(tubes.fixedModelMode, 2);
+	assert.equal(tubes.sampledControls, true);
+	assert.match(tubes.representation, /SPD\(4\) world.*compiled affine UVT/);
 });
 
 test("backend loader resolves each descriptor to its concrete trainer", async () => {
@@ -68,7 +76,8 @@ test("backend loader resolves each descriptor to its concrete trainer", async ()
 		if (id === "tiled3d-fast") {
 			assert.match(loaded.Trainer.name, /TiledFastTrainer$/);
 		} else {
-			assert.match(loaded.Trainer.name, id === "tiled3d" ? /TiledTrainer$/ : /WebGpu3dTrainer$/);
+			assert.match(loaded.Trainer.name, id === "tiled3d" ? /TiledTrainer$/
+				: id === "world-tubes" ? /WorldTubesWebGpuTrainer$/ : /WebGpu3dTrainer$/);
 		}
 	}
 });

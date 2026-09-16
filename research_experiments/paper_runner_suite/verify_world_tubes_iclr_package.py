@@ -70,6 +70,7 @@ REQUIRED_TABLE_FRAGMENTS = (
     "theorem_table.tex",
     "frozen_scaling_table.tex",
     "variable_camera_table.tex",
+    "moving_camera_density_table.tex",
     "public_context_table.tex",
 )
 REQUIRED_EVIDENCE_FIGURES = (

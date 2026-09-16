@@ -4,6 +4,26 @@ A standalone WebGPU SPA for testing a compact dynamic Gaussian-splat trainer in
 the browser. This directory is a demo and systems prototype. It is deliberately
 separate from the Python paper-trainer hierarchy.
 
+## Geometric units (2026-09-08)
+
+`geometryScale` is exclusively the external-to-normalized coordinate factor on
+the dataset. `trainingSceneScale` is the radius of the normalized training-camera
+rig (heldout cameras excluded; the existing coincident-camera fallback is 1).
+Initialization uses this geometric length for its local-PCA safeguards. The
+sampled and tiled training uniforms retain the legacy `geometryScale` field
+name for ABI compatibility, but receive `trainingSceneScale`: scale/motion
+limits and tiled geometric regularization therefore share normalized units.
+Preview camera conversion continues to use the actual coordinate factor.
+
+The six-case CPU source-unit audit is runnable with
+`node web/dynaworld_browser_trainer/tests/auditInitializationUnits.mjs`.
+At 96x72, Deep3D's fully capped initial splats fall from 3541 to 84 of 4096,
+and median projected sigma is 0.749 pixels independent of source-unit scaling.
+These are footprint diagnostics, not improved RGB convergence or speed claims.
+The existing coefficients remain heuristics; rig geometry can change the best
+bounds. Start a fresh run after updating. GPU convergence/occupancy verification
+is pending; the local headless harness lacks its `puppeteer` dependency.
+
 ## Run
 
 The worker runtime uses `SharedArrayBuffer`, so serve the repository with the
@@ -45,7 +65,52 @@ http://127.0.0.1:8080/web/dynaworld_browser_trainer/benchmarkTiledKernels.html
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/benchmarkLegacy2d.html
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/tiledParityHarness.html
 http://127.0.0.1:8080/web/dynaworld_browser_trainer/workerSmoke.html
+http://127.0.0.1:8080/web/dynaworld_browser_trainer/worldTubesSmoke.html
 ```
+
+The backend selector includes **World Tubes (affine STAR)**. It replaces the
+earlier mislabeled temporal-gate-on-3DGS implementation; the normal sampled and
+tiled 3DGS controls remain available. Selecting a different backend starts a
+fresh fit, not a cross-representation checkpoint conversion.
+
+The new path compiles shared SPD(4) world atoms into UVT precision, conditional
+depth mean/variance, color and peak-preserving opacity in WGSL. One compile per
+atom/camera is reused across sampled times, with full-interval spatial bins.
+Each ray sorts by its own conditional depth and source-over compositing is
+differentiated back through the compiler into the same world atoms. Adam state
+stays on the GPU. This is not independent per-camera trace fitting.
+
+- Up to 4,096 atoms, 192 uniform pixel/time rays and four training cameras per
+  step. This is **RGB MSE**, not the tiled backend's full-image L1/SSIM objective;
+  steps/s alone is not a fair quality comparison.
+- Learned temporal widths/centers; static mix, harmonic motion, support guards,
+  density growth and the unrelated tiled ablations are disabled in this mode.
+- Worker-owned training and preview, heldout CPU validation using the same
+  traces, global timestamps across resident pages, and parameter/Adam-preserving
+  progressive resolution continuation. Preview is capped at 144 pixels high.
+- The 24-float world schema is `world-tube-affine-star-24f/v2`. Old
+  `world-tube-spd4-block-24f/v1` continuation files are explicitly rejected.
+
+Scope: each fixed-camera pinhole map is linearized at the atom's mean time.
+Orbit queries recompile the traces. This is **not** a certified nonlinear
+projective interval atlas, retained-fiber rendering, or differentiation through
+visibility events. Large perspective changes along a trajectory can exceed the
+affine approximation. Dense preview rays use exact, slower depth peeling rather
+than truncating the local sort buffer.
+
+`worldTubesSmoke.html` now runs an independent canonical-Python fixture gate:
+UVT/RGB/world-gradient parity, a 64-step fit, checkpoint restore, orbit pixels,
+OffscreenCanvas, temporal paging, 4x resolution continuation, and worker
+validation. Regenerate the CPU oracle with
+`.venv/bin/python web/dynaworld_browser_trainer/tests/fixtures/world_tubes_reference.py`
+from the repository root; stdout is the JSON fixture.
+The retained [2026-09-06 integration report](benchmark_results/2026-09-06_world_tubes_integration.json)
+records RGB error `1.29e-7`, world-gradient error `5.00e-8`, and fixture loss
+`0.054926 -> 0.021999`. This is bounded engineering evidence, not a public
+quality or speed result. The real Coffee UI trained/paged at 4,096 atoms; its
+progressive preload/page mismatch was repaired afterward and still needs a
+fresh end-to-end UI rerun. Matched speed/time-to-quality testing is pending an
+idle GPU; another MPS training process was active during this session.
 
 The kernel benchmark does not require an interactive page. Bun owns a tiny
 no-store server, launches a private headless Chrome/Dawn process, waits for the

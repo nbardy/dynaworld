@@ -1545,7 +1545,31 @@ real scene. The three-lane public training matrix uses selected-time rendering
 and is reported only as representation-and-cost context; it is not compiler
 evidence.
 
-### 6.3 Bounded SPD(4), alpha-law, and fallback integration
+### 6.3 Frozen learned-world bounded moving-camera density
+
+The moving-camera density ablation loads the exact accepted checkpoint from
+the static frozen-world sweep and performs no further training. It compares
+exact per-pose replay against one single-midpoint first-order projective chart
+over a bounded open yaw path from $-22.5^\circ$ to $+22.5^\circ$ at
+$F\in\{8,16,32,64\}$ and $256\times256$. This isolates camera-program density
+from representation learning and preserves the gauged camera-ray mathematics:
+it is ordered transport along an open path, not a closed-loop holonomy claim.
+
+The generated table retains a mechanically complete failed predeclared gate
+as a labelled negative result. It never retunes thresholds after observing the
+row and never promotes target residuals at synthetic yaw poses to public-scene
+quality.
+
+```{=latex}
+\begin{table*}[t]
+\centering
+\caption{Frozen learned-world bounded moving-camera replay versus one-chart compilation.}
+\label{tab:moving-camera-density}
+\input{research_notes/gauged_uvt_trace_atlas/paper/generated/schema_v2/moving_camera_density_table.tex}
+\end{table*}
+```
+
+### 6.4 Bounded SPD(4), alpha-law, and fallback integration
 
 A single-seed, 16-frame, 40-step Coffee Martini fixture exercises the
 production selector end to end. The parameter-matched rows differ by only two
@@ -1577,7 +1601,7 @@ future work for this extension, not submission blockers for the central
 projective interval-atlas result. The submission still requires the declared
 public controls and scene breadth.
 
-### 6.4 Public representation and cost context
+### 6.5 Public representation and cost context
 
 When optimizer views are a subset of declared training cameras, a global
 training-camera mean is not the fitting metric for the optimized subset.
@@ -1617,9 +1641,9 @@ only when all seven schema-v2 controls pass. It emits no partial numeric rows.
 ```
 
 The causal public compiler experiment is specified separately through the
-frozen identical-world protocol in Section 5.4 and remains pending. It uses a
-static heldout Neural3D camera; bounded moving-camera scaling is currently
-synthetic.
+frozen identical-world protocol in Section 6.2. The checkpoint-only bounded
+moving-camera extension in Section 6.3 reuses that learned world; its
+compiled-versus-replay metrics are route parity, not novel-pose ground truth.
 
 Schema-v1 numbers and their plot are intentionally absent from the manuscript.
 Schema-v2 reruns of the progressive rows, pixel-matched fixed control, and
@@ -1630,9 +1654,12 @@ target, not blockers for the narrow compiler claim.
 
 The next fixed-512 run was killed after severe unified-memory compression and
 swap pressure destabilized the local workstation. Its partial outputs are
-excluded. The runner now isolates representations in child processes and is
-fail-closed on local MPS, but full-scale local execution remains unauthorized
-until targets/rays/evaluation are streamed or a larger machine is used.
+excluded. The runner now isolates representations in child processes, streams
+targets/rays/evaluation and video initialization in bounded chunks, records
+independent child-process peak RSS, and is fail-closed on local MPS. A quiet
+16-GB host is a candidate for the sequential campaign, not a guarantee: the
+first row must pass the live memory/swap/disk/load guard and remain below its
+RSS limit or the campaign stops.
 
 ## 7. Discussion and limitations
 

@@ -1,12 +1,12 @@
 import {
 	SPLAT_FLOATS,
 	resolveTrainViewIndices,
-} from "./trainerWebGpu3d.js?v=20260821-stablegs-ablation-1";
+} from "./trainerWebGpu3d.js?v=20260906-affine-star-2";
 import {
 	computeSnapshotMetrics,
 	snapshotUpdateRatios,
 	summarizeSplatParameters,
-} from "./snapshotMetrics.js?v=20260821-stablegs-ablation-1";
+} from "./snapshotMetrics.js?v=20260906-affine-star-2";
 import { computeCameraStressMetrics } from "./cameraStressMetrics.js?v=20260821-stablegs-ablation-1";
 import { WORKER_PROTOCOL_VERSION } from "./workerProtocol.js?v=20260803-fullfps-pixelgs-1";
 import { hydrateDatasetSharedViews } from "./datasetSharing.js";
@@ -175,6 +175,7 @@ self.onmessage = ({ data }) => {
 			staticCoverage: Number.NaN,
 			...summarizeSplatParameters(params, {
 				splatCount,
+				modelMode: options.modelMode,
 				temporalSigma: options.temporalSigma,
 				frameCount: dataset.frameCount,
 				maxAspectRatio: data.options?.maxAspectRatio ?? 3,
@@ -186,6 +187,7 @@ self.onmessage = ({ data }) => {
 			parameterUpdateRatios: snapshotUpdateRatios(
 				previousParams.subarray(0, activeValues),
 				params.subarray(0, activeValues),
+				{ modelMode: options.modelMode },
 			),
 			learningRateMultipliers: data.options?.learningRateMultipliers ?? null,
 			totalRecycled: data.options?.totalRecycled ?? 0,

@@ -19,6 +19,7 @@ from paper_training_protocol import (
 from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     DEFAULT_PROTOCOL,
     FROZEN_WORLD_ACCEPTANCE,
+    _process_rss_bytes,
     build_lane_evidence,
     build_dry_run_manifest,
     comparison_command,
@@ -41,6 +42,7 @@ from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
     validate_lane_cost,
     validate_lane_evidence,
     validate_manifest,
+    validate_process_memory,
     validate_route_native_extension_identity,
     validate_wandb_identity,
     wandb_file_identity,
@@ -246,7 +248,7 @@ def _valid_frozen_world_evidence(tmp_path: Path) -> dict:
             "same_precision": True,
             "same_alpha_mode": True,
             "bounded_device_frame_residency": True,
-            "host_target_storage": "eager_cpu_selected_frames",
+            "host_target_storage": "bounded_video_seek_chunks",
             "resident_chunk_frames": 2,
             "timing_excludes_parity_replay": True,
         },
@@ -500,6 +502,16 @@ def _write_isolated_reports(
                     "protocol_sha256": protocol_sha256,
                     "command": commands[lane_name],
                     "dataset_input_identity": dataset_identity,
+                    "process_memory": {
+                        "schema_version": 1,
+                        "measurement": (
+                            "direct_child_process_rss_polled_via_ps"
+                        ),
+                        "poll_interval_s": 0.25,
+                        "peak_rss_bytes": 1024,
+                        "rss_limit_bytes": None,
+                        "guard_tripped": False,
+                    },
                     "comparison_report_sha256": hashlib.sha256(
                         report_path.read_bytes()
                     ).hexdigest(),
@@ -1364,14 +1376,8 @@ def test_isolated_materializer_does_not_reuse_stale_backend_identity(
     )
 
     launched: list[list[str]] = []
-    original_run = subprocess.run
 
     def record_relaunch(command, **kwargs):
-        # subprocess.check_output implements itself through subprocess.run.
-        # Preserve the real read-only git provenance probes and intercept only
-        # the trainer child process this behavior test is about.
-        if command and command[0] in {"git", "vm_stat", "sysctl"}:
-            return original_run(command, **kwargs)
         launched.append(command)
         raise RuntimeError("stale backend relaunch")
 
@@ -1384,9 +1390,12 @@ def test_isolated_materializer_does_not_reuse_stale_backend_identity(
     )
     monkeypatch.setattr(
         "research_experiments.paper_runner_suite.run_unified_paper_ablation.require_live_resources",
-        lambda _snapshot: None,
+        lambda _snapshot, _protocol=None: None,
     )
-    monkeypatch.setattr("subprocess.run", record_relaunch)
+    monkeypatch.setattr(
+        "research_experiments.paper_runner_suite.run_unified_paper_ablation.run_checked_with_peak_rss",
+        record_relaunch,
+    )
     with pytest.raises(RuntimeError, match="stale backend relaunch"):
         materialize_isolated_comparison_report(
             SMOKE_PROTOCOL,
@@ -1488,6 +1497,7 @@ def test_wandb_identity_requires_the_exact_run_id_file_and_directory(
         "comparison_report_sha256": "b" * 64,
         "config_sha256": "c" * 64,
         "run_file": artifact,
+        "remote_identity": {"finish_called": True},
     }
     validate_wandb_identity(
         identity,
@@ -1682,13 +1692,22 @@ def test_submission_source_gate_records_both_repository_revisions() -> None:
         )
 
 
-def test_local_mps_execution_is_fail_closed_and_full_protocol_needs_second_acknowledgement() -> None:
+def test_local_mps_execution_uses_streamed_estimate_and_keeps_high_risk_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _, smoke = _protocol()
     full_raw = load_config_file(DEFAULT_PROTOCOL)
     full = resolve_paper_training_protocol(full_raw)
 
+    monkeypatch.setattr(
+        "research_experiments.paper_runner_suite.run_unified_paper_ablation.host_physical_memory_bytes",
+        lambda: 64 * 1024**3,
+    )
     assert local_mps_safety_estimate(smoke)["high_risk"] is False
-    assert local_mps_safety_estimate(full)["high_risk"] is True
+    full_estimate = local_mps_safety_estimate(full)
+    assert full_estimate["high_risk"] is False
+    assert full_estimate["target_residency"] == "bounded_video_seek_lru"
+    assert full_estimate["legacy_eager_reference"]["controls_execution"] is False
     with pytest.raises(RuntimeError, match="allow-local-mps-execution"):
         require_execution_safety_acknowledgement(
             smoke,
@@ -1696,6 +1715,12 @@ def test_local_mps_execution_is_fail_closed_and_full_protocol_needs_second_ackno
             allow_local_mps_execution=False,
             allow_high_risk_local_mps=False,
         )
+
+    monkeypatch.setattr(
+        "research_experiments.paper_runner_suite.run_unified_paper_ablation.host_physical_memory_bytes",
+        lambda: 8 * 1024**3,
+    )
+    assert local_mps_safety_estimate(full)["high_risk"] is True
     with pytest.raises(RuntimeError, match="allow-high-risk-local-mps"):
         require_execution_safety_acknowledgement(
             full,
@@ -1710,6 +1735,35 @@ def test_local_mps_execution_is_fail_closed_and_full_protocol_needs_second_ackno
         allow_high_risk_local_mps=False,
     )
     assert estimate["estimated_peak_bytes"] > estimate["safety_limit_bytes"]
+
+
+def test_process_rss_probe_and_receipt_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = {
+        "schema_version": 1,
+        "measurement": "direct_child_process_rss_polled_via_ps",
+        "poll_interval_s": 0.25,
+        "peak_rss_bytes": 1024,
+        "rss_limit_bytes": 4096,
+        "guard_tripped": False,
+    }
+    validate_process_memory(receipt, expected_rss_limit_bytes=4096)
+    for drift in (
+        {"peak_rss_bytes": 0},
+        {"guard_tripped": True},
+        {"measurement": "unmeasured"},
+        {"rss_limit_bytes": 512},
+    ):
+        with pytest.raises(ValueError, match="process-memory|RSS limit"):
+            validate_process_memory({**receipt, **drift})
+
+    def denied(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, ["ps"])
+
+    monkeypatch.setattr(subprocess, "check_output", denied)
+    with pytest.raises(RuntimeError, match="could not read paper child RSS"):
+        _process_rss_bytes(12345)
 
 
 def test_checked_in_full_protocol_manifest_is_all_300_frames() -> None:

@@ -270,6 +270,7 @@ def _summary(protocol=None, *, seed: int = 17) -> dict:
         "manifest_validation": manifest_validation,
         "execution_safety": {
             "high_risk": False,
+            "safety_limit_bytes": 4096,
             "live_resources": {},
         },
         "protocol": {
@@ -581,6 +582,12 @@ def _write_execution_identities(
             "source_digest": source_digest,
             "comparison_report_sha256": merged_report_sha256,
             "config_sha256": "d" * 64,
+            "remote_identity": {
+                "entity": None,
+                "project": None,
+                "url": None,
+                "finish_called": True,
+            },
             "run_file": run_file(lane_name, run_id),
         }
         wandb_identity_path = lane_dir / "wandb_identity.json"
@@ -603,6 +610,16 @@ def _write_execution_identities(
                     ]["dataset_input_identity"],
                     "protocol_sha256": protocol_sha256,
                     "command": comparison_commands[lane_name],
+                    "process_memory": {
+                        "schema_version": 1,
+                        "measurement": (
+                            "direct_child_process_rss_polled_via_ps"
+                        ),
+                        "poll_interval_s": 0.25,
+                        "peak_rss_bytes": 1024,
+                        "rss_limit_bytes": 4096,
+                        "guard_tripped": False,
+                    },
                     "comparison_report_sha256": hashlib.sha256(
                         report_path.read_bytes()
                     ).hexdigest(),
@@ -733,6 +750,12 @@ def _write_execution_identities(
             artifact_paths["resolved_config"].read_bytes()
         ).hexdigest(),
         "finalized": True,
+        "remote_identity": {
+            "entity": None,
+            "project": None,
+            "url": None,
+            "finish_called": True,
+        },
         "run_file": run_file("worldfoam", worldfoam_run_id),
     }
     worldfoam_wandb_path = worldfoam_dir / "wandb_identity.json"
@@ -768,6 +791,14 @@ def _write_execution_identities(
                 "initializer_identity": summary[
                     "worldfoam_initializer_identity"
                 ],
+                "process_memory": {
+                    "schema_version": 1,
+                    "measurement": "direct_child_process_rss_polled_via_ps",
+                    "poll_interval_s": 0.25,
+                    "peak_rss_bytes": 1024,
+                    "rss_limit_bytes": 4096,
+                    "guard_tripped": False,
+                },
                 "resolved_config_binding": resolved_config_binding,
                 "artifacts": {
                     name: identity(path, f"worldfoam:{name}")

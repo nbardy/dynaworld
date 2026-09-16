@@ -42,6 +42,21 @@ export const TRAINER_BACKENDS = Object.freeze({
 		sampledControls: true,
 		defaultSchedule: Object.freeze({ burstSteps: 4, metricEvery: 256, maxQueuedSteps: 32 }),
 	}),
+	"world-tubes": Object.freeze({
+		id: "world-tubes",
+		label: "World Tubes (affine STAR)",
+		parameterSchema: "world-tube-affine-star-24f/v2",
+		representation: "SPD(4) world → compiled affine UVT traces",
+		objective: "uniform multicamera pixel/time RGB MSE",
+		trainingUnit: "sampled rays",
+		maxAspectRatio: 4,
+		sampledControls: true,
+		fixedModelMode: 2,
+		maxSplats: 4096,
+		temporalPaging: true,
+		resolutionContinuation: true,
+		defaultSchedule: Object.freeze({ burstSteps: 4, metricEvery: 256, maxQueuedSteps: 32 }),
+	}),
 });
 
 export function resolveTrainerBackend(id = DEFAULT_TRAINER_BACKEND) {
@@ -62,6 +77,10 @@ export async function loadTrainerBackend(id = DEFAULT_TRAINER_BACKEND) {
 	if (descriptor.id === "tiled3d") {
 		const module = await import("./trainerWebGpu3dTiled.js?v=20260826-dense-scenes-1");
 		return { descriptor, Trainer: module.DynamicSplatWebGpu3dTiledTrainer };
+	}
+	if (descriptor.id === "world-tubes") {
+		const module = await import("./trainerWebGpuWorldTubes.js?v=20260906-affine-star-2");
+		return { descriptor, Trainer: module.WorldTubesWebGpuTrainer };
 	}
 	const module = await import("./trainerWebGpu3d.js?v=20260821-stablegs-ablation-1");
 	return {

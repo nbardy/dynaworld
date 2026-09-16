@@ -4,7 +4,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import torch
 from device_memory import DeviceMemorySampler
@@ -35,7 +35,9 @@ from powerfoam_direct import (
     camera_facing_quaternion,
     estimate_knn_radii,
     initialize_full_powerfoam_from_video,
+    initialize_full_powerfoam_from_video_chunks,
     initialize_powerfoam_from_video,
+    initialize_powerfoam_from_video_chunks,
     inverse_softplus,
     logit_clamped,
 )
@@ -265,8 +267,17 @@ class MetalPowerFoamVideo(nn.Module):
         image_init_jitter: float,
         raster_config: FoamRasterConfig,
         use_raytrace: bool = False,
+        init_frame_chunks: Iterable[torch.Tensor] | None = None,
     ) -> None:
         super().__init__()
+        if sum(
+            value is not None
+            for value in (init_frames, init_frame_chunks, init_points)
+        ) > 1:
+            raise ValueError(
+                "provide only one of init_frames, init_frame_chunks, or "
+                "init_points"
+            )
         generator = torch.Generator(device="cpu").manual_seed(int(seed))
         texel_sites_init = None
         texel_colors_init = None
@@ -294,22 +305,39 @@ class MetalPowerFoamVideo(nn.Module):
             init_colors = init_colors.to(dtype=init_points.dtype).clamp(0.0, 1.0)
             init_radii = estimate_knn_radii(init_points, radius_scale=radius_scale, radius_min=radius_min)
             quaternions_init = camera_facing_quaternion(frame_count, cell_count)
-        elif init_frames is not None and str(feature_mode) in texel_surface_modes:
-            init = initialize_full_powerfoam_from_video(
-                init_frames,
-                cell_count=cell_count,
-                xy_extent=xy_extent,
-                z_min=z_min,
-                z_max=z_max,
-                fov_degrees=fov_degrees,
-                image_init_depth=image_init_depth,
-                radius_min=radius_min,
-                radius_scale=radius_scale,
-                num_texel_sites=int(num_texel_sites),
-                sv_dof=int(sv_dof) if str(feature_mode) in sv_texel_surface_modes else 1,
-                sv_axis_init=float(sv_axis_init),
-                image_init_jitter=image_init_jitter,
-                generator=generator,
+        elif (
+            init_frames is not None or init_frame_chunks is not None
+        ) and str(feature_mode) in texel_surface_modes:
+            init_kwargs = {
+                "cell_count": cell_count,
+                "xy_extent": xy_extent,
+                "z_min": z_min,
+                "z_max": z_max,
+                "fov_degrees": fov_degrees,
+                "image_init_depth": image_init_depth,
+                "radius_min": radius_min,
+                "radius_scale": radius_scale,
+                "num_texel_sites": int(num_texel_sites),
+                "sv_dof": (
+                    int(sv_dof)
+                    if str(feature_mode) in sv_texel_surface_modes
+                    else 1
+                ),
+                "sv_axis_init": float(sv_axis_init),
+                "image_init_jitter": image_init_jitter,
+                "generator": generator,
+            }
+            init = (
+                initialize_full_powerfoam_from_video_chunks(
+                    init_frame_chunks,
+                    frame_count=frame_count,
+                    **init_kwargs,
+                )
+                if init_frame_chunks is not None
+                else initialize_full_powerfoam_from_video(
+                    init_frames,
+                    **init_kwargs,
+                )
             )
             init_points = init.points
             init_radii = init.radii
@@ -320,17 +348,28 @@ class MetalPowerFoamVideo(nn.Module):
             texel_colors_init = (init.texel_sv_rgb[..., 0, :] + 0.5).clamp(0.0, 1.0)
             texel_heights_init = init.texel_height
             init_colors = texel_colors_init.mean(dim=2)
-        elif init_frames is not None:
-            init_points, init_colors = initialize_powerfoam_from_video(
-                init_frames,
-                cell_count=cell_count,
-                xy_extent=xy_extent,
-                z_min=z_min,
-                z_max=z_max,
-                fov_degrees=fov_degrees,
-                image_init_depth=image_init_depth,
-                image_init_jitter=image_init_jitter,
-                generator=generator,
+        elif init_frames is not None or init_frame_chunks is not None:
+            init_kwargs = {
+                "cell_count": cell_count,
+                "xy_extent": xy_extent,
+                "z_min": z_min,
+                "z_max": z_max,
+                "fov_degrees": fov_degrees,
+                "image_init_depth": image_init_depth,
+                "image_init_jitter": image_init_jitter,
+                "generator": generator,
+            }
+            init_points, init_colors = (
+                initialize_powerfoam_from_video_chunks(
+                    init_frame_chunks,
+                    frame_count=frame_count,
+                    **init_kwargs,
+                )
+                if init_frame_chunks is not None
+                else initialize_powerfoam_from_video(
+                    init_frames,
+                    **init_kwargs,
+                )
             )
             init_radii = estimate_knn_radii(init_points, radius_scale=radius_scale, radius_min=radius_min)
         else:
@@ -1452,6 +1491,86 @@ def run_training(config: dict[str, Any]) -> None:
                 seed=int(cfg["train"]["seed"]),
             )
 
+        init_frame_chunks = None
+        init_frame_provider = training_data.get("init_frame_provider")
+        if init_frame_provider is not None:
+            if training_data.get("init_frames") is not None or point_cloud_init is not None:
+                raise ValueError(
+                    "bounded video initialization cannot be combined with a "
+                    "resident video or point-cloud initializer"
+                )
+            init_frame_view = training_data.get("init_frame_view")
+            if not isinstance(init_frame_view, int):
+                raise ValueError(
+                    "bounded video initialization requires a condition view"
+                )
+            init_chunk_frames = int(cfg["model"]["init_video_chunk_frames"])
+
+            def iter_init_frame_chunks():
+                for start in range(
+                    0,
+                    int(training_data["frame_count"]),
+                    init_chunk_frames,
+                ):
+                    stop = min(
+                        start + init_chunk_frames,
+                        int(training_data["frame_count"]),
+                    )
+                    yield init_frame_provider.select_view_frames(
+                        (init_frame_view,) * (stop - start),
+                        tuple(range(start, stop)),
+                        device=torch.device("cpu"),
+                    )
+
+            init_frame_chunks = iter_init_frame_chunks()
+            residency = training_data.get("init_frames_residency")
+            if isinstance(residency, dict):
+                selected_chunk_output_bytes = (
+                    init_chunk_frames
+                    * 3
+                    * int(init_frame_provider.height)
+                    * int(init_frame_provider.width)
+                    * 4
+                )
+                # The seek source can retain decoded view batches while the
+                # ordered output stack is formed.  Charge four output-sized
+                # tensors as a conservative source-visible decode/staging
+                # bound; process RSS is measured independently by the runner.
+                source_visible_decode_bytes = 4 * selected_chunk_output_bytes
+                initialization_floats_per_frame_cell = 8 + int(
+                    cfg["model"]["num_texel_sites"]
+                ) * (3 + 6 * int(cfg["model"]["sv_dof"]))
+                initializer_destination_bytes = (
+                    int(training_data["frame_count"])
+                    * initial_cell_count
+                    * initialization_floats_per_frame_cell
+                    * 4
+                )
+                initializer_chunk_result_bytes = (
+                    init_chunk_frames
+                    * initial_cell_count
+                    * initialization_floats_per_frame_cell
+                    * 4
+                )
+                residency.update(
+                    {
+                        "chunk_frames": init_chunk_frames,
+                        "selected_chunk_output_bytes": selected_chunk_output_bytes,
+                        "peak_source_visible_decode_bytes_conservative_bound": (
+                            source_visible_decode_bytes
+                        ),
+                        "initializer_destination_bytes": initializer_destination_bytes,
+                        "initializer_chunk_result_bytes": initializer_chunk_result_bytes,
+                        "accounted_peak_logical_bytes": (
+                            source_visible_decode_bytes
+                            + initializer_destination_bytes
+                            + initializer_chunk_result_bytes
+                        ),
+                        "process_rss_bound": False,
+                        "full_condition_video_materialization": False,
+                    }
+                )
+
         model = MetalPowerFoamVideo(
             frame_count=int(training_data["frame_count"]),
             cell_count=initial_cell_count,
@@ -1480,6 +1599,11 @@ def run_training(config: dict[str, Any]) -> None:
             color_init_mode=str(cfg["model"]["color_init_mode"]),
             seed=int(cfg["train"]["seed"]),
             init_frames=training_data["init_frames"] if bool(cfg["model"]["init_from_video"]) else None,
+            init_frame_chunks=(
+                init_frame_chunks
+                if bool(cfg["model"]["init_from_video"])
+                else None
+            ),
             init_points=None if point_cloud_init is None else point_cloud_init.points,
             init_colors=None if point_cloud_init is None else point_cloud_init.colors,
             image_init_depth=None if cfg["model"]["image_init_depth"] is None else float(cfg["model"]["image_init_depth"]),
@@ -1933,6 +2057,24 @@ def run_training(config: dict[str, Any]) -> None:
                     "mode": str(cfg["logging"]["wandb_mode"]),
                     "run_id": str(wandb_run.id),
                     "run_dir": str(wandb_run.dir),
+                    "remote_identity": {
+                        "entity": (
+                            None
+                            if wandb_run.entity is None
+                            else str(wandb_run.entity)
+                        ),
+                        "project": (
+                            None
+                            if wandb_run.project is None
+                            else str(wandb_run.project)
+                        ),
+                        "url": (
+                            None
+                            if wandb_run.url is None
+                            else str(wandb_run.url)
+                        ),
+                        "finish_called": False,
+                    },
                     "finalized": False,
                 },
             )

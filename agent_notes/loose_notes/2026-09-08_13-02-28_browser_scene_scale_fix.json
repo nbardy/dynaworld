@@ -1,0 +1,93 @@
+{
+  "kind": "initialization-source-unit-diagnostic",
+  "width": 96,
+  "height": 72,
+  "splats": 4096,
+  "assumptions": "Anchor camera; CPU projected conics; alpha=0.1; no temporal gate or Mip opacity compensation. Alpha is order independent. No RGB quality or GPU timing claim.",
+  "rows": [
+    {
+      "scene": "deep3d_mask_eval_jump_train9_holdout1",
+      "sourceUnitMultiplier": 1,
+      "geometryScale": 0.004713753614840568,
+      "trainingSceneScale": 0.02391073651459912,
+      "maxNormalizedCenterError": 0,
+      "allAxesAtCap": 84,
+      "medianAspect": 2.849478029392851,
+      "medianProjectedSigmaPixels": 0.7492744285841233,
+      "meanComposedAlpha": 0.19019110606872372,
+      "pixelFractionAlphaAboveHalf": 0.1792534722222222,
+      "tiledMaxScale": 0.02391073651459912,
+      "tiledMaxVelocityComponent": 0.04782147302919824
+    },
+    {
+      "scene": "deep3d_mask_eval_jump_train9_holdout1",
+      "sourceUnitMultiplier": 0.1,
+      "geometryScale": 0.04713753614840569,
+      "trainingSceneScale": 0.02391073551086713,
+      "maxNormalizedCenterError": 1.1920928955078125e-7,
+      "allAxesAtCap": 84,
+      "medianAspect": 2.849478029392851,
+      "medianProjectedSigmaPixels": 0.749274415750011,
+      "meanComposedAlpha": 0.19019111276480286,
+      "pixelFractionAlphaAboveHalf": 0.1792534722222222,
+      "tiledMaxScale": 0.02391073551086713,
+      "tiledMaxVelocityComponent": 0.04782147102173426
+    },
+    {
+      "scene": "deep3d_mask_eval_jump_train9_holdout1",
+      "sourceUnitMultiplier": 10,
+      "geometryScale": 0.0004713753411415225,
+      "trainingSceneScale": 0.02391073562641474,
+      "maxNormalizedCenterError": 1.1920928955078125e-7,
+      "allAxesAtCap": 84,
+      "medianAspect": 2.849476670656169,
+      "medianProjectedSigmaPixels": 0.7492743205774925,
+      "meanComposedAlpha": 0.19019111279294934,
+      "pixelFractionAlphaAboveHalf": 0.1792534722222222,
+      "tiledMaxScale": 0.02391073562641474,
+      "tiledMaxVelocityComponent": 0.04782147125282948
+    },
+    {
+      "scene": "coffee_martini_train17_holdout1",
+      "sourceUnitMultiplier": 1,
+      "geometryScale": 0.07098384194013442,
+      "trainingSceneScale": 0.4670152052305759,
+      "maxNormalizedCenterError": 0,
+      "allAxesAtCap": 4,
+      "medianAspect": 1.1196745503651353,
+      "medianProjectedSigmaPixels": 0.9329960299060627,
+      "meanComposedAlpha": 0.35170929986781113,
+      "pixelFractionAlphaAboveHalf": 0.30049189814814814,
+      "tiledMaxScale": 0.4670152052305759,
+      "tiledMaxVelocityComponent": 0.9340304104611518
+    },
+    {
+      "scene": "coffee_martini_train17_holdout1",
+      "sourceUnitMultiplier": 0.1,
+      "geometryScale": 0.7098384434277667,
+      "trainingSceneScale": 0.46701520915584777,
+      "maxNormalizedCenterError": 9.5367431640625e-7,
+      "allAxesAtCap": 4,
+      "medianAspect": 1.119672948658989,
+      "medianProjectedSigmaPixels": 0.9329960301303777,
+      "meanComposedAlpha": 0.3517092959869958,
+      "pixelFractionAlphaAboveHalf": 0.30049189814814814,
+      "tiledMaxScale": 0.46701520915584777,
+      "tiledMaxVelocityComponent": 0.9340304183116955
+    },
+    {
+      "scene": "coffee_martini_train17_holdout1",
+      "sourceUnitMultiplier": 10,
+      "geometryScale": 0.0070983840018020725,
+      "trainingSceneScale": 0.4670151709904973,
+      "maxNormalizedCenterError": 0.0000019073486328125,
+      "allAxesAtCap": 4,
+      "medianAspect": 1.1196750842676932,
+      "medianProjectedSigmaPixels": 0.9329960299060623,
+      "meanComposedAlpha": 0.3517093041259259,
+      "pixelFractionAlphaAboveHalf": 0.30049189814814814,
+      "tiledMaxScale": 0.4670151709904973,
+      "tiledMaxVelocityComponent": 0.9340303419809945
+    }
+  ]
+}

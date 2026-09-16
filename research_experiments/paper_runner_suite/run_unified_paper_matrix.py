@@ -38,6 +38,9 @@ DEFAULT_OUT_DIR = (
     / "2026-07-28_world_tubes_submission_matrix_schema2"
 )
 LANE_ORDER = ("world_tubes", "worldfoam", "dynamic_3dgs")
+NON_PUBLICATION_WANDB_ROLES = frozenset(
+    {"mechanical_smoke", "deterministic_correctness_timing"}
+)
 COMPARISON_MEDIA_PREFIX = {
     "world_tubes": "star_uvt",
     "dynamic_3dgs": "free_dynamic_splats",
@@ -238,6 +241,37 @@ class MatrixRun:
             "world_tubes_backward_policy": self.backward_policy,
             "worldfoam_initializer": self.worldfoam_initializer,
         }
+
+    @property
+    def requires_online_wandb(self) -> bool:
+        return self.role not in NON_PUBLICATION_WANDB_ROLES
+
+
+def validate_matrix_wandb_identity(
+    run: MatrixRun,
+    identity: Any,
+    *,
+    lane_name: str,
+) -> None:
+    if not isinstance(identity, Mapping):
+        raise ValueError(
+            f"existing paper row has invalid {lane_name} W&B provenance: "
+            f"{run.key}"
+        )
+    mode = identity.get("mode")
+    if mode not in {"online", "offline"} or not str(
+        identity.get("run_id", "")
+    ).strip():
+        raise ValueError(
+            f"existing paper row has invalid {lane_name} W&B provenance: "
+            f"{run.key}"
+        )
+    if run.requires_online_wandb and mode != "online":
+        raise ValueError(
+            f"publication row requires online W&B provenance for {lane_name}: "
+            f"{run.key}"
+        )
+    single.validate_wandb_remote_identity(identity, mode=str(mode))
 
 
 def expand_matrix(raw: Mapping[str, Any]) -> list[MatrixRun]:
@@ -973,21 +1007,31 @@ def validate_existing_summary(
                 f"existing paper row {lane_name} execution identity drifted: "
                 f"{run.key}"
             )
+        device = str(comparison_meta["device"])
+        execution_safety = summary.get("execution_safety")
+        if not isinstance(execution_safety, Mapping):
+            raise ValueError(
+                f"existing paper row execution safety is missing: {run.key}"
+            )
+        expected_rss_limit_bytes = (
+            int(execution_safety.get("safety_limit_bytes", 0))
+            if device.lower() == "mps"
+            else None
+        )
+        single.validate_process_memory(
+            identity.get("process_memory"),
+            expected_rss_limit_bytes=expected_rss_limit_bytes,
+        )
         summary_lane_wandb = summary.get("lanes", {}).get(
             lane_name,
             {},
         ).get("wandb")
-        if (
-            not isinstance(summary_lane_wandb, Mapping)
-            or summary_lane_wandb.get("mode") not in {"online", "offline"}
-            or not str(summary_lane_wandb.get("run_id", "")).strip()
-        ):
-            raise ValueError(
-                f"existing paper row has invalid {lane_name} W&B provenance: "
-                f"{run.key}"
-            )
+        validate_matrix_wandb_identity(
+            run,
+            summary_lane_wandb,
+            lane_name=lane_name,
+        )
         python = _identity_python(lane_name, identity, run=run)
-        device = str(comparison_meta["device"])
         allow_local_mps_execution = device.lower() == "mps"
         if lane_name in COMPARISON_MEDIA_PREFIX:
             expected_command = single.comparison_command(
@@ -1236,15 +1280,7 @@ def validate_existing_summary(
                 f"({', '.join(drifted)}): {run.key}"
             )
         wandb = lane.get("wandb")
-        if (
-            not isinstance(wandb, Mapping)
-            or wandb.get("mode") not in {"online", "offline"}
-            or not str(wandb.get("run_id", "")).strip()
-        ):
-            raise ValueError(
-                f"existing paper row has invalid {lane_name} W&B provenance: "
-                f"{run.key}"
-            )
+        validate_matrix_wandb_identity(run, wandb, lane_name=lane_name)
         wandb_identity_path = (
             run_dir
             / (
@@ -1480,6 +1516,9 @@ def matrix_preflight(
         wandb_mode,
         check_connectivity=check_wandb_connectivity,
     )
+    publication_requires_online = any(
+        run.requires_online_wandb for run in runs
+    )
     retained_output_budget = matrix_retained_output_budget(runs)
     try:
         output_disk_free_bytes = _disk_free_bytes(out_dir)
@@ -1504,6 +1543,9 @@ def matrix_preflight(
         "supported_device": device.lower() == "mps",
         "lpips_alex_assets_exact": lpips_assets["status"] == "pass",
         "wandb_local_readiness": wandb_readiness["status"] == "pass",
+        "publication_wandb_mode": (
+            not publication_requires_online or wandb_mode == "online"
+        ),
         "retained_output_disk_budget": (
             output_disk_free_bytes
             >= int(retained_output_budget["required_free_bytes"])
@@ -1520,6 +1562,7 @@ def matrix_preflight(
         "high_risk_protocols": high_risk_protocols,
         "lpips_alex_assets": lpips_assets,
         "wandb_readiness": wandb_readiness,
+        "publication_requires_online_wandb": publication_requires_online,
         "retained_output_budget": retained_output_budget,
         "output_root": single.display_path(out_dir),
         "output_disk_free_bytes": output_disk_free_bytes,
@@ -1649,6 +1692,14 @@ def main() -> None:
         selected_runs = select_matrix_runs(runs, args.run_key)
     except ValueError as error:
         parser.error(str(error))
+    if (
+        args.wandb_mode != "online"
+        and any(run.requires_online_wandb for run in selected_runs)
+    ):
+        parser.error(
+            "publication matrix rows require --wandb-mode online; offline is "
+            "reserved for mechanical_smoke and deterministic_correctness_timing"
+        )
     try:
         out_dir = resolve_matrix_output_dir(raw_matrix, args.out_dir)
     except ValueError as error:
@@ -1716,6 +1767,20 @@ def main() -> None:
             )
         )
         return
+
+    execution_preflight = matrix_preflight(
+        selected_runs,
+        device=args.device,
+        wandb_mode=args.wandb_mode,
+        check_wandb_connectivity=args.wandb_mode == "online",
+        out_dir=out_dir,
+    )
+    single.write_json(out_dir / "execution_preflight.json", execution_preflight)
+    if execution_preflight["status"] != "pass":
+        raise RuntimeError(
+            "paper matrix execution preflight rejected the launch; inspect "
+            f"{out_dir / 'execution_preflight.json'}"
+        )
 
     accepted_by_key: dict[str, dict[str, Any]] = {}
     if args.reuse_existing:

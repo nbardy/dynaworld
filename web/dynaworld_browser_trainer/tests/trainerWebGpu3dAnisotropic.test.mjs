@@ -14,6 +14,7 @@ import {
 	projectAnisotropicGaussianCpu,
 	resolveActiveSplatCount,
 	resolveAnchorCameraIndex,
+	resolveTrainingSceneScale,
 	screenSpaceFilterVariance,
 	sortProjectedSplatsBackToFront,
 } from "../trainerWebGpu3d.js";
@@ -143,6 +144,35 @@ test("geometry normalization follows the declared seed-coordinate anchor", () =>
 	assertClose(normalized.geometryScale, 0.05);
 	assertClose(normalized.seedPoints[2], 0.5);
 	assertClose(normalized.cameras[0].worldToCamera[11], 4.5);
+});
+
+test("source units cannot change initialized shapes or training scene bounds", () => {
+	const makeDataset = (unit) => {
+		const points = [];
+		for (let y = -1; y <= 1; y += 1) for (let x = -1; x <= 1; x += 1) {
+			points.push(x * 8 * unit, y * 3 * unit, (200 + x * y) * unit, 0.4, 0.5, 0.6);
+		}
+		return normalizeDatasetGeometry({
+			datasetContract: { anchor_camera: "anchor" },
+			cameras: [0, 6].map((translation, index) => ({
+				name: index ? "other" : "anchor", role: "train", intrinsics: [0.52, 0.92, 0.5, 0.5],
+				worldToCamera: Float32Array.from([1, 0, 0, translation * unit,
+					0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+			})), seedPointCount: 9, seedPoints: Float32Array.from(points),
+		});
+	};
+	const reference = makeDataset(1);
+	const expected = makeInitialSplats(reference, 9);
+	for (const unit of [0.001, 0.1, 10, 1000]) {
+		const dataset = makeDataset(unit);
+		assertClose(dataset.trainingSceneScale, reference.trainingSceneScale, 1e-7);
+		const actual = makeInitialSplats(dataset, 9);
+		for (let i = 0; i < actual.length; i += 1) assertClose(actual[i], expected[i], 2e-5);
+	}
+	const heldout = { ...reference.cameras[0], name: "heldout", role: "heldout",
+		worldToCamera: Float32Array.from([1, 0, 0, 10000, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) };
+	assertClose(resolveTrainingSceneScale({ ...reference, cameras: [...reference.cameras, heldout] }),
+		reference.trainingSceneScale, 1e-12);
 });
 
 test("reserved growth capacity is excluded from active render and validation counts", () => {

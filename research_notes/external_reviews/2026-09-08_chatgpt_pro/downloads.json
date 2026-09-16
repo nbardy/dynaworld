@@ -1,0 +1,18 @@
+[
+  {
+    "branch": "open",
+    "chat": "https://chatgpt.com/c/6a9fa123-3e48-83ee-af37-bc2e4ccbc85f",
+    "archive": "research_notes/external_reviews/2026-09-08_chatgpt_pro/open/Dynamic_Scene_Research_Source_and_Checks.zip",
+    "pdf": "research_notes/external_reviews/2026-09-08_chatgpt_pro/open/Transported_Geometry_Reusable_Rendering_Research.pdf",
+    "archive_sha256": "1463f9ae46b39d0cd4df09fb6bdf29167d8c25d3ff1491984116a70aa780a069",
+    "pdf_sha256": "523c47be0c6d837148018655dac669e37b1291d49561670b8fa46eadbb966f7c"
+  },
+  {
+    "branch": "gauge",
+    "chat": "https://chatgpt.com/c/6a9fa170-74d8-83ee-887e-aeba66cd8945",
+    "archive": "research_notes/external_reviews/2026-09-08_chatgpt_pro/gauge/camera_world_research.zip",
+    "pdf": "research_notes/external_reviews/2026-09-08_chatgpt_pro/gauge/camera_world_manuscript.pdf",
+    "archive_sha256": "dc402c5c03111d677061a893bce3474c1ff9afecf753e1dda1849d2b6f3d9d41",
+    "pdf_sha256": "8a6b8e5cc229a6de9058353f92a4b3e68ec38b1f69ddf07819101c888145b8a7"
+  }
+]

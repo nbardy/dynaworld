@@ -110,6 +110,7 @@
 							<option value="tiled3d-fast">Fast tiled full-frame</option>
 							<option value="tiled3d">Direct tiled reference</option>
 							<option value="sampled3d">Sampled rays (control)</option>
+							<option value="world-tubes">World Tubes (affine STAR)</option>
 						</select>
 					</label>
 
@@ -132,7 +133,7 @@
 
 					<label class="field">
 						<span>Motion Model</span>
-						<select id="modeSelect" title="Both choices use trajectory-gated dynamic 3DGS; neither is World Tubes, STAR, native 4DGS, or SpacetimeGS">
+						<select id="modeSelect" title="Trajectory model for the 3DGS backends; World Tubes fixes its own affine SPD(4) chart">
 							<option value="world_tubes">Harmonic trajectory 3DGS</option>
 							<option value="dynamic_splats">Linear trajectory 3DGS</option>
 						</select>
@@ -384,7 +385,7 @@
 						<strong id="persistentSplatValue">--</strong>
 					</div>
 					<div>
-						<span>Static Mix p50</span>
+						<span id="staticMixP50Label">Static Mix p50</span>
 						<strong id="staticMixP50Value">--</strong>
 					</div>
 					<div>
@@ -501,6 +502,6 @@
 				</section>
 			</main>
 		</div>
-		<script type="module" src="./app.js?v=20260828-deep3d-jump-2"></script>
+		<script type="module" src="./app.js?v=20260906-affine-star-2"></script>
 	</body>
 </html>

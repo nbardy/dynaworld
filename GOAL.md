@@ -230,6 +230,36 @@ Keep practical diagnostic results separate from accepted paper counts. Commit
 only changes whose ownership and scope are established; preserve unrelated WIP.
 This campaign is not complete merely because the first control reproduces.
 
+## Current scope — 2026-09-11
+
+The active user request is to clear GPU contention, run the ablations locally,
+and resize the baseline to a roughly 8-GB-RAM / 16-GB-disk Mac playground.
+This supersedes the historical overnight execution scope below; no new token
+budget was specified for this request. One lead owns the edits, with no
+delegation and at most one accelerator process at a time.
+
+Observable acceptance is completed real Metal optimizer runs for World Tubes,
+dynamic 3DGS, and WorldFoam on one matched small protocol, retained metrics,
+memory/disk receipts, and a documented reproduction command. The profile stops
+on its 3-GiB process-tree RSS cap, 2-GiB MPS allocator cap, 256-MiB new-swap
+limit, low host headroom, or 2-GiB output cap; installed dependencies/data plus
+reserved outputs must fit the 16-GiB disk budget. Each lane has at most 80
+updates and a 600-second training budget. Do not expand the run into new math
+or a publication sweep to compensate for a failed correctness check.
+
+All three 80-step/32-frame lanes completed on September 11; measurements and
+the command are in `research_notes/gauged_uvt_trace_atlas/paper/REPRODUCE.md`'s
+small-playground section. These are dirty
+source diagnostics. The separate frozen F=4 smoke failed image/VJP/fallback
+acceptance. Full paper rows, the sublinear speed claim, and physical 8-GiB-host
+validation remain outside this completed playground execution.
+
+## Historical overnight paper contract
+
+The remainder records the earlier paper campaign, including its earlier token
+budget. Its scientific acceptance gates remain applicable to publication
+claims, rather than to the small local diagnostic profile.
+
 ## Objective
 
 Advance **World Tubes first** and **WorldFoam second** toward conference-level

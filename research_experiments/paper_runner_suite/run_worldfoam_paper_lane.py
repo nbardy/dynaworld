@@ -13,6 +13,7 @@ for path in (ROOT, TRAIN_ROOT):
         sys.path.insert(0, str(path))
 
 from config_utils import load_config_file, serialize_config_value
+from paper_local_resources import configure_local_mps
 from paper_training_protocol import resolve_paper_training_protocol
 from powerfoam_metal_trainer import run_training
 from research_experiments.paper_runner_suite.run_unified_paper_ablation import (
@@ -60,6 +61,7 @@ def main() -> None:
         allow_local_mps_execution=args.allow_local_mps_execution,
         allow_high_risk_local_mps=args.allow_high_risk_local_mps,
     )
+    configure_local_mps(raw_protocol, args.device)
     run_training(cfg)
 
 

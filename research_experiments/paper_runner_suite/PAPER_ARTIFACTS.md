@@ -4,7 +4,8 @@
 generator. The tables and SVG files emitted directly by training/matrix
 runners are diagnostic intermediates; do not copy them into the manuscript.
 
-The generator is CPU-only and does not import Torch or a renderer. It reads:
+The generator launches no renderer or training workload. Its retained-artifact
+validators may import Torch to reopen checkpoints on CPU. It reads:
 
 1. the expected public matrix, its completed canonical `matrix_summary.json`,
    and each schema-v2 `run_summary.json`;
@@ -98,11 +99,13 @@ paper-freeze tree:
   --verify-local
 ```
 
-The manuscript-consumable files are `theorem_table.tex`,
+The manuscript-consumable table fragments are `theorem_table.tex`,
 `public_context_table.tex`, `frozen_scaling_table.tex`,
-`variable_camera_table.tex`, and the four corresponding SVG figures.
+`variable_camera_table.tex`, and `moving_camera_density_table.tex`. The bundle
+also contains five deterministic evidence SVGs, including the bounded-yaw
+moving-camera scaling plot.
 `artifact_manifest.json` binds every generated file by byte count and SHA-256.
-The four TeX tables are wired into `WORLD_TUBES_PAPER_DRAFT.md` with
+The five TeX tables are wired into `WORLD_TUBES_PAPER_DRAFT.md` with
 `\input{...}` and therefore remain live when Pandoc regenerates the working
 TeX. Schema-v1 public numbers and their historical plot are forbidden from
 both manuscript sources.

@@ -1555,7 +1555,13 @@ def load_powerfoam_training_data(cfg: dict[str, Any], device: torch.device) -> d
     image_size = normalize_image_size(cfg["render"]["image_size"])
     frame_source = str(cfg["data"]["frame_source"])
     if frame_source == "multicam_val":
-        stream_rays = bool(cfg.get("paper_protocol", {}).get("enabled", False))
+        # Only the Metal paper trainer consumes the provider interfaces below.
+        # Direct/diagnostic consumers still require resident tensors and must
+        # never receive a deferred meta bundle they cannot materialize.
+        stream_rays = (
+            bool(cfg.get("paper_protocol", {}).get("enabled", False))
+            and str(cfg.get("arch", "powerfoam_metal")) == "powerfoam_metal"
+        )
         bundle = load_multicam_video_bundle(
             data_cfg=cfg["data"],
             camera_cfg=cfg["camera"],
@@ -1645,6 +1651,8 @@ def load_powerfoam_training_data(cfg: dict[str, Any], device: torch.device) -> d
                 )
 
         init_frames = None
+        init_frame_provider = None
+        init_frame_view = None
         needs_video_init = bool(cfg.get("model", {}).get("init_from_video", False)) and not bool(
             cfg.get("model", {}).get("init_point_cloud_path")
         )
@@ -1654,16 +1662,15 @@ def load_powerfoam_training_data(cfg: dict[str, Any], device: torch.device) -> d
                 and train_target_provider is not None
                 and not bool(train_target_provider.residency()["full_source_resident"])
             ):
-                condition_camera = (
-                    bundle.metadata.get("condition_camera") or bundle.train_camera_names[0]
-                    if bundle.metadata is not None
-                    else bundle.train_camera_names[0]
-                )
-                condition_view = bundle.train_camera_names.index(str(condition_camera))
-                init_frames = train_target_provider.select_view_frames(
-                    (condition_view,) * bundle.frame_count,
-                    tuple(range(bundle.frame_count)),
-                    device=torch.device("cpu"),
+                condition_camera = bundle.train_camera_names[0]
+                if bundle.metadata is not None:
+                    condition_camera = (
+                        bundle.metadata.get("condition_camera")
+                        or condition_camera
+                    )
+                init_frame_provider = train_target_provider
+                init_frame_view = bundle.train_camera_names.index(
+                    str(condition_camera)
                 )
             else:
                 init_frames = bundle.condition_sequence.frames.detach().to(device="cpu")
@@ -1734,17 +1741,34 @@ def load_powerfoam_training_data(cfg: dict[str, Any], device: torch.device) -> d
                         if bool(train_target_provider.residency()["full_source_resident"])
                         else (
                             "MP4 and complete frame-path targets decode only selected batches; "
-                            "video initialization may still materialize the condition view when explicitly requested"
+                            "video initialization consumes bounded condition-view chunks"
                         )
                     )
                 ),
             },
             "init_frames": init_frames,
+            "init_frame_provider": init_frame_provider,
+            "init_frame_view": init_frame_view,
             "init_frames_resident_bytes": (0 if init_frames is None else int(init_frames.untyped_storage().nbytes())),
             "init_frames_residency": {
-                "enabled": init_frames is not None,
+                "enabled": init_frames is not None or init_frame_provider is not None,
+                "mode": (
+                    "bounded_target_provider"
+                    if init_frame_provider is not None
+                    else (
+                        "resident_tensor"
+                        if init_frames is not None
+                        else "disabled"
+                    )
+                ),
                 "resident_bytes": (0 if init_frames is None else int(init_frames.untyped_storage().nbytes())),
                 "shares_train_target_storage": (init_shares_train_storage),
+                "condition_view": init_frame_view,
+                "logical_frame_count": (
+                    bundle.frame_count
+                    if init_frame_provider is not None
+                    else (0 if init_frames is None else int(init_frames.shape[0]))
+                ),
             },
             "frame_count": bundle.frame_count,
             "train_view_count": bundle.train_view_count,

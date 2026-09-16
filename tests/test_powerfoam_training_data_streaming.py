@@ -86,8 +86,11 @@ def test_paper_multicam_data_keeps_rays_lazy(monkeypatch) -> None:
     assert data["init_frames"] is None
     assert data["init_frames_residency"] == {
         "enabled": False,
+        "mode": "disabled",
         "resident_bytes": 0,
         "shares_train_target_storage": False,
+        "condition_view": None,
+        "logical_frame_count": 0,
     }
 
 

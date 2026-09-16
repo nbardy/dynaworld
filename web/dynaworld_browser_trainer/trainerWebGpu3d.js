@@ -10,6 +10,7 @@ import {
 	readFrameBankValue,
 	resolveFrameBank,
 } from "./dataset.js?v=20260803-fullfps-pixelgs-1";
+import { cameraRigRadius } from "./orbitCamera.js?v=20260813-camera-stress-1";
 
 export const SPLAT_FLOATS = 24;
 export const CONTINUATION_STATE_SCHEMA = "dynaworld-browser-trainer-continuation/v1";
@@ -62,7 +63,7 @@ export function assertContinuationStateCompatible(state, expected) {
 	}
 	const contract = state.contract;
 	if (!contract || typeof contract !== "object") throw new TypeError("Continuation state is missing its contract.");
-	if (contract.parameterSchema !== CONTINUATION_PARAMETER_SCHEMA || contract.splatFloats !== SPLAT_FLOATS) {
+	if (contract.parameterSchema !== expected.parameterSchema || contract.splatFloats !== SPLAT_FLOATS) {
 		throw new Error("Continuation parameter schema does not match this trainer.");
 	}
 	requireContinuationInteger(contract.splatCount, "Continuation splatCount", { minimum: 1 });
@@ -370,7 +371,9 @@ export function normalizeDatasetGeometry(dataset) {
 	}
 	depths.sort((a, b) => a - b);
 	const medianDepth = depths.length > 0 ? depths[Math.floor((depths.length - 1) / 2)] : 1;
-	const geometryScale = Math.min(1, Math.max(1e-4, 1 / Math.max(1e-4, medianDepth)));
+	// A source-unit conversion must also work for reconstructions expressed in
+	// meters or millimeters; clipping the conversion changes camera near planes.
+	const geometryScale = 1 / medianDepth;
 	const seedPoints = dataset.seedPoints.slice();
 	for (let i = 0; i < dataset.seedPointCount; i += 1) {
 		const base = i * 6;
@@ -385,7 +388,14 @@ export function normalizeDatasetGeometry(dataset) {
 		worldToCamera[11] *= geometryScale;
 		return { ...camera, worldToCamera };
 	});
-	return { ...dataset, seedPoints, cameras, geometryScale };
+	const normalized = { ...dataset, seedPoints, cameras, geometryScale };
+	return { ...normalized, trainingSceneScale: resolveTrainingSceneScale(normalized) };
+}
+
+export function resolveTrainingSceneScale(dataset) {
+	// geometryScale converts external coordinates; it is not a geometric length.
+	// Exclude heldout cameras so their placement cannot change training bounds.
+	return cameraRigRadius(resolveTrainViewIndices(dataset).map((index) => dataset.cameras[index]));
 }
 
 function symmetricEigenvectors3(matrix) {
@@ -466,9 +476,9 @@ function matrixQuaternion(matrix) {
 	return normalizeQuaternionCpu(quaternion);
 }
 
-function localGaussianFrames(seeds, selectedSeeds, geometryScale, neighborCount = 8) {
-	const minimumScale = 0.03 * geometryScale;
-	const maximumScale = 0.60 * geometryScale;
+function localGaussianFrames(seeds, selectedSeeds, sceneScale, neighborCount = 8) {
+	const minimumScale = 0.03 * sceneScale;
+	const maximumScale = 0.60 * sceneScale;
 	return selectedSeeds.map((seed, index) => {
 		const source = seed * 6;
 		const neighbors = [];
@@ -489,7 +499,7 @@ function localGaussianFrames(seeds, selectedSeeds, geometryScale, neighborCount 
 		}
 		if (neighbors.length < 3) {
 			const radius = Math.min(maximumScale, Math.max(minimumScale,
-				Math.sqrt(neighbors[0]?.distanceSquared ?? 0) * 0.75 || 0.30 * geometryScale));
+				Math.sqrt(neighbors[0]?.distanceSquared ?? 0) * 0.75 || 0.30 * sceneScale));
 			return { scales: [radius, radius, radius], quaternion: [0, 0, 0, 1] };
 		}
 		const local = [{ source }, ...neighbors];
@@ -545,7 +555,7 @@ export function makeInitialSplats(dataset, splatCount) {
 			+ anchor[10] * seeds[rightBase + 2] + anchor[11];
 		return rightDepth - leftDepth;
 	});
-	const frames = localGaussianFrames(seeds, selectedSeeds, dataset.geometryScale);
+	const frames = localGaussianFrames(seeds, selectedSeeds, resolveTrainingSceneScale(dataset));
 	for (let i = 0; i < splatCount; i += 1) {
 		const seed = selectedSeeds[i];
 		const source = seed * 6;
@@ -1809,7 +1819,8 @@ export class DynamicSplatWebGpu3dTrainer {
 			minRadius: 0.0015, maxRadius: 0.12, temporalSigma, targetAspect: this.dataset.width / this.dataset.height,
 			motionSampleRate, motionCoverageTarget, motionCoverageWeight: 0.05, staticAlphaWeight: 0.08,
 			staticSampleRate, trainViewCount: this.trainViewIndices.length, cameraCount: this.dataset.viewCount,
-			geometryScale: this.dataset.geometryScale, camerasPerStep: cameraBatch.indices.length,
+			// The legacy uniform name carries normalized scene length, not unit conversion.
+			geometryScale: this.dataset.trainingSceneScale, camerasPerStep: cameraBatch.indices.length,
 			cameraRotationStart: cameraBatch.start,
 			legacyAllCameraSampling: this.legacyContiguousTrainViews
 				&& cameraBatch.indices.length >= this.trainViewIndices.length });

@@ -43,6 +43,20 @@ poses, and marks heldout cameras `validation_only`. The browser may optimize on
 serialized train views only; changing that split requires changing the
 canonical manifest/loader contract first.
 
+Browser World Tubes (2026-09-06) consumes `frameTimesNormalized` in the same
+global `[0,1]` interval for training and validation; resident pages must not
+renormalize time locally. Resolution continuation must compare the matching
+resident frame IDs, not a streamed coarse page against a fine overview atlas.
+Neither change alters the canonical train/heldout split or seed provenance.
+
+Browser normalization (2026-09-08) separates the external coordinate conversion
+`geometryScale` from `trainingSceneScale`, the radius of normalized training
+camera centers. Only training cameras determine this length. Initialization and
+the sampled/tiled Gaussian optimizer use it for geometric limits; external
+preview poses still use the conversion factor. Source-unit changes must preserve
+normalized initialization. The source camera calibration and export schema are
+unchanged.
+
 Deep 3D Mask evaluation clips use the same thin-browser rule. The preparation
 script converts the official synchronized per-frame JPEG layout into one MP4
 per camera while preserving the companion LLFF `poses_bounds.npy`. Records keep

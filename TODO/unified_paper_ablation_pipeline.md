@@ -1,5 +1,54 @@
 # Unified Paper Ablation Pipeline
 
+## 2026-08-25 Execution Handoff
+
+The authoritative schema-v2 ledger currently has two accepted components and
+three missing runtime components:
+
+- accepted: theorem/correctness and variable-camera closure/death;
+- missing: frozen identical-world scaling;
+- missing: checkpoint-only bounded moving-camera density;
+- missing: all seven public Coffee Martini protocol rows (`0/21` lane rows).
+
+This is no longer a data-acquisition or new-mathematics blocker. The
+bounded-memory/runner integration is source-complete and has passed two
+bounded read-only review passes with no remaining P0/P1 finding. Per the
+resource stop, no Python, tests, builds, training, or accelerator work was run
+in this preparation pass. The current worktree is still uncommitted; run the
+focused behavior gates, then commit one clean superproject/STAR pair before
+evidence execution.
+The moving-camera route is a recovery/adaptation of the previously reviewed
+`a290862` / STAR `6c99452` implementation, not a new camera formalism. Its
+frozen contract is direct `256x256`, yaw `-22.5..+22.5` degrees,
+`F={8,16,32,64}`, one midpoint first-order chart, and checkpoint-only replay.
+The gauged camera-ray, conditional-depth, event/order, and projective-trace
+math remains part of World Tubes; “holonomy” is not used as a literal method
+name for this open-path experiment.
+
+The current source preparation streams Neural3D targets, selected rays,
+evaluation, Metal statistics, retained media, and WorldFoam video
+initialization. Frozen selected-time parity and exact p99.9 accumulation must
+also stay chunk-bounded. Each expensive child now has an independent process
+RSS guard in addition to renderer allocator counters. A quiet 16-GB host is a
+candidate for the sequential run, not a guaranteed fit; the first row is the
+runtime calibration and the campaign stops on a live gate, RSS guard, swap
+growth, or any failed frozen contract.
+
+Run order after a clean source-only review:
+
+1. Static frozen learned-world sweep: train once, then evaluate
+   `F={full,4,8,16,32,64,128}` with one warmup/five repeats.
+2. Moving-camera density: reuse that exact checkpoint; no training;
+   `F={8,16,32,64}` at `256x256`.
+3. Seven public rows, one invocation/row: progressive seeds `17/29/43`,
+   pixel-matched fixed seeds `17/29/43`, global-shuffle seed `17`.
+4. Generate the schema-v2 artifact bundle, regenerate TeX, convert to the
+   selected venue package, and visually inspect the PDF.
+
+Do not add another audit, queue wrapper, venue scaffold, renderer family, or
+math branch before these evidence counts move. Exact commands and gates live
+in `research_notes/gauged_uvt_trace_atlas/paper/REPRODUCE.md`.
+
 ## Implemented And Verified
 
 - One typed protocol resolves dataset identity, camera split, full temporal
@@ -33,8 +82,8 @@
   runs because resolved configs plus clean commit hashes are the reproducible
   source contract.
 
-Evidence schema v2 is additionally implemented and statically checked, but not
-yet behavior-verified. It binds the exact ordered sample schedule, all raw
+Evidence schema v2 is implemented and source-reviewed, but the new bounded
+residency path is not yet runtime-verified. It binds the exact ordered sample schedule, all raw
 inputs, decoded targets and camera programs, the canonical evaluator, runtime
 and loaded native binaries, every retained lane artifact, and finalized W&B
 files. It also fixes cross-lane PSNR aggregation to derive PSNR from global
@@ -47,10 +96,11 @@ are the stronger breadth target.
 
 ## P0: Produce Paper Rows
 
-1. Run focused schema-v2 behavior tests and a bounded, quiet-host three-lane
-   evidence smoke. This must verify actual W&B file discovery, decoded-bundle
-   equality, route-native identity, evaluator equality, reuse rejection, and
-   matrix aggregation without launching a publication row.
+1. On the approved quiet host, use the first real row as the bounded runtime
+   calibration. It must verify actual W&B remote/file identity, decoded-bundle
+   equality, route-native identity, evaluator equality, reuse rejection,
+   process peak RSS, and matrix aggregation. A smoke does not count as an
+   ablation or advance the ledger.
 2. Run the implemented lane-isolated frozen identical-world comparison via
    `run_frozen_world_replay_compiled.py` with
    `--frame-counts 0,4,8,16,32,64,128`. It now trains and saves once, evaluates
@@ -60,10 +110,9 @@ are the stronger breadth target.
    single-shot correctness timings and separately records alternating paired,
    synchronized timing trials; use at least one warmup and three repeats
    (`1/5` is the publication-runner default).
-3. Run the implemented bounded variable-camera closure/death gate with its
-   fixed world, fixed physical interval, and exact rational live-depth-order
-   oracle. The static public causal row cannot by itself support the
-   moving-camera claim.
+3. Run the checkpoint-only bounded learned-world moving-camera density gate
+   from the accepted static checkpoint. The separate variable-camera
+   closure/death component is already accepted.
 4. Rerun the structured progressive 512-wide protocol for seeds 17/29/43
    under evidence schema v2.
 5. Run the exact target-pixel-matched fixed-512 control for seeds 17/29/43.
@@ -102,8 +151,9 @@ PYTHONPATH=src/train:third_party/powerfoam-metal .venv/bin/python \
 ```
 
 The MPS acknowledgement is required on an operator-approved Apple execution
-host. It does not bypass the incident-calibrated memory estimate or any live
-memory, swap, disk, or load gate; the incident workstation remains ineligible.
+host. It does not bypass the source-derived memory estimate, process-RSS guard,
+or any live memory, swap, disk, or load gate. A freshly quiet 16-GB host may
+qualify; eligibility is decided at launch and continuously during the child.
 
 Publication-scale execution is fail-closed on the incident workstation. The
 fixed-512 attempt was killed under severe unified-memory pressure; its partial
@@ -131,11 +181,10 @@ declaration, or pass the matching path explicitly.
 The eager path is not acceptable for 2704x2028 because all-frame float targets
 and per-sample ray grids scale to tens of gigabytes. Implement in this order:
 
-1. **Partial:** camera/calibration tensors can live on the compute device while
-   paper targets remain host-resident.
-2. **Missing:** decode only the sampled K source frames at the active stage
-   resolution with a bounded CPU cache. Current decoded target videos are
-   still host-eager.
+1. **Implemented, runtime-unverified:** camera/calibration tensors can live on
+   the compute device while paper targets remain disk-backed.
+2. **Implemented, runtime-unverified:** decode only selected source frames at
+   the requested resolution with a bounded CPU LRU and bounded identity pass.
 3. **Implemented, runtime-unverified:** generate calibrated PowerFoam ray grids
    only for selected samples.
 4. **Implemented, runtime-unverified:** stream train/heldout evaluation in

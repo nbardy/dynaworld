@@ -1,0 +1,34 @@
+{
+  "adapter": "apple",
+  "finalLoss": 0.02199888504401315,
+  "gradientFamilies": 19,
+  "initialLoss": 0.054925996519159526,
+  "lossError": 5.644278724958872e-10,
+  "orbitMaxError": 0.0019536009058356285,
+  "passed": true,
+  "previewMaxError": 0.0019483864307403564,
+  "restoredStep": 65,
+  "rgbMaxError": 1.2880351507593701e-7,
+  "traceMaxError": 0.00007270504130474365,
+  "worker": {
+    "heldoutLoss": 0.12726280134544374,
+    "offscreen": true,
+    "paging": true,
+    "resolutionContinuation": true,
+    "step": 8,
+    "trainLoss": 0.12729317175466634
+  },
+  "worldGradientMaxError": 4.998539671063895e-8,
+  "date": "2026-09-06",
+  "scope": "Engineering parity and lifecycle gate, not a quality or speed benchmark.",
+  "performance": {
+    "status": "not_measured",
+    "reason": "Concurrent unrelated MPS training detected; no speed comparison launched.",
+    "speedup": null
+  },
+  "pending": [
+    "Matched speed and time-to-quality comparison on an idle GPU",
+    "Real SPA progressive transition rerun after preload/page mismatch repair",
+    "Dense (>64 contributors/ray) preview fallback GPU stress"
+  ]
+}

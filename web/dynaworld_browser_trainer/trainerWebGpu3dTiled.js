@@ -3978,7 +3978,9 @@ export class DynamicSplatWebGpu3dTiledTrainer extends DynamicSplatWebGpu3dTraine
 			temporalSigma, alphaThreshold: 1 / 255, transmittanceThreshold: 1e-4,
 			lrPosition: rates.position, lrColor: rates.color,
 			lrOpacity: rates.opacity, lrMotion: rates.motion,
-			geometryScale: this.dataset.geometryScale, l1Weight: 0.8, dssimWeight: 0.2,
+			// Shared by size/motion bounds and geometry regularization. Keep the
+			// shader ABI, but never feed it the external coordinate conversion.
+			geometryScale: this.dataset.trainingSceneScale, l1Weight: 0.8, dssimWeight: 0.2,
 			statDecay: DENSITY_STAT_DECAY, ssimRadius: resolvedSsimRadius,
 			frameCount: this.dataset.frameCount,
 			frameTime: frameTime01(this.dataset, selected.frameIndex),

@@ -38,6 +38,59 @@ computes L1/MSE over all RGB elements, derives PSNR from global MSE, and
 averages SSIM/LPIPS over the full declared image set. No selected-time row is
 currently accepted under schema v2.
 
+## Small local Metal playground
+
+This runs World Tubes, dynamic 3DGS, and WorldFoam sequentially on the real
+Coffee Martini train `cam04/cam09`, heldout `cam06` split. The checked-in
+`coffee_martini_local_playground.jsonc` uses 32 frames, 80 updates, 128 to 256
+primitives, and 64-wide to 128-wide images. Run from the repository root:
+
+```bash
+PYTHONPATH=src/train PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  .venv/bin/python research_experiments/paper_runner_suite/run_unified_paper_ablation.py \
+  --execute --protocol src/train_configs/paper_protocols/coffee_martini_local_playground.jsonc \
+  --seed 17 --device mps --out-dir outputs/local_playground \
+  --worldfoam-initializer video --wandb-mode offline \
+  --allow-local-mps-execution --allow-dirty-source
+```
+
+Use `--reuse-existing` to validate and reuse matching completed lanes. Edit the
+JSONC for experiments. Each lane has a 3-GiB process-tree RSS guard, a 2-GiB
+PyTorch MPS allocator cap, and 2 GiB reserved for the OS; RSS and device memory
+can overlap, so their sum is conservative. The guard also stops on new host
+swap growth above 256 MiB, low available memory, or output growth beyond 2 GiB.
+It accounts for the launcher and descendants, including W&B. Old desktop swap
+is recorded rather than treated as proof that the small job cannot fit.
+The publication profiles retain their original resource gates.
+
+The September 11 run completed all three 80-step lanes under these limits on
+a **24-GiB Mac**. Peak sampled tree/launcher RSS was 1.75 GiB and the largest
+reported MPS driver allocation was 1.08 GiB; no new swap was observed. The
+selected runtime, backend checkouts, source, LPIPS weights, and whole scene
+occupied 4.73 GiB; outputs including offline W&B were about 11.2 MB. Unrelated
+datasets, historical outputs, Git history, and download caches are excluded
+from that installation footprint. This is a measured small-job budget, not a
+test on physical 8-GiB hardware or a fresh-install packaging claim.
+
+Results are diagnostic: heldout PSNR was 6.50 / 5.96 / 6.64 dB for World Tubes /
+dynamic 3DGS / WorldFoam. All use the same sample/pixel budget, but have different
+parameter counts and initialization models. Quality is poor at this setting.
+The tree is dirty and these runs do not enter the paper acceptance ledger or
+`BASELINES.md` standings. W&B remains offline because automatic approval review
+rejected uploading the generated media/configuration; artifacts are retained
+locally. The run summary, checkpoints, previews, per-child memory receipts, and
+offline W&B records are under:
+
+```text
+outputs/benchmarks/2026-09-11_local_playground/coffee_martini_local_playground/seed_17/
+```
+
+The separate two-step/four-frame smoke also ran `--frozen-world-replay-compiled`.
+It **failed** the existing image, world-gradient, and fallback gates; its cold
+compiled route was slower. Do not count it as sublinear scaling evidence or
+launch a larger compiler sweep before diagnosing this failure. Its retained
+row is in the sibling `coffee_martini_local_playground_smoke` directory.
+
 ## Lightweight one-command demo
 
 Run the bounded paper demo without a dataset, training, W&B, MPS, or the
@@ -119,16 +172,15 @@ supported path.
 
 ## Minimum Coffee Martini control subset
 
-The seven-run Coffee Martini control subset is currently blocked on this 24GB unified-memory
-workstation after an operator-killed memory-pressure incident. The runner is
-fail-closed on local MPS; this 24 GiB host would additionally require the
-high-risk override and still fails the live swap/disk gates. Do not bypass
-those gates on the incident machine. Use streamed targets/rays/evaluation or a
-sufficiently provisioned Apple host. The checked-in incident-calibrated estimates are
-`18.745 GiB` for the progressive/global-shuffle protocols and `17.303 GiB`
-for fixed-512. At the enforced 60% ceiling, a clean Apple host with at least
-32 GiB unified memory is the minimum supported execution target; it must also
-pass the live memory, swap, disk, and load gates.
+The seven-run Coffee Martini control subset is source-complete for sequential,
+bounded execution. Targets, rays, evaluation, Metal statistics, retained
+media, and WorldFoam video initialization no longer require an eager full-video
+tensor. The old `18.745/17.303 GiB` estimates and the inferred 32-GB minimum are
+superseded. A quiet 16-GB Apple-Silicon host is now a candidate, not a promise:
+the source-derived estimate must remain under the enforced 60% ceiling, the
+live guard must pass, and each isolated child records peak process RSS and is
+terminated if it crosses that ceiling. Start with one row and stop on any
+memory/swap/resource violation.
 
 Audit a candidate host without loading data or importing a renderer:
 
@@ -265,7 +317,7 @@ On an approved adequately sized MPS host, add both `--execute` and
 `--allow-local-mps-execution`. Local MPS remains fail-closed unless that
 incident-safety acknowledgement is explicit.
 Execution also rechecks live resources before each expensive child: at least
-10 GiB reclaimable memory, at most 2 GiB swap in use, at least 32 GiB free
+10 GiB reclaimable memory, at most 2 GiB swap in use, at least 8 GiB free
 disk, and one-minute load no greater than 0.75 per logical CPU. These are
 safety and timing-integrity gates, not flags to bypass.
 The accepted run must include `--max-frames 0` and
@@ -281,6 +333,31 @@ The report must include the checkpoint hash, image/loss/VJP parity, tensor
 payload, raw timing samples and summaries, and fallback statistics. The tensor
 payload excludes topology and transient working memory and must not be cited
 as storage.
+
+### Frozen learned-world bounded moving-camera density
+
+After the static frozen sweep is accepted, run the checkpoint-only bounded-yaw
+extension. It reuses the exact checkpoint and does not train again:
+
+```bash
+PYTHONPATH=src/train:third_party/fast-mac-gsplat/variants/star_uvt_v0 \
+  .venv/bin/python \
+  research_experiments/paper_runner_suite/run_frozen_world_moving_camera.py \
+  --execute \
+  --protocol \
+  src/train_configs/paper_protocols/coffee_martini_full_300f_progressive_512_v1.jsonc \
+  --seed 17 \
+  --device mps \
+  --wandb-mode online \
+  --require-clean-source \
+  --allow-local-mps-execution
+```
+
+The contract is fixed at direct $256\times256$ decode, bounded yaw from
+$-22.5^\circ$ to $+22.5^\circ$, `F=8,16,32,64`, one midpoint first-order chart,
+one warmup, and five paired repeats. It reports compiled-versus-replay parity,
+not ground-truth quality at synthetic yaw poses. A mechanically complete failed
+predeclared gate is retained as `complete_negative`; do not retune it.
 
 ### Bounded variable-camera closure/death curve
 
@@ -369,8 +446,9 @@ python3 \
 ```
 
 This writes explicit placeholders and an exact missing-input ledger while any
-component is absent. After the seven-row matrix, frozen sweep, and
-variable-camera report all verify, omit `--allow-incomplete`; the command then
+component is absent. After the seven-row matrix, static frozen sweep,
+checkpoint-only moving-camera sweep, and variable-camera report all verify,
+omit `--allow-incomplete`; the command then
 fails unless every declared component is submission-ready. The selected
 matrix's `output_root` supplies the default run root, so minimum and
 full-breadth matrices cannot silently share summaries. Verify the current

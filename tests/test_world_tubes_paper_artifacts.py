@@ -30,6 +30,9 @@ from research_experiments.paper_runner_suite.generate_world_tubes_paper_artifact
     verify_manuscript_package,
     write_bundle,
 )
+from research_experiments.paper_runner_suite import (
+    run_frozen_world_moving_camera as moving_camera,
+)
 from research_experiments.paper_runner_suite.world_tubes_theorem_table import (
     verify_table_report,
 )
@@ -92,6 +95,11 @@ def stub_retained_artifact_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         artifact_generator,
         "_validate_frozen_artifact_bindings",
+        lambda _path, _summary: [],
+    )
+    monkeypatch.setattr(
+        artifact_generator,
+        "_validate_moving_camera_artifact_bindings",
         lambda _path, _summary: [],
     )
 
@@ -618,6 +626,118 @@ def _variable_report() -> dict[str, object]:
     )
 
 
+def _moving_camera_report() -> dict[str, object]:
+    rows = []
+    for frame_count in moving_camera.FRAME_COUNTS:
+        row = _frozen_row(frame_count)
+        row.update(
+            {
+                "decoded_image_size": list(moving_camera.IMAGE_SIZE),
+                "render_image_size": list(moving_camera.IMAGE_SIZE),
+                "target_resize_mode": moving_camera.TARGET_RESIZE_MODE,
+                "target_semantics": moving_camera.TARGET_SEMANTICS,
+                "parity_metric_semantics": moving_camera.PARITY_METRIC_SEMANTICS,
+                "camera_program_mode": moving_camera.CAMERA_PROGRAM_MODE,
+                "camera_program_sha256": moving_camera.camera_program_sha256(),
+                "compiler_chart_policy": moving_camera.COMPILER_CHART_POLICY,
+                "multi_chart_gauge_compiler": moving_camera.MULTI_CHART_GAUGE_COMPILER,
+                "checks": {
+                    "checkpoint_matches": True,
+                    "image_matches": True,
+                    "loss_matches": True,
+                    "world_vjp_matches": True,
+                    "world_vjp_per_parameter_matches": True,
+                    "world_vjp_nonzero": True,
+                    "world_vjp_coverage_matches": True,
+                    "fallback_within_budget": True,
+                },
+                "mechanical_checks": {
+                    "checkpoint_identity_verified": True,
+                    "world_state_unchanged": True,
+                    "camera_program_identity_verified": True,
+                    "direct_256_decode_and_render": True,
+                    "publication_metrics_finite_nonnegative": True,
+                    "gradient_coverage_complete": True,
+                    "gradient_nonzero": True,
+                    "selected_time_slice_parity_accepted": True,
+                    "timing_evidence_complete_finite": True,
+                    "logical_interaction_memory_exact": True,
+                    "single_midpoint_first_order_boundary_explicit": True,
+                },
+                "mechanically_valid": True,
+                "selected_time_slice_parity": {
+                    "status": "complete",
+                    "accepted": True,
+                },
+                "publication_metrics": {
+                    "image_psnr_db": 55.0,
+                    "lpips_delta": 0.0005,
+                    "image_p999_abs_error": 1.0 / 255.0,
+                    "loss_absolute_delta": 1.0e-7,
+                    "world_vjp_global_normalized_l2_error": 1.0e-7,
+                    "world_vjp_max_parameter_normalized_l2_error": 2.0e-7,
+                    "chart_count": 10,
+                    "structural_atlas_record_count": 100,
+                    "continuous_candidate_reference_count": 30,
+                    "summed_sliced_candidate_reference_count": 100,
+                    "event_count": 20,
+                    "coefficient_count": 80,
+                    "interaction_memory_bytes_excluding_outputs_residuals": 1_000,
+                    "certified_stable_or_event_aligned_fraction": 0.99,
+                    "expensive_unresolved_fallback_fraction": 0.01,
+                },
+            }
+        )
+        rows.append(row)
+    gate = moving_camera.derive_publication_gate(rows)
+    sweep = {
+        "schema_version": 1,
+        "status": "complete",
+        "camera_program": moving_camera.camera_program_contract(),
+        "camera_program_sha256": moving_camera.camera_program_sha256(),
+        "requested_frame_counts": list(moving_camera.FRAME_COUNTS),
+        "resolved_frame_counts": list(moving_camera.FRAME_COUNTS),
+        "decoded_image_size": list(moving_camera.IMAGE_SIZE),
+        "render_image_size": list(moving_camera.IMAGE_SIZE),
+        "target_resize_mode": moving_camera.TARGET_RESIZE_MODE,
+        "target_semantics": moving_camera.TARGET_SEMANTICS,
+        "parity_metric_semantics": moving_camera.PARITY_METRIC_SEMANTICS,
+        "compiler_chart_policy": moving_camera.COMPILER_CHART_POLICY,
+        "multi_chart_gauge_compiler": moving_camera.MULTI_CHART_GAUGE_COMPILER,
+        "checkpoint_shared_across_rows": True,
+        "world_state_shared_across_rows": True,
+        "all_rows_accepted": True,
+        "all_rows_mechanically_valid": True,
+        "all_rows_selected_time_slice_parity_accepted": True,
+        "all_rows_timing_publication_ready": True,
+        "checkpoint_loaded_not_trained": True,
+        "evidence_complete": True,
+        "rows": rows,
+    }
+    return {
+        "schema_version": 1,
+        "status": "accepted",
+        "publication_eligible": True,
+        "protocol": {"name": "coffee_martini_full_300f_progressive_512_v1"},
+        "seed": 17,
+        "frame_counts": list(moving_camera.FRAME_COUNTS),
+        "image_size": list(moving_camera.IMAGE_SIZE),
+        "decoded_image_size": list(moving_camera.IMAGE_SIZE),
+        "render_image_size": list(moving_camera.IMAGE_SIZE),
+        "target_resize_mode": moving_camera.TARGET_RESIZE_MODE,
+        "target_semantics": moving_camera.TARGET_SEMANTICS,
+        "parity_metric_semantics": moving_camera.PARITY_METRIC_SEMANTICS,
+        "camera_program": moving_camera.camera_program_contract(),
+        "camera_program_sha256": moving_camera.camera_program_sha256(),
+        "compiler_chart_policy": moving_camera.COMPILER_CHART_POLICY,
+        "multi_chart_gauge_compiler": moving_camera.MULTI_CHART_GAUGE_COMPILER,
+        "publication_gate": gate,
+        "source": dict(SOURCE),
+        "source_finish": dict(SOURCE),
+        "moving_camera_sweep": sweep,
+    }
+
+
 def _complete_inputs(tmp_path: Path) -> dict[str, Any]:
     protocol = tmp_path / "protocol.json"
     matrix = tmp_path / "matrix.json"
@@ -626,6 +746,7 @@ def _complete_inputs(tmp_path: Path) -> dict[str, Any]:
     theorem = tmp_path / "theorem.json"
     frozen = tmp_path / "frozen.json"
     variable = tmp_path / "variable.json"
+    moving_density = tmp_path / "moving_density.json"
     _protocol(protocol)
     _matrix(matrix, protocol, [17, 29])
     matrix_records = []
@@ -673,6 +794,7 @@ def _complete_inputs(tmp_path: Path) -> dict[str, Any]:
     _write_json(theorem, _theorem_report())
     _write_json(frozen, _frozen_report())
     _write_json(variable, _variable_report())
+    _write_json(moving_density, _moving_camera_report())
     return {
         "matrix_path": matrix,
         "run_root": run_root,
@@ -680,6 +802,7 @@ def _complete_inputs(tmp_path: Path) -> dict[str, Any]:
         "theorem_summary": theorem,
         "frozen_summary": frozen,
         "variable_camera_summary": variable,
+        "moving_camera_density_summary": moving_density,
         "verify_current_variable_camera_source": False,
     }
 
@@ -950,6 +1073,24 @@ def test_frozen_evidence_rejects_tampered_bound_sidecar(
     assert component["rows"] == []
     assert any(
         f"{tampered_name}.json hash binding drifted" in error
+        for error in component["errors"]
+    )
+
+
+def test_moving_camera_evidence_requires_bound_runtime_sidecars(
+    tmp_path: Path,
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    _write_json(summary_path, _moving_camera_report())
+
+    component = artifact_generator.collect_moving_camera_density_evidence(
+        summary_path
+    )
+
+    assert component["status"] == "invalid"
+    assert component["rows"] == []
+    assert any(
+        "not bound to the summary sibling" in error
         for error in component["errors"]
     )
 
